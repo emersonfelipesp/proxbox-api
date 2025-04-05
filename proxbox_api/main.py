@@ -14,6 +14,14 @@ from typing import Annotated, Optional, Dict, Any, List
 
 import asyncio
 
+
+
+try:
+    from pynetbox_api import RawNetBoxSession
+except Exception as error:
+    print(error)
+    pass
+
 # pynetbox API Imports (from v6.0.0 plugin uses pynetbox-api package)
 from pynetbox_api.ipam.ip_address import IPAddress
 from pynetbox_api.dcim.device import Device, DeviceRole, DeviceType
@@ -26,7 +34,7 @@ from pynetbox_api.virtualization.cluster import Cluster
 from pynetbox_api.virtualization.cluster_type import ClusterType
 from pynetbox_api.extras.custom_field import CustomField
 from pynetbox_api.extras.tag import Tags
-from pynetbox_api import RawNetBoxSession
+
 
 # Proxbox API Imports
 from proxbox_api.exception import ProxboxException
