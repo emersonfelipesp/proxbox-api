@@ -346,7 +346,7 @@ async def proxmox_sessions(
         Default Behavior: Instantiate Proxmox Sessions and return a list of Proxmox Sessions objects.
         If 'name' is provided, return only the Proxmox Session with that name.
     """
-    nb = RawNetBoxSession
+    nb = RawNetBoxSession()
     
 
     def parse_to_schema(endpoint):
