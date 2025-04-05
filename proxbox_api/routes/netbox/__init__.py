@@ -3,8 +3,9 @@ from sqlmodel import select
 
 from typing import Annotated, Any
 
-from pynetbox_api.database import SessionDep, NetBoxEndpoint
-from pynetbox_api.session import RawNetBoxSession
+from proxbox_api.exception import ProxboxException
+from proxbox_api import SessionDep, NetBoxEndpoint, RawNetBoxSession
+
 # FastAPI Router
 router = APIRouter()
 
@@ -60,8 +61,17 @@ async def netbox_status():
     **Returns:**
     - The status of the Netbox session.
     """
-    nb = RawNetBoxSession
-    return nb.status()
+    
+    from proxbox_api import RawNetBoxSession
+    
+    try:
+        nb = RawNetBoxSession()
+        return nb.status()
+    except Exception as error:
+        raise ProxboxException(
+            message='Error fetching status from NetBox API.',
+            python_exception=str(error)
+        )
 
 
 @router.get("/openapi")
@@ -76,9 +86,15 @@ async def netbox_openapi():
     - **dict:** The OpenAPI documentation retrieved from the Netbox session.
     """
     
-    nb = RawNetBoxSession
-    output = nb.openapi()
-    return output
+    try:
+        nb = RawNetBoxSession()
+        output = nb.openapi()
+        return output
+    except Exception as error:
+        raise ProxboxException(
+            message='Error fetching OpenAPI documentation from NetBox API.',
+            python_exception=str(error)
+        )
 
 
 
