@@ -251,7 +251,7 @@ async def get_sync_processes():
     Get all sync processes from Netbox.
     """
     
-    nb = RawNetBoxSession
+    nb = RawNetBoxSession()
     sync_processes = [process.serialize() for process in nb.plugins.proxbox.__getattr__('sync-processes').all()]
     return sync_processes
 
@@ -295,7 +295,7 @@ async def create_proxmox_devices(
     use_css: bool = False
 ):
     # GET /api/plugins/proxbox/sync-processes/
-    nb = RawNetBoxSession
+    nb = RawNetBoxSession()
     start_time = datetime.now()
     sync_process = None
     
@@ -739,7 +739,7 @@ async def create_virtual_machines(
     '''
     
     # GET /api/plugins/proxbox/sync-processes/
-    nb = RawNetBoxSession
+    nb = RawNetBoxSession()
     start_time = datetime.now()
     sync_process = None
     try:
@@ -1334,7 +1334,7 @@ async def full_update_sync(
     start_time = datetime.now()
     sync_process = None
 
-    nb = RawNetBoxSession
+    nb = RawNetBoxSession()
     try:
         sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
             name=f"sync-all-{start_time}",
@@ -1399,7 +1399,7 @@ async def websocket_endpoint(
 ):
     connection_open = False
     
-    nb = RawNetBoxSession
+    nb = RawNetBoxSession()
     
     print('route ws reached')
     try:
