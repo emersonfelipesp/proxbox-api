@@ -2,9 +2,14 @@ from fastapi import APIRouter
 
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.enum.proxmox import *
 
-from fastapi import HTTPException
+
+
+from fastapi import HTTPException, Path, Query
+from typing import Annotated
+
 
 router = APIRouter()
 
@@ -189,3 +194,84 @@ async def proxmox(
         },
         "clusters": json_response
     }
+
+
+
+from pydantic import BaseModel
+
+class BackupVerification(BaseModel):
+    upid: str
+    state: str
+
+class ProxmoxStorageContent(BaseModel):
+    subtype: str | None = None
+    format: str | None = None # Format identifier ('raw', 'qcow2', 'subvol', 'iso', 'tgz' ...)
+    size: int | None = None # Volume size in bytes.
+    ctime: int | None = None # Creation time (seconds since the UNIX Epoch)
+    notes: str | None = None # Optional Notes. If they contain multiple lines, only the first one is returned here.
+    content: str | None = None
+    volid: str | None = None
+    vmid: int | None = None
+    notes: str | None = None
+    used: int | None = None     # Used space. Please note that most storage plugins do not report anything useful here.
+    encrypted: str | None = None
+    verification: BackupVerification | None = None
+    
+
+ProxmoxStorageContentList = list[ProxmoxStorageContent]
+ 
+@router.get('/nodes/{node}/storage/{storage}/content', response_model=ProxmoxStorageContentList)
+async def proxmox_nodes_node_storage_content(
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    node: Annotated[
+        str,
+        Path(
+            title="Node",
+            description="The name of the node to retrieve the storage content for."
+        )
+    ],
+    storage: Annotated[
+        str,
+        Path(
+            title="Storage",
+            description="The name of the storage to retrieve the content for."
+        )
+    ],
+    vmid: Annotated[
+        str,
+        Query(
+            title="VM ID",
+            description="The ID of the VM to retrieve the content for."
+        )
+    ] = None,
+    content: Annotated[
+        str,
+        Query(
+            title="Content",
+            description="The type of content to retrieve. Example: 'backup'"
+        )
+    ] = None
+):
+    """
+    ### Retrieve the content of a specific storage volume.
+    
+    **Args:**
+    - **pxs (ProxmoxSessionsDep):** A dependency injection of Proxmox sessions.
+    - **cluster_status (ClusterStatusDep):** A dependency injection of cluster status.
+    - **node (str):** The name of the node to retrieve the content for.
+    - **storage (str):** The name of the storage to retrieve the content for.
+    - **vmid (str):** The ID of the VM to retrieve the content for.
+    - **content (str):** The type of content to retrieve. Example: 'backup'
+    
+    **Returns:**
+    - **list:** A list of dictionaries (JSON)containing the content of the storage volume.
+    """
+    
+    for proxmox, cluster in zip(pxs, cluster_status):
+        print(proxmox, cluster)
+        for cluster_node in cluster.node_list:
+            if cluster_node.name == node:
+                return proxmox.session.nodes(node).storage(storage).content.get(vmid=vmid)
+    
+    raise HTTPException(status_code=404, detail="Node or Storage not found")
