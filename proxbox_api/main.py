@@ -54,7 +54,7 @@ async def proxbox_tag():
 ProxboxTagDep = Annotated[Tags.Schema, Depends(proxbox_tag)]
 
 # Proxmox Routes
-from proxbox_api.routes.proxmox import router as proxmox_router
+from proxbox_api.routes.proxmox import router as proxmox_router, proxmox_nodes_node_storage_content
 from proxbox_api.routes.proxmox.cluster import (
     router as px_cluster_router,
     ClusterResourcesDep
@@ -1236,6 +1236,100 @@ async def create_virtual_disks():
     # TODO
     pass
 
+
+@app.get('/virtualization/virtual-machines/backups/create')
+async def create_virtual_machine_backups(
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    node: Annotated[
+        str,
+        Query(
+            title="Node",
+            description="The name of the node to retrieve the storage content for."
+        )
+    ],
+    storage: Annotated[
+        str,
+        Query(
+            title="Storage",
+            description="The name of the storage to retrieve the content for."
+        )
+    ],
+    vmid: Annotated[
+        str,
+        Query(
+            title="VM ID",
+            description="The ID of the VM to retrieve the content for."
+        )
+    ] = None
+):
+    nb = RawNetBoxSession()
+    
+    for proxmox, cluster in zip(pxs, cluster_status):
+        print(proxmox, cluster)
+        for cluster_node in cluster.node_list:
+            if cluster_node.name == node:
+                backups = await proxmox_nodes_node_storage_content(
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    node=node,
+                    storage=storage,
+                    vmid=vmid,
+                    content='backup'
+                )
+                
+                try:
+                    for backup in backups:
+                        print('backup: ', backup)
+                        virtual_machine = VirtualMachine().get(id=int(backup.get('vmid')))
+                        print('virtual_machine: ', virtual_machine)
+                        
+                        verification = backup.get('verification')
+                        
+                        verification_state = None
+                        verification_upid = None
+                        
+                        if verification:
+                            verification_state = verification.get('state')
+                            verification_upid = verification.get('upid')
+                        
+                        storage_name = None
+                        volume_id = backup.get('volid', None)
+                        if volume_id:
+                            storage_name = volume_id.split(':')[0]
+                            
+                        creation_time = backup.get('ctime', None)
+                        if creation_time:
+                            creation_time = datetime.fromtimestamp(creation_time).isoformat()
+                        
+                        if virtual_machine:
+                            print('storage_name: ', storage_name)
+                            netbox_backup = nb.plugins.proxbox.__getattr__('backups').create(
+                                storage=storage_name,
+                                virtual_machine=virtual_machine.get('id'),
+                                subtype=backup.get('subtype'),
+                                creation_time=creation_time,
+                                size=backup.get('size'),
+                                verification_state=verification_state,
+                                verification_upid=verification_upid,
+                                volume_id=volume_id,
+                                notes=backup.get('notes'),
+                                vmid=backup.get('vmid'),
+                                format=backup.get('format'),
+                            )
+                            print('netbox_backup: ', netbox_backup)
+                            print('\n')
+                except Exception as error:
+                    print('ERROR: ', error)
+                    pass
+                        
+                        
+                
+                return backups
+    
+    raise ProxboxException(message=f"Node or Storage not found.")
+    
+    
 #
 # Routes (Endpoints)
 #
