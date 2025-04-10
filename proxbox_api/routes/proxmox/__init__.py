@@ -8,8 +8,8 @@ from proxbox_api.enum.proxmox import *
 
 
 from fastapi import HTTPException, Path, Query
-from typing import Annotated
-
+from typing import Annotated, Optional, List
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
@@ -83,33 +83,6 @@ async def proxmox_version(
 
     return json_response
 
-
-@router.get("/{top_level}")
-async def top_level_endpoint(
-    pxs: ProxmoxSessionsDep,
-    top_level: ProxmoxUpperPaths,
-):
-    """
-    ### Asynchronously retrieves data from multiple Proxmox sessions for a given top-level path.
-    
-    **Args:**    
-    - **pxs (`ProxmoxSessionsDep`):** A dependency injection of Proxmox sessions.
-    - **top_level (`ProxmoxUpperPaths`):** The top-level path to query in each Proxmox session.
-    
-    **Returns:**
-    - **list:** A list of dictionaries containing the session name as the key and the response data as the value.
-    """
-    
-    json_response = []
-    
-    for px in pxs:
-        json_response.append(
-            {  
-                px.name: px.session(top_level).get()
-            }
-        )
-    
-    return json_response
 
 
 @router.get("/")
@@ -196,9 +169,6 @@ async def proxmox(
     }
 
 
-
-from pydantic import BaseModel
-
 class BackupVerification(BaseModel):
     upid: str
     state: str
@@ -219,9 +189,47 @@ class ProxmoxStorageContent(BaseModel):
     
 
 ProxmoxStorageContentList = list[ProxmoxStorageContent]
+
+class ProxmoxStorage(BaseModel):
+    type: str | None = None
+    storage: str | None = None
+    path: str | None = None
+    content: str | None = None
+    digest: str | None = None
+    nodes: str | None = None
+    prune_backups: str | None = Field(None, alias="prune-backups")
+    shared: int | None = None
+    export: str | None = None
+    server: str | None = None
+    disable: int | None = None
+    pool: str | None = None
+    sparse: int | None = None
+    username: str | None = None
+    datastore: str | None = None
+    fingerprint: str | None = None
+    mountpoint: Optional[str] = None
+
+ProxmoxStorageList = List[ProxmoxStorage]
+ClusterProxmoxStorage = List[dict[str, ProxmoxStorageList]]
+
+@router.get('/storage', response_model=ClusterProxmoxStorage)
+async def get_proxmox_storage(
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+):
+    print('storage')
+    """
+    ### Retrieve the storage information from multiple Proxmox sessions.
+    
+    """
+    result = []
+    for proxmox in pxs:
+        result.append({proxmox.name: proxmox.session.storage.get()})
+    
+    return result
  
 @router.get('/nodes/{node}/storage/{storage}/content', response_model=ProxmoxStorageContentList)
-async def proxmox_nodes_node_storage_content(
+async def get_proxmox_node_storage_content(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     node: Annotated[
@@ -269,9 +277,36 @@ async def proxmox_nodes_node_storage_content(
     """
     
     for proxmox, cluster in zip(pxs, cluster_status):
-        print(proxmox, cluster)
         for cluster_node in cluster.node_list:
             if cluster_node.name == node:
                 return proxmox.session.nodes(node).storage(storage).content.get(vmid=vmid)
     
     raise HTTPException(status_code=404, detail="Node or Storage not found")
+
+
+@router.get("/{top_level}")
+async def top_level_endpoint(
+    pxs: ProxmoxSessionsDep,
+    top_level: ProxmoxUpperPaths,
+):
+    """
+    ### Asynchronously retrieves data from multiple Proxmox sessions for a given top-level path.
+    
+    **Args:**    
+    - **pxs (`ProxmoxSessionsDep`):** A dependency injection of Proxmox sessions.
+    - **top_level (`ProxmoxUpperPaths`):** The top-level path to query in each Proxmox session.
+    
+    **Returns:**
+    - **list:** A list of dictionaries containing the session name as the key and the response data as the value.
+    """
+    
+    json_response = []
+    
+    for px in pxs:
+        json_response.append(
+            {  
+                px.name: px.session(top_level).get()
+            }
+        )
+    
+    return json_response
