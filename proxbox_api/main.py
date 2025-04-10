@@ -1237,6 +1237,67 @@ async def create_virtual_disks():
     pass
 
 
+async def create_netbox_backups(backup):
+    nb = RawNetBoxSession()
+    
+    netbox_backups: list = []
+    
+    try:
+        # Get the virtual machine on NetBox by the VM ID.
+        vmid = backup.get('vmid', None)
+        virtual_machine = None
+        if vmid:
+            # Get the virtual machine on NetBox by the VM ID.
+            # custom_field.proxmox_vm_id = vmid
+            virtual_machine = nb.virtualization.virtual_machines.get(cf_proxmox_vm_id=int(vmid))
+        
+        if virtual_machine:
+            verification_state = None
+            verification_upid = None
+            
+            verification = backup.get('verification', None)
+                    
+            # Get the verification state and upid from the backup.
+            if verification:
+                verification_state = verification.get('state')
+                verification_upid = verification.get('upid')
+            
+            storage_name = None
+            volume_id = backup.get('volid', None)
+            if volume_id:
+                # Get the storage name from the volume ID.
+                # Example: 'local-zfs:vm-102-disk-0' -> 'local-zfs'
+                storage_name = volume_id.split(':')[0]
+                
+            creation_time = backup.get('ctime', None)
+            if creation_time:
+                # Convert the creation time from a UNIX timestamp to a datetime object.
+                creation_time = datetime.fromtimestamp(creation_time).isoformat()
+            
+            if virtual_machine:
+                # Create the backup on NetBox.
+                netbox_backup = nb.plugins.proxbox.__getattr__('backups').create(
+                    storage=storage_name,
+                    virtual_machine=virtual_machine.id,
+                    subtype=backup.get('subtype'),
+                    creation_time=creation_time,
+                    size=backup.get('size'),
+                    verification_state=verification_state,
+                    verification_upid=verification_upid,
+                    volume_id=volume_id,
+                    notes=backup.get('notes'),
+                    vmid=backup.get('vmid'),
+                    format=backup.get('format'),
+                )
+                
+                if netbox_backup:
+                    return netbox_backup
+    except Exception as error:
+        print('Error creating NetBox backup: ', error)
+        pass
+               
+    return None
+
 @app.get('/virtualization/virtual-machines/backups/create')
 async def create_virtual_machine_backups(
     pxs: ProxmoxSessionsDep,
@@ -1265,6 +1326,8 @@ async def create_virtual_machine_backups(
 ):
     nb = RawNetBoxSession()
     
+    netbox_backups: list = []
+    
     for proxmox, cluster in zip(pxs, cluster_status):
         print(proxmox, cluster)
         for cluster_node in cluster.node_list:
@@ -1278,53 +1341,15 @@ async def create_virtual_machine_backups(
                     content='backup'
                 )
                 
+                backups = [backup for backup in backups if backup.get('content') == 'backup']
+                    
                 try:
-                    for backup in backups:
-                        print('backup: ', backup)
-                        virtual_machine = VirtualMachine().get(id=int(backup.get('vmid')))
-                        print('virtual_machine: ', virtual_machine)
-                        
-                        verification = backup.get('verification')
-                        
-                        verification_state = None
-                        verification_upid = None
-                        
-                        if verification:
-                            verification_state = verification.get('state')
-                            verification_upid = verification.get('upid')
-                        
-                        storage_name = None
-                        volume_id = backup.get('volid', None)
-                        if volume_id:
-                            storage_name = volume_id.split(':')[0]
-                            
-                        creation_time = backup.get('ctime', None)
-                        if creation_time:
-                            creation_time = datetime.fromtimestamp(creation_time).isoformat()
-                        
-                        if virtual_machine:
-                            print('storage_name: ', storage_name)
-                            netbox_backup = nb.plugins.proxbox.__getattr__('backups').create(
-                                storage=storage_name,
-                                virtual_machine=virtual_machine.get('id'),
-                                subtype=backup.get('subtype'),
-                                creation_time=creation_time,
-                                size=backup.get('size'),
-                                verification_state=verification_state,
-                                verification_upid=verification_upid,
-                                volume_id=volume_id,
-                                notes=backup.get('notes'),
-                                vmid=backup.get('vmid'),
-                                format=backup.get('format'),
-                            )
-                            print('netbox_backup: ', netbox_backup)
-                            print('\n')
+                    return await asyncio.gather(*[create_netbox_backups(backup) for backup in backups])
+                    
                 except Exception as error:
-                    print('ERROR: ', error)
+                    print('Error creating NetBox backups: ', error)
                     pass
-                        
-                        
-                
+                    
                 return backups
     
     raise ProxboxException(message=f"Node or Storage not found.")
@@ -1336,61 +1361,6 @@ async def create_virtual_machine_backups(
     cluster_status: ClusterStatusDep,
 ):
     nb = RawNetBoxSession()
-    
-    async def create_netbox_backups(backup):
-        try:
-            # Get the virtual machine on NetBox by the VM ID.
-            vmid = backup.get('vmid', None)
-            virtual_machine = None
-            if vmid:
-                # Get the virtual machine on NetBox by the VM ID.
-                # custom_field.proxmox_vm_id = vmid
-                virtual_machine = nb.virtualization.virtual_machines.get(cf_proxmox_vm_id=int(vmid))
-            
-            if virtual_machine:
-                verification_state = None
-                verification_upid = None
-                
-                verification = backup.get('verification', None)
-                      
-                # Get the verification state and upid from the backup.
-                if verification:
-                    verification_state = verification.get('state')
-                    verification_upid = verification.get('upid')
-                
-                storage_name = None
-                volume_id = backup.get('volid', None)
-                if volume_id:
-                    # Get the storage name from the volume ID.
-                    # Example: 'local-zfs:vm-102-disk-0' -> 'local-zfs'
-                    storage_name = volume_id.split(':')[0]
-                    
-                creation_time = backup.get('ctime', None)
-                if creation_time:
-                    # Convert the creation time from a UNIX timestamp to a datetime object.
-                    creation_time = datetime.fromtimestamp(creation_time).isoformat()
-                
-                if virtual_machine:
-                    # Create the backup on NetBox.
-                    netbox_backup = nb.plugins.proxbox.__getattr__('backups').create(
-                        storage=storage_name,
-                        virtual_machine=virtual_machine.id,
-                        subtype=backup.get('subtype'),
-                        creation_time=creation_time,
-                        size=backup.get('size'),
-                        verification_state=verification_state,
-                        verification_upid=verification_upid,
-                        volume_id=volume_id,
-                        notes=backup.get('notes'),
-                        vmid=backup.get('vmid'),
-                        format=backup.get('format'),
-                    )
-                    
-                    netbox_backups.append(netbox_backup)
-                    
-        except Exception as error:
-            print('Error creating NetBox backup: ', error)
-            pass
     
     netbox_backups = []
 
