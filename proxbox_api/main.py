@@ -64,6 +64,9 @@ from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 # Netbox Routes
 from proxbox_api.routes.netbox import router as netbox_router, GetNetBoxEndpoint, get_netbox_endpoints
 
+# Virtualization Routes
+from proxbox_api.routes.virtualization import router as virtualization_router
+
 
 # Sessions
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -1418,6 +1421,7 @@ app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
 app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
 app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
 app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
+app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
 
 # Proxbox Routes
 #app.include_router(proxbox_router, prefix="/proxbox", tags=["proxbox"])

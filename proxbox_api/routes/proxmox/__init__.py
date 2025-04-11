@@ -4,7 +4,7 @@ from proxbox_api.schemas.proxmox import *
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.enum.proxmox import *
-
+from proxbox_api.schemas.virtualization import VMConfig
 
 
 from fastapi import HTTPException, Path, Query
@@ -310,3 +310,66 @@ async def top_level_endpoint(
         )
     
     return json_response
+
+@router.get(
+    '/{node}/{type}/{vmid}/config',
+    response_model=VMConfig,
+    response_model_exclude_none=True,
+    response_model_exclude_unset=True
+)
+async def get_vm_config(
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    name: str = Query(title="Cluster", description="Proxmox Cluster Name", default=None),
+    node: str = Path(..., title="Node", description="Proxmox Node Name"),
+    type: str = Path(..., title="Type", description="Proxmox VM Type"),
+    vmid: int = Path(..., title="VM ID", description="Proxmox VM ID"),
+):
+    '''
+    Loops through all Proxmox Clusters looking for a match in the node name.
+    If found, it returns the VM Config.
+    '''
+    
+    # Early error return.
+    if not type:
+        return {
+            "message": "VM Type is required. Use 'qemu' or 'lxc'."
+        }
+    else:
+        if type not in ('qemu', 'lxc'):
+            return {
+                "message": "Invalid VM Type. Use 'qemu' or 'lxc'."
+            }
+
+    try:
+        config = None
+        for px, cluster in zip(pxs, cluster_status):
+            try:
+                for cluster_node in cluster.node_list:
+                    if str(node) == str(cluster_node.name):
+                        if type == 'qemu':
+                            config = px.session.nodes(node).qemu(vmid).config.get()
+                        elif type == 'lxc':
+                            config = px.session.nodes(node).lxc(vmid).config.get()
+                            
+                        if config: return config
+            
+            except ResourceException as error:
+                raise ProxboxException(
+                    message="Error getting VM Config",
+                    python_exception=f"Error: {str(error)}"
+                )
+
+        if config is None:
+            raise ProxboxException(
+                message="VM Config not found.",
+                detail="VM Config not found. Check if the 'node', 'type', and 'vmid' are correct."
+            )            
+    
+    except ProxboxException:
+        raise
+    except Exception as error:
+        raise ProxboxException(
+            message="Unknown error getting VM Config. Search parameters probably wrong.",
+            detail="Check if the node, type, and vmid are correct."
+        )
