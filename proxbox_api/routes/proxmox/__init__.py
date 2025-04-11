@@ -1,15 +1,15 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Path, Query
+from typing import Annotated, Optional, List
+from pydantic import BaseModel, Field
 
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.enum.proxmox import *
 from proxbox_api.schemas.virtualization import VMConfig
+from proxbox_api.exception import ProxboxException
 
 
-from fastapi import HTTPException, Path, Query
-from typing import Annotated, Optional, List
-from pydantic import BaseModel, Field
 
 router = APIRouter()
 
