@@ -1,9 +1,9 @@
 [project]
 name = "proxbox_api"
-version = "0.0.2"
+version = "0.0.2.post1"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi[standard]>=0.115.6",
     "proxmoxer>=2.2.0",
