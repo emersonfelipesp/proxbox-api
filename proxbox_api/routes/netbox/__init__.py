@@ -15,6 +15,8 @@ router = APIRouter()
 
 @router.post('/endpoint')
 def create_netbox_endpoint(netbox: NetBoxEndpoint, session: SessionDep) -> NetBoxEndpoint:
+    if session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.id == netbox.id, NetBoxEndpoint.name == netbox.name)).first():
+        raise HTTPException(status_code=400, detail="NetBox Endpoint already exists")
     session.add(netbox)
     session.commit()
     session.refresh(netbox)

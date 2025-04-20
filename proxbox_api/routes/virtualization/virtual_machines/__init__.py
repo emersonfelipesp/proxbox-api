@@ -29,7 +29,7 @@ from pynetbox_api.virtualization.interface import VMInterface # VM Interface
 from pynetbox_api.ipam.ip_address import IPAddress # IP Address
 from pynetbox_api.cache import global_cache # Global Cache
 
-
+from proxbox_api.routes.proxmox import get_proxmox_node_storage_content # Get Proxmox Node Storage Content
 
 router = APIRouter()
 
@@ -294,7 +294,6 @@ async def create_virtual_machines(
             
             if vm_networks:
                 for network in vm_networks:
-                    print(f'vm: {virtual_machine.get('name')} - network: {network}')
                     # Parse the dict to valid netbox interface fields and Create Virtual Machine Interfaces
                     for interface_name, value in network.items():
                         # If 'bridge' value exists, create a bridge interface.
@@ -420,6 +419,7 @@ async def get_virtual_machine(id: int):
         else:
             return {}
     except Exception as error:
+        print(f'Error getting virtual machine: {error}')
         return {}
 
 
@@ -604,7 +604,7 @@ async def create_virtual_machine_backups(
                     
                 return backups
     
-    raise ProxboxException(message=f"Node or Storage not found.")
+    raise ProxboxException(message="Node or Storage not found.")
 
 
 @router.get('/virtual-machines/backups/all/create')
@@ -612,8 +612,6 @@ async def create_virtual_machine_backups(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
 ):
-    nb = RawNetBoxSession()
-    
     netbox_backups = []
 
     # Loop through each Proxmox cluster (endpoint).
@@ -654,4 +652,4 @@ async def create_virtual_machine_backups(
     if netbox_backups:
         return netbox_backups
     else:
-        raise ProxboxException(message=f"No backups found.")
+        raise ProxboxException(message="No backups found.")

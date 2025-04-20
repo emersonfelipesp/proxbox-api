@@ -1,6 +1,5 @@
-import requests
 
-from typing import Annotated, Any
+from typing import Annotated
 from fastapi import Depends
 
 from proxbox_api.routes.proxbox import netbox_settings
@@ -8,16 +7,8 @@ from proxbox_api.schemas.netbox import NetboxSessionSchema
 from proxbox_api.exception import ProxboxException
 
 from pynetbox_api.database import SessionDep, NetBoxEndpoint
+from sqlmodel import select
 
-
-# Netbox
-import pynetbox
-
-try:
-    from netbox.settings import BASE_PATH
-    DEFAULT_BASE_PATH = '/' + BASE_PATH
-except ImportError:
-    DEFAULT_BASE_PATH = ''
 
 async def netbox_settings(session: SessionDep) -> NetboxSessionSchema:
     """
