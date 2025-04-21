@@ -18,7 +18,7 @@ docker run -d -p 8800:8800 --name proxbox-api emersonfelipesp/proxbox-api:latest
 ### Clone the repository
 
 ```
-git clone https://github.com/netdevopsbr/netbox-proxbox.git
+git clone https://github.com/emersonfelipesp/proxbox-api.git
 ```
 
 ### Change to 'proxbox_api' project root folder
