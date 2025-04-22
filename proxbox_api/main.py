@@ -19,19 +19,12 @@ except Exception as error:
     pass
 
 # pynetbox API Imports (from v6.0.0 plugin uses pynetbox-api package)
-from pynetbox_api.ipam.ip_address import IPAddress
-from pynetbox_api.dcim.device import Device, DeviceRole, DeviceType
-from pynetbox_api.dcim.interface import Interface
-from pynetbox_api.dcim.site import Site
-from pynetbox_api.virtualization.cluster import Cluster
-from pynetbox_api.virtualization.cluster_type import ClusterType
-from pynetbox_api.extras.tag import Tags
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
 from proxbox_api.routes.dcim import router as dcim_router
 
 # Proxbox API Imports
 from proxbox_api.exception import ProxboxException
-from proxbox_api import ProxboxTagDep
+from proxbox_api.dependencies import ProxboxTagDep
 
 
 # Proxmox Routes
@@ -48,6 +41,7 @@ from proxbox_api.routes.extras import router as extras_router, CreateCustomField
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
+from proxbox_api.services.sync.devices import create_proxmox_devices
 
 # Proxmox Deps
 from proxbox_api.routes.proxmox.nodes import (

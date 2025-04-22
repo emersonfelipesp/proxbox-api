@@ -12,8 +12,11 @@ from pynetbox_api.exceptions import FastAPIException
 
 import traceback
 
-from pynetbox_api.virtualization import Cluster, ClusterType
-from pynetbox_api.dcim import Device, DeviceType, DeviceRole, Site
+from pynetbox_api.virtualization.cluster import Cluster, ClusterType
+from pynetbox_api.dcim.device import Device
+from pynetbox_api.dcim.device_type import DeviceType
+from pynetbox_api.dcim.device_role import DeviceRole
+from pynetbox_api.dcim.site import Site
 from pynetbox_api.cache import global_cache
 
 async def create_proxmox_devices(

@@ -1,5 +1,4 @@
 # Insert dependencies here
-
 from pynetbox_api.extras.tag import Tags
 
 import asyncio
