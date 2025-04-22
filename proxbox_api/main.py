@@ -44,8 +44,6 @@ from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.netbox import router as netbox_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.extras import router as extras_router, CreateCustomFieldsDep
-
-
 # Sessions
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 

@@ -14,7 +14,7 @@ from proxbox_api.schemas.virtualization import ( # Schemas
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep # Sessions
 from proxbox_api.routes.extras import CreateCustomFieldsDep # Create Custom Fields
-from proxbox_api import ProxboxTagDep # Proxbox Tag
+from proxbox_api.dependencies import ProxboxTagDep # Proxbox Tag
 from proxbox_api.utils import return_status_html # Return Status HTML
 from proxbox_api.routes.proxmox import get_vm_config # Get VM Config
 from proxbox_api.exception import ProxboxException # Proxbox Exception
