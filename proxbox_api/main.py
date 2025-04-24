@@ -242,7 +242,7 @@ app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
 
 # Virtualization Routes
 app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
-app.include_router(virtual_machines_router, prefix="/virtual-machines", tags=["virtualization / virtual-machines"])
+app.include_router(virtual_machines_router, prefix="/virtualization/virtual-machines", tags=["virtualization / virtual-machines"])
 
 # Extras Routes
 app.include_router(extras_router, prefix="/extras", tags=["extras"])

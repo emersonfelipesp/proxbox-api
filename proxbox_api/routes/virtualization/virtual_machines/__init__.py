@@ -33,7 +33,7 @@ from proxbox_api.routes.proxmox import get_proxmox_node_storage_content # Get Pr
 
 router = APIRouter()
 
-router.get('/virtual-machines/create')
+router.get('/create')
 async def create_virtual_machines(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -362,15 +362,6 @@ async def create_virtual_machines(
         
         # Lamba is necessary to treat the object instantiation as a coroutine/function.
         return virtual_machine
-
-        """""
-        proxmox_start_at_boot": resource.get(''),
-        "proxmox_unprivileged_container": unprivileged_container,
-        "proxmox_qemu_agent": qemu_agent,
-        "proxmox_search_domain": search_domain,
-        """
-    
-    
     
     # Return the created virtual machines.
     result_list = await asyncio.gather(*[_create_vm(cluster) for cluster in cluster_resources], return_exceptions=True)
@@ -395,7 +386,7 @@ async def create_virtual_machines(
  
  
 @router.get(
-    '/virtual-machines/',
+    '/',
     response_model=VirtualMachine.SchemaList,
     response_model_exclude_none=True,
     response_model_exclude_unset=True
@@ -406,7 +397,7 @@ async def get_virtual_machines():
 
 
 @router.get(
-    '/virtual-machines/{id}',
+    '/{id}',
     response_model=VirtualMachine.Schema,
     response_model_exclude_none=True,
     response_model_exclude_unset=True
@@ -425,7 +416,7 @@ async def get_virtual_machine(id: int):
 
         
 @router.get(
-    '/virtual-machines/summary/example',
+    '/summary/example',
     response_model=VirtualMachineSummary,
     response_model_exclude_none=True,
     response_model_exclude_unset=True
@@ -469,22 +460,22 @@ async def get_virtual_machine_summary_example():
     return vm_summary
 
 @router.get(
-    '/virtual-machines/{id}/summary',
+    '/{id}/summary',
 )
 async def get_virtual_machine_summary(id: int):
     pass
 
-@router.get('/virtual-machines/interfaces/create')
+@router.get('/interfaces/create')
 async def create_virtual_machines_interfaces():
     # TODO
     pass
 
-@router.get('/virtual-machines/interfaces/ip-address/create')
+@router.get('/interfaces/ip-address/create')
 async def create_virtual_machines_interfaces_ip_address():
     # TODO
     pass
 
-@router.get('/virtual-machines/virtual-disks/create')
+@router.get('/virtual-disks/create')
 async def create_virtual_disks():
     # TODO
     pass
@@ -550,7 +541,7 @@ async def create_netbox_backups(backup):
                
     return None
 
-@router.get('/virtual-machines/backups/create')
+@router.get('/backups/create')
 async def create_virtual_machine_backups(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -607,13 +598,32 @@ async def create_virtual_machine_backups(
     raise ProxboxException(message="Node or Storage not found.")
 
 
-@router.get('/virtual-machines/backups/all/create')
+
+@router.get('/backups/all/create')
 async def create_virtual_machine_backups(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
+    tag: ProxboxTagDep,
 ):
     netbox_backups = []
-
+    nb = RawNetBoxSession()
+    start_time = datetime.now()
+    sync_process = None
+    
+    try:
+        sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
+            name=f"sync-virtual-machines-backups-{start_time}",
+            sync_type="vm-backups",
+            status="not-started",
+            started_at=str(start_time),
+            completed_at=None,
+            runtime=None,
+            tags=[tag.get('id', 0)],
+        )
+    except Exception as error:
+        print(error)
+        pass
+    
     # Loop through each Proxmox cluster (endpoint).
     for proxmox, cluster in zip(pxs, cluster_status):
         # Get all storage names that have 'backup' in the content.
@@ -650,6 +660,13 @@ async def create_virtual_machine_backups(
                         pass
     
     if netbox_backups:
+        if sync_process:
+            end_time = datetime.now()
+            sync_process.status = "completed"
+            sync_process.completed_at = str(end_time)
+            sync_process.runtime = float((end_time - start_time).total_seconds())
+            sync_process.save()
+            
         return netbox_backups
     else:
         raise ProxboxException(message="No backups found.")
