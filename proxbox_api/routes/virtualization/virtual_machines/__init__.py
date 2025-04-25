@@ -483,63 +483,119 @@ async def create_virtual_disks():
 async def create_netbox_backups(backup):
     nb = RawNetBoxSession()
     
-    netbox_backups: list = []
-    
     try:
         # Get the virtual machine on NetBox by the VM ID.
         vmid = backup.get('vmid', None)
-        virtual_machine = None
-        if vmid:
-            # Get the virtual machine on NetBox by the VM ID.
-            # custom_field.proxmox_vm_id = vmid
-            virtual_machine = nb.virtualization.virtual_machines.get(cf_proxmox_vm_id=int(vmid))
+        if not vmid:
+            return None
+            
+        # Get the virtual machine on NetBox by the VM ID.
+        # Use a cached session to avoid repeated API calls
+        virtual_machine = await asyncio.to_thread(
+            lambda: nb.virtualization.virtual_machines.get(cf_proxmox_vm_id=int(vmid))
+        )
         
-        if virtual_machine:
-            verification_state = None
-            verification_upid = None
+        if not virtual_machine:
+            return None
             
-            verification = backup.get('verification', None)
-                    
-            # Get the verification state and upid from the backup.
-            if verification:
-                verification_state = verification.get('state')
-                verification_upid = verification.get('upid')
-            
-            storage_name = None
-            volume_id = backup.get('volid', None)
-            if volume_id:
-                # Get the storage name from the volume ID.
-                # Example: 'local-zfs:vm-102-disk-0' -> 'local-zfs'
-                storage_name = volume_id.split(':')[0]
-                
-            creation_time = backup.get('ctime', None)
-            if creation_time:
-                # Convert the creation time from a UNIX timestamp to a datetime object.
-                creation_time = datetime.fromtimestamp(creation_time).isoformat()
-            
-            if virtual_machine:
-                # Create the backup on NetBox.
-                netbox_backup = nb.plugins.proxbox.__getattr__('backups').create(
-                    storage=storage_name,
-                    virtual_machine=virtual_machine.id,
-                    subtype=backup.get('subtype'),
-                    creation_time=creation_time,
-                    size=backup.get('size'),
-                    verification_state=verification_state,
-                    verification_upid=verification_upid,
-                    volume_id=volume_id,
-                    notes=backup.get('notes'),
-                    vmid=backup.get('vmid'),
-                    format=backup.get('format'),
-                )
-                
-                if netbox_backup:
-                    return netbox_backup
+        # Process verification data
+        verification = backup.get('verification', {})
+        verification_state = verification.get('state')
+        verification_upid = verification.get('upid')
+        
+        # Process storage and volume data
+        volume_id = backup.get('volid', None)
+        storage_name = volume_id.split(':')[0] if volume_id else None
+        
+        # Process creation time
+        creation_time = None
+        ctime = backup.get('ctime', None)
+        if ctime:
+            creation_time = datetime.fromtimestamp(ctime).isoformat()
+        
+        # Create the backup on NetBox using a cached session
+        netbox_backup = await asyncio.to_thread(
+            lambda: nb.plugins.proxbox.__getattr__('backups').create(
+                storage=storage_name,
+                virtual_machine=virtual_machine.id,
+                subtype=backup.get('subtype'),
+                creation_time=creation_time,
+                size=backup.get('size'),
+                verification_state=verification_state,
+                verification_upid=verification_upid,
+                volume_id=volume_id,
+                notes=backup.get('notes'),
+                vmid=vmid,
+                format=backup.get('format'),
+            )
+        )
+        
+        return netbox_backup
+        
     except Exception as error:
-        print('Error creating NetBox backup: ', error)
-        pass
-               
-    return None
+        print(f'Error creating NetBox backup for VM {vmid}: {error}')
+        return None
+
+async def process_backups_batch(backup_tasks: list, batch_size: int = 10) -> list:
+    """
+    Process a list of backup tasks in batches to avoid overwhelming the API.
+    
+    Args:
+        backup_tasks: List of backup creation tasks
+        batch_size: Number of tasks to process in each batch
+        
+    Returns:
+        List of successfully created backups
+    """
+    results = []
+    for i in range(0, len(backup_tasks), batch_size):
+        batch = backup_tasks[i:i + batch_size]
+        batch_results = await asyncio.gather(*batch, return_exceptions=True)
+        results.extend([r for r in batch_results if r is not None])
+    return results
+
+async def get_node_backups(
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    node: str,
+    storage: str,
+    vmid: str = None
+) -> list:
+    """
+    Get backups for a specific node and storage.
+    
+    Args:
+        pxs: Proxmox sessions
+        cluster_status: Cluster status information
+        node: Node name
+        storage: Storage name
+        vmid: Optional VM ID to filter backups
+        
+    Returns:
+        List of backup tasks
+    """
+    for proxmox, cluster in zip(pxs, cluster_status):
+        for cluster_node in cluster.node_list:
+            if cluster_node.name == node:
+                try:
+                    backups = await get_proxmox_node_storage_content(
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        node=node,
+                        storage=storage,
+                        vmid=vmid,
+                        content='backup'
+                    )
+                    
+                    return [
+                        create_netbox_backups(backup) 
+                        for backup in backups 
+                        if backup.get('content') == 'backup'
+                    ]
+                except Exception as error:
+                    print(f'Error getting backups for node {node}: {error}')
+                    continue
+    return []
 
 @router.get('/backups/create')
 async def create_virtual_machine_backups(
@@ -567,50 +623,25 @@ async def create_virtual_machine_backups(
         )
     ] = None
 ):
-    nb = RawNetBoxSession()
+    backup_tasks = await get_node_backups(pxs, cluster_status, node, storage, vmid)
+    if not backup_tasks:
+        raise ProxboxException(message="Node or Storage not found.")
     
-    netbox_backups: list = []
-    
-    for proxmox, cluster in zip(pxs, cluster_status):
-        print(proxmox, cluster)
-        for cluster_node in cluster.node_list:
-            if cluster_node.name == node:
-                backups = await get_proxmox_node_storage_content(
-                    pxs=pxs,
-                    cluster_status=cluster_status,
-                    node=node,
-                    storage=storage,
-                    vmid=vmid,
-                    content='backup'
-                )
-                
-                backups = [backup for backup in backups if backup.get('content') == 'backup']
-                    
-                try:
-                    return await asyncio.gather(*[create_netbox_backups(backup) for backup in backups])
-                    
-                except Exception as error:
-                    print('Error creating NetBox backups: ', error)
-                    pass
-                    
-                return backups
-    
-    raise ProxboxException(message="Node or Storage not found.")
-
-
+    return await process_backups_batch(backup_tasks)
 
 @router.get('/backups/all/create')
-async def create_virtual_machine_backups(
+async def create_all_virtual_machine_backups(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     tag: ProxboxTagDep,
 ):
-    netbox_backups = []
     nb = RawNetBoxSession()
     start_time = datetime.now()
     sync_process = None
+    results = []
     
     try:
+        # Create sync process
         sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
             name=f"sync-virtual-machines-backups-{start_time}",
             sync_type="vm-backups",
@@ -621,52 +652,65 @@ async def create_virtual_machine_backups(
             tags=[tag.get('id', 0)],
         )
     except Exception as error:
-        print(error)
-        pass
+        print(f'Error creating sync process: {error}')
+        raise ProxboxException(message=f"Backup sync failed: {str(error)}")
     
-    # Loop through each Proxmox cluster (endpoint).
-    for proxmox, cluster in zip(pxs, cluster_status):
-        # Get all storage names that have 'backup' in the content.
-        storage_list = [
-            {
-                'storage': storage_dict.get('storage'),
-                'nodes': storage_dict.get('nodes', 'all')
-            } for storage_dict in proxmox.session.storage.get() 
-            if 'backup' in storage_dict.get('content')
-        ]
+    try:
+        sync_process.status = "syncing"
+        sync_process.save()
         
-        # Loop through each cluster node.
-        for cluster_node in cluster.node_list:
-            # Loop through each storage.
-            for storage in storage_list:
-                # If the storage is for all nodes or the current node is in the storage nodes list, get the backups.
-                if storage.get('nodes') == 'all' or cluster_node.name in storage.get('nodes'):
-                    backups = await get_proxmox_node_storage_content(
-                        pxs=pxs,
-                        cluster_status=cluster_status,
-                        node=cluster_node.name,
-                        storage=storage.get('storage'),
-                        content='backup'
-                    )
-                    
-                    backups = [backup for backup in backups if backup.get('content') == 'backup']
-                    
-                    try:
-                        current_backups = await asyncio.gather(*[create_netbox_backups(backup) for backup in backups])
-                        netbox_backups.extend(current_backups)
-
-                    except Exception as error:
-                        print('ERROR: ', error)
-                        pass
+        all_backup_tasks = []
+        
+        # Process each Proxmox cluster
+        for proxmox, cluster in zip(pxs, cluster_status):
+            # Get all storage names that have 'backup' in the content
+            storage_list = [
+                {
+                    'storage': storage_dict.get('storage'),
+                    'nodes': storage_dict.get('nodes', 'all')
+                } for storage_dict in proxmox.session.storage.get() 
+                if 'backup' in storage_dict.get('content')
+            ]
+            
+            # Process each cluster node
+            for cluster_node in cluster.node_list:
+                # Process each storage
+                for storage in storage_list:
+                    if storage.get('nodes') == 'all' or cluster_node.name in storage.get('nodes'):
+                        try:
+                            node_backup_tasks = await get_node_backups(
+                                pxs=pxs,
+                                cluster_status=cluster_status,
+                                node=cluster_node.name,
+                                storage=storage.get('storage')
+                            )
+                            all_backup_tasks.extend(node_backup_tasks)
+                        except Exception as error:
+                            print(f'Error processing backups for node {cluster_node.name} and storage {storage.get("storage")}: {error}')
+                            continue
+        
+        if not all_backup_tasks:
+            raise ProxboxException(message="No backups found.")
+        
+        # Process all backups in batches
+        results = await process_backups_batch(all_backup_tasks)
+        
+    except Exception as error:
+        print(f'Error during backup sync: {error}')
+        if sync_process:
+            sync_process.status = "failed"
+            sync_process.completed_at = str(datetime.now())
+            sync_process.runtime = float((datetime.now() - start_time).total_seconds())
+            sync_process.save()
+        raise ProxboxException(message=f"Backup sync failed: {str(error)}")
     
-    if netbox_backups:
+    finally:
+        # Always update sync process status
         if sync_process:
             end_time = datetime.now()
-            sync_process.status = "completed"
+            sync_process.status = "completed" if results else "failed"
             sync_process.completed_at = str(end_time)
             sync_process.runtime = float((end_time - start_time).total_seconds())
             sync_process.save()
-            
-        return netbox_backups
-    else:
-        raise ProxboxException(message="No backups found.")
+    
+    return results
