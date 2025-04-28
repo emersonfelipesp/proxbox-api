@@ -1,11 +1,11 @@
 # FastAPI Imports
 from fastapi import APIRouter
 from fastapi import WebSocket, Query
-from typing import Annotated
+from typing import Annotated, List
 
 from datetime import datetime
 import asyncio
-
+    
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep, ClusterResourcesDep # Cluster Status and Resources
 from proxbox_api.schemas.virtualization import ( # Schemas
     CPU, Memory, Disk, Network,
@@ -33,7 +33,7 @@ from proxbox_api.routes.proxmox import get_proxmox_node_storage_content # Get Pr
 
 router = APIRouter()
 
-router.get('/create')
+@router.get('/create')
 async def create_virtual_machines(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -62,6 +62,16 @@ async def create_virtual_machines(
             runtime=None,
             tags=[tag.get('id', 0)],
         )
+        
+        # Create a journal entry
+        journal_entry = nb.extras.journal_entries.create({
+            'assigned_object_type': 'netbox_proxbox.syncprocess',  # Content type of SyncProcess
+            'assigned_object_id': sync_process.id,  # ID of your SyncProcess object
+            'kind': 'info',  # Can be 'info', 'success', 'warning', or 'danger'
+            'comments': 'Syncing virtual machines'  # The actual journal entry content
+        })
+
+
     except Exception as error:
         print(error)
         pass
@@ -513,24 +523,41 @@ async def create_netbox_backups(backup):
         if ctime:
             creation_time = datetime.fromtimestamp(ctime).isoformat()
         
-        # Create the backup on NetBox using a cached session
-        netbox_backup = await asyncio.to_thread(
-            lambda: nb.plugins.proxbox.__getattr__('backups').create(
-                storage=storage_name,
-                virtual_machine=virtual_machine.id,
-                subtype=backup.get('subtype'),
-                creation_time=creation_time,
-                size=backup.get('size'),
-                verification_state=verification_state,
-                verification_upid=verification_upid,
-                volume_id=volume_id,
-                notes=backup.get('notes'),
-                vmid=vmid,
-                format=backup.get('format'),
+        try:
+            # Create the backup on NetBox using a cached session
+            netbox_backup = await asyncio.to_thread(
+                lambda: nb.plugins.proxbox.__getattr__('backups').create(
+                    storage=storage_name,
+                    virtual_machine=virtual_machine.id,
+                    subtype=backup.get('subtype'),
+                    creation_time=creation_time,
+                    size=backup.get('size'),
+                    verification_state=verification_state,
+                    verification_upid=verification_upid,
+                    volume_id=volume_id,
+                    notes=backup.get('notes'),
+                    vmid=vmid,
+                    format=backup.get('format'),
+                )
             )
-        )
-        
-        return netbox_backup
+            
+            return netbox_backup
+            
+        except Exception as error:
+            # Check if the error is due to a duplicate backup
+            if 'already exists' in str(error):
+                # Return a special object indicating this is a duplicate
+                return {
+                    'status': 'duplicate',
+                    'virtual_machine': virtual_machine,
+                    'storage': storage_name,
+                    'volume_id': volume_id,
+                    'creation_time': creation_time,
+                    'vmid': vmid
+                }
+            else:
+                # For other errors, raise the exception
+                raise
         
     except Exception as error:
         print(f'Error creating NetBox backup for VM {vmid}: {error}')
@@ -639,6 +666,8 @@ async def create_all_virtual_machine_backups(
     start_time = datetime.now()
     sync_process = None
     results = []
+    journal_messages = []  # Store all journal messages
+    duplicate_count = 0  # Track number of duplicate backups
     
     try:
         # Create sync process
@@ -651,14 +680,21 @@ async def create_all_virtual_machine_backups(
             runtime=None,
             tags=[tag.get('id', 0)],
         )
+        
+        journal_messages.append("## Backup Sync Process Started")
+        journal_messages.append(f"- **Start Time**: {start_time}")
+        journal_messages.append("- **Status**: Initializing")
+        
     except Exception as error:
-        print(f'Error creating sync process: {error}')
-        raise ProxboxException(message=f"Backup sync failed: {str(error)}")
+        error_msg = f"Error creating sync process: {str(error)}"
+        journal_messages.append(f"### ❌ Error\n{error_msg}")
+        raise ProxboxException(message=error_msg)
     
     try:
         sync_process.status = "syncing"
         sync_process.save()
         
+        journal_messages.append("\n## Backup Discovery")
         all_backup_tasks = []
         
         # Process each Proxmox cluster
@@ -671,6 +707,9 @@ async def create_all_virtual_machine_backups(
                 } for storage_dict in proxmox.session.storage.get() 
                 if 'backup' in storage_dict.get('content')
             ]
+            
+            journal_messages.append(f"\n### Processing Cluster: {cluster.name}")
+            journal_messages.append(f"- Found {len(storage_list)} backup storages")
             
             # Process each cluster node
             for cluster_node in cluster.node_list:
@@ -685,32 +724,72 @@ async def create_all_virtual_machine_backups(
                                 storage=storage.get('storage')
                             )
                             all_backup_tasks.extend(node_backup_tasks)
+                            
+                            journal_messages.append(f"- Node `{cluster_node.name}` in storage `{storage.get('storage')}`: Found {len(node_backup_tasks)} backups")
+                            
                         except Exception as error:
-                            print(f'Error processing backups for node {cluster_node.name} and storage {storage.get("storage")}: {error}')
+                            error_msg = f"Error processing backups for node {cluster_node.name} and storage {storage.get('storage')}: {str(error)}"
+                            journal_messages.append(f"  - ❌ {error_msg}")
                             continue
         
         if not all_backup_tasks:
-            raise ProxboxException(message="No backups found.")
+            error_msg = "No backups found to process"
+            journal_messages.append(f"\n### ⚠️ Warning\n{error_msg}")
+            raise ProxboxException(message=error_msg)
+        
+        journal_messages.append(f"\n## Backup Processing")
+        journal_messages.append(f"- Total backups to process: {len(all_backup_tasks)}")
         
         # Process all backups in batches
         results = await process_backups_batch(all_backup_tasks)
         
+        # Count successful and duplicate backups
+        successful_backups = [r for r in results if isinstance(r, dict) and r.get('status') != 'duplicate']
+        duplicate_backups = [r for r in results if isinstance(r, dict) and r.get('status') == 'duplicate']
+        duplicate_count = len(duplicate_backups)
+        
+        journal_messages.append(f"- Successfully created: {len(successful_backups)} backups")
+        if duplicate_count > 0:
+            journal_messages.append(f"- Skipped {duplicate_count} duplicate backups")
+            # Add details about duplicate backups
+            journal_messages.append("\n### Duplicate Backups")
+            for dup in duplicate_backups:
+                journal_messages.append(f"- VM ID {dup.get('vmid')} in storage {dup.get('storage')} (created at {dup.get('creation_time')})")
+        
     except Exception as error:
-        print(f'Error during backup sync: {error}')
+        error_msg = f"Error during backup sync: {str(error)}"
+        journal_messages.append(f"\n### ❌ Error\n{error_msg}")
         if sync_process:
-            sync_process.status = "failed"
+            sync_process.status = "not-started"
             sync_process.completed_at = str(datetime.now())
             sync_process.runtime = float((datetime.now() - start_time).total_seconds())
             sync_process.save()
-        raise ProxboxException(message=f"Backup sync failed: {str(error)}")
+        raise ProxboxException(message=error_msg)
     
     finally:
         # Always update sync process status
         if sync_process:
             end_time = datetime.now()
-            sync_process.status = "completed" if results else "failed"
+            sync_process.status = "completed" if results else "not-started"
             sync_process.completed_at = str(end_time)
             sync_process.runtime = float((end_time - start_time).total_seconds())
             sync_process.save()
+            
+            # Add final summary
+            journal_messages.append(f"\n## Process Summary")
+            journal_messages.append(f"- **Status**: {sync_process.status}")
+            journal_messages.append(f"- **Runtime**: {sync_process.runtime} seconds")
+            journal_messages.append(f"- **End Time**: {end_time}")
+            journal_messages.append(f"- **Total Backups Processed**: {len(results)}")
+            journal_messages.append(f"- **New Backups Created**: {len(results) - duplicate_count}")
+            journal_messages.append(f"- **Duplicate Backups Skipped**: {duplicate_count}")
+            
+            # Create single journal entry with all messages
+            nb.extras.journal_entries.create({
+                'assigned_object_type': 'netbox_proxbox.syncprocess',
+                'assigned_object_id': sync_process.id,
+                'kind': 'info',
+                'comments': '\n'.join(journal_messages)
+            })
     
     return results
