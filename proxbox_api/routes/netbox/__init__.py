@@ -40,6 +40,21 @@ def get_netbox_endpoint(netbox_id: int, session: SessionDep) -> NetBoxEndpoint:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found")
     return netbox_endpoint
 
+@router.put('/endpoint/{netbox_id}')
+def update_netbox_endpoint(netbox_id: int, netbox: NetBoxEndpoint, session: SessionDep) -> NetBoxEndpoint:
+    db_netbox = session.get(NetBoxEndpoint, netbox_id)
+    if not db_netbox:
+        raise HTTPException(status_code=404, detail="NetBox Endpoint not found")
+    
+    # Update the existing endpoint with new data
+    for key, value in netbox.dict(exclude_unset=True).items():
+        setattr(db_netbox, key, value)
+    
+    session.add(db_netbox)
+    session.commit()
+    session.refresh(db_netbox)
+    return db_netbox
+
 @router.delete('/endpoint/{netbox_id}')
 def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
     netbox_endpoint = session.get(NetBoxEndpoint, netbox_id)
