@@ -1,7 +1,7 @@
 # FastAPI Imports
 from fastapi import APIRouter
 from fastapi import WebSocket, Query
-from typing import Annotated, List
+from typing import Annotated
 
 from datetime import datetime
 import asyncio
@@ -33,6 +33,78 @@ from proxbox_api.routes.proxmox import get_proxmox_node_storage_content # Get Pr
 
 router = APIRouter()
 
+
+@router.get('/sync-process/journal-entry/test/create')
+async def create_sync_process_journal_entry():
+    """
+    Create a Sync Process, then create a Journal Entry for it.
+    """
+    
+    nb = RawNetBoxSession()
+    start_time = datetime.now().isoformat()
+    
+    try:
+        # Create sync process first
+        sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
+            name=f"journal-entry-test-{datetime.now().isoformat()}",
+            sync_type="virtual-machines",
+            status="not-started",
+            started_at=start_time
+        )
+        print(f"Created sync process: {sync_process}")
+        
+        # Try to create journal entries using the string format
+        try:
+            journal_entry_sync = nb.extras.journal_entries.create({
+                'assigned_object_type': 'netbox_proxbox.syncprocess',
+                'assigned_object_id': sync_process.id,
+                'kind': 'info',
+                'comments': 'Journal Entry Test for Sync Process'
+            })
+            print(f"Created sync process journal entry: {journal_entry_sync}")
+            
+            journal_entry_sync = nb.extras.journal_entries.create({
+                'assigned_object_type': 'netbox_proxbox.syncprocess',
+                'assigned_object_id': sync_process.id,
+                'kind': 'info',
+                'comments': '2 - Journal Entry Test for Sync Process'
+            })
+            print(f"2 Created sync process journal entry: {journal_entry_sync}")
+        except Exception as sync_error:
+            print(f"Error creating sync process journal entry: {str(sync_error)}")
+            if hasattr(sync_error, 'response'):
+                print(f"Response content: {sync_error.response.content}")
+        
+        try:
+            journal_entry_backup = nb.extras.journal_entries.create({
+                'assigned_object_type': 'netbox_proxbox.vmbackup',
+                'assigned_object_id': 1887,
+                'kind': 'info',
+                'comments': 'Journal Entry Test for VM Backup'
+            })
+            print(f"Created VM backup journal entry: {journal_entry_backup}")
+            
+        except Exception as backup_error:
+            print(f"Error creating VM backup journal entry: {str(backup_error)}")
+            if hasattr(backup_error, 'response'):
+                print(f"Response content: {backup_error.response.content}")
+        
+    except Exception as error:
+        print(f"Detailed error: {str(error)}")
+        print(f"Error type: {type(error)}")
+        if hasattr(error, 'response'):
+            print(f"Response content: {error.response.content}")
+        raise
+    
+    return {
+        'status': 'completed',
+        'sync_process': sync_process,
+        'journal_entries': {
+            'sync_process': journal_entry_sync if 'journal_entry_sync' in locals() else None,
+            'vm_backup': journal_entry_backup if 'journal_entry_backup' in locals() else None
+        }
+    }
+
 @router.get('/create')
 async def create_virtual_machines(
     pxs: ProxmoxSessionsDep,
@@ -52,6 +124,11 @@ async def create_virtual_machines(
     nb = RawNetBoxSession()
     start_time = datetime.now()
     sync_process = None
+    journal_messages = []  # Store all journal messages
+    total_vms = 0  # Track total VMs processed
+    successful_vms = 0  # Track successful VM creations
+    failed_vms = 0  # Track failed VM creations
+    
     try:
         sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
             name=f"sync-virtual-machines-{start_time}",
@@ -63,18 +140,14 @@ async def create_virtual_machines(
             tags=[tag.get('id', 0)],
         )
         
-        # Create a journal entry
-        journal_entry = nb.extras.journal_entries.create({
-            'assigned_object_type': 'netbox_proxbox.syncprocess',  # Content type of SyncProcess
-            'assigned_object_id': sync_process.id,  # ID of your SyncProcess object
-            'kind': 'info',  # Can be 'info', 'success', 'warning', or 'danger'
-            'comments': 'Syncing virtual machines'  # The actual journal entry content
-        })
-
-
+        journal_messages.append("## Virtual Machine Sync Process Started")
+        journal_messages.append(f"- **Start Time**: {start_time}")
+        journal_messages.append("- **Status**: Initializing")
+        
     except Exception as error:
-        print(error)
-        pass
+        error_msg = f"Error creating sync process: {str(error)}"
+        journal_messages.append(f"### ❌ Error\n{error_msg}")
+        raise ProxboxException(message=error_msg)
     
     async def _create_vm(cluster: dict):
         tasks = []  # Collect coroutines
@@ -129,8 +202,6 @@ async def create_virtual_machines(
             }
         }
         
-        #vm_config = px.session.nodes(resource.get("node")).qemu(resource.get("vmid")).config.get()
-     
         vm_type = resource.get('type', 'unknown')
         vm_config = await get_vm_config(
             pxs=pxs,
@@ -140,14 +211,10 @@ async def create_virtual_machines(
             vmid=resource.get("vmid")
         )
         
- 
         start_at_boot = True if vm_config.get('onboot', 0) == 1 else False
         qemu_agent = True if vm_config.get('agent', 0) == 1 else False
         unprivileged_container = True if vm_config.get('unprivileged', 0) == 1 else False
         search_domain = vm_config.get('searchdomain', None)
-        
-        #print(f'vm_config: {vm_config}')
-        
         
         initial_vm_json = websocket_vm_json | {
             'completed': False,
@@ -166,20 +233,10 @@ async def create_virtual_machines(
                 })
 
         try:
-            print('\n')
-            print('Creating Virtual Machine Dependents')
             cluster = await asyncio.to_thread(lambda: Cluster(name=cluster_name))
             device = await asyncio.to_thread(lambda: Device(name=resource.get('node')))
             role = await asyncio.to_thread(lambda: DeviceRole(**vm_role_mapping.get(vm_type)))
             
-            
-            print('> Virtual Machine Name: ', resource.get('name'))
-            print('> Cluster: ', cluster.get('name'), cluster.get('id'), type(cluster.get('id')))
-            print('> Device: ', device.get('name'), device.get('id'), type(device.get('id')))
-            print('> Tag: ', tag.get('name'), tag.get('id'))
-            print('> Role: ', role.get('name'), role.get('id'))
-            print('Finish creating Virtual Machine Dependents')
-            print('\n')
         except Exception as error:
             raise ProxboxException(
                 message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
@@ -193,7 +250,7 @@ async def create_virtual_machines(
                 cluster=cluster.get('id'),
                 device=device.get('id'),
                 vcpus=int(resource.get("maxcpu", 0)),
-                memory=int(resource.get("maxmem")) // 1000000,  # Fixed typo 'mexmem'
+                memory=int(resource.get("maxmem")) // 1000000,
                 disk=int(resource.get("maxdisk", 0)) // 1000000,
                 tags=[tag.get('id', 0)],
                 role=role.get('id', 0),
@@ -205,138 +262,65 @@ async def create_virtual_machines(
                     "proxmox_search_domain": search_domain,
                 },
             ))
-
             
         except ProxboxException:
             raise
         except Exception as error:
-            print(f'Error creating Virtual Machine in Netbox: {str(error)}')
             raise ProxboxException(
                 message="Error creating Virtual Machine in Netbox",
                 python_exception=f"Error: {str(error)}"
             )
             
-        
         if type(virtual_machine) != dict:
             virtual_machine = virtual_machine.dict()
-        
-        def format_to_html(json: dict, key: str):
-            return f"<a href='{json.get(key).get('url')}'>{json.get(key).get('name')}</a>"
-        
-        cluster_html = format_to_html(virtual_machine, 'cluster')
-        device_html = format_to_html(virtual_machine, 'device')
-        role_html = format_to_html(virtual_machine, 'role')
-        
-        
-        active_raw = "Active"
-        active_css = "<span class='text-bg-green badge p-1'>Active</span>"
-        active_html = active_css if use_css else active_raw
-        
-        offline_raw = "Offline"
-        offline_css = "<span class='text-bg-red badge p-1'>Offline</span>"
-        offline_html = offline_css if use_css else offline_raw
-        
-        unknown_raw = "Unknown"
-        unknown_css = "<span class='text-bg-grey badge p-1'>Unknown</span>"
-        unknown_html = unknown_css if use_css else unknown_raw
-        
-        status_html_choices = {
-            'active': active_html,
-            'offline': offline_html,
-            'unknown': unknown_html
-        }
-        
-        status_html = status_html_choices.get(virtual_machine.get('status').get('value'), status_html_choices.get('unknown'))
-    
-        name_html_css = f"<a href='{virtual_machine.get('display_url')}'>{virtual_machine.get('name')}</a>"
-        name_html_raw = f"{virtual_machine.get('name')}"
-        name_html = name_html_css if use_css else name_html_raw
-        
-        vm_created_json: dict = initial_vm_json | {
-            'increment_count': 'yes',
-            'completed': True,
-            'sync_status': return_status_html('completed', use_css),
-            'rowid': str(resource.get('name')),
-            'name': name_html,
-            'netbox_id': virtual_machine.get('id'),
-            'status': status_html,
-            'cluster': cluster_html,
-            'device': device_html,
-            'role': role_html,
-            'vcpus': virtual_machine.get('vcpus'),
-            'memory': virtual_machine.get('memory'),
-            'disk': virtual_machine.get('disk'),
-            'vm_interfaces': [],
-        }
-        
-        # At this point, the Virtual Machine was created in NetBox. Left to create the interfaces.
-        if all([use_websocket, websocket]):
-            await websocket.send_json(
-                {
-                    'object': 'virtual_machine',
-                    'type': 'create',
-                    'data': vm_created_json
-                }
-            )
-        
-        netbox_vm_interfaces: list = []
-        
+            
+        # Create VM interfaces
+        netbox_vm_interfaces = []
         if virtual_machine and vm_config:
-            ''' 
-            Create Virtual Machine Interfaces
-            '''
-            vm_networks: list = []
-            network_id: int = 0 # Network ID
+            vm_networks = []
+            network_id = 0
             while True:
-                # Parse network information got from Proxmox to dict
                 network_name = f'net{network_id}'
-                
-                vm_network_info = vm_config.get(network_name, None) # Example result: virtio=CE:59:22:67:69:b2,bridge=vmbr1,queues=20,tag=2010 
+                vm_network_info = vm_config.get(network_name, None)
                 if vm_network_info is not None:
-                    net_fields = vm_network_info.split(',') # Example result: ['virtio=CE:59:22:67:69:b2', 'bridge=vmbr1', 'queues=20', 'tag=2010']
-                    network_dict = dict([field.split('=') for field in net_fields]) # Example result: {'virtio': 'CE:59:22:67:69:b2', 'bridge': 'vmbr1', 'queues': '20', 'tag': '2010'}
-                    vm_networks.append({network_name:network_dict})
-                    
+                    net_fields = vm_network_info.split(',')
+                    network_dict = dict([field.split('=') for field in net_fields])
+                    vm_networks.append({network_name: network_dict})
                     network_id += 1
                 else:
-                    # If no network found by increasing network id, break the loop.
                     break
             
             if vm_networks:
                 for network in vm_networks:
-                    # Parse the dict to valid netbox interface fields and Create Virtual Machine Interfaces
                     for interface_name, value in network.items():
-                        # If 'bridge' value exists, create a bridge interface.
                         bridge_name = value.get('bridge', None)
-                        bridge: dict = {}
+                        bridge = {}
                         if bridge_name:
-                            bridge=VMInterface(
+                            bridge = VMInterface(
                                 name=bridge_name,
                                 virtual_machine=virtual_machine.get('id'),
                                 type='bridge',
-                                description=f'Bridge interface of Device {resource.get("node")}. The current NetBox modeling does not allow correct abstraction of virtual bridge.',
+                                description=f'Bridge interface of Device {resource.get("node")}.',
                                 tags=[tag.get('id', 0)]
                             )
-                        
+                            
                         if type(bridge) != dict:
                             bridge = bridge.dict()
-                        
+                            
                         vm_interface = await asyncio.to_thread(lambda: VMInterface(
                             virtual_machine=virtual_machine.get('id'),
                             name=value.get('name', interface_name),
                             enabled=True,
                             bridge=bridge.get('id', None),
-                            mac_address= value.get('virtio', value.get('hwaddr', None)), # Try get MAC from 'virtio' first, then 'hwaddr'. Else None.
+                            mac_address=value.get('virtio', value.get('hwaddr', None)),
                             tags=[tag.get('id', 0)]
                         ))
                         
-                        
                         if type(vm_interface) != dict:
                             vm_interface = vm_interface.dict()
-                        
+                            
                         netbox_vm_interfaces.append(vm_interface)
                         
-                        # If 'ip' value exists and is not 'dhcp', create IP Address on NetBox.
                         interface_ip = value.get('ip', None)
                         if interface_ip and interface_ip != 'dhcp':
                             IPAddress(
@@ -346,55 +330,88 @@ async def create_virtual_machines(
                                 status='active',
                                 tags=[tag.get('id', 0)],
                             )
-                            
-                        # TODO: Create VLANs and other network related objects.
-                        # 'tag' is the VLAN ID.
-                        # 'bridge' is the bridge name.
         
-        
-        
-        vm_created_with_interfaces_json: dict = vm_created_json | {
-            'vm_interfaces': [f"<a href='{interface.get('display_url')}'>{interface.get('name')}</a>" for interface in netbox_vm_interfaces],
-        }
-        # Remove 'completed' and 'increment_count' keys from the dictionary so it does not affect progress count on GUI.
-        vm_created_with_interfaces_json.pop('completed')
-        vm_created_with_interfaces_json.pop('increment_count')
-        
-        if all([use_websocket, websocket]):
-            await websocket.send_json(
-                {
-                    'object': 'virtual_machine',
-                    'type': 'create',
-                    'data': vm_created_with_interfaces_json
-                }
-            )
-        
-        
-        # Lamba is necessary to treat the object instantiation as a coroutine/function.
         return virtual_machine
     
-    # Return the created virtual machines.
-    result_list = await asyncio.gather(*[_create_vm(cluster) for cluster in cluster_resources], return_exceptions=True)
-
-    print('result_list: ', result_list)
-
-    # Send end message to websocket to indicate that the creation of virtual machines is finished.
-    if all([use_websocket, websocket]):
-        await websocket.send_json({'object': 'virtual_machine', 'end': True})
-
-    # Clear cache after creating virtual machines.
-    global_cache.clear_cache()
-    
-    if sync_process:
-        end_time = datetime.now()
-        sync_process.status = "completed"
-        sync_process.completed_at = str(end_time)
-        sync_process.runtime = float((end_time - start_time).total_seconds())
+    try:
+        sync_process.status = "syncing"
         sync_process.save()
+        
+        journal_messages.append("\n## Virtual Machine Discovery")
+        
+        # Process each cluster
+        for cluster in cluster_resources:
+            cluster_name = list(cluster.keys())[0]
+            resources = cluster[cluster_name]
+            vm_count = len([r for r in resources if r.get('type') in ('qemu', 'lxc')])
+            
+            journal_messages.append(f"\n### Processing Cluster: {cluster_name}")
+            journal_messages.append(f"- Found {vm_count} virtual machines")
+            total_vms += vm_count
+        
+        journal_messages.append(f"\n## Virtual Machine Processing")
+        journal_messages.append(f"- Total VMs to process: {total_vms}")
+        
+        # Return the created virtual machines.
+        result_list = await asyncio.gather(*[_create_vm(cluster) for cluster in cluster_resources], return_exceptions=True)
+        
+        # Process results
+        for result in result_list:
+            if isinstance(result, Exception):
+                failed_vms += 1
+                journal_messages.append(f"- ❌ Failed to create VM: {str(result)}")
+            else:
+                successful_vms += 1
+                journal_messages.append(f"- ✅ Successfully created VM: {result.get('name')} (ID: {result.get('id')})")
+        
+        # Send end message to websocket
+        if all([use_websocket, websocket]):
+            await websocket.send_json({'object': 'virtual_machine', 'end': True})
+
+        # Clear cache after creating virtual machines
+        global_cache.clear_cache()
+        
+    except Exception as error:
+        error_msg = f"Error during VM sync: {str(error)}"
+        journal_messages.append(f"\n### ❌ Error\n{error_msg}")
+        if sync_process:
+            sync_process.status = "not-started"
+            sync_process.completed_at = str(datetime.now())
+            sync_process.runtime = float((datetime.now() - start_time).total_seconds())
+            sync_process.save()
+        raise ProxboxException(message=error_msg)
+    
+    finally:
+        # Always update sync process status
+        if sync_process:
+            end_time = datetime.now()
+            sync_process.status = "completed" if successful_vms > 0 else "not-started"
+            sync_process.completed_at = str(end_time)
+            sync_process.runtime = float((end_time - start_time).total_seconds())
+            sync_process.save()
+            
+            # Add final summary
+            journal_messages.append(f"\n## Process Summary")
+            journal_messages.append(f"- **Status**: {sync_process.status}")
+            journal_messages.append(f"- **Runtime**: {sync_process.runtime} seconds")
+            journal_messages.append(f"- **End Time**: {end_time}")
+            journal_messages.append(f"- **Total VMs Processed**: {total_vms}")
+            journal_messages.append(f"- **Successfully Created**: {successful_vms}")
+            journal_messages.append(f"- **Failed**: {failed_vms}")
+            
+            
+            journal_entry = nb.extras.journal_entries.create({
+                'assigned_object_type': 'netbox_proxbox.syncprocess',
+                'assigned_object_id': sync_process.id,
+                'kind': 'info',
+                'comments': '\n'.join(journal_messages)
+            })
+            
+            if not journal_entry:
+                print("Warning: Journal entry creation returned None")
     
     return result_list
- 
- 
+
 @router.get(
     '/',
     response_model=VirtualMachine.SchemaList,
@@ -404,7 +421,6 @@ async def create_virtual_machines(
 async def get_virtual_machines():
     virtual_machine = VirtualMachine()
     return virtual_machine.all()
-
 
 @router.get(
     '/{id}',
@@ -423,8 +439,6 @@ async def get_virtual_machine(id: int):
         print(f'Error getting virtual machine: {error}')
         return {}
 
-
-        
 @router.get(
     '/summary/example',
     response_model=VirtualMachineSummary,
@@ -433,7 +447,6 @@ async def get_virtual_machine(id: int):
 )
 async def get_virtual_machine_summary_example():
    
-
     # Example usage
     vm_summary = VirtualMachineSummary(
         id="vm-102",
@@ -540,6 +553,14 @@ async def create_netbox_backups(backup):
                     format=backup.get('format'),
                 )
             )
+            
+            # Create a journal entry for the backup
+            journal_entry = nb.extras.journal_entries.create({
+                'assigned_object_type': 'netbox_proxbox.vmbackup',
+                'assigned_object_id': netbox_backup.id,
+                'kind': 'info',
+                'comments': f'Backup created for VM {vmid} in storage {storage_name}'
+            })
             
             return netbox_backup
             
@@ -784,12 +805,15 @@ async def create_all_virtual_machine_backups(
             journal_messages.append(f"- **New Backups Created**: {len(results) - duplicate_count}")
             journal_messages.append(f"- **Duplicate Backups Skipped**: {duplicate_count}")
             
-            # Create single journal entry with all messages
-            nb.extras.journal_entries.create({
+            
+            journal_entry = nb.extras.journal_entries.create({
                 'assigned_object_type': 'netbox_proxbox.syncprocess',
                 'assigned_object_id': sync_process.id,
                 'kind': 'info',
                 'comments': '\n'.join(journal_messages)
             })
-    
+            
+            if not journal_entry:
+                print("Warning: Journal entry creation returned None")
+    print('Syncing Backups Finished.')
     return results
