@@ -15,6 +15,8 @@ router = APIRouter()
 
 @router.post('/endpoint')
 def create_netbox_endpoint(netbox: NetBoxEndpoint, session: SessionDep) -> NetBoxEndpoint:
+    if session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.id == netbox.id, NetBoxEndpoint.name == netbox.name)).first():
+        raise HTTPException(status_code=400, detail="NetBox Endpoint already exists")
     session.add(netbox)
     session.commit()
     session.refresh(netbox)
@@ -37,6 +39,21 @@ def get_netbox_endpoint(netbox_id: int, session: SessionDep) -> NetBoxEndpoint:
     if not netbox_endpoint:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found")
     return netbox_endpoint
+
+@router.put('/endpoint/{netbox_id}')
+def update_netbox_endpoint(netbox_id: int, netbox: NetBoxEndpoint, session: SessionDep) -> NetBoxEndpoint:
+    db_netbox = session.get(NetBoxEndpoint, netbox_id)
+    if not db_netbox:
+        raise HTTPException(status_code=404, detail="NetBox Endpoint not found")
+    
+    # Update the existing endpoint with new data
+    for key, value in netbox.dict(exclude_unset=True).items():
+        setattr(db_netbox, key, value)
+    
+    session.add(db_netbox)
+    session.commit()
+    session.refresh(db_netbox)
+    return db_netbox
 
 @router.delete('/endpoint/{netbox_id}')
 def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:

@@ -1,7 +1,8 @@
 uv.lock
 
 development/
-
+pynetbox_api/
+pynetbox_api
 # Ignore pem files
 *.pem
 
