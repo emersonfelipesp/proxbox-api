@@ -107,25 +107,41 @@ async def create_proxmox_devices(
                     
                 print(f'netbox_device: {netbox_device}')
                 
-                if netbox_device is None and all([use_websocket, websocket]):
-                    await websocket.send_json(
-                        {
-                            'object': 'device',
-                            'type': 'create',
-                            'data': {
-                                'completed': True,
-                                'increment_count': 'yes',
-                                'sync_status': return_status_html('completed', use_css),
-                                'rowid': node_obj.name,
-                                'name': f"<a href='{netbox_device.get('display_url')}'>{netbox_device.get('name')}</a>",
-                                'netbox_id': netbox_device.get('id'),
-                                #'manufacturer': f"<a href='{netbox_device.get('manufacturer').get('url')}'>{netbox_device.get('manufacturer').get('name')}</a>",
-                                'role': f"<a href='{netbox_device.get('role').get('url')}'>{netbox_device.get('role').get('name')}</a>",
-                                'cluster': f"<a href='{netbox_device.get('cluster').get('url')}'>{netbox_device.get('cluster').get('name')}</a>",
-                                'device_type': f"<a href='{netbox_device.get('device_type').get('url')}'>{netbox_device.get('device_type').get('model')}</a>",
+                if all([use_websocket, websocket]):
+                    if netbox_device is not None:
+                        await websocket.send_json(
+                            {
+                                'object': 'device',
+                                'type': 'create',
+                                'data': {
+                                    'completed': True,
+                                    'increment_count': 'yes',
+                                    'sync_status': return_status_html('completed', use_css),
+                                    'rowid': node_obj.name,
+                                    'name': f"<a href='{netbox_device.get('display_url')}'>{netbox_device.get('name')}</a>",
+                                    'netbox_id': netbox_device.get('id'),
+                                    #'manufacturer': f"<a href='{netbox_device.get('manufacturer').get('url')}'>{netbox_device.get('manufacturer').get('name')}</a>",
+                                    'role': f"<a href='{netbox_device.get('role').get('url')}'>{netbox_device.get('role').get('name')}</a>",
+                                    'cluster': f"<a href='{netbox_device.get('cluster').get('url')}'>{netbox_device.get('cluster').get('name')}</a>",
+                                    'device_type': f"<a href='{netbox_device.get('device_type').get('url')}'>{netbox_device.get('device_type').get('model')}</a>",
+                                }
                             }
-                        }
-                    )
+                        )
+                    else:
+                        # Handle the case where netbox_device is None
+                        await websocket.send_json(
+                            {
+                                'object': 'device',
+                                'type': 'create',
+                                'data': {
+                                    'completed': False,
+                                    'increment_count': 'no',
+                                    'sync_status': return_status_html('failed', use_css),
+                                    'rowid': node_obj.name,
+                                    'error': 'Device creation failed. netbox_device is None.',
+                                }
+                            }
+                        )
                     
                     # If node, return only the node requested.
                     if node:
