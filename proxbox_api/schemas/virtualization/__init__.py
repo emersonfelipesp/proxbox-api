@@ -16,7 +16,6 @@ class VMConfig(BaseModel):
     description: str | None = None
     ostype: str | None = None
     numa: int | None = None
-    digest: str | None = None
     sockets: int | None = None
     cpulimit: int | None = None
     onboot: int | None = None
