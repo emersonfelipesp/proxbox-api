@@ -28,7 +28,6 @@ class VMConfig(BaseModel):
     nameserver: str | None = None
     arch: str | None = None
     hostname: str | None = None
-    rootfs: str | None = None
     features: str | None = None
     
     @model_validator(mode="before")
