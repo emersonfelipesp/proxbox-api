@@ -13,6 +13,6 @@ async def create_cluster_types():
 
 @router.get('/clusters/create')
 async def create_clusters(cluster_status: ClusterStatusDep):
-    # TOOD
+    # TODO
     pass
     
