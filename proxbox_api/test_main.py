@@ -16,6 +16,6 @@ def test_read_root():
         "fastapi": {
             "github": "https://github.com/tiangolo/fastapi",
             "website": "https://fastapi.tiangolo.com/",
-            "reason": "FastAPI was chosen because of performance and reliabilty."
+            "reason": "FastAPI was chosen because of performance and reliability."
         }
     }
