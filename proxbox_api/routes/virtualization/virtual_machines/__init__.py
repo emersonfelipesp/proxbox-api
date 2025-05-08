@@ -682,6 +682,13 @@ async def create_all_virtual_machine_backups(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     tag: ProxboxTagDep,
+    delete_nonexistent_backup: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Backup",
+            description="If true, deletes backups that exist in NetBox but not in Proxmox."
+        )
+    ] = False
 ):
     nb = RawNetBoxSession()
     start_time = datetime.now()
@@ -689,6 +696,7 @@ async def create_all_virtual_machine_backups(
     results = []
     journal_messages = []  # Store all journal messages
     duplicate_count = 0  # Track number of duplicate backups
+    deleted_count = 0  # Track number of deleted backups
     
     try:
         # Create sync process
@@ -717,6 +725,7 @@ async def create_all_virtual_machine_backups(
         
         journal_messages.append("\n## Backup Discovery")
         all_backup_tasks = []
+        proxmox_backups = set()  # Store all Proxmox backup identifiers
         
         # Process each Proxmox cluster
         for proxmox, cluster in zip(pxs, cluster_status):
@@ -745,6 +754,11 @@ async def create_all_virtual_machine_backups(
                                 storage=storage.get('storage')
                             )
                             all_backup_tasks.extend(node_backup_tasks)
+                            
+                            # Add backup identifiers to the set
+                            for backup in node_backup_tasks:
+                                if isinstance(backup, dict) and backup.get('volume_id'):
+                                    proxmox_backups.add(backup.get('volume_id'))
                             
                             journal_messages.append(f"- Node `{cluster_node.name}` in storage `{storage.get('storage')}`: Found {len(node_backup_tasks)} backups")
                             
@@ -777,6 +791,34 @@ async def create_all_virtual_machine_backups(
             for dup in duplicate_backups:
                 journal_messages.append(f"- VM ID {dup.get('vmid')} in storage {dup.get('storage')} (created at {dup.get('creation_time')})")
         
+        # Handle deletion of nonexistent backups if requested
+        if delete_nonexistent_backup:
+            journal_messages.append("\n## Deleting Nonexistent Backups")
+            try:
+                # Get all backups from NetBox
+                netbox_backups = nb.plugins.proxbox.__getattr__('backups').all()
+                
+                for backup in netbox_backups:
+                    print(f"Backup: {backup} | Backup Volume ID: {backup.volume_id} | Proxmox Backups: {proxmox_backups}")
+                    if backup.volume_id not in proxmox_backups:
+                        try:
+                            # Delete the backup
+                            backup.delete()
+                            deleted_count += 1
+                            journal_messages.append(f"- Deleted backup for VM ID {backup.vmid} in storage {backup.storage} (volume: {backup.volume_id})")
+                        except Exception as error:
+                            journal_messages.append(f"- ❌ Failed to delete backup for VM ID {backup.vmid}: {str(error)}")
+                
+                if deleted_count > 0:
+                    journal_messages.append(f"\nTotal backups deleted: {deleted_count}")
+                else:
+                    journal_messages.append("\nNo backups needed to be deleted")
+                    
+            except Exception as error:
+                error_msg = f"Error during backup deletion: {str(error)}"
+                journal_messages.append(f"\n### ❌ Error\n{error_msg}")
+                # Don't raise the exception as this is not critical for the sync process
+        
     except Exception as error:
         error_msg = f"Error during backup sync: {str(error)}"
         journal_messages.append(f"\n### ❌ Error\n{error_msg}")
@@ -804,7 +846,8 @@ async def create_all_virtual_machine_backups(
             journal_messages.append(f"- **Total Backups Processed**: {len(results)}")
             journal_messages.append(f"- **New Backups Created**: {len(results) - duplicate_count}")
             journal_messages.append(f"- **Duplicate Backups Skipped**: {duplicate_count}")
-            
+            if delete_nonexistent_backup:
+                journal_messages.append(f"- **Backups Deleted**: {deleted_count}")
             
             journal_entry = nb.extras.journal_entries.create({
                 'assigned_object_type': 'netbox_proxbox.syncprocess',
