@@ -222,7 +222,7 @@ class ProxmoxSession:
                 return proxmox_session
                 
         except Exception as error:
-            print(f'Proxmox connection using domain failed, trying to connect using IP address {self.ip_address}')
+            print(f'Proxmox connection using domain failed, trying to connect using IP address {self.ip_address}\n{error}')
             USE_IP_ADDRESS = True
                 
         if USE_IP_ADDRESS:
