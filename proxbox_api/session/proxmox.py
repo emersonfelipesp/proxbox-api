@@ -1,6 +1,8 @@
 from fastapi import Depends, Query
 from typing import Annotated, Any
 
+import pynetbox
+
 # Proxmox
 from proxmoxer import ProxmoxAPI
 
@@ -10,7 +12,7 @@ from proxbox_api.exception import ProxboxException
 
 
 # Pynetbox-api Imports
-from pynetbox_api.session import RawNetBoxSession
+from proxbox_api.session.netbox import get_netbox_session
 
 #
 # PROXMOX SESSION
@@ -312,6 +314,7 @@ class ProxmoxSession:
 
 
 async def proxmox_sessions(
+    netbox_session: Annotated[pynetbox.api, Depends(get_netbox_session)],
     source: str = "netbox",
     name: Annotated[
         str,
@@ -346,7 +349,8 @@ async def proxmox_sessions(
         Default Behavior: Instantiate Proxmox Sessions and return a list of Proxmox Sessions objects.
         If 'name' is provided, return only the Proxmox Session with that name.
     """
-    nb = RawNetBoxSession()
+    
+    nb = netbox_session
     
 
     def parse_to_schema(endpoint):

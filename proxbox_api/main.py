@@ -10,14 +10,6 @@ from typing import Annotated, List
 
 import asyncio
 
-
-
-try:
-    from pynetbox_api import RawNetBoxSession
-except Exception as error:
-    print(error)
-    pass
-
 # pynetbox API Imports (from v6.0.0 plugin uses pynetbox-api package)
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
 from proxbox_api.routes.dcim import router as dcim_router
@@ -51,6 +43,8 @@ from proxbox_api.routes.proxmox.nodes import (
 )
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 
+from proxbox_api.dependencies import NetBoxSessionDep
+
 """
 CORS ORIGINS
 """
@@ -71,13 +65,20 @@ app = FastAPI(
 
 
 from sqlmodel import select
-from pynetbox_api.database import NetBoxEndpoint, get_session
+from proxbox_api.database import NetBoxEndpoint, get_session
+from proxbox_api.session.netbox import get_netbox_session
 from sqlalchemy.exc import OperationalError
+from pynetbox_api import NetBoxBase
 
 netbox_endpoint = None
 database_session = None
 try:
     database_session = next(get_session())
+    netbox_session = get_netbox_session(database_session=database_session)
+    
+    # Set the NetBox session instance in the NetBoxBase class
+    NetBoxBase.nb = netbox_session
+    
 except OperationalError as error:
     print(error)
     pass
@@ -87,7 +88,7 @@ if database_session:
         netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
     except OperationalError as error:
         # If table does not exist, create it.
-        from pynetbox_api.database import create_db_and_tables
+        from proxbox_api.database import create_db_and_tables
         create_db_and_tables()
         netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
         
@@ -152,7 +153,7 @@ async def standalone_info():
         }
     }
     
-from pynetbox_api.cache import global_cache
+from proxbox_api.cache import global_cache
 
 @app.get('/cache')
 async def get_cache():
@@ -175,7 +176,7 @@ class SyncProcessIn(BaseModel):
     sync_type: str
     status: str
     started_at: datetime
-    completed_at: datetime
+    completed_at: Optional[datetime] = None
 
 class SyncProcess(SyncProcessIn):
     id: int
@@ -201,9 +202,15 @@ async def get_sync_processes():
     Get all sync processes from Netbox.
     """
     
-    nb = RawNetBoxSession()
-    sync_processes = [process.serialize() for process in nb.plugins.proxbox.__getattr__('sync-processes').all()]
-    return sync_processes
+    nb = get_raw_netbox_session()
+    if nb is None:
+        raise ProxboxException(message="Failed to establish NetBox session")
+    
+    try:
+        sync_processes = [process.serialize() for process in nb.plugins.proxbox.__getattr__('sync-processes').all()]
+        return sync_processes
+    except Exception as error:
+        raise ProxboxException(message="Error fetching sync processes", python_exception=str(error))
 
 @app.post('/sync-processes', response_model=SyncProcess)
 async def create_sync_process():
@@ -213,16 +220,21 @@ async def create_sync_process():
     
     print(datetime.now())
     
-    nb = RawNetBoxSession
-    sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
-        name=f"sync-process-{datetime.now()}",
-        sync_type="all",
-        status="not-started",
-        started_at=str(datetime.now()),
-        completed_at=str(datetime.now()),
-    )
+    nb = get_raw_netbox_session()
+    if nb is None:
+        raise ProxboxException(message="Failed to establish NetBox session")
     
-    return sync_process
+    try:
+        sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
+            name=f"sync-process-{datetime.now()}",
+            sync_type="all",
+            status="not-started",
+            started_at=str(datetime.now()),
+            completed_at=str(datetime.now()),
+        )
+        return sync_process
+    except Exception as error:
+        raise ProxboxException(message="Error creating sync process", python_exception=str(error))
 
     
 #
@@ -302,6 +314,7 @@ async def websocket_endpoint(
 
 @app.get('/full-update')
 async def full_update_sync(
+    netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
@@ -311,9 +324,8 @@ async def full_update_sync(
     start_time = datetime.now()
     sync_process = None
 
-    nb = RawNetBoxSession()
     try:
-        sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
+        sync_process = netbox_session.plugins.proxbox.__getattr__('sync-processes').create(
             name=f"sync-all-{start_time}",
             sync_type="all",
             status="not-started",
@@ -324,11 +336,12 @@ async def full_update_sync(
         )
     except Exception as error:
         print(error)
-        pass
+        raise ProxboxException(message=f"Error while creating sync process.", python_exception=str(error))
 
     try:
         # Sync Nodes
         sync_nodes = await create_proxmox_devices(
+            netbox_session=netbox_session,
             clusters_status=cluster_status,
                 node=None,
                 tag=tag,
@@ -367,6 +380,7 @@ async def full_update_sync(
     
 @app.websocket("/ws")
 async def websocket_endpoint(
+    netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
@@ -376,7 +390,7 @@ async def websocket_endpoint(
 ):
     connection_open = False
     
-    nb = RawNetBoxSession()
+    nb = netbox_session
     
     print('route ws reached')
     try:
@@ -408,10 +422,12 @@ async def websocket_endpoint(
             
             # Sync Nodes
             sync_nodes_function = create_proxmox_devices(
+                netbox_session=nb,
                 clusters_status=cluster_status,
                 node=None,
                 websocket=websocket,
-                tag=tag
+                tag=tag,
+                use_websocket=True
             )
             
             # Sync Virtual Machines
@@ -441,6 +457,7 @@ async def websocket_endpoint(
                 
                 # Sync Nodes
                 sync_nodes = await create_proxmox_devices(
+                    netbox_session=nb,
                     clusters_status=cluster_status,
                     node=None,
                     websocket=websocket,
@@ -469,6 +486,7 @@ async def websocket_endpoint(
                 print('Sync Nodes')
                 await websocket.send_text('Sync Nodes')
                 await create_proxmox_devices(
+                    netbox_session=nb,
                     clusters_status=cluster_status,
                     node=None,
                     websocket=websocket,
@@ -498,3 +516,12 @@ async def websocket_endpoint(
     finally:
         if connection_open and websocket.client_state.CONNECTED:
             await websocket.close(code=1000, reason=None)
+
+def get_raw_netbox_session():
+    """Helper function to get a NetBox session with the same interface as RawNetBoxSession"""
+    try:
+        database_session = next(get_session())
+        return get_netbox_session(database_session)
+    except Exception as error:
+        print(f"Error getting NetBox session: {error}")
+        return None

@@ -1,4 +1,4 @@
-from pynetbox_api.database import SessionDep, NetBoxEndpoint
-from pynetbox_api.session import RawNetBoxSession
+from proxbox_api.database import DatabaseSessionDep as SessionDep, NetBoxEndpoint
+from proxbox_api.session.netbox import get_netbox_session
  
-__all__ = ['SessionDep', 'NetBoxEndpoint', 'RawNetBoxSession']
+__all__ = ['SessionDep', 'NetBoxEndpoint', 'get_netbox_session']
