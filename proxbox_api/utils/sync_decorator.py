@@ -13,6 +13,7 @@ def sync_process(sync_type: str):
     Returns:
         Decorator function that wraps the original function.
     '''
+    
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
