@@ -40,24 +40,22 @@ async def create_proxmox_devices(
     
     for cluster_status in clusters_status:
         for node_obj in cluster_status.node_list:
-            if use_websocket:
-                await websocket.send_json(
-                    {
-                        'object': 'device',
-                        'type': 'create',
-                        'data': {
-                            'completed': False,
-                            'sync_status': return_status_html('syncing', use_css),
-                            'rowid': node_obj.name,
-                            'name': node_obj.name,
-                            'netbox_id': None,
-                            'manufacturer': None,
-                            'role': None,
-                            'cluster': cluster_status.mode.capitalize(),
-                            'device_type': None,
+            if use_websocket and websocket:
+                await websocket.send_json({
+                    'object': 'device',
+                    'type': 'create',
+                    'data': {
+                        'completed': False,
+                        'sync_status': return_status_html('syncing', use_css),
+                        'rowid': node_obj.name,
+                        'name': node_obj.name,
+                        'netbox_id': None,
+                        'manufacturer': None,
+                        'role': None,
+                        'cluster': cluster_status.mode.capitalize(),
+                        'device_type': None,
                     }
-                }
-            )
+                })
             
             
             try:
@@ -80,6 +78,7 @@ async def create_proxmox_devices(
                 site = await asyncio.to_thread(lambda: Site(bootstrap_placeholder=True))
                 
                 netbox_device = None
+                
                 if cluster is not None: 
                     # TODO: Based on name.ip create Device IP Address
                     netbox_device = await asyncio.to_thread(lambda: Device(
@@ -95,8 +94,15 @@ async def create_proxmox_devices(
                     
                 print(f'netbox_device: {netbox_device}')
                 
-                if all([use_websocket, websocket]):
-                    if netbox_device is not None:
+                
+                if netbox_device:
+                    # If node, return only the node requested.
+                    if node and node == node_obj.name:
+                        return Device.SchemaList([netbox_device.json])
+                    
+                    device_list.append(netbox_device.json)
+                    
+                    if use_websocket and websocket:
                         await websocket.send_json(
                             {
                                 'object': 'device',
@@ -115,7 +121,8 @@ async def create_proxmox_devices(
                                 }
                             }
                         )
-                    else:
+                else:
+                    if use_websocket and websocket:
                         # Handle the case where netbox_device is None
                         await websocket.send_json(
                             {
@@ -130,18 +137,6 @@ async def create_proxmox_devices(
                                 }
                             }
                         )
-                    
-                    # If node, return only the node requested.
-                    if node:
-                        if node == node_obj.name:
-                            return Device.SchemaList([netbox_device])
-                        else:
-                            continue
-                        
-                    # If not node, return all nodes.
-                    elif not node:
-                        device_list.append(netbox_device)
-
             
             except Exception as error:
                 traceback.print_exc()
@@ -157,6 +152,7 @@ async def create_proxmox_devices(
     # Clear cache after creating devices.
     global_cache.clear_cache()
     
+    print(f'\n\ndevice_list: {device_list}')
     return Device.SchemaList(device_list)
 
 ProxmoxCreateDevicesDep = Annotated[Device.SchemaList, Depends(create_proxmox_devices)]

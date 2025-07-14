@@ -4,6 +4,15 @@ import traceback
 from proxbox_api.exception import ProxboxException
 
 def sync_process(sync_type: str):
+    '''
+    Decorator to create a sync process and track the status of the sync.
+    
+    Args:
+        sync_type (str): The type of sync to track.
+        
+    Returns:
+        Decorator function that wraps the original function.
+    '''
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
