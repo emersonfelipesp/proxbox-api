@@ -1,3 +1,7 @@
+# Sessions
+from proxbox_api.session.netbox import NetBoxSessionDep
+from proxbox_api.database import DatabaseSessionDep
+
 # Insert dependencies here
 from pynetbox_api.extras.tag import Tags
 

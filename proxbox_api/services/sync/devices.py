@@ -2,9 +2,9 @@ import asyncio
 from fastapi import WebSocket, Depends
 from typing import Annotated
 from datetime import datetime
-from proxbox_api import RawNetBoxSession
+from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.dependencies import ProxboxTagDep
-from proxbox_api.utils import return_status_html
+from proxbox_api.utils import return_status_html, sync_process
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 
 from proxbox_api.exception import ProxboxException
@@ -19,33 +19,22 @@ from pynetbox_api.dcim.device_role import DeviceRole
 from pynetbox_api.dcim.site import Site
 from pynetbox_api.cache import global_cache
 
+@sync_process(sync_type='devices')
 async def create_proxmox_devices(
+    netbox_session: NetBoxSessionDep,
     clusters_status: ClusterStatusDep,
     tag: ProxboxTagDep,
     websocket: WebSocket = None,
     node: str | None = None,
     use_websocket: bool = False,
-    use_css: bool = False
+    use_css: bool = False,
+    sync_process = None,
 ):
-    # GET /api/plugins/proxbox/sync-processes/
-    nb = RawNetBoxSession()
-    start_time = datetime.now()
-    sync_process = None
+    tag_id = getattr(tag, 'id', 0)
+    tags = [tag_id] if tag_id > 0 else []
     
-    try:    
-        sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create({
-            'name': f"sync-devices-{start_time}",
-            'sync_type': "devices",
-            'status': "not-started",
-            'started_at': str(start_time),
-            'completed_at': None,
-            'runtime': None,
-            'tags': [tag.get('id', 0)],
-        })
-
-    except Exception as error:
-        print(error)
-        pass
+    # GET /api/plugins/proxbox/sync-processes/
+    nb = netbox_session
     
     device_list: list = []
     
@@ -76,15 +65,14 @@ async def create_proxmox_devices(
                     name=cluster_status.mode.capitalize(),
                     slug=cluster_status.mode,
                     description=f'Proxmox {cluster_status.mode} mode',
-                    tags=[tag.get('id', None)]
+                    tags=tags
                 ))
                 
-                #cluster_type = await asyncio.to_thread(lambda: )
                 cluster = await asyncio.to_thread(lambda: Cluster(
                     name=cluster_status.name,
-                    type=cluster_type.get('id'),
+                    type=getattr(cluster_type, 'id', None),
                     description = f'Proxmox {cluster_status.mode} cluster.',
-                    tags=[tag.get('id', None)]
+                    tags=tags
                 ))
                 
                 device_type = await asyncio.to_thread(lambda: DeviceType(bootstrap_placeholder=True))
@@ -92,17 +80,17 @@ async def create_proxmox_devices(
                 site = await asyncio.to_thread(lambda: Site(bootstrap_placeholder=True))
                 
                 netbox_device = None
-                if cluster is not None:
+                if cluster is not None: 
                     # TODO: Based on name.ip create Device IP Address
                     netbox_device = await asyncio.to_thread(lambda: Device(
                         name=node_obj.name,
-                        tags=[tag.get('id', 0)],
-                        cluster = cluster.get('id'),
+                        tags=tags,
+                        cluster = getattr(cluster, 'id', None),
                         status='active',
                         description=f'Proxmox Node {node_obj.name}',
-                        device_type=device_type.get('id', None),
-                        role=role.get('id', None),
-                        site=site.get('id', None),
+                        device_type=getattr(device_type, 'id', None),
+                        role=getattr(role, 'id', None),
+                        site=getattr(site, 'id', None),
                     ))
                     
                 print(f'netbox_device: {netbox_device}')
@@ -154,12 +142,6 @@ async def create_proxmox_devices(
                     elif not node:
                         device_list.append(netbox_device)
 
-            except FastAPIException as error:
-                traceback.print_exc()
-                raise ProxboxException(
-                    message="Unknown Error creating device in Netbox",
-                    detail=f"Error: {str(error)}"
-                )
             
             except Exception as error:
                 traceback.print_exc()
@@ -174,13 +156,6 @@ async def create_proxmox_devices(
     
     # Clear cache after creating devices.
     global_cache.clear_cache()
-    
-    if sync_process:
-        end_time = datetime.now()
-        sync_process.status = "completed"
-        sync_process.completed_at = str(end_time)
-        sync_process.runtime = float((end_time - start_time).total_seconds())
-        sync_process.save()
     
     return Device.SchemaList(device_list)
 
