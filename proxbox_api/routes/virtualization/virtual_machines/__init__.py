@@ -19,6 +19,7 @@ from proxbox_api.utils import return_status_html, sync_process # Return Status H
 from proxbox_api.routes.proxmox import get_vm_config # Get VM Config
 from proxbox_api.exception import ProxboxException # Proxbox Exception
 from proxbox_api.dependencies import NetBoxSessionDep # NetBox Session
+from proxbox_api.logger import logger # Logger
 
 # pynetbox_api Imports
 from pynetbox_api.virtualization.virtual_machine import VirtualMachine # Virtual Machine
@@ -28,7 +29,6 @@ from pynetbox_api.dcim.device_role import DeviceRole # Device Role
 from pynetbox_api.virtualization.interface import VMInterface # VM Interface
 from pynetbox_api.ipam.ip_address import IPAddress # IP Address
 from pynetbox_api.cache import global_cache # Global Cache
-
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content # Get Proxmox Node Storage Content
 
 router = APIRouter()
@@ -105,10 +105,48 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
         }
     }
 
+
+
+
+@router.get('/create-test')
+async def create_test():
+    '''
+    name:  DB-MASTER
+    status:  active
+    cluster:  1
+    device:  29
+    vcpus:  4
+    memory:  4294
+    disk:  34359
+    tags:  [2]
+    role:  786
+    '''
+    
+    virtual_machine = await asyncio.to_thread(lambda: VirtualMachine(
+        name='DB-MASTER',
+        status='active',
+        cluster=1,
+        device=29,
+        vcpus=4,
+        memory=4294,
+        disk=34359,
+        tags=[2],
+        role=786,
+        custom_fields={
+            "proxmox_vm_id": 100,
+            "proxmox_start_at_boot": True,
+            "proxmox_unprivileged_container": False,
+            "proxmox_qemu_agent": True,
+            "proxmox_search_domain": 'example.com',
+        },
+    ))
+    
+    return virtual_machine
+    
+
 @router.get('/create')
 @sync_process('virtual-machines')
 async def create_virtual_machines(
-    sync_process,
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -118,6 +156,7 @@ async def create_virtual_machines(
     websocket: WebSocket = None,
     use_css: bool = False,
     use_websocket: bool = False,
+    sync_process = None,
 ):
     '''
     Creates a new virtual machine in Netbox.
@@ -137,17 +176,6 @@ async def create_virtual_machines(
     journal_messages.append(f"- **Start Time**: {start_time}")
     journal_messages.append("- **Status**: Initializing")
         
-    
-    async def _create_vm(cluster: dict):
-        tasks = []  # Collect coroutines
-        for cluster_name, resources in cluster.items():
-            for resource in resources:
-                if resource.get('type') in ('qemu', 'lxc'):
-                    tasks.append(create_vm_task(cluster_name, resource))
-
-        return await asyncio.gather(*tasks)  # Gather coroutines
-
-
     async def create_vm_task(cluster_name, resource):
         undefined_html = return_status_html('undefined', use_css)
         
@@ -230,32 +258,51 @@ async def create_virtual_machines(
             device = await asyncio.to_thread(lambda: Device(name=resource.get('node'), tags=[getattr(tag, 'id')]))
             role = await asyncio.to_thread(lambda: DeviceRole(**vm_role_mapping.get(vm_type, {})))
             
+            print(f"Cluster: {cluster} / {cluster.id}")
+            print(f"Device: {device} / {device.id}")
+            print(f"Role: {role} / {role.id}")
+            print('\n')            
+            
         except Exception as error:
             raise ProxboxException(
                 message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
                 python_exception=f"Error: {str(error)}"
             )
             
-        try:
-            virtual_machine = await asyncio.to_thread(lambda: VirtualMachine(
-                name=resource.get('name'),
-                status=VirtualMachine.status_field.get(resource.get('status'), 'active'),
-                cluster=getattr(cluster, 'id'),
-                device=getattr(device, 'id'),
-                vcpus=int(resource.get("maxcpu", 0)),
-                memory=int(resource.get("maxmem")) // 1000000,
-                disk=int(resource.get("maxdisk", 0)) // 1000000,
-                tags=[getattr(tag, 'id')],
-                role=getattr(role, 'id'),
-                custom_fields={
-                    "proxmox_vm_id": resource.get('vmid'),
-                    "proxmox_start_at_boot": start_at_boot,
-                    "proxmox_unprivileged_container": unprivileged_container,
-                    "proxmox_qemu_agent": qemu_agent,
-                    "proxmox_search_domain": search_domain,
-                },
-            ))
-            
+        #try:
+        print('name: ', resource.get('name'))
+        print('status: ', VirtualMachine.status_field.get(resource.get('status'), 'active'))
+        print('cluster: ', getattr(cluster, 'id'))
+        print('device: ', getattr(device, 'id'))
+        print('vcpus: ', int(resource.get("maxcpu", 0)))
+        print('memory: ', int(resource.get("maxmem")) // 1000000)
+        print('disk: ', int(resource.get("maxdisk", 0)) // 1000000)
+        print('tags: ', [getattr(tag, 'id')])
+        print('role: ', getattr(role, 'id'))
+        
+        virtual_machine = await asyncio.to_thread(lambda: VirtualMachine(
+            name=resource.get('name'),
+            status=VirtualMachine.status_field.get(resource.get('status'), 'active'),
+            cluster=getattr(cluster, 'id'),
+            device=getattr(device, 'id'),
+            vcpus=int(resource.get("maxcpu", 0)),
+            memory=int(resource.get("maxmem")) // 1000000,
+            disk=int(resource.get("maxdisk", 0)) // 1000000,
+            tags=[getattr(tag, 'id')],
+            role=getattr(role, 'id'),
+            custom_fields={
+                "proxmox_vm_id": resource.get('vmid'),
+                "proxmox_start_at_boot": start_at_boot,
+                "proxmox_unprivileged_container": unprivileged_container,
+                "proxmox_qemu_agent": qemu_agent,
+                "proxmox_search_domain": search_domain,
+            },
+        ))
+        
+        print(f"Virtual Machine: {virtual_machine} / {virtual_machine.id}")
+        print('\n')
+        
+        '''
         except ProxboxException:
             raise
         except Exception as error:
@@ -263,6 +310,7 @@ async def create_virtual_machines(
                 message="Error creating Virtual Machine in Netbox",
                 python_exception=f"Error: {str(error)}"
             )
+        '''
             
         if type(virtual_machine) != dict:
             virtual_machine = virtual_machine.dict()
@@ -326,6 +374,25 @@ async def create_virtual_machines(
         
         return virtual_machine
     
+    async def _create_cluster_vms(cluster: dict) -> list:
+        """
+        Create virtual machines for a cluster.
+        
+        Args:
+            cluster: A dictionary containing cluster information.
+            
+        Returns:
+            A list of virtual machine creation results.
+        """
+        
+        tasks = []  # Collect coroutines
+        for cluster_name, resources in cluster.items():
+            for resource in resources:
+                if resource.get('type') in ('qemu', 'lxc'):
+                    tasks.append(create_vm_task(cluster_name, resource))
+
+        return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
+    
     try:
         journal_messages.append("\n## Virtual Machine Discovery")
         
@@ -335,24 +402,46 @@ async def create_virtual_machines(
             resources = cluster[cluster_name]
             vm_count = len([r for r in resources if r.get('type') in ('qemu', 'lxc')])
             
-            journal_messages.append(f"\n### Processing Cluster: {cluster_name}")
-            journal_messages.append(f"- Found {vm_count} virtual machines")
+            journal_messages += [
+                f"\n### Processing Cluster: {cluster_name}",
+                f"- Found {vm_count} virtual machines"
+            ]
+            
             total_vms += vm_count
         
-        journal_messages.append(f"\n## Virtual Machine Processing")
-        journal_messages.append(f"- Total VMs to process: {total_vms}")
+        journal_messages += [
+            "\n## Virtual Machine Processing",
+            f"- Total VMs to process: {total_vms}"
+        ]
         
         # Return the created virtual machines.
-        result_list = await asyncio.gather(*[_create_vm(cluster) for cluster in cluster_resources], return_exceptions=True)
+        result_list = await asyncio.gather(*[_create_cluster_vms(cluster) for cluster in cluster_resources], return_exceptions=True)
         
-        # Process results
-        for result in result_list:
+        logger.info(f"VM Creation Result list: {result_list}")
+        for result in result_list[0]:
             if isinstance(result, Exception):
+                print('python_exception: ', result.python_exception)
+                print('str(result): ', str(result))
+                print('')
+
+            
+        
+        # Flatten the nested results and process them
+        flattened_results = []
+        for cluster_results in result_list:
+            if isinstance(cluster_results, Exception):
                 failed_vms += 1
-                journal_messages.append(f"- ❌ Failed to create VM: {str(result)}")
+                journal_messages.append(f"- ❌ Failed to process cluster: {str(cluster_results)}")
             else:
-                successful_vms += 1
-                journal_messages.append(f"- ✅ Successfully created VM: {result.get('name')} (ID: {result.get('id')})")
+                # cluster_results is a list of VM creation results
+                for vm_result in cluster_results:
+                    if isinstance(vm_result, Exception):
+                        failed_vms += 1
+                        journal_messages.append(f"- ❌ Failed to create VM: {str(vm_result)}")
+                    else:
+                        successful_vms += 1
+                        journal_messages.append(f"- ✅ Successfully created VM: {vm_result.get('name')} (ID: {vm_result.get('id')})")
+                        flattened_results.append(vm_result)
         
         # Send end message to websocket
         if all([use_websocket, websocket]):
@@ -368,13 +457,15 @@ async def create_virtual_machines(
     
     finally:
         # Add final summary
-        journal_messages.append(f"\n## Process Summary")
-        journal_messages.append(f"- **Status**: {sync_process.status}")
-        journal_messages.append(f"- **Runtime**: {sync_process.runtime} seconds")
-        journal_messages.append(f"- **End Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        journal_messages.append(f"- **Total VMs Processed**: {total_vms}")
-        journal_messages.append(f"- **Successfully Created**: {successful_vms}")
-        journal_messages.append(f"- **Failed**: {failed_vms}")
+        journal_messages += [
+            "\n## Process Summary",
+            f"- **Status**: {getattr(sync_process, 'status', 'unknown')}",
+            f"- **Runtime**: {getattr(sync_process, 'runtime', 'unknown')} seconds",
+            f"- **End Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"- **Total VMs Processed**: {total_vms}",
+            f"- **Successfully Created**: {successful_vms}",
+            f"- **Failed**: {failed_vms}"
+        ]
         
         
         journal_entry = nb.extras.journal_entries.create({
@@ -387,7 +478,7 @@ async def create_virtual_machines(
         if not journal_entry:
             print("Warning: Journal entry creation returned None")
 
-    return result_list
+    return flattened_results
 
 @router.get(
     '/',

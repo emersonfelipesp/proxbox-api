@@ -13,7 +13,7 @@ from proxbox_api.exception import ProxboxException
 
 # Pynetbox-api Imports
 from proxbox_api.session.netbox import get_netbox_session
-
+from proxbox_api.logger import logger
 #
 # PROXMOX SESSION
 #
@@ -51,15 +51,15 @@ class ProxmoxSession:
         # Validate cluster_config type
         #
         if isinstance(cluster_config, ProxmoxSessionSchema):
-            print("INPUT is Pydantic Model ProxmoxSessionSchema")
+            logger.info("INPUT is Pydantic Model ProxmoxSessionSchema")
             cluster_config = cluster_config.model_dump(mode="python")
           
         # FIXME: This is not working  
         elif isinstance(cluster_config, str):
-            print("INPUT is string")
+            logger.info("INPUT is string")
             import json
             cluster_config = json.loads(cluster_config)
-            print(f"json_loads: {cluster_config} - type: {type(cluster_config)}""}")
+            logger.info(f"json_loads: {cluster_config} - type: {type(cluster_config)}""}")
                 
                 
             """
@@ -71,7 +71,7 @@ class ProxmoxSession:
                 )
             """
         elif isinstance(cluster_config, dict):
-            print("INPUT is dict")
+            logger.info("INPUT is dict")
             pass
         else:
             raise ProxboxException(
@@ -185,7 +185,7 @@ class ProxmoxSession:
         # Establish Proxmox Session with Token
         USE_IP_ADDRESS = False
         try:
-            print(f"Using {auth_method} to authenticate with Proxmox")
+            logger.info(f"Using {auth_method} to authenticate with Proxmox")
             kwargs = {
                 'port': self.http_port,
                 'user': self.user,
@@ -201,7 +201,7 @@ class ProxmoxSession:
             
             # Initialize Proxmox Session using Token or Password
             if self.domain:
-                print(f'Using domain {self.domain} to authenticate with Proxmox')
+                logger.info(f'Using domain {self.domain} to authenticate with Proxmox')
                 proxmox_session = ProxmoxAPI(
                     self.domain,
                     **kwargs
@@ -212,7 +212,7 @@ class ProxmoxSession:
                 self.version = proxmox_session.version.get()
                 return proxmox_session
             else:
-                print(f'Using IP {self.ip_address} address to authenticate with Proxmox as domain is not provided')
+                logger.info(f'Using IP {self.ip_address} address to authenticate with Proxmox as domain is not provided')
                 proxmox_session = ProxmoxAPI(
                     self.ip_address,
                     **kwargs
@@ -224,7 +224,7 @@ class ProxmoxSession:
                 return proxmox_session
                 
         except Exception as error:
-            print(f'Proxmox connection using domain failed, trying to connect using IP address {self.ip_address}\n{error}')
+            logger.info(f'Proxmox connection using domain failed, trying to connect using IP address {self.ip_address}\n{error}')
             USE_IP_ADDRESS = True
                 
         if USE_IP_ADDRESS:
@@ -283,7 +283,7 @@ class ProxmoxSession:
                     python_exception = f"{error}"
                 )
         else:
-            print('Proxmox Session is not connected, so not able to get Cluster Mode')
+            logger.info('Proxmox Session is not connected, so not able to get Cluster Mode')
             
     
     def get_cluster_name(self):
@@ -376,7 +376,6 @@ async def proxmox_sessions(
 
     # GET /api/plugins/proxbox/endpoints/proxmox/ and parse the JSON result to schemas.
     proxmox_schemas = [parse_to_schema(endpoint) for endpoint in nb.plugins.proxbox.__getattr__('endpoints/proxmox').all()]
-    print(f"proxmox_schemas: {proxmox_schemas}")
     
     def return_single_session(field, value):
         for proxmox_schema in proxmox_schemas:

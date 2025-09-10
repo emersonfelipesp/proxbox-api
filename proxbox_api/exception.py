@@ -8,6 +8,7 @@ class ProxboxException(Exception):
         detail: str | None = None,
         python_exception: str | None = None,
     ):
+        super().__init__(message)
         self.message = message
         self.detail = detail
         self.python_exception = python_exception
