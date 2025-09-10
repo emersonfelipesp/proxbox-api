@@ -19,6 +19,8 @@ from pynetbox_api.dcim.device_role import DeviceRole
 from pynetbox_api.dcim.site import Site
 from pynetbox_api.cache import global_cache
 
+from proxbox_api.logger import logger
+
 @sync_process(sync_type='devices')
 async def create_proxmox_devices(
     netbox_session: NetBoxSessionDep,
@@ -43,6 +45,7 @@ async def create_proxmox_devices(
     failed_devices = 0  # Track failed device creations
     
     journal_messages.append("## Device Sync Process Started")
+    logger.info(f"Device Sync Process Started")
     journal_messages.append(f"- **Start Time**: {start_time}")
     journal_messages.append("- **Status**: Initializing")
     
@@ -56,6 +59,7 @@ async def create_proxmox_devices(
             if cluster_status and cluster_status.node_list:
                 device_count = len(cluster_status.node_list)
                 total_devices += device_count
+                
                 journal_messages.append(f"- Cluster `{cluster_status.name}` ({cluster_status.mode}): Found {device_count} devices")
         
         journal_messages.append(f"\n## Device Processing")
@@ -65,13 +69,17 @@ async def create_proxmox_devices(
             if not cluster_status or not cluster_status.node_list:
                 continue
                 
-            journal_messages.append(f"\n### Processing Cluster: {cluster_status.name}")
+            journal_messages.append(f"\n### 🔄Processing Cluster: {cluster_status.name}")
+            logger.info(f"🔄 Processing Cluster: {cluster_status.name}")
+            
             journal_messages.append(f"- Cluster Mode: {cluster_status.mode}")
             journal_messages.append(f"- Devices in cluster: {len(cluster_status.node_list)}")
             
             for node_obj in cluster_status.node_list:
                 device_name = node_obj.name
-                journal_messages.append(f"\n#### Processing Device: {device_name}")
+                
+                journal_messages.append(f"\n#### 🔄 Processing Device: {device_name}")
+                logger.info(f"🔄 Processing Device: {device_name}")
                 
                 if use_websocket and websocket:
                     await websocket.send_json({
@@ -128,8 +136,8 @@ async def create_proxmox_devices(
                             site=getattr(site, 'id', None),
                         ))
                         
-                        journal_messages.append(f"- Device created successfully: {device_name}")
-                        print(f'netbox_device: {netbox_device}')
+                        journal_messages.append(f"- ✅ Device created/synced successfully: {device_name}")
+                        logger.info(f"✅ Device created/synced successfully: {device_name}")
                         
                     if netbox_device:
                         # If node, return only the node requested.
@@ -207,7 +215,6 @@ async def create_proxmox_devices(
         journal_messages.append(f"- **Successfully Created**: {successful_devices}")
         journal_messages.append(f"- **Failed**: {failed_devices}")
         
-        print(f'\n\ndevice_list: {device_list}')
         
     except Exception as error:
         error_msg = f"Error during device sync: {str(error)}"
