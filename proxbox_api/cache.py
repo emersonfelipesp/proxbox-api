@@ -16,5 +16,11 @@ class Cache:
             self.cache.pop(key)
         except KeyError:
             pass
+    
+    def return_cache(self):
+        return self.cache
 
-cache = Cache()
+    def clear_cache(self):
+        self.cache = {}
+
+global_cache = Cache()
