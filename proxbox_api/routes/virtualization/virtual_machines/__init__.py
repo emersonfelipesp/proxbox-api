@@ -1,7 +1,7 @@
 # FastAPI Imports
 from fastapi import APIRouter
 from fastapi import WebSocket, Query
-from typing import Annotated
+from typing import Annotated, Optional
 
 from datetime import datetime
 import asyncio
@@ -15,12 +15,12 @@ from proxbox_api.schemas.virtualization import ( # Schemas
 from proxbox_api.session.proxmox import ProxmoxSessionsDep # Sessions
 from proxbox_api.routes.extras import CreateCustomFieldsDep # Create Custom Fields
 from proxbox_api.dependencies import ProxboxTagDep # Proxbox Tag
-from proxbox_api.utils import return_status_html # Return Status HTML
+from proxbox_api.utils import return_status_html, sync_process # Return Status HTML and Sync Process
 from proxbox_api.routes.proxmox import get_vm_config # Get VM Config
 from proxbox_api.exception import ProxboxException # Proxbox Exception
+from proxbox_api.dependencies import NetBoxSessionDep # NetBox Session
 
 # pynetbox_api Imports
-from pynetbox_api import RawNetBoxSession   # Raw NetBox Session
 from pynetbox_api.virtualization.virtual_machine import VirtualMachine # Virtual Machine
 from pynetbox_api.virtualization.cluster import Cluster # Cluster
 from pynetbox_api.dcim.device import Device # Device
@@ -35,12 +35,12 @@ router = APIRouter()
 
 
 @router.get('/sync-process/journal-entry/test/create')
-async def create_sync_process_journal_entry():
+async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
     """
     Create a Sync Process, then create a Journal Entry for it.
     """
     
-    nb = RawNetBoxSession()
+    nb = netbox_session
     start_time = datetime.now().isoformat()
     
     try:
@@ -106,48 +106,37 @@ async def create_sync_process_journal_entry():
     }
 
 @router.get('/create')
+@sync_process('virtual-machines')
 async def create_virtual_machines(
+    sync_process,
+    netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
-    websocket = WebSocket,
+    websocket: WebSocket = None,
     use_css: bool = False,
-    use_websocket: bool = False
+    use_websocket: bool = False,
 ):
     '''
     Creates a new virtual machine in Netbox.
     '''
     
     # GET /api/plugins/proxbox/sync-processes/
-    nb = RawNetBoxSession()
+    nb = netbox_session
     start_time = datetime.now()
-    sync_process = None
+    
     journal_messages = []  # Store all journal messages
     total_vms = 0  # Track total VMs processed
     successful_vms = 0  # Track successful VM creations
     failed_vms = 0  # Track failed VM creations
     
-    try:
-        sync_process = nb.plugins.proxbox.__getattr__('sync-processes').create(
-            name=f"sync-virtual-machines-{start_time}",
-            sync_type="virtual-machines",
-            status="not-started",
-            started_at=str(start_time),
-            completed_at=None,
-            runtime=None,
-            tags=[tag.get('id', 0)],
-        )
+
+    journal_messages.append("## Virtual Machine Sync Process Started")
+    journal_messages.append(f"- **Start Time**: {start_time}")
+    journal_messages.append("- **Status**: Initializing")
         
-        journal_messages.append("## Virtual Machine Sync Process Started")
-        journal_messages.append(f"- **Start Time**: {start_time}")
-        journal_messages.append("- **Status**: Initializing")
-        
-    except Exception as error:
-        error_msg = f"Error creating sync process: {str(error)}"
-        journal_messages.append(f"### ❌ Error\n{error_msg}")
-        raise ProxboxException(message=error_msg)
     
     async def _create_vm(cluster: dict):
         tasks = []  # Collect coroutines
@@ -157,6 +146,7 @@ async def create_virtual_machines(
                     tasks.append(create_vm_task(cluster_name, resource))
 
         return await asyncio.gather(*tasks)  # Gather coroutines
+
 
     async def create_vm_task(cluster_name, resource):
         undefined_html = return_status_html('undefined', use_css)
@@ -181,7 +171,7 @@ async def create_virtual_machines(
                 'slug': 'virtual-machine-qemu',
                 'color': '00ffff',
                 'description': 'Proxmox Virtual Machine',
-                'tags': [tag.get('id', 0)],
+                'tags': [tag.id],
                 'vm_role': True
             },
             'lxc': {
@@ -189,7 +179,7 @@ async def create_virtual_machines(
                 'slug': 'container-lxc',
                 'color': '7fffd4',
                 'description': 'Proxmox LXC Container',
-                'tags': [tag.get('id', 0)],
+                'tags': [tag.id],
                 'vm_role': True
             },
             'undefined': {
@@ -197,7 +187,7 @@ async def create_virtual_machines(
                 'slug': 'unknown',
                 'color': '000000',
                 'description': 'VM Type not found. Neither QEMU nor LXC.',
-                'tags': [tag.get('id', 0)],
+                'tags': [tag.id],
                 'vm_role': True
             }
         }
@@ -211,6 +201,9 @@ async def create_virtual_machines(
             vmid=resource.get("vmid")
         )
         
+        if vm_config is None:
+            vm_config = {}
+            
         start_at_boot = True if vm_config.get('onboot', 0) == 1 else False
         qemu_agent = True if vm_config.get('agent', 0) == 1 else False
         unprivileged_container = True if vm_config.get('unprivileged', 0) == 1 else False
@@ -233,9 +226,9 @@ async def create_virtual_machines(
                 })
 
         try:
-            cluster = await asyncio.to_thread(lambda: Cluster(name=cluster_name))
-            device = await asyncio.to_thread(lambda: Device(name=resource.get('node')))
-            role = await asyncio.to_thread(lambda: DeviceRole(**vm_role_mapping.get(vm_type)))
+            cluster = await asyncio.to_thread(lambda: Cluster(name=cluster_name, tags=[getattr(tag, 'id')]))
+            device = await asyncio.to_thread(lambda: Device(name=resource.get('node'), tags=[getattr(tag, 'id')]))
+            role = await asyncio.to_thread(lambda: DeviceRole(**vm_role_mapping.get(vm_type, {})))
             
         except Exception as error:
             raise ProxboxException(
@@ -247,13 +240,13 @@ async def create_virtual_machines(
             virtual_machine = await asyncio.to_thread(lambda: VirtualMachine(
                 name=resource.get('name'),
                 status=VirtualMachine.status_field.get(resource.get('status'), 'active'),
-                cluster=cluster.get('id'),
-                device=device.get('id'),
+                cluster=getattr(cluster, 'id'),
+                device=getattr(device, 'id'),
                 vcpus=int(resource.get("maxcpu", 0)),
                 memory=int(resource.get("maxmem")) // 1000000,
                 disk=int(resource.get("maxdisk", 0)) // 1000000,
-                tags=[tag.get('id', 0)],
-                role=role.get('id', 0),
+                tags=[getattr(tag, 'id')],
+                role=getattr(role, 'id'),
                 custom_fields={
                     "proxmox_vm_id": resource.get('vmid'),
                     "proxmox_start_at_boot": start_at_boot,
@@ -301,7 +294,7 @@ async def create_virtual_machines(
                                 virtual_machine=virtual_machine.get('id'),
                                 type='bridge',
                                 description=f'Bridge interface of Device {resource.get("node")}.',
-                                tags=[tag.get('id', 0)]
+                                tags=[tag.id]
                             )
                             
                         if type(bridge) != dict:
@@ -313,7 +306,7 @@ async def create_virtual_machines(
                             enabled=True,
                             bridge=bridge.get('id', None),
                             mac_address=value.get('virtio', value.get('hwaddr', None)),
-                            tags=[tag.get('id', 0)]
+                            tags=[tag.id]
                         ))
                         
                         if type(vm_interface) != dict:
@@ -328,15 +321,12 @@ async def create_virtual_machines(
                                 assigned_object_type='virtualization.vminterface',
                                 assigned_object_id=vm_interface.get('id'),
                                 status='active',
-                                tags=[tag.get('id', 0)],
+                                tags=[tag.id],
                             )
         
         return virtual_machine
     
     try:
-        sync_process.status = "syncing"
-        sync_process.save()
-        
         journal_messages.append("\n## Virtual Machine Discovery")
         
         # Process each cluster
@@ -374,42 +364,29 @@ async def create_virtual_machines(
     except Exception as error:
         error_msg = f"Error during VM sync: {str(error)}"
         journal_messages.append(f"\n### ❌ Error\n{error_msg}")
-        if sync_process:
-            sync_process.status = "not-started"
-            sync_process.completed_at = str(datetime.now())
-            sync_process.runtime = float((datetime.now() - start_time).total_seconds())
-            sync_process.save()
         raise ProxboxException(message=error_msg)
     
     finally:
-        # Always update sync process status
-        if sync_process:
-            end_time = datetime.now()
-            sync_process.status = "completed" if successful_vms > 0 else "not-started"
-            sync_process.completed_at = str(end_time)
-            sync_process.runtime = float((end_time - start_time).total_seconds())
-            sync_process.save()
-            
-            # Add final summary
-            journal_messages.append(f"\n## Process Summary")
-            journal_messages.append(f"- **Status**: {sync_process.status}")
-            journal_messages.append(f"- **Runtime**: {sync_process.runtime} seconds")
-            journal_messages.append(f"- **End Time**: {end_time}")
-            journal_messages.append(f"- **Total VMs Processed**: {total_vms}")
-            journal_messages.append(f"- **Successfully Created**: {successful_vms}")
-            journal_messages.append(f"- **Failed**: {failed_vms}")
-            
-            
-            journal_entry = nb.extras.journal_entries.create({
-                'assigned_object_type': 'netbox_proxbox.syncprocess',
-                'assigned_object_id': sync_process.id,
-                'kind': 'info',
-                'comments': '\n'.join(journal_messages)
-            })
-            
-            if not journal_entry:
-                print("Warning: Journal entry creation returned None")
-    
+        # Add final summary
+        journal_messages.append(f"\n## Process Summary")
+        journal_messages.append(f"- **Status**: {sync_process.status}")
+        journal_messages.append(f"- **Runtime**: {sync_process.runtime} seconds")
+        journal_messages.append(f"- **End Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        journal_messages.append(f"- **Total VMs Processed**: {total_vms}")
+        journal_messages.append(f"- **Successfully Created**: {successful_vms}")
+        journal_messages.append(f"- **Failed**: {failed_vms}")
+        
+        
+        journal_entry = nb.extras.journal_entries.create({
+            'assigned_object_type': 'netbox_proxbox.syncprocess',
+            'assigned_object_id': sync_process.id,
+            'kind': 'info',
+            'comments': '\n'.join(journal_messages)
+        })
+        
+        if not journal_entry:
+            print("Warning: Journal entry creation returned None")
+
     return result_list
 
 @router.get(
@@ -503,9 +480,8 @@ async def create_virtual_disks():
     # TODO
     pass
 
-async def create_netbox_backups(backup):
-    nb = RawNetBoxSession()
-    
+async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
+    nb = netbox_session
     try:
         # Get the virtual machine on NetBox by the VM ID.
         vmid = backup.get('vmid', None)
@@ -607,8 +583,10 @@ async def get_node_backups(
     cluster_status: ClusterStatusDep,
     node: str,
     storage: str,
-    vmid: str = None
+    netbox_session: NetBoxSessionDep,
+    vmid: Optional[str] = None
 ) -> list:
+    nb = netbox_session
     """
     Get backups for a specific node and storage.
     
@@ -623,30 +601,32 @@ async def get_node_backups(
         List of backup tasks
     """
     for proxmox, cluster in zip(pxs, cluster_status):
-        for cluster_node in cluster.node_list:
-            if cluster_node.name == node:
-                try:
-                    backups = await get_proxmox_node_storage_content(
-                        pxs=pxs,
-                        cluster_status=cluster_status,
-                        node=node,
-                        storage=storage,
-                        vmid=vmid,
-                        content='backup'
-                    )
-                    
-                    return [
-                        create_netbox_backups(backup) 
-                        for backup in backups 
-                        if backup.get('content') == 'backup'
-                    ]
-                except Exception as error:
-                    print(f'Error getting backups for node {node}: {error}')
-                    continue
+        if cluster and cluster.node_list:
+            for cluster_node in cluster.node_list:
+                if cluster_node.name == node:
+                    try:
+                        backups = await get_proxmox_node_storage_content(
+                            pxs=pxs,
+                            cluster_status=cluster_status,
+                            node=node,
+                            storage=storage,
+                            vmid=vmid,
+                            content='backup'
+                        )
+                        
+                        return [
+                            create_netbox_backups(backup, nb) 
+                            for backup in backups 
+                            if backup.get('content') == 'backup'
+                        ]
+                    except Exception as error:
+                        print(f'Error getting backups for node {node}: {error}')
+                        continue
     return []
 
 @router.get('/backups/create')
 async def create_virtual_machine_backups(
+    netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     node: Annotated[
@@ -664,14 +644,14 @@ async def create_virtual_machine_backups(
         )
     ],
     vmid: Annotated[
-        str,
+        Optional[str],
         Query(
             title="VM ID",
             description="The ID of the VM to retrieve the content for."
         )
     ] = None
 ):
-    backup_tasks = await get_node_backups(pxs, cluster_status, node, storage, vmid)
+    backup_tasks = await get_node_backups(pxs, cluster_status, node, storage, netbox_session=netbox_session, vmid=vmid)
     if not backup_tasks:
         raise ProxboxException(message="Node or Storage not found.")
     
@@ -679,6 +659,7 @@ async def create_virtual_machine_backups(
 
 @router.get('/backups/all/create')
 async def create_all_virtual_machine_backups(
+    netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     tag: ProxboxTagDep,
@@ -690,7 +671,7 @@ async def create_all_virtual_machine_backups(
         )
     ] = False
 ):
-    nb = RawNetBoxSession()
+    nb = netbox_session
     start_time = datetime.now()
     sync_process = None
     results = []
@@ -707,7 +688,7 @@ async def create_all_virtual_machine_backups(
             started_at=str(start_time),
             completed_at=None,
             runtime=None,
-            tags=[tag.get('id', 0)],
+            tags=[tag.id],
         )
         
         journal_messages.append("## Backup Sync Process Started")
@@ -742,30 +723,32 @@ async def create_all_virtual_machine_backups(
             journal_messages.append(f"- Found {len(storage_list)} backup storages")
             
             # Process each cluster node
-            for cluster_node in cluster.node_list:
-                # Process each storage
-                for storage in storage_list:
-                    if storage.get('nodes') == 'all' or cluster_node.name in storage.get('nodes'):
-                        try:
-                            node_backup_tasks = await get_node_backups(
-                                pxs=pxs,
-                                cluster_status=cluster_status,
-                                node=cluster_node.name,
-                                storage=storage.get('storage')
-                            )
-                            all_backup_tasks.extend(node_backup_tasks)
-                            
-                            # Add backup identifiers to the set
-                            for backup in node_backup_tasks:
-                                if isinstance(backup, dict) and backup.get('volume_id'):
-                                    proxmox_backups.add(backup.get('volume_id'))
-                            
-                            journal_messages.append(f"- Node `{cluster_node.name}` in storage `{storage.get('storage')}`: Found {len(node_backup_tasks)} backups")
-                            
-                        except Exception as error:
-                            error_msg = f"Error processing backups for node {cluster_node.name} and storage {storage.get('storage')}: {str(error)}"
-                            journal_messages.append(f"  - ❌ {error_msg}")
-                            continue
+            if cluster and cluster.node_list:
+                for cluster_node in cluster.node_list:
+                    # Process each storage
+                    for storage in storage_list:
+                        if storage.get('nodes') == 'all' or cluster_node.name in storage.get('nodes', []):
+                            try:
+                                node_backup_tasks = await get_node_backups(
+                                    pxs=pxs,
+                                    cluster_status=cluster_status,
+                                    node=cluster_node.name,
+                                    storage=storage.get('storage'),
+                                    nb=nb
+                                )
+                                all_backup_tasks.extend(node_backup_tasks)
+                                
+                                # Add backup identifiers to the set
+                                for backup in node_backup_tasks:
+                                    if isinstance(backup, dict) and backup.get('volume_id'):
+                                        proxmox_backups.add(backup.get('volume_id'))
+                                
+                                journal_messages.append(f"- Node `{cluster_node.name}` in storage `{storage.get('storage')}`: Found {len(node_backup_tasks)} backups")
+                                
+                            except Exception as error:
+                                error_msg = f"Error processing backups for node {cluster_node.name} and storage {storage.get('storage')}: {str(error)}"
+                                journal_messages.append(f"  - ❌ {error_msg}")
+                                continue
         
         if not all_backup_tasks:
             error_msg = "No backups found to process"

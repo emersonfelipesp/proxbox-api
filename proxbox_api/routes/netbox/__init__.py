@@ -3,8 +3,9 @@ from sqlmodel import select
 
 from typing import Annotated, Any
 
-from proxbox_api.exception import ProxboxException
-from proxbox_api import SessionDep, NetBoxEndpoint, RawNetBoxSession
+from proxbox_api.exception import ProxboxException          
+from proxbox_api.database import NetBoxEndpoint         
+from proxbox_api.dependencies import DatabaseSessionDep as SessionDep, NetBoxSessionDep
 
 # FastAPI Router
 router = APIRouter()
@@ -29,7 +30,7 @@ def get_netbox_endpoints(
     limit: Annotated[int, Query(le=100)] = 100
 ) -> list[NetBoxEndpoint]:
     netbox_endpoints = session.exec(select(NetBoxEndpoint).offset(offset).limit(limit)).all()
-    return netbox_endpoints
+    return list(netbox_endpoints)
 
 GetNetBoxEndpoint = Annotated[list[NetBoxEndpoint], Depends(get_netbox_endpoints)]
 
@@ -66,24 +67,16 @@ def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
 
 
 @router.get("/status")
-async def netbox_status():
+async def netbox_status(netbox_session: NetBoxSessionDep):
     """
     ### Asynchronously retrieves the status of the Netbox session.
     
-    
-    **Args:**
-    - **nb (NetboxSessionDep):** The Netbox session dependency.
-    
-
     **Returns:**
     - The status of the Netbox session.
     """
     
-    from proxbox_api import RawNetBoxSession
-    
     try:
-        nb = RawNetBoxSession()
-        return nb.status()
+        return netbox_session.status()
     except Exception as error:
         raise ProxboxException(
             message='Error fetching status from NetBox API.',
@@ -92,20 +85,19 @@ async def netbox_status():
 
 
 @router.get("/openapi")
-async def netbox_openapi():
+async def netbox_openapi(netbox_session: NetBoxSessionDep):
     """
     ### Fetches the OpenAPI documentation from the Netbox session.
-    
-    **Args:**
-    - **nb (NetboxSessionDep):** The Netbox session dependency.
     
     **Returns:**
     - **dict:** The OpenAPI documentation retrieved from the Netbox session.
     """
     
+    from proxbox_api.session.netbox import get_netbox_session
+    from proxbox_api.database import get_session
+    
     try:
-        nb = RawNetBoxSession()
-        output = nb.openapi()
+        output = netbox_session.openapi()
         return output
     except Exception as error:
         raise ProxboxException(

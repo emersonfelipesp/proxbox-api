@@ -7,13 +7,6 @@ from typing import Annotated
 import asyncio
 from datetime import datetime
 
-try:
-    from pynetbox_api import RawNetBoxSession
-except Exception as error:
-    print(error)
-    pass
-
-
 # pynetbox API Imports (from v6.0.0 plugin uses pynetbox-api package)
 from pynetbox_api.ipam.ip_address import IPAddress
 from pynetbox_api.dcim.device import Device, DeviceRole, DeviceType
@@ -35,7 +28,7 @@ from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 router = APIRouter()
 
 @router.get('/devices')
-async def create_devices():
+async def get_devices():
     return {
         "message": "Devices created"
     }
@@ -43,6 +36,7 @@ async def create_devices():
 @router.get(
     '/devices/create',
     response_model=Device.SchemaList,
+    response_model_exclude={'websocket'},
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
