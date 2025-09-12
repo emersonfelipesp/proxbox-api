@@ -1,13 +1,20 @@
 import traceback
-
+import os
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
 from pydantic import BaseModel
 from typing import Annotated, List
 
-
+from sqlmodel import select
+from proxbox_api.database import NetBoxEndpoint, get_session
+from proxbox_api.session.netbox import get_netbox_session
+from sqlalchemy.exc import OperationalError
+from pynetbox_api import NetBoxBase
 import asyncio
 
 # pynetbox API Imports (from v6.0.0 plugin uses pynetbox-api package)
@@ -18,6 +25,8 @@ from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.exception import ProxboxException
 from proxbox_api.dependencies import ProxboxTagDep
 
+# ProxBox Admin Panel Routes
+from proxbox_api.routes.admin import router as admin_router
 
 # Proxmox Routes
 from proxbox_api.routes.proxmox import router as proxmox_router
@@ -63,12 +72,10 @@ app = FastAPI(
     version="0.0.1"
 )
 
+base_dir = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(base_dir, 'static')
+app.mount('/static', StaticFiles(directory=static_dir), name='static')
 
-from sqlmodel import select
-from proxbox_api.database import NetBoxEndpoint, get_session
-from proxbox_api.session.netbox import get_netbox_session
-from sqlalchemy.exc import OperationalError
-from pynetbox_api import NetBoxBase
 
 netbox_endpoint = None
 database_session = None
@@ -171,6 +178,32 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
 
+#
+# Routes (Endpoints)
+#
+
+# Admin Routes
+app.include_router(admin_router, prefix="/admin", tags=["admin"])
+
+# Netbox Routes
+app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
+
+# Proxmox Routes
+app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
+app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
+app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
+
+# DCIM Routes
+app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
+
+# Virtualization Routes
+app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
+app.include_router(virtual_machines_router, prefix="/virtualization/virtual-machines", tags=["virtualization / virtual-machines"])
+
+# Extras Routes
+app.include_router(extras_router, prefix="/extras", tags=["extras"])
+
+
 class SyncProcessIn(BaseModel):
     name: str
     sync_type: str
@@ -236,28 +269,6 @@ async def create_sync_process():
     except Exception as error:
         raise ProxboxException(message="Error creating sync process", python_exception=str(error))
 
-    
-#
-# Routes (Endpoints)
-#
-
-# Netbox Routes
-app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
-
-# Proxmox Routes
-app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
-app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
-app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
-
-# DCIM Routes
-app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
-
-# Virtualization Routes
-app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
-app.include_router(virtual_machines_router, prefix="/virtualization/virtual-machines", tags=["virtualization / virtual-machines"])
-
-# Extras Routes
-app.include_router(extras_router, prefix="/extras", tags=["extras"])
 
 @app.websocket('/')
 async def base_websocket(websocket: WebSocket):
