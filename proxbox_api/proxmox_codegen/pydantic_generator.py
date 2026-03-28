@@ -84,11 +84,31 @@ def _generate_root_model(model_name: str, schema: dict[str, Any]) -> str:
     )
 
 
-def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> str:
+def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> list[str]:
     schema = _resolved_schema(schema) or {}
+    if (
+        schema.get("type") == "array"
+        and isinstance(schema.get("items"), dict)
+        and schema["items"].get("type") == "object"
+        and schema["items"].get("properties")
+    ):
+        item_model_name = f"{model_name}Item"
+        description = schema.get("description")
+        description_expr = (
+            f", description={description!r}" if isinstance(description, str) and description else ""
+        )
+        return [
+            _generate_object_model(item_model_name, schema["items"]),
+            "\n".join(
+                [
+                    f"class {model_name}(RootModel[list[{item_model_name}]]):",
+                    f"    root: list[{item_model_name}] = Field(...{description_expr})",
+                ]
+            ),
+        ]
     if schema.get("type") == "object":
-        return _generate_object_model(model_name, schema)
-    return _generate_root_model(model_name, schema)
+        return [_generate_object_model(model_name, schema)]
+    return [_generate_root_model(model_name, schema)]
 
 
 def _request_schema_for_operation(path: str, operation: dict[str, Any]) -> dict[str, Any] | None:
@@ -156,13 +176,13 @@ def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:
             if isinstance(req_schema, dict):
                 req_model_name = f"{base_name}Request"
                 if req_model_name not in seen_models:
+                    model_blocks = _generate_model_from_schema(req_model_name, req_schema)
                     seen_models.add(req_model_name)
-                    lines.append(
-                        _generate_model_from_schema(req_model_name, req_schema).replace(
-                            "(BaseModel)", "(ProxmoxBaseModel)"
-                        )
-                    )
-                    lines.append("")
+                    if len(model_blocks) > 1:
+                        seen_models.add(f"{req_model_name}Item")
+                    for block in model_blocks:
+                        lines.append(block.replace("(BaseModel)", "(ProxmoxBaseModel)"))
+                        lines.append("")
 
             resp_schema = (
                 operation.get("responses", {})
@@ -174,13 +194,13 @@ def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:
             if isinstance(resp_schema, dict):
                 resp_model_name = f"{base_name}Response"
                 if resp_model_name not in seen_models:
+                    model_blocks = _generate_model_from_schema(resp_model_name, resp_schema)
                     seen_models.add(resp_model_name)
-                    lines.append(
-                        _generate_model_from_schema(resp_model_name, resp_schema).replace(
-                            "(BaseModel)", "(ProxmoxBaseModel)"
-                        )
-                    )
-                    lines.append("")
+                    if len(model_blocks) > 1:
+                        seen_models.add(f"{resp_model_name}Item")
+                    for block in model_blocks:
+                        lines.append(block.replace("(BaseModel)", "(ProxmoxBaseModel)"))
+                        lines.append("")
 
     if not seen_models:
         lines.append("class GeneratedPlaceholder(ProxmoxBaseModel):")

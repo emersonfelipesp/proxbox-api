@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import keyword
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +39,8 @@ def slugify_identifier(value: str) -> str:
         return "field"
     if out[0].isdigit():
         out = f"n_{out}"
+    if keyword.iskeyword(out):
+        out = f"{out}_"
     return out
 
 

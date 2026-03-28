@@ -14,6 +14,12 @@ Dependencies are listed in `requirements-test.txt`.
 pytest
 ```
 
+For the schema-generation and typed helper path specifically:
+
+```bash
+pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py
+```
+
 ## Targeted endpoint tests
 
 The file `proxbox_api/test_endpoint_crud.py` includes dedicated coverage for:
@@ -39,3 +45,11 @@ python -m compileall proxbox_api
 - `pytest`
 - `python -m compileall proxbox_api`
 - `mkdocs build --strict` (when docs changed)
+
+## Generated Proxmox contract checks
+
+When changing `proxbox_api/proxmox_codegen/` or the sync-facing Proxmox service layer:
+
+- Regenerate `proxbox_api/generated/proxmox/*/pydantic_models.py` from the checked-in `openapi.json` artifacts.
+- Confirm array-of-object responses still emit concrete `...ResponseItem` schemas.
+- Confirm helper-backed routes still return payloads compatible with existing sync code.
