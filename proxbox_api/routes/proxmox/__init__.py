@@ -4,12 +4,19 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
+from proxmoxer.core import ResourceException
 
 from proxbox_api.enum.proxmox import *
 from proxbox_api.exception import ProxboxException
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.schemas.virtualization import VMConfig
+from proxbox_api.services.proxmox_helpers import (
+    dump_models,
+    get_node_storage_content as get_typed_node_storage_content,
+    get_storage_list,
+    get_vm_config as get_typed_vm_config,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -233,7 +240,7 @@ async def get_proxmox_storage(
     """
     result = []
     for proxmox in pxs:
-        result.append({proxmox.name: proxmox.session.storage.get()})
+        result.append({proxmox.name: dump_models(get_storage_list(proxmox))})
 
     return result
 
@@ -286,7 +293,15 @@ async def get_proxmox_node_storage_content(
     for proxmox, cluster in zip(pxs, cluster_status):
         for cluster_node in cluster.node_list:
             if cluster_node.name == node:
-                return proxmox.session.nodes(node).storage(storage).content.get(vmid=vmid)
+                return dump_models(
+                    get_typed_node_storage_content(
+                        proxmox,
+                        node=node,
+                        storage=storage,
+                        vmid=vmid,
+                        content=content,
+                    )
+                )
 
     raise HTTPException(status_code=404, detail="Node or Storage not found")
 
@@ -348,12 +363,16 @@ async def get_vm_config(
                 for cluster_node in cluster.node_list:
                     if str(node) == str(cluster_node.name):
                         if type == "qemu":
-                            config = px.session.nodes(node).qemu(vmid).config.get()
+                            config = get_typed_vm_config(px, node=node, vm_type=type, vmid=vmid)
                         elif type == "lxc":
-                            config = px.session.nodes(node).lxc(vmid).config.get()
+                            config = get_typed_vm_config(px, node=node, vm_type=type, vmid=vmid)
 
                         if config:
-                            return config
+                            return config.model_dump(
+                                mode="python",
+                                by_alias=True,
+                                exclude_none=True,
+                            )
 
             except ResourceException as error:
                 raise ProxboxException(

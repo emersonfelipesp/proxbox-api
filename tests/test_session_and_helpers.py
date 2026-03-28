@@ -11,8 +11,17 @@ from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
+from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
+from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.session import netbox as netbox_session_module
 from proxbox_api.session.proxmox import ProxmoxSession, proxmox_sessions
+from proxbox_api.services.proxmox_helpers import (
+    get_cluster_resources as get_typed_cluster_resources,
+    get_cluster_status as get_typed_cluster_status,
+    get_node_storage_content as get_typed_node_storage_content,
+    get_storage_list as get_typed_storage_list,
+    get_vm_config as get_typed_vm_config,
+)
 
 
 class AsyncEndpoint:
@@ -142,6 +151,113 @@ class FakePermissionDeniedProxmoxAPI:
         if path == "cluster/status":
             return FakePermissionDeniedClusterResource(None)
         raise AssertionError(f"unexpected path {path}")
+
+
+class FakeNestedResource:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def get(self, **kwargs):
+        return self._payload
+
+
+class FakeStorageContentAccessor:
+    def __init__(self, payload):
+        self.content = FakeNestedResource(payload)
+
+
+class FakeNodeVmAccessor:
+    def __init__(self, payload):
+        self.config = FakeNestedResource(payload)
+
+
+class FakeNodeAccessor:
+    def __init__(self, storage_content_payload, qemu_config_payload, lxc_config_payload):
+        self._storage_content_payload = storage_content_payload
+        self._qemu_config_payload = qemu_config_payload
+        self._lxc_config_payload = lxc_config_payload
+
+    def storage(self, storage):
+        assert storage == "local"
+        return FakeStorageContentAccessor(self._storage_content_payload)
+
+    def qemu(self, vmid):
+        assert vmid == 101
+        return FakeNodeVmAccessor(self._qemu_config_payload)
+
+    def lxc(self, vmid):
+        assert vmid == 102
+        return FakeNodeVmAccessor(self._lxc_config_payload)
+
+
+class FakeTypedSessionAPI:
+    def __init__(self):
+        self.storage = FakeNestedResource([{"storage": "local"}])
+
+    def __call__(self, path):
+        if path == "cluster/status":
+            return FakeNestedResource(
+                [
+                    {"id": "cluster/lab", "name": "lab", "type": "cluster", "nodes": 1, "quorate": True, "version": 7},
+                    {
+                        "id": "node/pve01",
+                        "name": "pve01",
+                        "type": "node",
+                        "ip": "10.0.0.10",
+                        "local": True,
+                        "nodeid": 1,
+                        "online": True,
+                    },
+                ]
+            )
+        if path == "cluster/resources":
+            return FakeNestedResource(
+                [
+                    {
+                        "id": "qemu/101",
+                        "name": "vm01",
+                        "node": "pve01",
+                        "type": "qemu",
+                        "status": "running",
+                        "vmid": 101,
+                    }
+                ]
+            )
+        raise AssertionError(f"unexpected path {path}")
+
+    def nodes(self, node):
+        assert node == "pve01"
+        return FakeNodeAccessor(
+            storage_content_payload=[
+                {
+                    "format": "tgz",
+                    "size": 2048,
+                    "volid": "local:backup/vzdump-qemu-101.vma.zst",
+                    "content": "backup",
+                    "vmid": 101,
+                }
+            ],
+            qemu_config_payload={
+                "digest": "abc123",
+                "name": "vm01",
+                "cores": 2,
+                "memory": "4096",
+                "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+            },
+            lxc_config_payload={
+                "arch": "amd64",
+                "cores": 1,
+                "hostname": "ct01",
+                "memory": 1024,
+            },
+        )
+
+
+class FakeTypedProxmoxSession:
+    def __init__(self):
+        self.name = "lab"
+        self.mode = "cluster"
+        self.session = FakeTypedSessionAPI()
 
 
 @dataclass
@@ -390,6 +506,69 @@ def test_proxmox_sessions_reads_netbox_endpoints_via_client_fallback(monkeypatch
 
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"
+
+
+def test_typed_proxmox_helpers_validate_live_payloads():
+    session = FakeTypedProxmoxSession()
+
+    cluster_items = get_typed_cluster_status(session)
+    resource_items = get_typed_cluster_resources(session)
+    storage_items = get_typed_storage_list(session)
+    backup_items = get_typed_node_storage_content(
+        session, node="pve01", storage="local", vmid="101", content="backup"
+    )
+    vm_config = get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+    assert cluster_items[0].type == "cluster"
+    assert cluster_items[1].name == "pve01"
+    assert resource_items[0].vmid == 101
+    assert storage_items[0].storage == "local"
+    assert backup_items[0].volid == "local:backup/vzdump-qemu-101.vma.zst"
+    assert vm_config.name == "vm01"
+    assert vm_config.digest == "abc123"
+
+
+def test_proxmox_routes_use_typed_helpers_for_sync_dependencies():
+    pxs = [FakeTypedProxmoxSession()]
+
+    cluster_status_payload = asyncio.run(cluster_status(pxs))
+    cluster_resources_payload = asyncio.run(cluster_resources(pxs, type=None))
+    vm_config_payload = asyncio.run(
+        get_vm_config(pxs, cluster_status_payload, node="pve01", type="qemu", vmid=101)
+    )
+    backup_payload = asyncio.run(
+        get_proxmox_node_storage_content(
+            pxs,
+            cluster_status_payload,
+            node="pve01",
+            storage="local",
+            vmid="101",
+            content="backup",
+        )
+    )
+
+    assert cluster_status_payload[0].name == "lab"
+    assert cluster_status_payload[0].node_list[0].name == "pve01"
+    assert cluster_resources_payload == [
+        {
+            "lab": [
+                {
+                    "id": "qemu/101",
+                    "name": "vm01",
+                    "node": "pve01",
+                    "status": "running",
+                    "type": "qemu",
+                    "vmid": 101,
+                }
+            ]
+        }
+    ]
+    assert vm_config_payload["name"] == "vm01"
+    assert vm_config_payload["digest"] == "abc123"
+    assert vm_config_payload["memory"] == "4096"
+    assert vm_config_payload["net0"].startswith("virtio=")
+    assert backup_payload[0]["volid"] == "local:backup/vzdump-qemu-101.vma.zst"
+    assert backup_payload[0]["content"] == "backup"
 
 
 def test_netbox_v2_config_produces_bearer_authorization():
