@@ -21,3 +21,17 @@
 - [x] Refactor VM sync payload build to use `proxmox_to_netbox` mapper/service helper.
 - [x] Add tests for Proxmox-to-NetBox mapping and schema contract resolution.
 - [x] Run final compile/test validation and fix regressions.
+
+## MkDocs Material Documentation
+
+- [x] Create `material-for-mkdocs` branch from `main`.
+- [x] Add MkDocs Material configuration with English default and optional pt-BR locale.
+- [x] Write full English documentation for architecture, install, config, API, sync, troubleshooting, tests, and contribution.
+- [x] Add pt-BR translated documentation pages with mirrored structure.
+- [x] Add GitHub Actions workflow to build docs and publish to `gh-pages` on push to `main`.
+- [x] Run strict docs build and resolve configuration warnings/errors.
+
+## Review
+
+- Completed. Added `mkdocs.yml`, full `docs/` tree in EN + pt-BR, docs workflow at `.github/workflows/docs.yml`, and `requirements-docs.txt`.
+- Verified with `mkdocs build --strict` on branch `material-for-mkdocs`.
