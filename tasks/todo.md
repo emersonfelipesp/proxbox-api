@@ -35,3 +35,20 @@
 
 - Completed. Added `mkdocs.yml`, full `docs/` tree in EN + pt-BR, docs workflow at `.github/workflows/docs.yml`, and `requirements-docs.txt`.
 - Verified with `mkdocs build --strict` on branch `material-for-mkdocs`.
+
+## NetBox Async Session Fix
+
+- [x] Add async NetBox session accessor for async dependencies.
+- [x] Refactor `proxmox_sessions(source="netbox")` to iterate async endpoints directly.
+- [x] Add regression test for NetBox-backed Proxmox session loading.
+- [x] Run targeted tests and verify endpoint behavior.
+- [x] Handle netbox-sdk plugin list-path mismatch via direct NetBox client fallback.
+- [x] Add regression test for fallback endpoint retrieval.
+- [x] Re-run full tests and endpoint verification.
+
+## Review
+
+- Completed. NetBox-backed Proxmox session loading now uses async iteration and avoids SyncProxy in async dependency path.
+- Added fallback to `/api/plugins/proxbox/endpoints/proxmox/` when schema list path is unavailable in netbox-sdk facade.
+- Verified with `pytest tests/test_session_and_helpers.py` (13 passed) and full `pytest` (30 passed).
+- Runtime endpoint now returns auth/domain errors (HTTP 400) instead of generic internal server error when Proxmox credentials fail.
