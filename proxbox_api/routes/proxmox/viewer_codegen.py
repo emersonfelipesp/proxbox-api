@@ -10,6 +10,10 @@ from fastapi.responses import PlainTextResponse
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle_async
+from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+    load_proxmox_generated_openapi,
+)
+from proxbox_api.proxmox_to_netbox.netbox_schema import netbox_openapi_schema_source
 
 
 router = APIRouter()
@@ -145,6 +149,33 @@ async def proxmox_viewer_openapi(
             message="Failed to load generated OpenAPI schema.",
             python_exception=str(error),
         )
+
+
+@router.get("/openapi/embedded")
+async def proxmox_viewer_openapi_embedded():
+    """Return generated Proxmox OpenAPI as consumed by custom FastAPI OpenAPI extension."""
+
+    schema = load_proxmox_generated_openapi()
+    if not schema:
+        raise ProxboxException(
+            message="Generated Proxmox OpenAPI schema not found.",
+            detail="Run /proxmox/viewer/generate first.",
+        )
+    return schema
+
+
+@router.get("/integration/contracts")
+async def proxmox_netbox_integration_contracts():
+    """Report Proxmox and NetBox schema contract sources for transformation workflows."""
+
+    proxmox = load_proxmox_generated_openapi()
+    return {
+        "proxmox_generated_openapi_present": bool(proxmox),
+        "proxmox_generated_path_count": len((proxmox.get("paths") or {}).keys())
+        if proxmox
+        else 0,
+        "netbox_schema_source": netbox_openapi_schema_source(),
+    }
 
 
 @router.get("/pydantic", response_class=PlainTextResponse)

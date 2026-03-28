@@ -12,3 +12,12 @@
 ## Review
 
 - Done. Async parallel crawl verified, generated artifacts validated, compileall and pytest passed.
+
+## Integration Refactor
+
+- [x] Create `integration-refactor` branch and run baseline checks.
+- [x] Add FastAPI custom OpenAPI override and embed generated Proxmox OpenAPI.
+- [x] Add `proxmox_to_netbox` package with schema loaders and Pydantic v2 VM normalization.
+- [x] Refactor VM sync payload build to use `proxmox_to_netbox` mapper/service helper.
+- [x] Add tests for Proxmox-to-NetBox mapping and schema contract resolution.
+- [x] Run final compile/test validation and fix regressions.

@@ -8,6 +8,7 @@ Holds generated code and schema artifacts produced by build-time and runtime gen
 
 - `__init__.py`: Package marker for generated artifacts.
 - `proxmox/`: Proxmox API viewer generation outputs (`openapi.json`, `pydantic_models.py`, `raw_capture.json`).
+- `netbox/`: NetBox OpenAPI cache output (`openapi.json`) fetched from live endpoint when available.
 
 ## Extension Guidance
 
