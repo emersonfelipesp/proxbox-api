@@ -17,6 +17,7 @@ Endpoints that expose Proxmox sessions, cluster data, nodes, storage, and VM con
 - cluster.py and nodes.py provide typed response schemas and dependency aliases.
 - VM and storage helpers are consumed by virtualization sync endpoints.
 - Viewer codegen endpoints delegate generation to `proxbox_api.proxmox_codegen`.
+- Viewer codegen endpoints also expose integration contract diagnostics for Proxmox-to-NetBox schema workflows.
 
 ## Extension Guidance
 

@@ -13,7 +13,9 @@ Core FastAPI package: app bootstrap, shared dependencies, persistence, and helpe
 - `exception.py`: Custom exception types and async exception logging helpers.
 - `logger.py`: Logging setup utilities for console and file outputs.
 - `main.py`: FastAPI application entrypoint and route registration.
+- `openapi_custom.py`: FastAPI OpenAPI override and Proxmox generated-schema embedding.
 - `proxmox_codegen/`: Proxmox API Viewer crawler and OpenAPI/Pydantic code generation pipeline.
+- `proxmox_to_netbox/`: Schema-driven normalization from Proxmox payloads to NetBox create payloads.
 - `test_main.py`: Basic API smoke tests for the FastAPI root endpoint.
 - `utils.py`: Legacy utility helpers for sync status rendering.
 

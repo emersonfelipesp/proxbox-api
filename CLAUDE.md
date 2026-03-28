@@ -15,6 +15,7 @@ proxbox-api is a FastAPI backend that coordinates data flow between Proxmox clus
 - Persistence layer (`proxbox_api/database.py`): SQLite-backed SQLModel table for NetBox endpoint bootstrap and runtime session creation.
 - Utility layer (`proxbox_api/utils/*`, `proxbox_api/logger.py`, `proxbox_api/cache.py`, `proxbox_api/exception.py`): Cross-cutting helpers for logging, exception formatting, in-memory cache, and sync lifecycle tracking.
 - Proxmox codegen layer (`proxbox_api/proxmox_codegen/*`): Playwright crawl, `apidoc.js` parsing, OpenAPI conversion, and Pydantic v2 model generation for Proxmox endpoints.
+- Proxmox-to-NetBox transform layer (`proxbox_api/proxmox_to_netbox/*`): Pydantic-driven normalization from raw Proxmox payloads to valid NetBox create payloads with live schema contract resolution.
 
 ### Runtime Components
 
@@ -107,6 +108,8 @@ Defined in `requirements-test.txt`:
 - `proxbox_api/custom_objects/`: custom NetBox object wrappers.
 - `proxbox_api/proxmox_codegen/`: Proxmox API viewer extraction and schema generation pipeline.
 - `proxbox_api/generated/proxmox/`: generated OpenAPI and Pydantic artifacts.
+- `proxbox_api/proxmox_to_netbox/`: Proxmox input to NetBox output schema transformations.
+- `proxbox_api/generated/netbox/`: cached NetBox OpenAPI contract artifacts.
 
 ## Safe Extension Pattern
 
