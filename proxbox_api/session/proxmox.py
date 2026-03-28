@@ -1,7 +1,7 @@
 """Proxmox session management and dependency provider utilities."""
 
-from json import JSONDecodeError
 import re
+from json import JSONDecodeError
 from typing import Annotated, Any
 
 from fastapi import Depends, Query
