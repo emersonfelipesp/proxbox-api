@@ -16,6 +16,7 @@ import { NetBoxEndpointForm, ProxmoxEndpointForm } from "@/components/endpoint-f
 import type { NetBoxEndpoint, ProxmoxEndpoint, ProxmoxEndpointPayload } from "@/lib/types"
 
 type ToastKind = "success" | "error" | "info"
+type ThemeMode = "light" | "dark"
 
 interface ToastMessage {
   kind: ToastKind
@@ -23,6 +24,7 @@ interface ToastMessage {
 }
 
 export default function Home() {
+  const [theme, setTheme] = useState<ThemeMode>("light")
   const [loading, setLoading] = useState(true)
   const [savingNetBox, setSavingNetBox] = useState(false)
   const [savingProxmox, setSavingProxmox] = useState(false)
@@ -60,6 +62,28 @@ export default function Home() {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    const storedTheme = window.localStorage.getItem("proxbox-ui-theme")
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setTheme(storedTheme)
+      document.documentElement.dataset.theme = storedTheme
+      return
+    }
+
+    const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light"
+    setTheme(preferredTheme)
+    document.documentElement.dataset.theme = preferredTheme
+  }, [])
+
+  function toggleTheme() {
+    const nextTheme: ThemeMode = theme === "light" ? "dark" : "light"
+    setTheme(nextTheme)
+    document.documentElement.dataset.theme = nextTheme
+    window.localStorage.setItem("proxbox-ui-theme", nextTheme)
+  }
 
   async function handleNetBoxSubmit(payload: NetBoxEndpoint) {
     setSavingNetBox(true)
@@ -111,7 +135,7 @@ export default function Home() {
     }
   }
 
-  async function handleProxmoxUpdate(payload: ProxmoxEndpointPayload) {
+  async function handleProxmoxUpdate(payload: Partial<ProxmoxEndpointPayload>) {
     if (!editingProxmox?.id) return
 
     setSavingProxmox(true)
@@ -152,11 +176,22 @@ export default function Home() {
     <div className="min-h-screen bg-[var(--app-bg)] text-[var(--app-foreground)]">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 md:px-8">
         <header className="rounded-3xl border border-[var(--border)] bg-[var(--hero-bg)] px-6 py-6 shadow-[0_20px_70px_-45px_rgba(0,0,0,0.45)]">
-          <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">Proxbox UI</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Endpoint Control Plane</h1>
-          <p className="mt-2 max-w-3xl text-sm text-[var(--muted)] md:text-base">
-            Manage one NetBox endpoint and multiple Proxmox endpoints from a single interface.
-          </p>
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">Proxbox UI</p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Endpoint Control Plane</h1>
+              <p className="mt-2 max-w-3xl text-sm text-[var(--muted)] md:text-base">
+                Manage one NetBox endpoint and multiple Proxmox endpoints from a single interface.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border-strong)] bg-[var(--panel-bg)] px-4 text-sm font-semibold text-[var(--panel-foreground)] shadow-sm transition hover:bg-[var(--field-bg)]"
+            >
+              {theme === "light" ? "Switch to Dark" : "Switch to Light"}
+            </button>
+          </div>
           {toast ? (
             <p
               className={`mt-4 inline-flex rounded-lg px-3 py-2 text-sm font-medium ${
@@ -190,6 +225,7 @@ export default function Home() {
                   </span>
                 </div>
                 <NetBoxEndpointForm
+                  key={netboxEndpoint?.id ?? "netbox-new"}
                   mode={netboxEndpoint ? "edit" : "create"}
                   initial={netboxEndpoint}
                   submitting={savingNetBox}
@@ -217,6 +253,7 @@ export default function Home() {
                   </span>
                 </div>
                 <ProxmoxEndpointForm
+                  key={editingProxmox?.id ?? "proxmox-new"}
                   mode={editingProxmox ? "edit" : "create"}
                   initial={editingProxmox}
                   submitting={savingProxmox}

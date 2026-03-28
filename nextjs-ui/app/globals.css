@@ -1,23 +1,45 @@
 @import "tailwindcss";
 
 :root {
-  --app-bg: #f2f5f9;
-  --app-foreground: #1d2533;
-  --hero-bg: linear-gradient(135deg, #17385d 0%, #2f638c 58%, #3f8f95 100%);
+  --app-bg: #f5f7fb;
+  --app-foreground: #1f2a37;
+  --hero-bg: linear-gradient(120deg, #0f355e 0%, #1f4f80 45%, #2f6a96 100%);
   --panel-bg: #ffffff;
-  --panel-foreground: #112037;
-  --field-bg: #f7fafc;
-  --muted: #5c6f87;
-  --border: #d7e2ef;
-  --accent: #1464b4;
-  --chip-bg: #dceafd;
-  --chip-foreground: #175393;
-  --success: #1f7a4b;
-  --success-bg: #def8e8;
-  --danger: #b23749;
-  --danger-bg: #ffe8ec;
-  --info: #1957a8;
-  --info-bg: #e1edff;
+  --panel-foreground: #122033;
+  --field-bg: #f7f9fc;
+  --muted: #5f6f84;
+  --border: #d9e1ea;
+  --border-strong: #aebdcc;
+  --accent: #2f6faa;
+  --chip-bg: #e4edf7;
+  --chip-foreground: #2b537f;
+  --success: #2f855a;
+  --success-bg: #e6f6ed;
+  --danger: #bb3e55;
+  --danger-bg: #ffeaf0;
+  --info: #275e96;
+  --info-bg: #e6f0fb;
+}
+
+:root[data-theme="dark"] {
+  --app-bg: #0f1724;
+  --app-foreground: #d8e3ef;
+  --hero-bg: linear-gradient(130deg, #12253d 0%, #1b3758 55%, #26476b 100%);
+  --panel-bg: #1a2635;
+  --panel-foreground: #dce7f5;
+  --field-bg: #132131;
+  --muted: #9bb0c8;
+  --border: #2b3e53;
+  --border-strong: #4a627b;
+  --accent: #5c8dbd;
+  --chip-bg: #21364f;
+  --chip-foreground: #b6cde6;
+  --success: #61b386;
+  --success-bg: #173126;
+  --danger: #f08196;
+  --danger-bg: #43202b;
+  --info: #7cb2e6;
+  --info-bg: #1b3147;
 }
 
 @theme inline {
@@ -28,9 +50,15 @@
 }
 
 body {
-  background: radial-gradient(circle at 10% 0%, #d8e8fa 0, transparent 40%),
-    radial-gradient(circle at 90% 20%, #d0f2f0 0, transparent 35%),
+  background: radial-gradient(circle at 8% 0%, rgba(100, 140, 185, 0.24) 0, transparent 38%),
+    radial-gradient(circle at 92% 18%, rgba(87, 150, 183, 0.2) 0, transparent 34%),
     var(--app-bg);
   color: var(--app-foreground);
   font-family: var(--font-geist-sans), "Segoe UI", sans-serif;
+}
+
+:root[data-theme="dark"] body {
+  background: radial-gradient(circle at 8% 0%, rgba(84, 121, 161, 0.24) 0, transparent 38%),
+    radial-gradient(circle at 92% 18%, rgba(54, 108, 151, 0.22) 0, transparent 34%),
+    var(--app-bg);
 }
