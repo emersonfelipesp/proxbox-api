@@ -84,6 +84,8 @@ def _merge_capture(
                     "path": path,
                     "method_name": method_data.get("name"),
                     "description": method_data.get("description"),
+                    "viewer_description": None,
+                    "viewer_usage": None,
                     "parameters": method_data.get("parameters"),
                     "returns": method_data.get("returns"),
                     "permissions": method_data.get("permissions"),
