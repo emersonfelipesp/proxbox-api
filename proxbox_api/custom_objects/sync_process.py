@@ -9,16 +9,15 @@ from datetime import datetime
 from pydantic import BaseModel, RootModel
 from typing import List
 
-from pynetbox_api.utils import GenericSchema
-from pynetbox_api.session import NetBoxBase
-from pynetbox_api.extras.tag import Tags
+from proxbox_api.netbox_compat import GenericSchema, NetBoxBase, Tags
 
 __all__ = [
     "SyncProcessSchema",
     "SyncProcessSchemaList",
     "SyncProcessSchemaIn",
-    "SyncProcess"
+    "SyncProcess",
 ]
+
 
 class SyncProcess(NetBoxBase):
     class BasicSchema(BaseModel):
@@ -27,29 +26,28 @@ class SyncProcess(NetBoxBase):
         display: str | None = None
         name: str | None = None
         description: str | None = None
-    
+
     class Schema(GenericSchema, BasicSchema):
         sync_type: str | None = None
         status: str | None = None
         runtime: float | None = None
         started_at: datetime | None = None
         completed_at: datetime | None = None
-        
 
     class SchemaIn(BaseModel):
-        name: str = 'SyncProcess Placeholder'
+        name: str = "SyncProcess Placeholder"
         start_time = datetime.now()
         tags: List[int] | None = None
 
     SyncProcessSchemaList = RootModel[List[Schema]]
-    
-    app = 'plugins.proxbox'
-    name = 'sync_processes'
+
+    app = "plugins.proxbox"
+    name = "sync_processes"
     schema = Schema
     schema_in = SchemaIn
     schema_list = SyncProcessSchemaList
-    unique_together = ['name', 'slug']
-    
+    unique_together = ["name", "slug"]
+
     # API
-    prefix = '/SyncProcess'
-    api_router = APIRouter(tags=['DCIM / SyncProcess'])
+    prefix = "/SyncProcess"
+    api_router = APIRouter(tags=["DCIM / SyncProcess"])

@@ -1,3 +1,5 @@
+"""Proxmox cluster endpoints and cluster response schemas."""
+
 
 from fastapi import APIRouter, Query, Depends
 

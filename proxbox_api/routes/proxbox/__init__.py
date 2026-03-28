@@ -1,3 +1,5 @@
+"""Proxbox plugin route handlers for configuration access."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query

@@ -1,3 +1,5 @@
+"""SQLModel database configuration and NetBox endpoint model."""
+
 from typing import Annotated
 from pathlib import Path
 

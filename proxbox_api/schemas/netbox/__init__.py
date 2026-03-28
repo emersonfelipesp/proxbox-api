@@ -1,3 +1,5 @@
+"""Schemas for NetBox session settings and connection details."""
+
 from pydantic import BaseModel, RootModel
 
 class NetboxSessionSettingsSchema(BaseModel):

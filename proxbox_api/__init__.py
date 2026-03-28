@@ -1,3 +1,5 @@
+"""Top-level package exports for proxbox_api."""
+
 from proxbox_api.database import DatabaseSessionDep as SessionDep, NetBoxEndpoint
 from proxbox_api.session.netbox import get_netbox_session
  
