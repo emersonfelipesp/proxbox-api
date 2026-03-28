@@ -7,18 +7,36 @@ from pathlib import Path
 from typing import Any
 
 
-def proxmox_generated_openapi_path() -> Path:
-    """Return canonical generated Proxmox OpenAPI artifact path."""
+DEFAULT_PROXMOX_OPENAPI_TAG = "latest"
 
-    return (
-        Path(__file__).resolve().parents[1] / "generated" / "proxmox" / "openapi.json"
+
+def _legacy_proxmox_openapi_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "generated" / "proxmox" / "openapi.json"
+
+
+def proxmox_generated_openapi_path(
+    version_tag: str = DEFAULT_PROXMOX_OPENAPI_TAG,
+) -> Path:
+    """Return canonical generated Proxmox OpenAPI artifact path for version tag."""
+
+    versioned = (
+        Path(__file__).resolve().parents[1]
+        / "generated"
+        / "proxmox"
+        / version_tag
+        / "openapi.json"
     )
+    if versioned.exists():
+        return versioned
+    return _legacy_proxmox_openapi_path()
 
 
-def load_proxmox_generated_openapi() -> dict[str, Any]:
-    """Load generated Proxmox OpenAPI document if available."""
+def load_proxmox_generated_openapi(
+    version_tag: str = DEFAULT_PROXMOX_OPENAPI_TAG,
+) -> dict[str, Any]:
+    """Load generated Proxmox OpenAPI document for version tag if available."""
 
-    path = proxmox_generated_openapi_path()
+    path = proxmox_generated_openapi_path(version_tag=version_tag)
     if not path.exists():
         return {}
     try:
@@ -30,11 +48,12 @@ def load_proxmox_generated_openapi() -> dict[str, Any]:
 def proxmox_operation_schema(
     path: str,
     method: str,
+    version_tag: str = DEFAULT_PROXMOX_OPENAPI_TAG,
     openapi: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Get operation schema from generated Proxmox OpenAPI by path and method."""
 
-    document = openapi or load_proxmox_generated_openapi()
+    document = openapi or load_proxmox_generated_openapi(version_tag=version_tag)
     paths = document.get("paths", {}) if isinstance(document, dict) else {}
     item = paths.get(path)
     if not isinstance(item, dict):
