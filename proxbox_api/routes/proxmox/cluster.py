@@ -9,6 +9,8 @@ from proxbox_api.enum.proxmox import *
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
+)
+from proxbox_api.services.proxmox_helpers import (
     get_cluster_status as get_typed_cluster_status,
 )
 from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
