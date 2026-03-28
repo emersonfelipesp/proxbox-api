@@ -350,86 +350,10 @@ async def proxmox_sessions(
     If 'name' is provided, return only the Proxmox Session with that name.
     """
 
-    def parse_db_to_schema(endpoint: ProxmoxEndpoint):
-        return ProxmoxSessionSchema(
-            ip_address=endpoint.ip_address,
-            domain=endpoint.domain,
-            http_port=endpoint.port,
-            user=endpoint.username,
-            password=endpoint.password,
-            ssl=endpoint.verify_ssl,
-            token=ProxmoxTokenSchema(
-                name=endpoint.token_name,
-                value=endpoint.token_value,
-            ),
-        )
-
-    proxmox_schemas: list[ProxmoxSessionSchema]
-    if source == "netbox":
-        netbox_session = get_netbox_async_session(database_session=database_session)
-
-        async def fetch_netbox_endpoints() -> list[Any]:
-            endpoint = netbox_session.plugins.proxbox.__getattr__("endpoints/proxmox")
-            try:
-                results = []
-                async for item in endpoint.all():
-                    results.append(item)
-                return results
-            except ValueError:
-                response = await netbox_session.client.request(
-                    "GET", "/api/plugins/proxbox/endpoints/proxmox/"
-                )
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise ProxboxException(
-                        message="Invalid NetBox response while fetching Proxmox endpoints",
-                    )
-                results = payload.get("results")
-                if not isinstance(results, list):
-                    raise ProxboxException(
-                        message="NetBox Proxmox endpoints response missing results list",
-                    )
-                return results
-            except JSONDecodeError as error:
-                raise ProxboxException(
-                    message="NetBox returned invalid JSON while fetching Proxmox endpoints",
-                    python_exception=str(error),
-                )
-
-        def netbox_field(endpoint: Any, field: str, default: Any = None) -> Any:
-            if isinstance(endpoint, dict):
-                return endpoint.get(field, default)
-            return getattr(endpoint, field, default)
-
-        def parse_netbox_to_schema(endpoint):
-            ip = None
-            ip_address_object = netbox_field(endpoint, "ip_address")
-            if ip_address_object:
-                if isinstance(ip_address_object, dict):
-                    ip_address_with_mask = ip_address_object.get("address")
-                else:
-                    ip_address_with_mask = getattr(ip_address_object, "address", None)
-                if ip_address_with_mask:
-                    ip = ip_address_with_mask.split("/")[0]
-
-            return ProxmoxSessionSchema(
-                ip_address=ip,
-                domain=netbox_field(endpoint, "domain"),
-                http_port=netbox_field(endpoint, "port"),
-                user=netbox_field(endpoint, "username"),
-                password=netbox_field(endpoint, "password"),
-                ssl=bool(netbox_field(endpoint, "verify_ssl", False)),
-                token=ProxmoxTokenSchema(
-                    name=netbox_field(endpoint, "token_name"),
-                    value=netbox_field(endpoint, "token_value"),
-                ),
-            )
-
-        netbox_endpoints = await fetch_netbox_endpoints()
-        proxmox_schemas = [parse_netbox_to_schema(endpoint) for endpoint in netbox_endpoints]
-    else:
-        db_endpoints = database_session.exec(select(ProxmoxEndpoint)).all()
-        proxmox_schemas = [parse_db_to_schema(endpoint) for endpoint in db_endpoints]
+    proxmox_schemas = await load_proxmox_session_schemas(
+        database_session=database_session,
+        source=source,
+    )
 
     def return_single_session(field, value):
         for proxmox_schema in proxmox_schemas:
@@ -462,3 +386,141 @@ async def proxmox_sessions(
 
 
 ProxmoxSessionsDep = Annotated[list, Depends(proxmox_sessions)]
+
+
+def _netbox_field(endpoint: Any, field: str, default: Any = None) -> Any:
+    if isinstance(endpoint, dict):
+        return endpoint.get(field, default)
+    return getattr(endpoint, field, default)
+
+
+def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
+    return ProxmoxSessionSchema(
+        name=endpoint.name,
+        ip_address=endpoint.ip_address,
+        domain=endpoint.domain,
+        http_port=endpoint.port,
+        user=endpoint.username,
+        password=endpoint.password,
+        ssl=endpoint.verify_ssl,
+        token=ProxmoxTokenSchema(
+            name=endpoint.token_name,
+            value=endpoint.token_value,
+        ),
+    )
+
+
+def _parse_netbox_endpoint(endpoint: Any) -> ProxmoxSessionSchema:
+    ip = None
+    ip_address_object = _netbox_field(endpoint, "ip_address")
+    if ip_address_object:
+        if isinstance(ip_address_object, dict):
+            ip_address_with_mask = ip_address_object.get("address")
+        else:
+            ip_address_with_mask = getattr(ip_address_object, "address", None)
+        if ip_address_with_mask:
+            ip = ip_address_with_mask.split("/")[0]
+
+    return ProxmoxSessionSchema(
+        name=_netbox_field(endpoint, "name"),
+        ip_address=ip,
+        domain=_netbox_field(endpoint, "domain"),
+        http_port=_netbox_field(endpoint, "port"),
+        user=_netbox_field(endpoint, "username"),
+        password=_netbox_field(endpoint, "password"),
+        ssl=bool(_netbox_field(endpoint, "verify_ssl", False)),
+        token=ProxmoxTokenSchema(
+            name=_netbox_field(endpoint, "token_name"),
+            value=_netbox_field(endpoint, "token_value"),
+        ),
+    )
+
+
+async def load_proxmox_session_schemas(
+    database_session: DatabaseSessionDep,
+    source: str = "database",
+) -> list[ProxmoxSessionSchema]:
+    """Load configured Proxmox endpoint schemas without creating Proxmox API sessions."""
+
+    if source == "netbox":
+        netbox_session = get_netbox_async_session(database_session=database_session)
+
+        async def fetch_netbox_endpoints() -> list[Any]:
+            endpoint = netbox_session.plugins.proxbox.__getattr__("endpoints/proxmox")
+            try:
+                results = []
+                async for item in endpoint.all():
+                    results.append(item)
+                return results
+            except ValueError:
+                response = await netbox_session.client.request(
+                    "GET", "/api/plugins/proxbox/endpoints/proxmox/"
+                )
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ProxboxException(
+                        message="Invalid NetBox response while fetching Proxmox endpoints",
+                    )
+                results = payload.get("results")
+                if not isinstance(results, list):
+                    raise ProxboxException(
+                        message="NetBox Proxmox endpoints response missing results list",
+                    )
+                return results
+            except JSONDecodeError as error:
+                raise ProxboxException(
+                    message="NetBox returned invalid JSON while fetching Proxmox endpoints",
+                    python_exception=str(error),
+                )
+
+        netbox_endpoints = await fetch_netbox_endpoints()
+        return [_parse_netbox_endpoint(endpoint) for endpoint in netbox_endpoints]
+
+    db_endpoints = database_session.exec(select(ProxmoxEndpoint)).all()
+    return [_parse_db_endpoint(endpoint) for endpoint in db_endpoints]
+
+
+async def resolve_proxmox_target_session(
+    database_session: DatabaseSessionDep,
+    *,
+    source: str = "database",
+    name: str | None = None,
+    domain: str | None = None,
+    ip_address: str | None = None,
+) -> ProxmoxSession:
+    """Resolve a single Proxmox target for generated live proxy routes."""
+
+    proxmox_schemas = await load_proxmox_session_schemas(
+        database_session=database_session,
+        source=source,
+    )
+
+    selectors = (
+        ("ip_address", ip_address),
+        ("domain", domain),
+        ("name", name),
+    )
+    for field, value in selectors:
+        if value is None:
+            continue
+        for proxmox_schema in proxmox_schemas:
+            if value == getattr(proxmox_schema, field, None):
+                return ProxmoxSession(proxmox_schema)
+        raise ProxboxException(
+            message=f"No result found for Proxmox Sessions based on the provided {field}",
+            detail="Check if the provided parameters are correct",
+        )
+
+    if not proxmox_schemas:
+        raise ProxboxException(
+            message="No Proxmox endpoints found for generated proxy route.",
+            detail="Configure at least one Proxmox endpoint before using generated proxy routes.",
+        )
+
+    if len(proxmox_schemas) > 1:
+        raise ProxboxException(
+            message="Multiple Proxmox endpoints configured; provide name, domain, or ip_address.",
+            detail="Generated Proxmox proxy routes require an explicit target when more than one endpoint is configured.",
+        )
+
+    return ProxmoxSession(proxmox_schemas[0])

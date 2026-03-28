@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
-from proxbox_api.proxmox_codegen.utils import pascal_case, slugify_identifier
+from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, slugify_identifier
 
 
 def _python_type(schema: dict[str, Any] | None) -> str:
@@ -56,6 +57,34 @@ def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _request_schema_for_operation(path: str, operation: dict[str, Any]) -> dict[str, Any] | None:
+    """Return request-body schema excluding path parameters for runtime proxy models."""
+
+    request_schema = (
+        operation.get("requestBody", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema")
+    )
+    if not isinstance(request_schema, dict):
+        return None
+
+    path_params = set(extract_path_params(path))
+    if not path_params:
+        return request_schema
+
+    schema = deepcopy(request_schema)
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        schema["properties"] = {
+            name: value for name, value in properties.items() if name not in path_params
+        }
+    required = schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = [name for name in required if name not in path_params]
+    return schema
+
+
 def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:
     """Generate a Python module with Pydantic v2 schemas for request/response payloads."""
 
@@ -89,12 +118,7 @@ def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:
             operation_id = operation.get("operationId") or f"{method}_{path}"
             base_name = pascal_case(operation_id)
 
-            req_schema = (
-                operation.get("requestBody", {})
-                .get("content", {})
-                .get("application/json", {})
-                .get("schema")
-            )
+            req_schema = _request_schema_for_operation(path=path, operation=operation)
             if isinstance(req_schema, dict):
                 req_model_name = f"{base_name}Request"
                 if req_model_name not in seen_models:

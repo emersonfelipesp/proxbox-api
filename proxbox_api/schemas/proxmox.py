@@ -11,6 +11,7 @@ class ProxmoxTokenSchema(BaseModel):
 
 
 class ProxmoxSessionSchema(BaseModel):
+    name: str | None = None
     ip_address: str | None = None
     domain: str | None = None
     http_port: int | None = None
