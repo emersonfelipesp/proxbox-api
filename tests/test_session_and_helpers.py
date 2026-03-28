@@ -13,15 +13,23 @@ from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
-from proxbox_api.session import netbox as netbox_session_module
-from proxbox_api.session.proxmox import ProxmoxSession, proxmox_sessions
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
+)
+from proxbox_api.services.proxmox_helpers import (
     get_cluster_status as get_typed_cluster_status,
+)
+from proxbox_api.services.proxmox_helpers import (
     get_node_storage_content as get_typed_node_storage_content,
+)
+from proxbox_api.services.proxmox_helpers import (
     get_storage_list as get_typed_storage_list,
+)
+from proxbox_api.services.proxmox_helpers import (
     get_vm_config as get_typed_vm_config,
 )
+from proxbox_api.session import netbox as netbox_session_module
+from proxbox_api.session.proxmox import ProxmoxSession, proxmox_sessions
 
 
 class AsyncEndpoint:
@@ -198,7 +206,14 @@ class FakeTypedSessionAPI:
         if path == "cluster/status":
             return FakeNestedResource(
                 [
-                    {"id": "cluster/lab", "name": "lab", "type": "cluster", "nodes": 1, "quorate": True, "version": 7},
+                    {
+                        "id": "cluster/lab",
+                        "name": "lab",
+                        "type": "cluster",
+                        "nodes": 1,
+                        "quorate": True,
+                        "version": 7,
+                    },
                     {
                         "id": "node/pve01",
                         "name": "pve01",
