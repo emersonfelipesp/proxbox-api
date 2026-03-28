@@ -94,6 +94,7 @@ Behavior:
 - The unversioned `/proxmox/api2/*` alias forwards to the `latest` generated contract.
 - Request bodies and responses are validated with runtime-generated Pydantic models.
 - Generated response models now cover object, array, scalar, and `null` response schemas rather than object-shaped responses only.
+- For array responses whose items are objects, generation now emits `{Operation}ResponseItem` plus `RootModel[list[{Operation}ResponseItem]]`, so Swagger shows concrete item fields instead of generic `additionalProp` placeholders.
 - Generated routes appear in FastAPI `/docs` and `/openapi.json`.
 - `latest` routes are mounted before older version tags so they appear first in Swagger.
 - Generated routes are prioritized ahead of older handcrafted `/proxmox/*` routes so path collisions resolve to the generated API surface.
@@ -120,6 +121,12 @@ Target selection:
   - `target_ip_address`
 - `source` selects whether endpoints come from the local database or NetBox plugin records.
 
+Typed sync integration:
+
+- Handcrafted sync-facing routes still call proxmoxer directly, but now do so through `proxbox_api/services/proxmox_helpers.py`.
+- That helper layer validates live proxmoxer payloads with the generated models in `proxbox_api/generated/proxmox/latest/pydantic_models.py` before returning data to route handlers.
+- This avoids internal HTTP round-trips while keeping VM config, cluster status, cluster resources, storage listing, and node storage content aligned with the generated contract used by `/proxmox/api2/*`.
+
 Examples of generated route shapes:
 
 - `GET /proxmox/api2/latest/cluster/resources`
@@ -142,6 +149,7 @@ Test coverage:
 - `tests/test_generated_proxmox_routes.py` runs a mock-based exhaustive route suite over every generated operation for every available version plus the `latest` alias.
 - Each generated operation is exercised individually with schema-generated path/query/body inputs and a schema-generated mock upstream response.
 - `tests/test_pydantic_generator_models.py` verifies generated response models for array, scalar, `null`, and aliased object payloads.
+- `tests/test_session_and_helpers.py` verifies the typed proxmox helper layer and confirms the handcrafted sync dependencies return helper-validated payloads.
 
 ## DCIM routes (`/dcim`)
 

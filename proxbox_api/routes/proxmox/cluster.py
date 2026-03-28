@@ -7,6 +7,10 @@ from pydantic import BaseModel
 
 from proxbox_api.enum.proxmox import *
 from proxbox_api.schemas.proxmox import *
+from proxbox_api.services.proxmox_helpers import (
+    get_cluster_resources as get_typed_cluster_resources,
+    get_cluster_status as get_typed_cluster_status,
+)
 from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
 
 router = APIRouter()
@@ -86,27 +90,27 @@ async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
     """
 
     async def parse_cluster_status(
-        proxmox_object: ProxmoxSession, data: dict
+        proxmox_object: ProxmoxSession, data: list
     ) -> ClusterStatusSchema:
         node_list = []
         cluster: ClusterStatusSchema = None
 
         for item in data:
-            item["mode"] = proxmox_object.mode
-            if item.get("type") == "cluster":
-                cluster = ClusterStatusSchema(**item)
+            item_data = item.model_dump(mode="python", by_alias=True, exclude_none=True)
+            item_data["mode"] = proxmox_object.mode
+            if item_data.get("type") == "cluster":
+                cluster = ClusterStatusSchema(**item_data)
 
-            if item.get("type") == "node":
-                node_list.append(ClusterNodeStatusSchema(**item))
-
-        cluster.node_list = node_list
+            if item_data.get("type") == "node":
+                node_list.append(ClusterNodeStatusSchema(**item_data))
 
         if cluster:
+            cluster.node_list = node_list
             return cluster
 
     return ClusterStatusSchemaList(
         [
-            await parse_cluster_status(proxmox_object=px, data=px.session("cluster/status").get())
+            await parse_cluster_status(proxmox_object=px, data=get_typed_cluster_status(px))
             for px in pxs
         ]
     )
@@ -146,9 +150,10 @@ async def cluster_resources(
     for px in pxs:
         json_response.append(
             {
-                px.name: px.session("cluster/resources").get(type=type)
-                if type
-                else px.session("cluster/resources").get()
+                px.name: [
+                    resource.model_dump(mode="python", by_alias=True, exclude_none=True)
+                    for resource in get_typed_cluster_resources(px, resource_type=type)
+                ]
             }
         )
 

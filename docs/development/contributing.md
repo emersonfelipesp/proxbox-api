@@ -20,6 +20,7 @@
 - Update `docs/` when endpoint behavior changes.
 - Keep English docs as source-of-truth.
 - Update `docs/pt-br/` for translated key pages.
+- Document generated-contract changes and any helper/service integration that depends on those generated models.
 
 ## Pull request checklist
 
@@ -27,6 +28,7 @@
 - [ ] Code compiles (`python -m compileall proxbox_api`).
 - [ ] Docs build passes (`mkdocs build --strict`) when docs changed.
 - [ ] API behavior changes are documented.
+- [ ] Generated Proxmox artifacts are regenerated when codegen behavior changes.
 
 ## Security and secrets
 
