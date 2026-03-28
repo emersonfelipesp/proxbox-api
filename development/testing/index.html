@@ -861,6 +861,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#generated-proxmox-contract-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated Proxmox contract checks
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1042,6 +1053,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#generated-proxmox-contract-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated Proxmox contract checks
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1078,6 +1100,9 @@
 <h2 id="run-tests">Run tests<a class="headerlink" href="#run-tests" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pytest
 </code></pre></div>
+<p>For the schema-generation and typed helper path specifically:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pytest<span class="w"> </span>tests/test_pydantic_generator_models.py<span class="w"> </span>tests/test_session_and_helpers.py
+</code></pre></div>
 <h2 id="targeted-endpoint-tests">Targeted endpoint tests<a class="headerlink" href="#targeted-endpoint-tests" title="Permanent link">&para;</a></h2>
 <p>The file <code>proxbox_api/test_endpoint_crud.py</code> includes dedicated coverage for:</p>
 <ul>
@@ -1086,16 +1111,23 @@
 <li>NetBox endpoint singleton enforcement.</li>
 </ul>
 <p>Run only this test file:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pytest<span class="w"> </span>proxbox_api/test_endpoint_crud.py
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pytest<span class="w"> </span>proxbox_api/test_endpoint_crud.py
 </code></pre></div>
 <h2 id="compile-check">Compile check<a class="headerlink" href="#compile-check" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>-m<span class="w"> </span>compileall<span class="w"> </span>proxbox_api
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>-m<span class="w"> </span>compileall<span class="w"> </span>proxbox_api
 </code></pre></div>
 <h2 id="recommended-pre-pr-checks">Recommended pre-PR checks<a class="headerlink" href="#recommended-pre-pr-checks" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>pytest</code></li>
 <li><code>python -m compileall proxbox_api</code></li>
 <li><code>mkdocs build --strict</code> (when docs changed)</li>
+</ul>
+<h2 id="generated-proxmox-contract-checks">Generated Proxmox contract checks<a class="headerlink" href="#generated-proxmox-contract-checks" title="Permanent link">&para;</a></h2>
+<p>When changing <code>proxbox_api/proxmox_codegen/</code> or the sync-facing Proxmox service layer:</p>
+<ul>
+<li>Regenerate <code>proxbox_api/generated/proxmox/*/pydantic_models.py</code> from the checked-in <code>openapi.json</code> artifacts.</li>
+<li>Confirm array-of-object responses still emit concrete <code>...ResponseItem</code> schemas.</li>
+<li>Confirm helper-backed routes still return payloads compatible with existing sync code.</li>
 </ul>
 
 
