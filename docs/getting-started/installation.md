@@ -19,12 +19,12 @@ docker pull emersonfelipesp/proxbox-api:latest
 Run container:
 
 ```bash
-docker run -d -p 8800:8800 --name proxbox-api emersonfelipesp/proxbox-api:latest
+docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest
 ```
 
 Service URL:
 
-- <http://127.0.0.1:8800>
+- <http://127.0.0.1:8000>
 
 ## Option 2: Local development from source
 
@@ -50,13 +50,13 @@ uv sync
 Run API:
 
 ```bash
-uv run fastapi run --host 0.0.0.0 --port 8800
+uv run fastapi run --host 0.0.0.0 --port 8000
 ```
 
 Alternative with uvicorn:
 
 ```bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8800 --reload
+uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ## TLS with local certificates
@@ -66,13 +66,13 @@ If you need HTTPS locally, generate a certificate with `mkcert` and pass it to u
 ```bash
 mkcert -install
 mkcert proxbox.backend.local localhost 127.0.0.1 ::1
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8800 --ssl-keyfile=./localhost+2-key.pem --ssl-certfile=./localhost+2.pem
+uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --ssl-keyfile=./localhost+2-key.pem --ssl-certfile=./localhost+2.pem
 ```
 
 ## Verify installation
 
 Open:
 
-- Root: <http://127.0.0.1:8800/>
-- Swagger: <http://127.0.0.1:8800/docs>
-- ReDoc: <http://127.0.0.1:8800/redoc>
+- Root: <http://127.0.0.1:8000/>
+- Swagger: <http://127.0.0.1:8000/docs>
+- ReDoc: <http://127.0.0.1:8000/redoc>

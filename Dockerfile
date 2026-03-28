@@ -6,11 +6,11 @@ WORKDIR /app
 
 RUN pip install proxbox-api
 
-# Make port 8800 available to the world outside this container
-EXPOSE 8800
+# Make port 8000 available to the world outside this container
+EXPOSE 8000
 
 # Define environment variable
-ENV PORT=8800
+ENV PORT=8000
 
 # Run app.py when the container launches
 CMD uvicorn proxbox_api.main:app --host 0.0.0.0 --port ${PORT}
