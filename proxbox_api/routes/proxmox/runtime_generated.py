@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import inspect
+import json
 import sys
 import threading
 from copy import deepcopy
+from datetime import UTC, datetime
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
 
@@ -20,17 +23,22 @@ from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, 
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
     available_proxmox_openapi_versions,
+    proxmox_generated_route_cache_path,
     load_proxmox_generated_openapi,
 )
 from proxbox_api.session.proxmox import resolve_proxmox_target_session
 
 _GENERATED_ROUTE_TAG_PREFIX = "proxmox / live-generated"
 _GENERATED_ROUTE_NAME_PREFIX = "generated_proxmox_route__"
+_GENERATED_ROUTE_CACHE_FORMAT = 1
 _GENERATED_ROUTE_STATE_LOCK = threading.RLock()
 _GENERATED_ROUTE_STATE: dict[str, Any] = {
     "route_names": set(),
     "versions": {},
     "alias_version_tag": DEFAULT_PROXMOX_OPENAPI_TAG,
+    "cache_path": str(proxmox_generated_route_cache_path()),
+    "cache_enabled": True,
+    "loaded_from_cache": False,
 }
 
 
@@ -102,6 +110,67 @@ def _load_model_module(openapi_document: dict[str, Any], version_tag: str) -> Mo
         ):
             value.model_rebuild(_types_namespace=module.__dict__)
     return module
+
+
+def _version_sort_key(version_tag: str) -> tuple[int, str]:
+    return (0 if version_tag == DEFAULT_PROXMOX_OPENAPI_TAG else 1, version_tag)
+
+
+def _generated_route_cache_path() -> Path:
+    return proxmox_generated_route_cache_path()
+
+
+def _read_generated_route_cache() -> dict[str, Any] | None:
+    cache_path = _generated_route_cache_path()
+    if not cache_path.exists():
+        return None
+
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("cache_format") != _GENERATED_ROUTE_CACHE_FORMAT:
+        return None
+
+    documents = payload.get("documents")
+    if not isinstance(documents, dict) or not documents:
+        return None
+
+    normalized_documents: dict[str, dict[str, Any]] = {}
+    for version_tag, document in documents.items():
+        if not isinstance(version_tag, str) or not isinstance(document, dict):
+            return None
+        normalized_documents[version_tag] = document
+
+    return {
+        "alias_version_tag": payload.get("alias_version_tag") or DEFAULT_PROXMOX_OPENAPI_TAG,
+        "documents": dict(
+            sorted(normalized_documents.items(), key=lambda item: _version_sort_key(item[0]))
+        ),
+        "generated_at": payload.get("generated_at"),
+        "source": "runtime-cache",
+    }
+
+
+def _write_generated_route_cache(
+    *,
+    documents: dict[str, dict[str, Any]],
+    alias_version_tag: str,
+) -> Path:
+    cache_path = _generated_route_cache_path()
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_payload = {
+        "cache_format": _GENERATED_ROUTE_CACHE_FORMAT,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "alias_version_tag": alias_version_tag,
+        "mounted_versions": sorted(documents.keys(), key=_version_sort_key),
+        "documents": documents,
+    }
+    cache_path.write_text(json.dumps(cache_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return cache_path
 
 
 def _operation_response_model(model_module: ModuleType, operation_id: str) -> type | None:
@@ -377,7 +446,7 @@ def _build_version_route_specs(
             )
             route_specs.append(
                 {
-                    "path": f"/proxmox/api2/{version_tag}/json{openapi_path}",
+                    "path": f"/proxmox/api2/{version_tag}{openapi_path}",
                     "endpoint": endpoint,
                     "methods": [method.upper()],
                     "name": base_route_name,
@@ -393,7 +462,7 @@ def _build_version_route_specs(
                 alias_route_name = f"{base_route_name}__alias"
                 route_specs.append(
                     {
-                        "path": f"/proxmox/api2/json{openapi_path}",
+                        "path": f"/proxmox/api2{openapi_path}",
                         "endpoint": endpoint,
                         "methods": [method.upper()],
                         "name": alias_route_name,
@@ -424,17 +493,21 @@ def _load_documents_for_registration(
     openapi_documents: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     if openapi_documents is not None:
-        return dict(sorted(openapi_documents.items()))
+        return dict(sorted(openapi_documents.items(), key=lambda item: _version_sort_key(item[0])))
     if openapi_document is not None:
         target_version = version_tag or DEFAULT_PROXMOX_OPENAPI_TAG
         return {target_version: openapi_document}
     if version_tag is not None:
         return {version_tag: load_proxmox_generated_openapi(version_tag=version_tag)}
 
+    cached = _read_generated_route_cache()
+    if cached is not None:
+        return cached["documents"]
+
     versions = available_proxmox_openapi_versions()
     return {
         discovered_version: load_proxmox_generated_openapi(version_tag=discovered_version)
-        for discovered_version in versions
+        for discovered_version in sorted(versions, key=_version_sort_key)
     }
 
 
@@ -448,6 +521,17 @@ def register_generated_proxmox_routes(
     """Register runtime-generated live Proxmox proxy routes on the FastAPI app."""
 
     with _GENERATED_ROUTE_STATE_LOCK:
+        cache_snapshot = None
+        cache_source = "explicit"
+        if openapi_documents is None and openapi_document is None and version_tag is None:
+            cache_snapshot = _read_generated_route_cache()
+            if cache_snapshot is not None:
+                cache_source = "runtime-cache"
+            else:
+                cache_source = "generated-artifacts"
+        elif version_tag is not None:
+            cache_source = "generated-artifacts"
+
         documents = _load_documents_for_registration(
             version_tag=version_tag,
             openapi_document=openapi_document,
@@ -483,14 +567,23 @@ def register_generated_proxmox_routes(
         for spec in route_specs:
             app.add_api_route(**spec)
 
+        cache_path = _write_generated_route_cache(
+            documents=dict(sorted(documents.items(), key=lambda item: _version_sort_key(item[0]))),
+            alias_version_tag=_GENERATED_ROUTE_STATE["alias_version_tag"],
+        )
         app.openapi_schema = None
         _GENERATED_ROUTE_STATE["route_names"] = all_route_names
         _GENERATED_ROUTE_STATE["versions"] = version_state
+        _GENERATED_ROUTE_STATE["cache_path"] = str(cache_path)
+        _GENERATED_ROUTE_STATE["cache_enabled"] = True
+        _GENERATED_ROUTE_STATE["loaded_from_cache"] = cache_source == "runtime-cache"
 
         return {
             "message": "Generated Proxmox live routes registered.",
-            "mounted_versions": sorted(version_state.keys()),
+            "mounted_versions": sorted(version_state.keys(), key=_version_sort_key),
             "alias_version_tag": _GENERATED_ROUTE_STATE["alias_version_tag"],
+            "cache_path": str(cache_path),
+            "cache_source": cache_source,
             "route_count": len(route_specs),
             "versions": {
                 mounted_version: {
@@ -499,7 +592,9 @@ def register_generated_proxmox_routes(
                     "method_count": state["method_count"],
                     "schema_version": state["schema_version"],
                 }
-                for mounted_version, state in sorted(version_state.items())
+                for mounted_version, state in sorted(
+                    version_state.items(), key=lambda item: _version_sort_key(item[0])
+                )
             },
         }
 
@@ -510,8 +605,11 @@ def generated_proxmox_route_state() -> dict[str, Any]:
     with _GENERATED_ROUTE_STATE_LOCK:
         versions = _GENERATED_ROUTE_STATE["versions"]
         return {
-            "mounted_versions": sorted(versions.keys()),
+            "mounted_versions": sorted(versions.keys(), key=_version_sort_key),
             "alias_version_tag": _GENERATED_ROUTE_STATE["alias_version_tag"],
+            "cache_path": _GENERATED_ROUTE_STATE["cache_path"],
+            "cache_enabled": _GENERATED_ROUTE_STATE["cache_enabled"],
+            "loaded_from_cache": _GENERATED_ROUTE_STATE["loaded_from_cache"],
             "route_count": len(_GENERATED_ROUTE_STATE["route_names"]),
             "versions": {
                 mounted_version: {
@@ -520,7 +618,9 @@ def generated_proxmox_route_state() -> dict[str, Any]:
                     "method_count": state["method_count"],
                     "schema_version": state["schema_version"],
                 }
-                for mounted_version, state in sorted(versions.items())
+                for mounted_version, state in sorted(
+                    versions.items(), key=lambda item: _version_sort_key(item[0])
+                )
             },
         }
 
@@ -532,4 +632,13 @@ def clear_generated_proxmox_routes(app: FastAPI) -> None:
         _remove_generated_routes(app, set(_GENERATED_ROUTE_STATE["route_names"]))
         _GENERATED_ROUTE_STATE["route_names"] = set()
         _GENERATED_ROUTE_STATE["versions"] = {}
+        _GENERATED_ROUTE_STATE["loaded_from_cache"] = False
         app.openapi_schema = None
+
+
+def clear_generated_proxmox_route_cache() -> None:
+    """Remove the persisted runtime-generated Proxmox route cache artifact."""
+
+    cache_path = _generated_route_cache_path()
+    if cache_path.exists():
+        cache_path.unlink()

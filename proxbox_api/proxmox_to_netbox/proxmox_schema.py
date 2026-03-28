@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_PROXMOX_OPENAPI_TAG = "latest"
+RUNTIME_GENERATED_ROUTE_CACHE_FILENAME = "runtime_generated_routes_cache.json"
 
 
 def proxmox_generated_openapi_path(
@@ -23,6 +24,12 @@ def proxmox_generated_openapi_root() -> Path:
     """Return the directory containing generated Proxmox OpenAPI artifacts."""
 
     return Path(__file__).resolve().parents[1] / "generated" / "proxmox"
+
+
+def proxmox_generated_route_cache_path() -> Path:
+    """Return the cache manifest path for runtime-generated Proxmox routes."""
+
+    return proxmox_generated_openapi_root() / RUNTIME_GENERATED_ROUTE_CACHE_FILENAME
 
 
 def available_proxmox_openapi_versions() -> list[str]:
