@@ -4,8 +4,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -330,7 +329,9 @@ def _build_request_inputs(openapi_path: str, operation: dict[str, Any]) -> dict[
         properties = body_schema.get("properties")
         if isinstance(properties, dict):
             body_schema["properties"] = {
-                name: value for name, value in properties.items() if name not in path_parameter_names
+                name: value
+                for name, value in properties.items()
+                if name not in path_parameter_names
             }
         required = body_schema.get("required")
         if isinstance(required, list):
@@ -364,7 +365,9 @@ def _build_generated_route_cases() -> list[Any]:
                 continue
             for method, operation in sorted(path_item.items()):
                 method_name = method.upper()
-                if method_name not in SUPPORTED_GENERATED_METHODS or not isinstance(operation, dict):
+                if method_name not in SUPPORTED_GENERATED_METHODS or not isinstance(
+                    operation, dict
+                ):
                     continue
 
                 request_inputs = _build_request_inputs(openapi_path, operation)
