@@ -18,7 +18,7 @@ type ProxmoxFormProps = {
   mode: FormMode
   initial?: ProxmoxEndpoint | null
   submitting?: boolean
-  onSubmit: (payload: ProxmoxEndpointPayload) => Promise<void>
+  onSubmit: (payload: ProxmoxEndpointPayload | Partial<ProxmoxEndpointPayload>) => Promise<void>
   onCancel?: () => void
 }
 
@@ -131,7 +131,11 @@ export function ProxmoxEndpointForm({ mode, initial, submitting = false, onSubmi
   const hasPassword = Boolean(password.trim())
   const hasTokenPair = Boolean(tokenName.trim() && tokenValue.trim())
   const hasPartialToken = Boolean(tokenName.trim() || tokenValue.trim()) && !hasTokenPair
-  const canSubmit = Boolean(name.trim() && ipAddress.trim() && username.trim() && (hasPassword || hasTokenPair) && !hasPartialToken)
+  const hasRequiredCoreFields = Boolean(name.trim() && ipAddress.trim() && username.trim())
+  const canSubmit =
+    mode === "create"
+      ? Boolean(hasRequiredCoreFields && (hasPassword || hasTokenPair) && !hasPartialToken)
+      : Boolean(hasRequiredCoreFields && !hasPartialToken)
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -140,23 +144,38 @@ export function ProxmoxEndpointForm({ mode, initial, submitting = false, onSubmi
     if (!canSubmit) {
       if (hasPartialToken) {
         setError("Provide token name and token value together.")
-      } else {
+      } else if (mode === "create") {
         setError("Fill required fields and provide password or token credentials.")
+      } else {
+        setError("Fill required fields.")
       }
       return
     }
 
-    await onSubmit({
+    const payload: Partial<ProxmoxEndpointPayload> = {
       name: name.trim(),
       ip_address: ipAddress.trim(),
       domain: domain.trim() || null,
       port,
       username: username.trim(),
-      password: password.trim() || null,
       verify_ssl: verifySsl,
-      token_name: tokenName.trim() || null,
-      token_value: tokenValue.trim() || null,
-    })
+    }
+
+    if (mode === "create") {
+      payload.password = password.trim() || null
+      payload.token_name = tokenName.trim() || null
+      payload.token_value = tokenValue.trim() || null
+    } else {
+      if (hasPassword) {
+        payload.password = password.trim()
+      }
+      if (hasTokenPair) {
+        payload.token_name = tokenName.trim()
+        payload.token_value = tokenValue.trim()
+      }
+    }
+
+    await onSubmit(payload)
   }
 
   return (
