@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -93,28 +94,32 @@ def test_to_dict_supports_dict_and_serializable_objects():
     assert to_dict(object()) == {}
 
 
-@pytest.mark.asyncio
-async def test_ensure_record_get_or_create_behavior():
+def test_ensure_record_get_or_create_behavior():
     existing_endpoint = AsyncEndpoint(existing={"id": 10})
     created_endpoint = AsyncEndpoint(existing=None, created={"id": 11})
 
-    existing = await ensure_record(existing_endpoint, {"name": "vm01"}, {"name": "vm01"})
-    created = await ensure_record(created_endpoint, {"name": "vm02"}, {"name": "vm02"})
+    existing = asyncio.run(
+        ensure_record(existing_endpoint, {"name": "vm01"}, {"name": "vm01"})
+    )
+    created = asyncio.run(
+        ensure_record(created_endpoint, {"name": "vm02"}, {"name": "vm02"})
+    )
 
     assert existing == {"id": 10}
     assert created == {"id": 11}
     assert created_endpoint.created_payload == {"name": "vm02"}
 
 
-@pytest.mark.asyncio
-async def test_ensure_tag_creates_missing_tag():
+def test_ensure_tag_creates_missing_tag():
     facade = AsyncNetBoxFacade()
-    created = await ensure_tag(
-        facade,
-        name="Proxbox",
-        slug="proxbox",
-        color="9e9e9e",
-        description="Synced by proxbox-api",
+    created = asyncio.run(
+        ensure_tag(
+            facade,
+            name="Proxbox",
+            slug="proxbox",
+            color="9e9e9e",
+            description="Synced by proxbox-api",
+        )
     )
     assert created == {"id": 99}
     assert facade.extras.tags.created_payload["slug"] == "proxbox"
@@ -198,8 +203,7 @@ def test_proxmox_session_falls_back_to_ip_when_domain_fails(monkeypatch):
     assert session.proxmoxer.host == "10.0.0.10"
 
 
-@pytest.mark.asyncio
-async def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
+def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
 
     with Session(db_engine) as session:
@@ -215,7 +219,7 @@ async def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine)
             )
         )
         session.commit()
-        sessions = await proxmox_sessions(session)
+        sessions = asyncio.run(proxmox_sessions(session))
 
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"
