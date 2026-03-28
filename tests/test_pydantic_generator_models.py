@@ -123,9 +123,7 @@ def test_generate_pydantic_models_keeps_object_request_models_with_aliases():
     }
 
     module = _load_generated_module(openapi)
-    payload = module.PutAccessAclRequest.model_validate(
-        {"path": "/vms", "groups-autocreate": True}
-    )
+    payload = module.PutAccessAclRequest.model_validate({"path": "/vms", "groups-autocreate": True})
 
     assert payload.path == "/vms"
     assert payload.groups_autocreate is True
