@@ -1,3 +1,5 @@
+"""Proxmox route handlers for sessions, storage, and VM config."""
+
 from fastapi import APIRouter, HTTPException, Path, Query
 from typing import Annotated, Optional, List
 from pydantic import BaseModel, Field

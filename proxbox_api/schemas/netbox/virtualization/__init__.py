@@ -1,3 +1,5 @@
+"""NetBox virtualization schema models for clusters and types."""
+
 from pydantic import BaseModel
 
 from proxbox_api.schemas.netbox.extras import TagSchema

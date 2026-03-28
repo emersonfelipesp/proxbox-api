@@ -1,3 +1,5 @@
+"""Device synchronization service from Proxmox nodes to NetBox."""
+
 import asyncio
 from fastapi import WebSocket, Depends
 from typing import Annotated

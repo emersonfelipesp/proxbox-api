@@ -1,3 +1,5 @@
+"""Utility package exports for decorators and status helpers."""
+
 from .sync_decorator import sync_process
 
 def return_status_html(status: str, use_css: bool) -> str:

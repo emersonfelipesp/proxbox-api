@@ -1,3 +1,5 @@
+"""NetBox extras schema models such as tags."""
+
 from pydantic import BaseModel
 
 class TagSchema(BaseModel):

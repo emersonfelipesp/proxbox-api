@@ -1,3 +1,5 @@
+"""NetBox API session creation and dependency wiring."""
+
 from typing import Annotated
 from fastapi import Depends
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint

@@ -1,3 +1,5 @@
+"""Enum definitions for Proxmox API path and mode choices."""
+
 from enum import Enum
 
 class ProxmoxModeOptions(str, Enum):

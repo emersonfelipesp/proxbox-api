@@ -1,3 +1,5 @@
+"""NetBox DCIM schema models used by API payloads."""
+
 from pydantic import BaseModel
 
 from proxbox_api.schemas.netbox.extras import TagSchema
