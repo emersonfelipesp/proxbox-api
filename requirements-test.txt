@@ -1,3 +1,4 @@
 httpx
+playwright
 pytest
 pytest-cov
