@@ -12,5 +12,24 @@ dependencies = [
     "sqlmodel>=0.0.22",
 ]
 
+[project.optional-dependencies]
+test = [
+    "httpx",
+    "pytest",
+    "pytest-cov",
+]
+
 [project.scripts]
 proxbox-proxmox-codegen = "proxbox_api.proxmox_codegen.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.coverage.run]
+source = ["proxbox_api"]
+branch = true
+
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
