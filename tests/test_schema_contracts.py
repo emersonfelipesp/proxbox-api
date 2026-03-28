@@ -27,17 +27,21 @@ def test_generated_proxmox_openapi_snapshot_is_available():
     assert proxmox_generated_openapi_path().exists()
     assert document["openapi"] == "3.1.0"
     assert "/cluster/resources" in document["paths"]
-    assert proxmox_operation_schema("/cluster/resources", "GET", document) is not None
+    assert (
+        proxmox_operation_schema(
+            "/cluster/resources",
+            "GET",
+            openapi=document,
+        )
+        is not None
+    )
 
 
 def test_generated_proxmox_pydantic_models_are_importable():
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "proxbox_api"
-        / "generated"
-        / "proxmox"
-        / "pydantic_models.py"
-    )
+    base = Path(__file__).resolve().parents[1] / "proxbox_api" / "generated" / "proxmox"
+    path = base / "latest" / "pydantic_models.py"
+    if not path.exists():
+        path = base / "pydantic_models.py"
     spec = importlib.util.spec_from_file_location("generated_proxmox_models", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -63,7 +67,9 @@ def test_netbox_schema_resolution_prefers_live_then_cache_then_fallback(
     assert live_resolved["source"] == "live"
     assert cache_path.exists()
 
-    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", lambda timeout=20: None)
+    monkeypatch.setattr(
+        netbox_schema, "fetch_live_netbox_openapi", lambda timeout=20: None
+    )
     cached_resolved = netbox_schema.resolve_netbox_schema_contract()
     assert cached_resolved["source"] == "cache"
     assert cached_resolved["openapi"]["paths"]
@@ -76,4 +82,3 @@ def test_netbox_schema_resolution_prefers_live_then_cache_then_fallback(
         "status",
         "cluster",
     ]
-
