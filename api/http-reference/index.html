@@ -1353,8 +1353,18 @@ OpenAPI contract under:</p>
 <li><code>POST /proxmox/viewer/routes/refresh?version_tag=8.3.0</code> rebuilds only that mounted version.</li>
 <li>The unversioned <code>/proxmox/api2/*</code> alias forwards to the <code>latest</code> generated contract.</li>
 <li>Request bodies and responses are validated with runtime-generated Pydantic models.</li>
+<li>Generated response models now cover object, array, scalar, and <code>null</code> response schemas rather than object-shaped responses only.</li>
 <li>Generated routes appear in FastAPI <code>/docs</code> and <code>/openapi.json</code>.</li>
 <li><code>latest</code> routes are mounted before older version tags so they appear first in Swagger.</li>
+<li>Generated routes are prioritized ahead of older handcrafted <code>/proxmox/*</code> routes so path collisions resolve to the generated API surface.</li>
+</ul>
+<p>Path parameter normalization:</p>
+<ul>
+<li>When the Proxmox viewer uses path parameter names that are not valid FastAPI identifiers, the mounted FastAPI route uses a normalized placeholder name.</li>
+<li>Example:</li>
+<li>Proxmox contract path: <code>/nodes/{node}/hardware/pci/{pci-id-or-mapping}</code></li>
+<li>Mounted FastAPI path: <code>/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}</code></li>
+<li>The upstream proxmoxer call still uses the original Proxmox parameter name from the generated OpenAPI contract.</li>
 </ul>
 <p>Version discovery:</p>
 <ul>
@@ -1386,6 +1396,12 @@ OpenAPI contract under:</p>
 <li><code>versions.&lt;tag&gt;.path_count</code>: number of OpenAPI paths mounted for that version.</li>
 <li><code>versions.&lt;tag&gt;.method_count</code>: number of <code>GET</code>/<code>POST</code>/<code>PUT</code>/<code>DELETE</code> operations mounted for that version.</li>
 <li><code>versions.&lt;tag&gt;.schema_version</code>: the <code>info.version</code> value from the generated OpenAPI document.</li>
+</ul>
+<p>Test coverage:</p>
+<ul>
+<li><code>tests/test_generated_proxmox_routes.py</code> runs a mock-based exhaustive route suite over every generated operation for every available version plus the <code>latest</code> alias.</li>
+<li>Each generated operation is exercised individually with schema-generated path/query/body inputs and a schema-generated mock upstream response.</li>
+<li><code>tests/test_pydantic_generator_models.py</code> verifies generated response models for array, scalar, <code>null</code>, and aliased object payloads.</li>
 </ul>
 <h2 id="dcim-routes-dcim">DCIM routes (<code>/dcim</code>)<a class="headerlink" href="#dcim-routes-dcim" title="Permanent link">&para;</a></h2>
 <ul>
