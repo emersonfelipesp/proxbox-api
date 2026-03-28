@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import ssl
 from typing import Any
+from urllib.error import URLError
 from urllib.request import urlopen
 
 
@@ -14,8 +16,15 @@ PROXMOX_APIDOC_JS_URL = "https://pve.proxmox.com/pve-docs/api-viewer/apidoc.js"
 def fetch_apidoc_js(url: str = PROXMOX_APIDOC_JS_URL, timeout: int = 60) -> str:
     """Download the upstream Proxmox `apidoc.js` source file."""
 
-    with urlopen(url, timeout=timeout) as response:
-        return response.read().decode("utf-8")
+    try:
+        with urlopen(url, timeout=timeout) as response:
+            return response.read().decode("utf-8")
+    except URLError as error:
+        if not isinstance(getattr(error, "reason", None), ssl.SSLError):
+            raise
+        insecure_context = ssl._create_unverified_context()
+        with urlopen(url, timeout=timeout, context=insecure_context) as response:
+            return response.read().decode("utf-8")
 
 
 def extract_api_schema_text(apidoc_source: str) -> str:
