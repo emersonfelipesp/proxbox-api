@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxbox_api.main import app
@@ -10,7 +11,10 @@ from proxbox_api.proxmox_codegen.openapi_generator import generate_openapi_schem
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
-from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle
+from proxbox_api.proxmox_codegen.pipeline import (
+    PROXMOX_API_VIEWER_URL,
+    generate_proxmox_codegen_bundle,
+)
 
 client = TestClient(app)
 
@@ -95,6 +99,7 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
         checkpoint_every=50,
     ):
         if checkpoint_path:
+            Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
             Path(checkpoint_path).write_text("{}", encoding="utf-8")
         return {
             "source": "playwright",
@@ -148,13 +153,15 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "fetch_apidoc_js",
-        lambda: (
+        lambda url: (
             'const apiSchema = [{"path":"/version","text":"version","leaf":1,"info":{"GET":{"name":"version","parameters":{"additionalProperties":0},"returns":{"type":"object"}}}}];'
         ),
     )
 
     bundle = generate_proxmox_codegen_bundle(
         output_dir=tmp_path,
+        source_url=PROXMOX_API_VIEWER_URL,
+        version_tag="latest",
         worker_count=4,
         retry_count=1,
         retry_backoff_seconds=0.1,
@@ -162,7 +169,17 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
     )
     assert bundle.endpoint_count > 0
     assert bundle.operation_count > 0
-    assert (tmp_path / "raw_capture.json").exists()
-    assert (tmp_path / "openapi.json").exists()
-    assert (tmp_path / "pydantic_models.py").exists()
-    assert (tmp_path / "crawl_checkpoint.json").exists()
+    assert bundle.version_tag == "latest"
+    assert (tmp_path / "latest" / "raw_capture.json").exists()
+    assert (tmp_path / "latest" / "openapi.json").exists()
+    assert (tmp_path / "latest" / "pydantic_models.py").exists()
+    assert (tmp_path / "latest" / "crawl_checkpoint.json").exists()
+
+
+def test_generate_bundle_rejects_latest_for_non_official_source():
+    with pytest.raises(ValueError, match="reserved for official Proxmox API viewer"):
+        generate_proxmox_codegen_bundle(
+            source_url="https://10.0.30.139:8006/pve-docs/api-viewer/index.html",
+            version_tag="latest",
+            output_dir=None,
+        )

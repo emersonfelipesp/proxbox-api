@@ -10,25 +10,18 @@ from typing import Any
 DEFAULT_PROXMOX_OPENAPI_TAG = "latest"
 
 
-def _legacy_proxmox_openapi_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "generated" / "proxmox" / "openapi.json"
-
-
 def proxmox_generated_openapi_path(
     version_tag: str = DEFAULT_PROXMOX_OPENAPI_TAG,
 ) -> Path:
     """Return canonical generated Proxmox OpenAPI artifact path for version tag."""
 
-    versioned = (
+    return (
         Path(__file__).resolve().parents[1]
         / "generated"
         / "proxmox"
         / version_tag
         / "openapi.json"
     )
-    if versioned.exists():
-        return versioned
-    return _legacy_proxmox_openapi_path()
 
 
 def load_proxmox_generated_openapi(

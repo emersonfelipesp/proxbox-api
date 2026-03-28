@@ -340,7 +340,7 @@ async def crawl_proxmox_api_viewer_async(
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context()
+        context = await browser.new_context(ignore_https_errors=True)
 
         seed_page = await context.new_page()
         tree_paths = await _setup_page(seed_page, config)
