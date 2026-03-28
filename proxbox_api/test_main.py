@@ -32,6 +32,12 @@ def test_read_root():
     }
 
 
+def test_custom_openapi_contains_embedded_proxmox_extension():
+    schema = app.openapi()
+    assert isinstance(schema, dict)
+    assert "x-proxmox-generated-openapi" in schema
+
+
 def test_openapi_generation_pipeline_from_sample_capture():
     sample_capture = {
         "/version": {
