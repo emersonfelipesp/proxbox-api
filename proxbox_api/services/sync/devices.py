@@ -1,28 +1,27 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
 import asyncio
-from fastapi import WebSocket, Depends
-from typing import Annotated
+import traceback
 from datetime import datetime
-from proxbox_api.session.netbox import NetBoxSessionDep
+from typing import Annotated
+
+from fastapi import Depends, WebSocket
+
+from proxbox_api.cache import global_cache
 from proxbox_api.dependencies import ProxboxTagDep
-from proxbox_api.utils import return_status_html, sync_process
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import (
     Cluster,
     ClusterType,
     Device,
-    DeviceType,
     DeviceRole,
+    DeviceType,
     Site,
 )
-from proxbox_api.cache import global_cache
-
-from proxbox_api.exception import ProxboxException
-
-import traceback
-
-from proxbox_api.logger import logger
+from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.session.netbox import NetBoxSessionDep
+from proxbox_api.utils import return_status_html, sync_process
 
 
 @sync_process(sync_type="devices")
@@ -49,7 +48,7 @@ async def create_proxmox_devices(
     failed_devices = 0  # Track failed device creations
 
     journal_messages.append("## Device Sync Process Started")
-    logger.info(f"Device Sync Process Started")
+    logger.info("Device Sync Process Started")
     journal_messages.append(f"- **Start Time**: {start_time}")
     journal_messages.append("- **Status**: Initializing")
 
@@ -68,22 +67,18 @@ async def create_proxmox_devices(
                     f"- Cluster `{cluster_status.name}` ({cluster_status.mode}): Found {device_count} devices"
                 )
 
-        journal_messages.append(f"\n## Device Processing")
+        journal_messages.append("\n## Device Processing")
         journal_messages.append(f"- Total devices to process: {total_devices}")
 
         for cluster_status in clusters_status:
             if not cluster_status or not cluster_status.node_list:
                 continue
 
-            journal_messages.append(
-                f"\n### 🔄Processing Cluster: {cluster_status.name}"
-            )
+            journal_messages.append(f"\n### 🔄Processing Cluster: {cluster_status.name}")
             logger.info(f"🔄 Processing Cluster: {cluster_status.name}")
 
             journal_messages.append(f"- Cluster Mode: {cluster_status.mode}")
-            journal_messages.append(
-                f"- Devices in cluster: {len(cluster_status.node_list)}"
-            )
+            journal_messages.append(f"- Devices in cluster: {len(cluster_status.node_list)}")
 
             for node_obj in cluster_status.node_list:
                 device_name = node_obj.name
@@ -123,9 +118,7 @@ async def create_proxmox_devices(
                         )
                     )
 
-                    journal_messages.append(
-                        f"- Creating cluster: {cluster_status.name}"
-                    )
+                    journal_messages.append(f"- Creating cluster: {cluster_status.name}")
                     cluster = await asyncio.to_thread(
                         lambda: Cluster(
                             name=cluster_status.name,
@@ -135,18 +128,12 @@ async def create_proxmox_devices(
                         )
                     )
 
-                    journal_messages.append(
-                        f"- Creating device type, role, and site placeholders"
-                    )
+                    journal_messages.append("- Creating device type, role, and site placeholders")
                     device_type = await asyncio.to_thread(
                         lambda: DeviceType(bootstrap_placeholder=True)
                     )
-                    role = await asyncio.to_thread(
-                        lambda: DeviceRole(bootstrap_placeholder=True)
-                    )
-                    site = await asyncio.to_thread(
-                        lambda: Site(bootstrap_placeholder=True)
-                    )
+                    role = await asyncio.to_thread(lambda: DeviceRole(bootstrap_placeholder=True))
+                    site = await asyncio.to_thread(lambda: Site(bootstrap_placeholder=True))
 
                     netbox_device = None
 
@@ -169,18 +156,14 @@ async def create_proxmox_devices(
                         journal_messages.append(
                             f"- ✅ Device created/synced successfully: {device_name}"
                         )
-                        logger.info(
-                            f"✅ Device created/synced successfully: {device_name}"
-                        )
+                        logger.info(f"✅ Device created/synced successfully: {device_name}")
 
                     if netbox_device:
                         netbox_device_data = netbox_device.json
 
                         # If node, return only the node requested.
                         if node and node == device_name:
-                            journal_messages.append(
-                                f"- Returning single device: {device_name}"
-                            )
+                            journal_messages.append(f"- Returning single device: {device_name}")
 
                             return [netbox_device_data] if netbox_device_data else []
 
@@ -198,9 +181,7 @@ async def create_proxmox_devices(
                                     "data": {
                                         "completed": True,
                                         "increment_count": "yes",
-                                        "sync_status": return_status_html(
-                                            "completed", use_css
-                                        ),
+                                        "sync_status": return_status_html("completed", use_css),
                                         "rowid": device_name,
                                         "name": f"<a href='{netbox_device_data.get('display_url')}'>{netbox_device_data.get('name')}</a>",
                                         "netbox_id": netbox_device_data.get("id"),
@@ -213,7 +194,9 @@ async def create_proxmox_devices(
                             )
                     else:
                         failed_devices += 1
-                        error_msg = f"Device creation failed for {device_name}. netbox_device is None."
+                        error_msg = (
+                            f"Device creation failed for {device_name}. netbox_device is None."
+                        )
                         journal_messages.append(f"- ❌ {error_msg}")
 
                         if use_websocket and websocket:
@@ -225,9 +208,7 @@ async def create_proxmox_devices(
                                     "data": {
                                         "completed": False,
                                         "increment_count": "no",
-                                        "sync_status": return_status_html(
-                                            "failed", use_css
-                                        ),
+                                        "sync_status": return_status_html("failed", use_css),
                                         "rowid": device_name,
                                         "error": error_msg,
                                     },
@@ -251,16 +232,12 @@ async def create_proxmox_devices(
         # Clear cache after creating devices.
         global_cache.clear_cache()
 
-        journal_messages.append(f"\n## Process Summary")
-        journal_messages.append(
-            f"- **Status**: {getattr(sync_process, 'status', 'unknown')}"
-        )
+        journal_messages.append("\n## Process Summary")
+        journal_messages.append(f"- **Status**: {getattr(sync_process, 'status', 'unknown')}")
         journal_messages.append(
             f"- **Runtime**: {getattr(sync_process, 'runtime', 'unknown')} seconds"
         )
-        journal_messages.append(
-            f"- **End Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        journal_messages.append(f"- **End Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         journal_messages.append(f"- **Total Devices Processed**: {total_devices}")
         journal_messages.append(f"- **Successfully Created**: {successful_devices}")
         journal_messages.append(f"- **Failed**: {failed_devices}")
@@ -287,9 +264,7 @@ async def create_proxmox_devices(
                 if not journal_entry:
                     print("Warning: Journal entry creation returned None")
             else:
-                print(
-                    "Warning: Cannot create journal entry - sync_process is None or has no id"
-                )
+                print("Warning: Cannot create journal entry - sync_process is None or has no id")
         except Exception as journal_error:
             print(f"Warning: Failed to create journal entry: {str(journal_error)}")
 

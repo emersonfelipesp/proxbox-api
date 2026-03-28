@@ -22,9 +22,7 @@ engine = create_engine(sqlite_url, connect_args=connect_args)
 
 
 class NetBoxEndpoint(SQLModel, table=True):
-    __table_args__ = {
-        "extend_existing": True
-    }  # Add this line to prevent redefinition errors
+    __table_args__ = {"extend_existing": True}  # Add this line to prevent redefinition errors
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True)
@@ -80,9 +78,7 @@ def _migrate_netbox_endpoint_columns() -> None:
         return
     stmts: list[str] = []
     if "token_version" not in existing:
-        stmts.append(
-            f"ALTER TABLE {table} ADD COLUMN token_version VARCHAR DEFAULT 'v1'"
-        )
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN token_version VARCHAR DEFAULT 'v1'")
     if "token_key" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN token_key VARCHAR")
     if not stmts:

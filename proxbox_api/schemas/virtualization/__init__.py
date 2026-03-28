@@ -1,8 +1,10 @@
 """Virtualization schema models and VM configuration validator."""
 
-from pydantic import BaseModel, model_validator
-from typing import Dict, Any, List
 import re
+from typing import Any
+
+from pydantic import BaseModel, model_validator
+
 
 class VMConfig(BaseModel):
     parent: str | None = None
@@ -31,19 +33,22 @@ class VMConfig(BaseModel):
     arch: str | None = None
     hostname: str | None = None
     features: str | None = None
-    
+
     @model_validator(mode="before")
     @classmethod
-    def validate_dynamic_keys(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_dynamic_keys(cls, values: dict[str, Any]) -> dict[str, Any]:
         # Validate dynamic keys (e.g. scsi0, net0, etc.).
         if values:
             for key in values.keys():
-                if not re.match(r'^(scsi|net|ide|unused|smbios)\d+$', key) and key not in cls.model_fields:
+                if (
+                    not re.match(r"^(scsi|net|ide|unused|smbios)\d+$", key)
+                    and key not in cls.model_fields
+                ):
                     raise ValueError(f"Invalid key: {key}")
             return values
 
     class Config:
-        extra = 'allow'
+        extra = "allow"
 
 
 class CPU(BaseModel):
@@ -52,10 +57,12 @@ class CPU(BaseModel):
     type: str
     usage: int
 
+
 class Memory(BaseModel):
     total: int
     used: int
     usage: int
+
 
 class Disk(BaseModel):
     id: str
@@ -66,6 +73,7 @@ class Disk(BaseModel):
     format: str
     path: str
 
+
 class Network(BaseModel):
     id: str
     model: str
@@ -75,11 +83,13 @@ class Network(BaseModel):
     netmask: str
     gateway: str
 
+
 class Snapshot(BaseModel):
     id: str
     name: str
     created: str
     description: str
+
 
 class Backup(BaseModel):
     id: str
@@ -87,6 +97,7 @@ class Backup(BaseModel):
     created: str
     size: int
     status: str
+
 
 class VirtualMachineSummary(BaseModel):
     id: str
@@ -100,7 +111,7 @@ class VirtualMachineSummary(BaseModel):
     created: str
     cpu: CPU
     memory: Memory
-    disks: List[Disk]
-    networks: List[Network]
-    snapshots: List[Snapshot]
-    backups: List[Backup]
+    disks: list[Disk]
+    networks: list[Network]
+    snapshots: list[Snapshot]
+    backups: list[Backup]

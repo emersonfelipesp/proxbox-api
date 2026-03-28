@@ -9,10 +9,10 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from netbox_sdk.config import authorization_header_value
+from sqlmodel import select
 
 from proxbox_api.database import NetBoxEndpoint, get_session
 from proxbox_api.session.netbox import netbox_config_from_endpoint
-from sqlmodel import select
 
 
 def netbox_openapi_cache_path() -> Path:

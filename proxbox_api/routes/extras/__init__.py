@@ -1,11 +1,11 @@
 """Extras route handlers for NetBox custom field management."""
 
-from fastapi import APIRouter, Depends
-from fastapi import WebSocket
+import asyncio
 from typing import Annotated
 
+from fastapi import APIRouter, Depends, WebSocket
+
 from proxbox_api.netbox_compat import CustomField
-import asyncio
 
 router = APIRouter()
 
@@ -90,10 +90,7 @@ async def create_custom_fields(websocket=WebSocket):
 
     # Create Custom Fields
     fields = await asyncio.gather(
-        *[
-            create_custom_field_task(custom_field_dict)
-            for custom_field_dict in custom_fields
-        ]
+        *[create_custom_field_task(custom_field_dict) for custom_field_dict in custom_fields]
     )
     return [field.dict() if hasattr(field, "dict") else field for field in fields]
 

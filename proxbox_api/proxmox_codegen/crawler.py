@@ -101,9 +101,7 @@ async def _select_path(page: Page, path: str) -> bool:
     )
 
 
-async def _extract_method_data(
-    page: Page, path: str, method: str
-) -> dict[str, Any] | None:
+async def _extract_method_data(page: Page, path: str, method: str) -> dict[str, Any] | None:
     return await page.evaluate(
         """
         ({method, path}) => {
@@ -144,13 +142,9 @@ def _synthesize_raw_sections(method_data: dict[str, Any]) -> list[str]:
 
     sections: list[str] = []
     if "items" in returns:
-        sections.append(
-            f"items: {json.dumps(returns['items'], indent=4, sort_keys=True)}"
-        )
+        sections.append(f"items: {json.dumps(returns['items'], indent=4, sort_keys=True)}")
     if "properties" in returns:
-        sections.append(
-            f"properties:{json.dumps(returns['properties'], indent=4, sort_keys=True)}"
-        )
+        sections.append(f"properties:{json.dumps(returns['properties'], indent=4, sort_keys=True)}")
     return sections
 
 
@@ -296,8 +290,7 @@ async def _worker(
                     if (
                         checkpoint_path is not None
                         and checkpoint_every > 0
-                        and (state["processed"] - state["last_checkpoint"])
-                        >= checkpoint_every
+                        and (state["processed"] - state["last_checkpoint"]) >= checkpoint_every
                     ):
                         state["last_checkpoint"] = state["processed"]
                         checkpoint_payload = {

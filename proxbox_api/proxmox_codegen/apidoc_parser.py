@@ -8,7 +8,6 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
-
 PROXMOX_API_VIEWER_URL = "https://pve.proxmox.com/pve-docs/api-viewer/"
 PROXMOX_APIDOC_JS_URL = "https://pve.proxmox.com/pve-docs/api-viewer/apidoc.js"
 
@@ -33,9 +32,7 @@ def extract_api_schema_text(apidoc_source: str) -> str:
     marker = "const apiSchema ="
     marker_index = apidoc_source.find(marker)
     if marker_index < 0:
-        raise ValueError(
-            "Unable to locate `const apiSchema =` marker in apidoc source."
-        )
+        raise ValueError("Unable to locate `const apiSchema =` marker in apidoc source.")
 
     start_index = apidoc_source.find("[", marker_index)
     if start_index < 0:

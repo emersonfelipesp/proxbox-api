@@ -2,16 +2,19 @@
 
 from enum import Enum
 
+
 class ProxmoxModeOptions(str, Enum):
     single = "single"
     multi = "multi"
-    
+
+
 class ProxmoxUpperPaths(str, Enum):
     access = "access"
     cluster = "cluster"
     nodes = "nodes"
     storage = "storage"
     version = "version"
+
 
 class ProxmoxAccessPaths(str, Enum):
     domains = "domains"
@@ -24,6 +27,7 @@ class ProxmoxAccessPaths(str, Enum):
     password = "password"
     permissions = "permissions"
     ticket = "ticket"
+
 
 class ProxmoxClusterPaths(str, Enum):
     acme = "acme"
@@ -45,6 +49,7 @@ class ProxmoxClusterPaths(str, Enum):
     status = "status"
     tasks = "tasks"
 
+
 class ClusterResourcesType(str, Enum):
     vm = "vm"
     storage = "storage"
@@ -60,10 +65,11 @@ class ClusterResourcesTypeResponse(str, Enum):
     lxc = "lxc"
     openvz = "openvz"
     sdn = "sdn"
-    
+
 
 class ProxmoxNodesPaths(str, Enum):
     node = "node"
+
 
 class ResourceType(Enum):
     node = "node"
@@ -73,7 +79,8 @@ class ResourceType(Enum):
     lxc = "lxc"
     openvz = "openvz"
     sdn = "sdn"
-    
+
+
 class NodeStatus(Enum):
     unknown = "unknown"
     online = "online"

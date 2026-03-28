@@ -28,9 +28,7 @@ def to_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-async def ensure_record(
-    endpoint: Any, lookup: dict[str, Any], payload: dict[str, Any]
-) -> Any:
+async def ensure_record(endpoint: Any, lookup: dict[str, Any], payload: dict[str, Any]) -> Any:
     """Get a record by lookup fields or create it when missing."""
     record = await endpoint.get(**lookup)
     if record:
@@ -42,9 +40,7 @@ async def ensure_record(
         return await endpoint.get(**lookup)
 
 
-async def ensure_tag(
-    nb: Any, *, name: str, slug: str, color: str, description: str
-) -> Any:
+async def ensure_tag(nb: Any, *, name: str, slug: str, color: str, description: str) -> Any:
     """Get or create a NetBox tag."""
     tag = await nb.extras.tags.get(slug=slug)
     if tag:

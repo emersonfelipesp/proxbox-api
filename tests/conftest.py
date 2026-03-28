@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import Session, SQLModel, create_engine
 
 from proxbox_api.database import get_session
 from proxbox_api.main import app
@@ -21,10 +21,14 @@ class FakeNetBoxSession:
         openapi_error: Exception | None = None,
     ) -> None:
         self._status_result = status_result if status_result is not None else {"ok": True}
-        self._openapi_result = openapi_result if openapi_result is not None else {
-            "openapi": "3.1.0",
-            "paths": {},
-        }
+        self._openapi_result = (
+            openapi_result
+            if openapi_result is not None
+            else {
+                "openapi": "3.1.0",
+                "paths": {},
+            }
+        )
         self._status_error = status_error
         self._openapi_error = openapi_error
 

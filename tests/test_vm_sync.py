@@ -10,7 +10,6 @@ from proxbox_api.proxmox_to_netbox.normalize import build_virtual_machine_transf
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
-
 from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
 

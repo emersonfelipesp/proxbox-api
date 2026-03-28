@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
     load_proxmox_generated_openapi,

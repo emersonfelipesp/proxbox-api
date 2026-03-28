@@ -98,12 +98,8 @@ def test_ensure_record_get_or_create_behavior():
     existing_endpoint = AsyncEndpoint(existing={"id": 10})
     created_endpoint = AsyncEndpoint(existing=None, created={"id": 11})
 
-    existing = asyncio.run(
-        ensure_record(existing_endpoint, {"name": "vm01"}, {"name": "vm01"})
-    )
-    created = asyncio.run(
-        ensure_record(created_endpoint, {"name": "vm02"}, {"name": "vm02"})
-    )
+    existing = asyncio.run(ensure_record(existing_endpoint, {"name": "vm01"}, {"name": "vm01"}))
+    created = asyncio.run(ensure_record(created_endpoint, {"name": "vm02"}, {"name": "vm02"}))
 
     assert existing == {"id": 10}
     assert created == {"id": 11}

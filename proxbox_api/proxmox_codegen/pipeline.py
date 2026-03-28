@@ -55,12 +55,8 @@ def _viewer_apidoc_js_url(source_url: str) -> str:
 def _validate_source_for_version_tag(source_url: str, version_tag: str) -> None:
     if version_tag != LATEST_VERSION_TAG:
         return
-    if _normalized_viewer_url(source_url) != _normalized_viewer_url(
-        PROXMOX_API_VIEWER_URL
-    ):
-        raise ValueError(
-            "Version tag 'latest' is reserved for official Proxmox API viewer URL."
-        )
+    if _normalized_viewer_url(source_url) != _normalized_viewer_url(PROXMOX_API_VIEWER_URL):
+        raise ValueError("Version tag 'latest' is reserved for official Proxmox API viewer URL.")
 
 
 def _merge_capture(
@@ -178,9 +174,7 @@ async def generate_proxmox_codegen_bundle_async(
     cleaned_version_tag = version_tag.strip()
     if not cleaned_version_tag:
         raise ValueError("version_tag cannot be empty.")
-    _validate_source_for_version_tag(
-        source_url=source_url, version_tag=cleaned_version_tag
-    )
+    _validate_source_for_version_tag(source_url=source_url, version_tag=cleaned_version_tag)
 
     viewer_capture = await crawl_proxmox_api_viewer_async(
         url=source_url,
@@ -199,9 +193,7 @@ async def generate_proxmox_codegen_bundle_async(
     apidoc_tree = parse_api_schema(apidoc_source)
     apidoc_flat = flatten_api_schema(apidoc_tree)
 
-    merged_capture = _merge_capture(
-        viewer_capture=viewer_capture, apidoc_flattened=apidoc_flat
-    )
+    merged_capture = _merge_capture(viewer_capture=viewer_capture, apidoc_flattened=apidoc_flat)
     completeness = _capture_completeness(
         merged_capture=merged_capture,
         viewer_capture=viewer_capture,

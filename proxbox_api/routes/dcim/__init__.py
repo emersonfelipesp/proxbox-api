@@ -1,35 +1,21 @@
 """DCIM route handlers for device and interface synchronization."""
 
-import traceback
-
-from fastapi import WebSocket, Depends, APIRouter
+import asyncio
 from typing import Annotated
 
+from fastapi import APIRouter, Depends
 
-import asyncio
-from datetime import datetime
+from proxbox_api.dependencies import ProxboxTagDep
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_compat import (
-    IPAddress,
-    Device,
-    DeviceRole,
-    DeviceType,
     Interface,
-    Site,
-    Cluster,
-    ClusterType,
+    IPAddress,
 )
-from proxbox_api.cache import global_cache
-
-# Proxbox API Imports
-from proxbox_api.exception import ProxboxException
-from proxbox_api.dependencies import ProxboxTagDep
-from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep
 
 # Proxmox Deps
 from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfacesDep
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep
 
 router = APIRouter()
 
@@ -72,9 +58,8 @@ async def create_interface_and_ip(tag: ProxboxTagDep, node_interface, node):
 
     try:
         interface_id = getattr(interface, "id", interface.get("id", None))
-    except:
+    except (AttributeError, TypeError):
         interface_id = None
-        pass
 
     if node_cidr and interface_id is not None:
         IPAddress(
@@ -106,20 +91,14 @@ async def create_proxmox_device_interfaces(
         break
 
     interfaces = await asyncio.gather(
-        *[
-            create_interface_and_ip(tag, node_interface, node)
-            for node_interface in node_interfaces
-        ]
+        *[create_interface_and_ip(tag, node_interface, node) for node_interface in node_interfaces]
     )
     return [
-        interface.dict() if hasattr(interface, "dict") else interface
-        for interface in interfaces
+        interface.dict() if hasattr(interface, "dict") else interface for interface in interfaces
     ]
 
 
-ProxmoxCreateDeviceInterfacesDep = Annotated[
-    list[dict], Depends(create_proxmox_device_interfaces)
-]
+ProxmoxCreateDeviceInterfacesDep = Annotated[list[dict], Depends(create_proxmox_device_interfaces)]
 
 
 @router.get("/devices/interfaces/create")

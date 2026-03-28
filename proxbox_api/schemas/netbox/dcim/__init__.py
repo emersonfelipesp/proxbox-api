@@ -2,8 +2,9 @@
 
 from pydantic import BaseModel
 
-from proxbox_api.schemas.netbox.extras import TagSchema
 from proxbox_api.enum.netbox.dcim import StatusOptions
+from proxbox_api.schemas.netbox.extras import TagSchema
+
 
 class SitesSchema(BaseModel):
     name: str
@@ -22,4 +23,3 @@ class SitesSchema(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     tenant: int | None = None
-    

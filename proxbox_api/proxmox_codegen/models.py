@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 HTTP_METHODS = ("GET", "POST", "PUT", "DELETE")
 
 

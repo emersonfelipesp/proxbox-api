@@ -8,12 +8,12 @@ from fastapi.testclient import TestClient
 from proxbox_api.main import app
 from proxbox_api.proxmox_codegen.normalize import normalize_captured_endpoints
 from proxbox_api.proxmox_codegen.openapi_generator import generate_openapi_schema
-from proxbox_api.proxmox_codegen.pydantic_generator import (
-    generate_pydantic_models_from_openapi,
-)
 from proxbox_api.proxmox_codegen.pipeline import (
     PROXMOX_API_VIEWER_URL,
     generate_proxmox_codegen_bundle,
+)
+from proxbox_api.proxmox_codegen.pydantic_generator import (
+    generate_pydantic_models_from_openapi,
 )
 
 client = TestClient(app)
@@ -129,9 +129,7 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
                             "parameters": {"type": "object", "properties": {}},
                             "returns": {
                                 "type": "object",
-                                "properties": {
-                                    "version": {"type": "string", "optional": 0}
-                                },
+                                "properties": {"version": {"type": "string", "optional": 0}},
                             },
                             "permissions": {"user": "all"},
                             "allowtoken": 1,

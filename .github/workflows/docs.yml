@@ -7,7 +7,8 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
-      - "requirements-docs.txt"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
   pull_request:
@@ -16,7 +17,8 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
-      - "requirements-docs.txt"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/docs.yml"
 
 permissions:
@@ -33,16 +35,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
+          enable-cache: true
 
-      - name: Install docs dependencies
-        run: pip install -r requirements-docs.txt
+      - name: Pin Python
+        run: uv python install 3.11
+
+      - name: Sync docs dependencies
+        run: uv sync --frozen --extra docs --group dev
 
       - name: Build docs
-        run: mkdocs build --strict
+        run: uv run mkdocs build --strict
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -52,16 +57,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
+          enable-cache: true
 
-      - name: Install docs dependencies
-        run: pip install -r requirements-docs.txt
+      - name: Pin Python
+        run: uv python install 3.11
+
+      - name: Sync docs dependencies
+        run: uv sync --frozen --extra docs --group dev
 
       - name: Build docs
-        run: mkdocs build --strict
+        run: uv run mkdocs build --strict
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4

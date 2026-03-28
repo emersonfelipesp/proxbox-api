@@ -1,5 +1,27 @@
 # Installing proxbox-api (Plugin backend made using FastAPI)
 
+## Tooling: uv + Ruff
+
+This repo uses [uv](https://docs.astral.sh/uv/) to install Python and dependencies, and [Ruff](https://docs.astral.sh/ruff/) for linting and formatting.
+
+```bash
+# Runtime only
+uv sync
+
+# Tests + Ruff (matches CI)
+uv sync --extra test --group dev
+
+# Documentation (MkDocs)
+uv sync --extra docs --group dev
+```
+
+```bash
+uv run ruff check .
+uv run ruff format .
+uv run pytest tests
+uv run mkdocs serve   # after syncing with --extra docs
+```
+
 ## Documentation (MkDocs Material)
 
 Project documentation is available under `docs/` and built with MkDocs Material.
@@ -7,8 +29,8 @@ Project documentation is available under `docs/` and built with MkDocs Material.
 ### Local docs build
 
 ```bash
-pip install -r requirements-docs.txt
-mkdocs serve
+uv sync --extra docs --group dev
+uv run mkdocs serve
 ```
 
 ### Languages
@@ -45,20 +67,18 @@ cd proxbox_api
 
 ### Install dependencies
 
-```
-pip install -r requirements.txt
-```
-
-### Change to 'proxbox_api' app folder (the actual code)
+From the repository root (where `pyproject.toml` lives):
 
 ```
-cd proxbox_api
+uv sync
 ```
 
-### Start the FastAPI using astral-uv (recommended)
+### Start the FastAPI app (recommended)
+
+From the repository root:
 
 ```
-uv run fastapi run --host 0.0.0.0 --port 8000
+uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
 ```
 
 - `--host 0.0.0.0` will make the app available on all host network interfaces, which my not be recommended.
@@ -66,19 +86,17 @@ Just pass your desired IP like `--host <YOUR-IP>` and it will also work.
 
 - `--port 8000` is the default port, but you can change it if needed. Just to remember to update it on NetBox also, at FastAPI Endpoint model.
 
-### If using 'uv' fails, try to start it directly:
-
-Using `fastapi`:
+### Alternative: pip editable install
 
 ```
 pip install -e .
-fastapi run --host 0.0.0.0 --port 8000
+fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Or using `uvicorn`:
+Or with uvicorn:
 
 ```
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## Using mkcert

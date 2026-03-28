@@ -1,20 +1,20 @@
 """Proxmox session management and dependency provider utilities."""
 
-from fastapi import Depends, Query
 from typing import Annotated, Any
+
+from fastapi import Depends, Query
 
 # Proxmox
 from proxmoxer import ProxmoxAPI
-
-from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
-from proxbox_api.exception import ProxboxException
-from proxbox_api.database import DatabaseSessionDep, ProxmoxEndpoint
 from sqlmodel import select
 
+from proxbox_api.database import DatabaseSessionDep, ProxmoxEndpoint
+from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
+from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
 
 # Pynetbox-api Imports
 from proxbox_api.session.netbox import get_netbox_session
-from proxbox_api.logger import logger
 
 
 #
@@ -61,9 +61,7 @@ class ProxmoxSession:
             import json
 
             cluster_config = json.loads(cluster_config)
-            logger.info(
-                f"json_loads: {cluster_config} - type: {type(cluster_config)}}}"
-            )
+            logger.info(f"json_loads: {cluster_config} - type: {type(cluster_config)}}}")
 
             """
             except Exception as error:
@@ -275,10 +273,7 @@ class ProxmoxSession:
         """Get Proxmox Cluster Mode (Standalone or Cluster)"""
         if self.CONNECTED:
             try:
-                if (
-                    len(self.cluster_status) == 1
-                    and self.cluster_status[0].get("type") == "node"
-                ):
+                if len(self.cluster_status) == 1 and self.cluster_status[0].get("type") == "node":
                     return "standalone"
                 else:
                     return "cluster"
@@ -289,9 +284,7 @@ class ProxmoxSession:
                     python_exception=f"{error}",
                 )
         else:
-            logger.info(
-                "Proxmox Session is not connected, so not able to get Cluster Mode"
-            )
+            logger.info("Proxmox Session is not connected, so not able to get Cluster Mode")
 
     def get_cluster_name(self):
         """Get Proxmox Cluster Name"""
@@ -309,10 +302,7 @@ class ProxmoxSession:
     def get_standalone_name(self):
         """Get Proxmox Standalone Node Name"""
         try:
-            if (
-                len(self.cluster_status) == 1
-                and self.cluster_status[0].get("type") == "node"
-            ):
+            if len(self.cluster_status) == 1 and self.cluster_status[0].get("type") == "node":
                 return self.cluster_status[0].get("name")
 
         except Exception as error:
@@ -400,9 +390,7 @@ async def proxmox_sessions(
 
         proxmox_schemas = [
             parse_netbox_to_schema(endpoint)
-            for endpoint in netbox_session.plugins.proxbox.__getattr__(
-                "endpoints/proxmox"
-            ).all()
+            for endpoint in netbox_session.plugins.proxbox.__getattr__("endpoints/proxmox").all()
         ]
     else:
         db_endpoints = database_session.exec(select(ProxmoxEndpoint)).all()

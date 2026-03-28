@@ -10,7 +10,6 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     proxmox_generated_openapi_path,
     proxmox_operation_schema,
 )
-
 from tests.fixtures import NETBOX_OPENAPI_SNAPSHOT
 
 
@@ -67,9 +66,7 @@ def test_netbox_schema_resolution_prefers_live_then_cache_then_fallback(
     assert live_resolved["source"] == "live"
     assert cache_path.exists()
 
-    monkeypatch.setattr(
-        netbox_schema, "fetch_live_netbox_openapi", lambda timeout=20: None
-    )
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", lambda timeout=20: None)
     cached_resolved = netbox_schema.resolve_netbox_schema_contract()
     assert cached_resolved["source"] == "cache"
     assert cached_resolved["openapi"]["paths"]
