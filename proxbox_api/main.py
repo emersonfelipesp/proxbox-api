@@ -2,15 +2,20 @@
 
 import os
 import traceback
-
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from fastapi.staticfiles import StaticFiles
+
 from pydantic import BaseModel
 from typing import Annotated, List
 
-
+from sqlmodel import select
+from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
+from proxbox_api.session.netbox import get_netbox_session
+from sqlalchemy.exc import OperationalError
+from proxbox_api.netbox_compat import NetBoxBase
 import asyncio
 
 # Proxbox API route imports
@@ -23,6 +28,8 @@ from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.exception import ProxboxException
 from proxbox_api.dependencies import ProxboxTagDep
 
+# ProxBox Admin Panel Routes
+from proxbox_api.routes.admin import router as admin_router
 
 # Proxmox Routes
 from proxbox_api.routes.proxmox import router as proxmox_router
@@ -70,6 +77,10 @@ app = FastAPI(
     version="0.0.1",
 )
 
+base_dir = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(base_dir, 'static')
+app.mount('/static', StaticFiles(directory=static_dir), name='static')
+
 
 def custom_openapi():
     """Override FastAPI OpenAPI generation with embedded Proxmox generated schema."""
@@ -78,13 +89,6 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
-
-
-from sqlmodel import select
-from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
-from proxbox_api.session.netbox import get_netbox_session
-from proxbox_api.netbox_compat import NetBoxBase
-from sqlalchemy.exc import OperationalError
 
 netbox_endpoint = None
 database_session = None
@@ -104,8 +108,6 @@ if database_session:
         netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
     except OperationalError as error:
         # If table does not exist, create it.
-        from proxbox_api.database import create_db_and_tables
-
         create_db_and_tables()
         netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
 
@@ -199,10 +201,8 @@ async def clear_cache():
     return {"message": "Cache cleared"}
 
 
-from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
-
 
 class SyncProcessIn(BaseModel):
     name: str
@@ -283,6 +283,9 @@ async def create_sync_process():
 #
 # Routes (Endpoints)
 #
+
+# Admin Routes
+app.include_router(admin_router, prefix="/admin", tags=["admin"])
 
 # Netbox Routes
 app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
