@@ -43,6 +43,49 @@ class AsyncNetBoxFacade:
         return {"netbox": "ok"}
 
 
+class AsyncIterableEndpoint:
+    def __init__(self, items):
+        self._items = items
+
+    async def all(self):
+        for item in self._items:
+            yield item
+
+
+class AsyncNetBoxPluginsFacade:
+    def __init__(self, items):
+        self.plugins = SimpleNamespace(
+            proxbox=SimpleNamespace(
+                __getattr__=lambda name: (
+                    AsyncIterableEndpoint(items) if name == "endpoints/proxmox" else None
+                )
+            )
+        )
+
+
+class BrokenAsyncEndpoint:
+    def all(self):
+        raise ValueError("Resource does not expose list path: plugins/proxbox/endpoints/proxmox")
+
+
+class AsyncNetBoxFallbackFacade:
+    def __init__(self, payload):
+        self._payload = payload
+        self.plugins = SimpleNamespace(
+            proxbox=SimpleNamespace(
+                __getattr__=lambda name: (
+                    BrokenAsyncEndpoint() if name == "endpoints/proxmox" else None
+                )
+            )
+        )
+        self.client = SimpleNamespace(request=self._request)
+
+    async def _request(self, method, path):
+        assert method == "GET"
+        assert path == "/api/plugins/proxbox/endpoints/proxmox/"
+        return SimpleNamespace(json=lambda: self._payload)
+
+
 class FakeProxmoxResource:
     def __init__(self, payload):
         self.payload = payload
@@ -196,7 +239,7 @@ def test_proxmox_session_falls_back_to_ip_when_domain_fails(monkeypatch):
     )
 
     assert session.CONNECTED is True
-    assert session.proxmoxer.host == "10.0.0.10"
+    assert getattr(session.proxmoxer, "host", None) == "10.0.0.10"
 
 
 def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
@@ -216,6 +259,63 @@ def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
         )
         session.commit()
         sessions = asyncio.run(proxmox_sessions(session))
+
+    assert len(sessions) == 1
+    assert sessions[0].name == "lab-cluster"
+
+
+def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
+
+    endpoint = SimpleNamespace(
+        ip_address=SimpleNamespace(address="10.0.0.10/24"),
+        domain="pve.local",
+        port=8006,
+        username="root@pam",
+        password="password",
+        verify_ssl=False,
+        token_name=None,
+        token_value=None,
+    )
+
+    monkeypatch.setattr(
+        "proxbox_api.session.proxmox.get_netbox_async_session",
+        lambda database_session: AsyncNetBoxPluginsFacade([endpoint]),
+    )
+
+    with Session(db_engine) as session:
+        sessions = asyncio.run(proxmox_sessions(session, source="netbox"))
+
+    assert len(sessions) == 1
+    assert sessions[0].name == "lab-cluster"
+
+
+def test_proxmox_sessions_reads_netbox_endpoints_via_client_fallback(monkeypatch, db_engine):
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
+
+    payload = {
+        "count": 1,
+        "results": [
+            {
+                "ip_address": {"address": "10.0.0.10/24"},
+                "domain": "pve.local",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "password",
+                "verify_ssl": False,
+                "token_name": None,
+                "token_value": None,
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        "proxbox_api.session.proxmox.get_netbox_async_session",
+        lambda database_session: AsyncNetBoxFallbackFacade(payload),
+    )
+
+    with Session(db_engine) as session:
+        sessions = asyncio.run(proxmox_sessions(session, source="netbox"))
 
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"

@@ -28,7 +28,6 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
         token_version=tv,
         token_key=key,
         token_secret=endpoint.token,
-        ssl_verify=endpoint.verify_ssl,
     )
 
 
@@ -52,6 +51,30 @@ def get_netbox_session(database_session: DatabaseSessionDep) -> Any:
             )
 
         return SyncProxy(netbox_api_from_endpoint(netbox_endpoint))
+
+    except ProxboxException as error:
+        raise error
+
+    except Exception as error:
+        raise ProxboxException(
+            message="Error establishing NetBox API session", python_exception=str(error)
+        )
+
+
+def get_netbox_async_session(database_session: DatabaseSessionDep) -> Api:
+    """
+    Get NetBox API parameters from database and establish an async netbox-sdk API session.
+    """
+    try:
+        netbox_endpoint = database_session.exec(select(NetBoxEndpoint)).first()
+
+        if not netbox_endpoint:
+            raise ProxboxException(
+                message="No NetBox endpoint found",
+                detail="Please add a NetBox endpoint in the database",
+            )
+
+        return netbox_api_from_endpoint(netbox_endpoint)
 
     except ProxboxException as error:
         raise error
