@@ -27,7 +27,7 @@ proxbox-api is a FastAPI backend that coordinates data flow between Proxmox clus
 ## Entrypoints
 
 - Application entrypoint: `proxbox_api/main.py` (FastAPI app named `app`).
-- Typical ASGI command: `uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8800`.
+- Typical ASGI command: `uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000`.
 - Docker entrypoint: defined in `Dockerfile` with the same module path.
 - Test entrypoint: `proxbox_api/test_main.py` using `fastapi.testclient.TestClient`.
 

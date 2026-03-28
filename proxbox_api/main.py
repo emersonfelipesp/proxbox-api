@@ -1,5 +1,6 @@
 """FastAPI application entrypoint and route registration."""
 
+import os
 import traceback
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends
@@ -125,10 +126,25 @@ if netbox_endpoints:
             ]
         )
 
-# Add default development origins
+# Add default development origins (API + Next.js dev server on typical ports)
 origins.extend(
-    ["https://127.0.0.1:443", "http://127.0.0.1:80", "http://127.0.0.1:8000"]
+    [
+        "https://127.0.0.1:443",
+        "http://127.0.0.1:80",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
 )
+
+for part in os.environ.get("PROXBOX_CORS_EXTRA_ORIGINS", "").split(","):
+    origin = part.strip().rstrip("/")
+    if origin:
+        origins.append(origin)
+
+origins = list(dict.fromkeys(origins))
 
 print(origins)
 

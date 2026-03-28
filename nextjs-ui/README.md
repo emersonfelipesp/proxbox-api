@@ -7,7 +7,7 @@ Standalone Next.js frontend for CRUD management of:
 
 ## Prerequisites
 
-- Proxbox API running locally (default `http://127.0.0.1:8800`)
+- Proxbox API running locally (default `http://127.0.0.1:8000`)
 - Node.js 20+
 
 ## Setup
@@ -21,7 +21,7 @@ cp .env.example .env.local
 2. Adjust API URL if needed:
 
 ```bash
-NEXT_PUBLIC_PROXBOX_API_URL=http://127.0.0.1:8800
+NEXT_PUBLIC_PROXBOX_API_URL=http://127.0.0.1:8000
 ```
 
 3. Start development server:
