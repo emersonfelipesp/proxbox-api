@@ -1,0 +1,22 @@
+<html>
+    <head>
+        <title>Proxbox Admin</title>
+    </head>
+    <body>
+        <h1>Proxbox Admin</h1>
+        <p>{{ name }}</p>
+        <p>Netbox Endpoints:</p>
+        <ul>
+            {% for netbox_endpoint in netbox_endpoints %}
+                <li><strong>Name:</strong> {{ netbox_endpoint.name }}</li>
+                <li><strong>IP Address:</strong> {{ netbox_endpoint.ip_address }}</li>
+                <li><strong>Port:</strong> {{ netbox_endpoint.port }}</li>
+                <li><strong>Username:</strong> {{ netbox_endpoint.username }}</li>
+                <li><strong>Password:</strong> {{ netbox_endpoint.password }}</li>
+                <li><strong>Verify SSL:</strong> {{ netbox_endpoint.verify_ssl }}</li>
+                <li><strong>API Token:</strong> {{ netbox_endpoint.api_token }}</li>
+                <li><strong>Enabled:</strong> {{ netbox_endpoint.enabled }}</li>
+            {% endfor %}
+        </ul>
+    </body>
+</html>
