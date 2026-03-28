@@ -695,6 +695,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#runtime-generated-live-proxy-routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime-generated live proxy routes
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1171,6 +1182,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#runtime-generated-live-proxy-routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime-generated live proxy routes
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1312,6 +1334,38 @@
 <li><code>GET /proxmox/viewer/openapi/embedded</code></li>
 <li><code>GET /proxmox/viewer/integration/contracts</code></li>
 <li><code>GET /proxmox/viewer/pydantic</code></li>
+<li><code>POST /proxmox/viewer/routes/refresh</code></li>
+</ul>
+<h3 id="runtime-generated-live-proxy-routes">Runtime-generated live proxy routes<a class="headerlink" href="#runtime-generated-live-proxy-routes" title="Permanent link">&para;</a></h3>
+<p><code>proxbox-api</code> now mounts runtime-generated Proxmox proxy routes from the embedded generated
+OpenAPI contract under:</p>
+<ul>
+<li><code>/proxmox/api2/{version_tag}/json/*</code></li>
+<li><code>/proxmox/api2/json/*</code> as a compatibility alias to <code>latest</code></li>
+</ul>
+<p>Behavior:</p>
+<ul>
+<li>Routes are built at startup for every generated version present under <code>proxbox_api/generated/proxmox/</code>.</li>
+<li>Routes are rebuilt on demand with <code>POST /proxmox/viewer/routes/refresh</code>.</li>
+<li>The unversioned <code>/proxmox/api2/json/*</code> alias forwards to the <code>latest</code> generated contract.</li>
+<li>Request bodies and responses are validated with runtime-generated Pydantic models.</li>
+<li>Generated routes appear in FastAPI <code>/docs</code> and <code>/openapi.json</code>.</li>
+</ul>
+<p>Target selection:</p>
+<ul>
+<li>If exactly one Proxmox endpoint exists, generated routes use it automatically.</li>
+<li>If more than one endpoint exists, pass one of:</li>
+<li><code>target_name</code></li>
+<li><code>target_domain</code></li>
+<li><code>target_ip_address</code></li>
+<li><code>source</code> selects whether endpoints come from the local database or NetBox plugin records.</li>
+</ul>
+<p>Examples of generated route shapes:</p>
+<ul>
+<li><code>GET /proxmox/api2/latest/json/cluster/resources</code></li>
+<li><code>GET /proxmox/api2/8.3.0/json/nodes/{node}/qemu/{vmid}/config</code></li>
+<li><code>POST /proxmox/api2/latest/json/access/acl</code></li>
+<li><code>GET /proxmox/api2/json/cluster/resources</code> as the compatibility alias for <code>latest</code></li>
 </ul>
 <h2 id="dcim-routes-dcim">DCIM routes (<code>/dcim</code>)<a class="headerlink" href="#dcim-routes-dcim" title="Permanent link">&para;</a></h2>
 <ul>
