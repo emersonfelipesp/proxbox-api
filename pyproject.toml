@@ -11,3 +11,6 @@ dependencies = [
     "netbox-sdk==0.0.5",
     "sqlmodel>=0.0.22",
 ]
+
+[project.scripts]
+proxbox-proxmox-codegen = "proxbox_api.proxmox_codegen.cli:main"
