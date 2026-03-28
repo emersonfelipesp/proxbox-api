@@ -17,7 +17,7 @@ from tests.fixtures import NETBOX_OPENAPI_SNAPSHOT
 def test_custom_openapi_contains_embedded_generated_proxmox_schema():
     schema = app.openapi()
     assert schema["info"]["x-proxmox-generated-openapi"]["source"].endswith(
-        "proxbox_api/generated/proxmox/openapi.json"
+        "proxbox_api/generated/proxmox/latest/openapi.json"
     )
     assert "x-proxmox-generated-openapi" in schema
 

@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+    DEFAULT_PROXMOX_OPENAPI_TAG,
+    load_proxmox_generated_openapi,
+    proxmox_generated_openapi_path,
+)
 
 
 def _generated_proxmox_openapi() -> dict[str, Any]:
-    path = Path(__file__).resolve().parent / "generated" / "proxmox" / "openapi.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return load_proxmox_generated_openapi(version_tag=DEFAULT_PROXMOX_OPENAPI_TAG)
 
 
 def custom_openapi_builder(app: FastAPI) -> dict[str, Any]:
@@ -36,10 +34,16 @@ def custom_openapi_builder(app: FastAPI) -> dict[str, Any]:
 
     proxmox_generated = _generated_proxmox_openapi()
     if proxmox_generated:
+        source = str(
+            proxmox_generated_openapi_path(
+                version_tag=DEFAULT_PROXMOX_OPENAPI_TAG,
+            ).relative_to(Path(__file__).resolve().parents[1])
+        )
         openapi_schema.setdefault("info", {})["x-proxmox-generated-openapi"] = {
-            "source": "proxbox_api/generated/proxmox/openapi.json",
+            "source": source,
             "endpoint_count": len((proxmox_generated.get("paths") or {}).keys()),
             "version": proxmox_generated.get("info", {}).get("version"),
+            "version_tag": DEFAULT_PROXMOX_OPENAPI_TAG,
         }
         openapi_schema["x-proxmox-generated-openapi"] = proxmox_generated
 

@@ -49,7 +49,7 @@ def test_map_proxmox_vm_to_netbox_vm_body():
 
 
 def test_load_proxmox_generated_openapi_present():
-    document = load_proxmox_generated_openapi()
+    document = load_proxmox_generated_openapi(version_tag="latest")
     assert isinstance(document, dict)
     assert "paths" in document
 
