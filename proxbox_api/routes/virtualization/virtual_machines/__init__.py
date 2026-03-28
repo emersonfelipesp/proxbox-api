@@ -46,6 +46,12 @@ from proxbox_api.cache import global_cache
 from proxbox_api.routes.proxmox import (
     get_proxmox_node_storage_content,
 )  # Get Proxmox Node Storage Content
+from proxbox_api.proxmox_to_netbox.mappers.virtual_machine import (
+    map_proxmox_vm_to_netbox_vm_body,
+)
+from proxbox_api.services.sync.virtual_machines import (
+    build_netbox_virtual_machine_payload,
+)
 
 router = APIRouter()
 
@@ -302,39 +308,18 @@ async def create_virtual_machines(
             )
 
         # try:
-        print("name: ", resource.get("name"))
-        print(
-            "status: ",
-            VirtualMachine.status_field.get(resource.get("status"), "active"),
+        netbox_vm_payload = build_netbox_virtual_machine_payload(
+            proxmox_resource=resource,
+            proxmox_config=vm_config,
+            cluster_id=int(getattr(cluster, "id", 0) or 0),
+            device_id=int(getattr(device, "id", 0) or 0),
+            role_id=int(getattr(role, "id", 0) or 0),
+            tag_ids=[int(getattr(tag, "id", 0) or 0)],
         )
-        print("cluster: ", getattr(cluster, "id"))
-        print("device: ", getattr(device, "id"))
-        print("vcpus: ", int(resource.get("maxcpu", 0)))
-        print("memory: ", int(resource.get("maxmem")) // 1000000)
-        print("disk: ", int(resource.get("maxdisk", 0)) // 1000000)
-        print("tags: ", [getattr(tag, "id")])
-        print("role: ", getattr(role, "id"))
 
         virtual_machine = await asyncio.to_thread(
             lambda: VirtualMachine(
-                name=resource.get("name"),
-                status=VirtualMachine.status_field.get(
-                    resource.get("status"), "active"
-                ),
-                cluster=getattr(cluster, "id"),
-                device=getattr(device, "id"),
-                vcpus=int(resource.get("maxcpu", 0)),
-                memory=int(resource.get("maxmem")) // 1000000,
-                disk=int(resource.get("maxdisk", 0)) // 1000000,
-                tags=[getattr(tag, "id")],
-                role=getattr(role, "id"),
-                custom_fields={
-                    "proxmox_vm_id": resource.get("vmid"),
-                    "proxmox_start_at_boot": start_at_boot,
-                    "proxmox_unprivileged_container": unprivileged_container,
-                    "proxmox_qemu_agent": qemu_agent,
-                    "proxmox_search_domain": search_domain,
-                },
+                **netbox_vm_payload,
             )
         )
 

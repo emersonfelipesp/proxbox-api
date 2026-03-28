@@ -49,6 +49,7 @@ from proxbox_api.routes.proxmox.nodes import (
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 
 from proxbox_api.dependencies import NetBoxSessionDep
+from proxbox_api.openapi_custom import custom_openapi_builder
 
 """
 CORS ORIGINS
@@ -67,6 +68,15 @@ app = FastAPI(
     description="## Proxbox Backend made in FastAPI framework",
     version="0.0.1",
 )
+
+
+def custom_openapi():
+    """Override FastAPI OpenAPI generation with embedded Proxmox generated schema."""
+
+    return custom_openapi_builder(app)
+
+
+app.openapi = custom_openapi
 
 
 from sqlmodel import select
