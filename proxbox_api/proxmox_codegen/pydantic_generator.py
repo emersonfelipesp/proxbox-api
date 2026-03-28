@@ -45,10 +45,10 @@ def _generate_object_model(model_name: str, schema: dict[str, Any]) -> str:
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
     required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
 
-    lines = [f"class {model_name}(BaseModel):"]
     if not properties:
-        lines.append("    value: dict[str, Any] | None = None")
-        return "\n".join(lines)
+        return _generate_root_model(model_name, {"type": "object"})
+
+    lines = [f"class {model_name}(BaseModel):"]
 
     for prop_name, prop_schema in sorted(properties.items()):
         if not isinstance(prop_schema, dict):

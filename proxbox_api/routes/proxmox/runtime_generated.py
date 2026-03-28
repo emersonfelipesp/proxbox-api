@@ -198,6 +198,46 @@ def _operation_parameters(operation: dict[str, Any]) -> list[dict[str, Any]]:
     return [parameter for parameter in parameters if isinstance(parameter, dict)]
 
 
+def _path_parameter_name_map(operation: dict[str, Any]) -> dict[str, str]:
+    used_parameter_names = {
+        "_database_session",
+        "source",
+        "target_name",
+        "target_domain",
+        "target_ip_address",
+        "request_body",
+    }
+    mapping: dict[str, str] = {}
+
+    for parameter in _operation_parameters(operation):
+        if parameter.get("in") != "path":
+            continue
+        original_name = parameter.get("name")
+        if not isinstance(original_name, str):
+            continue
+
+        python_name = slugify_identifier(original_name)
+        if python_name in used_parameter_names:
+            candidate = f"op_{python_name}"
+            suffix = 1
+            while candidate in used_parameter_names:
+                candidate = f"op_{python_name}_{suffix}"
+                suffix += 1
+            python_name = candidate
+
+        used_parameter_names.add(python_name)
+        mapping[original_name] = python_name
+
+    return mapping
+
+
+def _mounted_fastapi_path(openapi_path: str, operation: dict[str, Any]) -> str:
+    mounted_path = openapi_path
+    for original_name, python_name in _path_parameter_name_map(operation).items():
+        mounted_path = mounted_path.replace(f"{{{original_name}}}", f"{{{python_name}}}")
+    return mounted_path
+
+
 def _build_generated_endpoint(
     *,
     openapi_path: str,
@@ -207,7 +247,10 @@ def _build_generated_endpoint(
     response_model: type | None,
 ) -> Any:
     operation_id = operation.get("operationId") or f"{method.lower()}_{openapi_path}"
-    path_param_map: dict[str, str] = {}
+    path_param_name_map = _path_parameter_name_map(operation)
+    path_param_map: dict[str, str] = {
+        python_name: original_name for original_name, python_name in path_param_name_map.items()
+    }
     query_param_map: dict[str, str] = {}
     signature_parameters: list[inspect.Parameter] = [
         inspect.Parameter(
@@ -274,7 +317,11 @@ def _build_generated_endpoint(
         schema = parameter.get("schema") if isinstance(parameter.get("schema"), dict) else {}
         description = parameter.get("description")
         required = bool(parameter.get("required"))
-        python_name = slugify_identifier(original_name)
+        python_name = (
+            path_param_name_map[original_name]
+            if location == "path" and original_name in path_param_name_map
+            else slugify_identifier(original_name)
+        )
         if python_name in used_parameter_names:
             python_name = unique_parameter_name(f"op_{python_name}")
         annotation = _schema_to_annotation(schema)
@@ -283,7 +330,6 @@ def _build_generated_endpoint(
             alias = f"op_{original_name}"
 
         if location == "path":
-            path_param_map[python_name] = original_name
             signature_parameters.append(
                 inspect.Parameter(
                     python_name,
@@ -292,7 +338,6 @@ def _build_generated_endpoint(
                     default=Path(
                         ...,
                         description=description,
-                        alias=alias,
                     ),
                 )
             )
@@ -404,6 +449,19 @@ def _remove_generated_routes(app: FastAPI, route_names: set[str]) -> None:
     ]
 
 
+def _prioritize_generated_routes(app: FastAPI, route_names: set[str]) -> None:
+    if not route_names:
+        return
+
+    generated_routes = [
+        route for route in app.router.routes if getattr(route, "name", None) in route_names
+    ]
+    other_routes = [
+        route for route in app.router.routes if getattr(route, "name", None) not in route_names
+    ]
+    app.router.routes = generated_routes + other_routes
+
+
 def _build_version_route_specs(
     *,
     version_tag: str,
@@ -444,9 +502,10 @@ def _build_version_route_specs(
                 request_model=request_model,
                 response_model=response_model,
             )
+            mounted_fastapi_path = _mounted_fastapi_path(openapi_path, operation)
             route_specs.append(
                 {
-                    "path": f"/proxmox/api2/{version_tag}{openapi_path}",
+                    "path": f"/proxmox/api2/{version_tag}{mounted_fastapi_path}",
                     "endpoint": endpoint,
                     "methods": [method.upper()],
                     "name": base_route_name,
@@ -462,7 +521,7 @@ def _build_version_route_specs(
                 alias_route_name = f"{base_route_name}__alias"
                 route_specs.append(
                     {
-                        "path": f"/proxmox/api2{openapi_path}",
+                        "path": f"/proxmox/api2{mounted_fastapi_path}",
                         "endpoint": endpoint,
                         "methods": [method.upper()],
                         "name": alias_route_name,
@@ -566,6 +625,7 @@ def register_generated_proxmox_routes(
         _remove_generated_routes(app, previous_names)
         for spec in route_specs:
             app.add_api_route(**spec)
+        _prioritize_generated_routes(app, all_route_names)
 
         cache_path = _write_generated_route_cache(
             documents=dict(sorted(documents.items(), key=lambda item: _version_sort_key(item[0]))),

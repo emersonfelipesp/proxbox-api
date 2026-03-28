@@ -93,8 +93,18 @@ Behavior:
 - `POST /proxmox/viewer/routes/refresh?version_tag=8.3.0` rebuilds only that mounted version.
 - The unversioned `/proxmox/api2/*` alias forwards to the `latest` generated contract.
 - Request bodies and responses are validated with runtime-generated Pydantic models.
+- Generated response models now cover object, array, scalar, and `null` response schemas rather than object-shaped responses only.
 - Generated routes appear in FastAPI `/docs` and `/openapi.json`.
 - `latest` routes are mounted before older version tags so they appear first in Swagger.
+- Generated routes are prioritized ahead of older handcrafted `/proxmox/*` routes so path collisions resolve to the generated API surface.
+
+Path parameter normalization:
+
+- When the Proxmox viewer uses path parameter names that are not valid FastAPI identifiers, the mounted FastAPI route uses a normalized placeholder name.
+- Example:
+  - Proxmox contract path: `/nodes/{node}/hardware/pci/{pci-id-or-mapping}`
+  - Mounted FastAPI path: `/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}`
+- The upstream proxmoxer call still uses the original Proxmox parameter name from the generated OpenAPI contract.
 
 Version discovery:
 
@@ -126,6 +136,12 @@ Refresh response shape:
 - `versions.<tag>.path_count`: number of OpenAPI paths mounted for that version.
 - `versions.<tag>.method_count`: number of `GET`/`POST`/`PUT`/`DELETE` operations mounted for that version.
 - `versions.<tag>.schema_version`: the `info.version` value from the generated OpenAPI document.
+
+Test coverage:
+
+- `tests/test_generated_proxmox_routes.py` runs a mock-based exhaustive route suite over every generated operation for every available version plus the `latest` alias.
+- Each generated operation is exercised individually with schema-generated path/query/body inputs and a schema-generated mock upstream response.
+- `tests/test_pydantic_generator_models.py` verifies generated response models for array, scalar, `null`, and aliased object payloads.
 
 ## DCIM routes (`/dcim`)
 
