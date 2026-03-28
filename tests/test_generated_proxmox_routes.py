@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from sqlmodel import Session
 
 from proxbox_api.database import ProxmoxEndpoint, get_session
 from proxbox_api.main import app
+from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_openapi_versions
 from proxbox_api.routes.proxmox.runtime_generated import (
     generated_proxmox_route_state,
     register_generated_proxmox_routes,
@@ -361,3 +363,27 @@ def test_refresh_generated_routes_endpoint_rebuilds_single_version(monkeypatch):
     assert result["route_count"] == 3
     assert result["state"]["mounted_versions"] == ["8.3.0"]
     assert state["versions"]["8.3.0"]["schema_version"] == "8.3.0-generated"
+
+
+def test_available_proxmox_openapi_versions_ignores_non_version_entries(tmp_path, monkeypatch):
+    generated_root = tmp_path / "generated" / "proxmox"
+    latest_dir = generated_root / "latest"
+    version_dir = generated_root / "8.3.0"
+    ignored_dir = generated_root / "__pycache__"
+    empty_dir = generated_root / "scratch"
+
+    latest_dir.mkdir(parents=True)
+    version_dir.mkdir()
+    ignored_dir.mkdir()
+    empty_dir.mkdir()
+    (generated_root / "CLAUDE.md").write_text("guide", encoding="utf-8")
+    (latest_dir / "openapi.json").write_text("{}", encoding="utf-8")
+    (version_dir / "openapi.json").write_text("{}", encoding="utf-8")
+    (ignored_dir / "openapi.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.proxmox_generated_openapi_root",
+        lambda: Path(generated_root),
+    )
+
+    assert available_proxmox_openapi_versions() == ["8.3.0", "latest"]
