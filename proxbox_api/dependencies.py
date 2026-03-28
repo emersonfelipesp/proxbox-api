@@ -1,3 +1,5 @@
+"""FastAPI dependency providers shared by route modules."""
+
 # Sessions
 from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.database import DatabaseSessionDep

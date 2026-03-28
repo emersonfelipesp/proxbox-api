@@ -1,3 +1,5 @@
+"""FastAPI application entrypoint and route registration."""
+
 import traceback
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends

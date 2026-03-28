@@ -1,3 +1,5 @@
+"""Extras route handlers for NetBox custom field management."""
+
 from fastapi import APIRouter, Depends
 from fastapi import WebSocket
 from typing import Annotated

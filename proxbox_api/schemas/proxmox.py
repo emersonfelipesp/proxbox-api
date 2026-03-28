@@ -1,3 +1,5 @@
+"""Pydantic schemas for Proxmox sessions and resource payloads."""
+
 from pydantic import BaseModel, RootModel
 
 from typing import List, Dict

@@ -1,3 +1,5 @@
+"""Basic API smoke tests for the FastAPI root endpoint."""
+
 from fastapi.testclient import TestClient
 
 from proxbox_api.main import app

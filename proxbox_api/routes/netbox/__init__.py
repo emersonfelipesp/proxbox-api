@@ -1,3 +1,5 @@
+"""NetBox route handlers for endpoint and status operations."""
+
 from fastapi import APIRouter, Depends, Query, HTTPException, Depends
 from sqlmodel import select
 

@@ -1,3 +1,5 @@
+"""DCIM route handlers for device and interface synchronization."""
+
 import traceback
 
 from fastapi import WebSocket, Depends, APIRouter

@@ -1,3 +1,5 @@
+"""Experimental Diode client integration example script."""
+
 from netboxlabs.diode.sdk import DiodeClient
 from netboxlabs.diode.sdk.ingester import (
     Device,
