@@ -38,7 +38,7 @@ Defined in `pyproject.toml`:
 - `fastapi[standard]`: API framework and ASGI runtime support.
 - `proxmoxer`: Proxmox API client.
 - `pynetbox`: NetBox API client.
-- `pynetbox-api`: higher-level object wrappers used in synchronization logic.
+- `netbox-sdk`: async facade and request tooling used for NetBox object operations.
 - `sqlmodel`: SQLite model and session management.
 
 ### Test dependencies
@@ -54,7 +54,7 @@ Defined in `requirements-test.txt`:
 
 1. Import and initialize FastAPI app in `main.py`.
 2. Open local SQLite session (`database.db`) and retrieve NetBox endpoint configuration.
-3. Build a NetBox client and assign it to `pynetbox_api.session.NetBoxBase.nb` for model operations.
+3. Build a NetBox client and attach it to compatibility wrappers for model-style operations.
 4. Resolve CORS origins from database-backed endpoint records.
 5. Register routers for Proxmox, NetBox, DCIM, virtualization, and extras APIs.
 

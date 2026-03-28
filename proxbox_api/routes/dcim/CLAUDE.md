@@ -11,7 +11,7 @@ Endpoints that synchronize and expose DCIM entities in NetBox.
 ## Key Data Flow and Dependencies
 
 - Consumes Proxmox-derived dependencies and sync services to create devices and interfaces.
-- Depends on pynetbox_api object wrappers for creation and serialization.
+- Depends on local netbox-sdk compatibility wrappers for creation and serialization.
 
 ## Extension Guidance
 
