@@ -1,63 +1,55 @@
 """FastAPI application entrypoint and route registration."""
 
-import os
-import traceback
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-
-from fastapi.staticfiles import StaticFiles
-
-from pydantic import BaseModel
-from typing import Annotated, List
-
-from sqlmodel import select
-from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
-from proxbox_api.session.netbox import get_netbox_session
-from sqlalchemy.exc import OperationalError
-from proxbox_api.netbox_compat import NetBoxBase
 import asyncio
+import os
+
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from sqlalchemy.exc import OperationalError
+from sqlmodel import select
+
+from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
+from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+
+# Proxbox API Imports
+from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_compat import NetBoxBase
+from proxbox_api.openapi_custom import custom_openapi_builder
+
+# ProxBox Admin Panel Routes
+from proxbox_api.routes.admin import router as admin_router
+from proxbox_api.routes.dcim import router as dcim_router
+from proxbox_api.routes.extras import CreateCustomFieldsDep
+from proxbox_api.routes.extras import router as extras_router
+from proxbox_api.routes.netbox import router as netbox_router
+
+# Proxmox Routes
+from proxbox_api.routes.proxmox import router as proxmox_router
+
+# Proxmox Deps
+from proxbox_api.routes.proxmox.cluster import (
+    ClusterResourcesDep,
+    ClusterStatusDep,
+)
+from proxbox_api.routes.proxmox.cluster import (
+    router as px_cluster_router,
+)
+from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
+from proxbox_api.routes.virtualization import router as virtualization_router
+from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 
 # Proxbox API route imports
 from proxbox_api.routes.virtualization.virtual_machines import (
     router as virtual_machines_router,
 )
-from proxbox_api.routes.dcim import router as dcim_router
-
-# Proxbox API Imports
-from proxbox_api.exception import ProxboxException
-from proxbox_api.dependencies import ProxboxTagDep
-
-# ProxBox Admin Panel Routes
-from proxbox_api.routes.admin import router as admin_router
-
-# Proxmox Routes
-from proxbox_api.routes.proxmox import router as proxmox_router
-from proxbox_api.routes.proxmox.cluster import (
-    router as px_cluster_router,
-    ClusterResourcesDep,
-)
-from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
-from proxbox_api.routes.netbox import router as netbox_router
-from proxbox_api.routes.virtualization import router as virtualization_router
-from proxbox_api.routes.extras import router as extras_router, CreateCustomFieldsDep
+from proxbox_api.services.sync.devices import create_proxmox_devices
+from proxbox_api.session.netbox import get_netbox_session
 
 # Sessions
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
-
-from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
-from proxbox_api.services.sync.devices import create_proxmox_devices
-
-# Proxmox Deps
-from proxbox_api.routes.proxmox.nodes import (
-    ProxmoxNodeDep,
-    ProxmoxNodeInterfacesDep,
-    get_node_network,
-)
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
-
-from proxbox_api.dependencies import NetBoxSessionDep
-from proxbox_api.openapi_custom import custom_openapi_builder
 
 """
 CORS ORIGINS
@@ -78,8 +70,8 @@ app = FastAPI(
 )
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
-static_dir = os.path.join(base_dir, 'static')
-app.mount('/static', StaticFiles(directory=static_dir), name='static')
+static_dir = os.path.join(base_dir, "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 def custom_openapi():
@@ -106,7 +98,7 @@ except Exception as error:
 if database_session:
     try:
         netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
-    except OperationalError as error:
+    except OperationalError:
         # If table does not exist, create it.
         create_db_and_tables()
         netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
@@ -202,14 +194,14 @@ async def clear_cache():
 
 
 from datetime import datetime
-from typing import Optional
+
 
 class SyncProcessIn(BaseModel):
     name: str
     sync_type: str
     status: str
     started_at: datetime
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
 
 
 class SyncProcess(SyncProcessIn):
@@ -231,7 +223,7 @@ example_sync_process = SyncProcess(
 )
 
 
-@app.get("/sync-processes", response_model=List[SyncProcess])
+@app.get("/sync-processes", response_model=list[SyncProcess])
 async def get_sync_processes():
     """
     Get all sync processes from Netbox.
@@ -248,9 +240,7 @@ async def get_sync_processes():
         ]
         return sync_processes
     except Exception as error:
-        raise ProxboxException(
-            message="Error fetching sync processes", python_exception=str(error)
-        )
+        raise ProxboxException(message="Error fetching sync processes", python_exception=str(error))
 
 
 @app.post("/sync-processes", response_model=SyncProcess)
@@ -275,9 +265,7 @@ async def create_sync_process():
         )
         return sync_process
     except Exception as error:
-        raise ProxboxException(
-            message="Error creating sync process", python_exception=str(error)
-        )
+        raise ProxboxException(message="Error creating sync process", python_exception=str(error))
 
 
 #
@@ -292,18 +280,14 @@ app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
 
 # Proxmox Routes
 app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
-app.include_router(
-    px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"]
-)
+app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
 app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
 
 # DCIM Routes
 app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
 
 # Virtualization Routes
-app.include_router(
-    virtualization_router, prefix="/virtualization", tags=["virtualization"]
-)
+app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
 app.include_router(
     virtual_machines_router,
     prefix="/virtualization/virtual-machines",
@@ -332,7 +316,7 @@ async def base_websocket(websocket: WebSocket):
 
 
 @app.websocket("/ws/virtual-machines")
-async def websocket_endpoint(
+async def websocket_virtual_machines(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
@@ -342,11 +326,8 @@ async def websocket_endpoint(
 ):
     print("route ws/virtual-machines reached")
 
-    connection_open = False
-
     try:
         await websocket.accept()
-        connection_open = True
         await websocket.send_text("Connected!")
     except Exception as error:
         print(f"Error while accepting WebSocket connection: {error}")
@@ -354,8 +335,6 @@ async def websocket_endpoint(
             await websocket.close()
         except Exception as error:
             print(f"Error while closing WebSocket connection: {error}")
-
-    data = None
 
     await create_virtual_machines(
         pxs=pxs,
@@ -381,9 +360,7 @@ async def full_update_sync(
     sync_process = None
 
     try:
-        sync_process = netbox_session.plugins.proxbox.__getattr__(
-            "sync-processes"
-        ).create(
+        sync_process = netbox_session.plugins.proxbox.__getattr__("sync-processes").create(
             name=f"sync-all-{start_time}",
             sync_type="all",
             status="not-started",
@@ -395,7 +372,7 @@ async def full_update_sync(
     except Exception as error:
         print(error)
         raise ProxboxException(
-            message=f"Error while creating sync process.", python_exception=str(error)
+            message="Error while creating sync process.", python_exception=str(error)
         )
 
     try:
@@ -409,9 +386,7 @@ async def full_update_sync(
         )
     except Exception as error:
         print(error)
-        raise ProxboxException(
-            message=f"Error while syncing nodes.", python_exception=str(error)
-        )
+        raise ProxboxException(message="Error while syncing nodes.", python_exception=str(error))
 
     if sync_nodes:
         # Sync Virtual Machines
@@ -427,7 +402,7 @@ async def full_update_sync(
         except Exception as error:
             print(error)
             raise ProxboxException(
-                message=f"Error while syncing virtual machines.",
+                message="Error while syncing virtual machines.",
                 python_exception=str(error),
             )
 
@@ -444,7 +419,7 @@ async def full_update_sync(
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(
+async def websocket_sync_commands(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -485,34 +460,11 @@ async def websocket_endpoint(
                 print(f"Error while receiving data from WebSocket: {error}")
                 break
 
-            # Sync Nodes
-            sync_nodes_function = create_proxmox_devices(
-                netbox_session=nb,
-                clusters_status=cluster_status,
-                node=None,
-                websocket=websocket,
-                tag=tag,
-                use_websocket=True,
-            )
-
-            # Sync Virtual Machines
-            sync_vms_function = create_virtual_machines(
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                custom_fields=custom_fields,
-                websocket=websocket,
-                tag=tag,
-                use_websocket=True,
-            )
-
             if data == "Full Update Sync":
                 sync_process = None
 
                 try:
-                    sync_process = nb.plugins.proxbox.__getattr__(
-                        "sync-processes"
-                    ).create(
+                    sync_process = nb.plugins.proxbox.__getattr__("sync-processes").create(
                         name=f"sync-process-{datetime.now()}",
                         sync_type="all",
                         status="not-started",

@@ -23,9 +23,7 @@ def _validate_netbox_contract(payload: NetBoxVirtualMachineCreateBody) -> None:
     data = payload.model_dump(exclude_none=True)
     missing = [field for field in required if field not in data]
     if missing:
-        raise ProxmoxToNetBoxError(
-            f"NetBox fallback contract required fields missing: {missing}"
-        )
+        raise ProxmoxToNetBoxError(f"NetBox fallback contract required fields missing: {missing}")
 
 
 def build_virtual_machine_transform(

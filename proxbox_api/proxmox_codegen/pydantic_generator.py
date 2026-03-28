@@ -46,9 +46,7 @@ def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> str:
         alias_expr = f', alias="{prop_name}"' if field_name != prop_name else ""
         description = prop_schema.get("description")
         description_expr = (
-            f", description={description!r}"
-            if isinstance(description, str) and description
-            else ""
+            f", description={description!r}" if isinstance(description, str) and description else ""
         )
 
         lines.append(
@@ -120,9 +118,9 @@ def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:
                 if resp_model_name not in seen_models:
                     seen_models.add(resp_model_name)
                     lines.append(
-                        _generate_model_from_schema(
-                            resp_model_name, resp_schema
-                        ).replace("(BaseModel)", "(ProxmoxBaseModel)")
+                        _generate_model_from_schema(resp_model_name, resp_schema).replace(
+                            "(BaseModel)", "(ProxmoxBaseModel)"
+                        )
                     )
                     lines.append("")
 

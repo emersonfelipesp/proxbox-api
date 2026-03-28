@@ -1,25 +1,23 @@
 """Proxmox route handlers for sessions, storage, and VM config."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Path, Query
-from typing import Annotated, Optional, List
 from pydantic import BaseModel, Field
 
-from proxbox_api.schemas.proxmox import *
-from proxbox_api.session.proxmox import ProxmoxSessionsDep
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.enum.proxmox import *
-from proxbox_api.schemas.virtualization import VMConfig
 from proxbox_api.exception import ProxboxException
-
+from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.schemas.proxmox import *
+from proxbox_api.schemas.virtualization import VMConfig
+from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
 
-from proxbox_api.routes.proxmox.viewer_codegen import router as viewer_codegen_router
 from proxbox_api.routes.proxmox.endpoints import router as endpoints_router
+from proxbox_api.routes.proxmox.viewer_codegen import router as viewer_codegen_router
 
-router.include_router(
-    viewer_codegen_router, prefix="/viewer", tags=["proxmox / viewer"]
-)
+router.include_router(viewer_codegen_router, prefix="/viewer", tags=["proxmox / viewer"])
 router.include_router(endpoints_router, tags=["proxmox / endpoints"])
 
 #
@@ -179,9 +177,7 @@ class BackupVerification(BaseModel):
 
 class ProxmoxStorageContent(BaseModel):
     subtype: str | None = None
-    format: str | None = (
-        None  # Format identifier ('raw', 'qcow2', 'subvol', 'iso', 'tgz' ...)
-    )
+    format: str | None = None  # Format identifier ('raw', 'qcow2', 'subvol', 'iso', 'tgz' ...)
     size: int | None = None  # Volume size in bytes.
     ctime: int | None = None  # Creation time (seconds since the UNIX Epoch)
     notes: str | None = (
@@ -218,11 +214,11 @@ class ProxmoxStorage(BaseModel):
     username: str | None = None
     datastore: str | None = None
     fingerprint: str | None = None
-    mountpoint: Optional[str] = None
+    mountpoint: str | None = None
 
 
-ProxmoxStorageList = List[ProxmoxStorage]
-ClusterProxmoxStorage = List[dict[str, ProxmoxStorageList]]
+ProxmoxStorageList = list[ProxmoxStorage]
+ClusterProxmoxStorage = list[dict[str, ProxmoxStorageList]]
 
 
 @router.get("/storage", response_model=ClusterProxmoxStorage)
@@ -242,9 +238,7 @@ async def get_proxmox_storage(
     return result
 
 
-@router.get(
-    "/nodes/{node}/storage/{storage}/content", response_model=ProxmoxStorageContentList
-)
+@router.get("/nodes/{node}/storage/{storage}/content", response_model=ProxmoxStorageContentList)
 async def get_proxmox_node_storage_content(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -264,9 +258,7 @@ async def get_proxmox_node_storage_content(
     ],
     vmid: Annotated[
         str,
-        Query(
-            title="VM ID", description="The ID of the VM to retrieve the content for."
-        ),
+        Query(title="VM ID", description="The ID of the VM to retrieve the content for."),
     ] = None,
     content: Annotated[
         str,
@@ -294,9 +286,7 @@ async def get_proxmox_node_storage_content(
     for proxmox, cluster in zip(pxs, cluster_status):
         for cluster_node in cluster.node_list:
             if cluster_node.name == node:
-                return (
-                    proxmox.session.nodes(node).storage(storage).content.get(vmid=vmid)
-                )
+                return proxmox.session.nodes(node).storage(storage).content.get(vmid=vmid)
 
     raise HTTPException(status_code=404, detail="Node or Storage not found")
 
@@ -334,9 +324,7 @@ async def top_level_endpoint(
 async def get_vm_config(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
-    name: str = Query(
-        title="Cluster", description="Proxmox Cluster Name", default=None
-    ),
+    name: str = Query(title="Cluster", description="Proxmox Cluster Name", default=None),
     node: str = Path(..., title="Node", description="Proxmox Node Name"),
     type: str = Path(..., title="Type", description="Proxmox VM Type"),
     vmid: int = Path(..., title="VM ID", description="Proxmox VM ID"),
@@ -381,7 +369,7 @@ async def get_vm_config(
 
     except ProxboxException:
         raise
-    except Exception as error:
+    except Exception:
         raise ProxboxException(
             message="Unknown error getting VM Config. Search parameters probably wrong.",
             detail="Check if the node, type, and vmid are correct.",

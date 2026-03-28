@@ -100,11 +100,7 @@ def _build_path_params(path: str, parameters: dict[str, Any]) -> list[dict[str, 
                     "type": base.get("type", "string"),
                     **({"enum": base["enum"]} if "enum" in base else {}),
                     **({"pattern": base["pattern"]} if "pattern" in base else {}),
-                    **(
-                        {"format": base["format"]}
-                        if isinstance(base.get("format"), str)
-                        else {}
-                    ),
+                    **({"format": base["format"]} if isinstance(base.get("format"), str) else {}),
                 },
                 "x-proxmox": {
                     "raw": schema,
@@ -120,9 +116,7 @@ def _build_query_params(
 ) -> list[dict[str, Any]]:
     path_param_names = set(extract_path_params(path))
     out: list[dict[str, Any]] = []
-    properties = (
-        parameters.get("properties", {}) if isinstance(parameters, dict) else {}
-    )
+    properties = parameters.get("properties", {}) if isinstance(parameters, dict) else {}
     if not isinstance(properties, dict):
         return out
 
@@ -167,12 +161,12 @@ def normalize_captured_endpoints(
             if not method_data:
                 continue
 
-            parameters = _normalize_schema(
-                method_data.get("parameters") or {"type": "object"}
-            ) or {"type": "object"}
-            returns = _normalize_schema(
-                method_data.get("returns") or {"type": "object"}
-            ) or {"type": "object"}
+            parameters = _normalize_schema(method_data.get("parameters") or {"type": "object"}) or {
+                "type": "object"
+            }
+            returns = _normalize_schema(method_data.get("returns") or {"type": "object"}) or {
+                "type": "object"
+            }
 
             operations.append(
                 NormalizedOperation(

@@ -11,12 +11,11 @@ from fastapi.responses import PlainTextResponse
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_codegen.apidoc_parser import PROXMOX_API_VIEWER_URL
 from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle_async
+from proxbox_api.proxmox_to_netbox.netbox_schema import netbox_openapi_schema_source
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
     load_proxmox_generated_openapi,
 )
-from proxbox_api.proxmox_to_netbox.netbox_schema import netbox_openapi_schema_source
-
 
 router = APIRouter()
 
@@ -96,9 +95,7 @@ async def generate_viewer_codegen_artifacts(
                 "fallback_method_count": completeness.get("fallback_method_count"),
                 "missing_from_viewer": len(completeness.get("missing_from_viewer", [])),
             },
-            "output_dir": (
-                str(Path(output_dir) / bundle.version_tag) if output_dir else None
-            ),
+            "output_dir": (str(Path(output_dir) / bundle.version_tag) if output_dir else None),
             "retry": {
                 "retry_count": retry_count,
                 "retry_backoff": retry_backoff,
@@ -201,9 +198,7 @@ async def proxmox_netbox_integration_contracts():
     proxmox = load_proxmox_generated_openapi()
     return {
         "proxmox_generated_openapi_present": bool(proxmox),
-        "proxmox_generated_path_count": len((proxmox.get("paths") or {}).keys())
-        if proxmox
-        else 0,
+        "proxmox_generated_path_count": len((proxmox.get("paths") or {}).keys()) if proxmox else 0,
         "netbox_schema_source": netbox_openapi_schema_source(),
     }
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 PROXMOX_VM_RESOURCE: dict[str, Any] = {
     "vmid": 101,
     "name": "db-vm-01",
@@ -47,4 +46,3 @@ NETBOX_OPENAPI_SNAPSHOT: dict[str, Any] = {
         }
     },
 }
-

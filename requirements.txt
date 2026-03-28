@@ -1,1 +1,5 @@
-uv
+# This project is managed with uv. Install dependencies with:
+#   uv sync
+# Development (tests + ruff): uv sync --extra test --group dev
+# Documentation:               uv sync --extra docs --group dev
+# All extras + dev tools:      uv sync --all-extras --group dev

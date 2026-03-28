@@ -3,20 +3,14 @@ Custom object to manage sync processes.
 This is not implemented yet!
 """
 
-from fastapi import APIRouter
 from datetime import datetime
 
+from fastapi import APIRouter
 from pydantic import BaseModel, RootModel
-from typing import List
 
-from proxbox_api.netbox_compat import GenericSchema, NetBoxBase, Tags
+from proxbox_api.netbox_compat import GenericSchema, NetBoxBase
 
-__all__ = [
-    "SyncProcessSchema",
-    "SyncProcessSchemaList",
-    "SyncProcessSchemaIn",
-    "SyncProcess",
-]
+__all__ = ["SyncProcess"]
 
 
 class SyncProcess(NetBoxBase):
@@ -37,9 +31,9 @@ class SyncProcess(NetBoxBase):
     class SchemaIn(BaseModel):
         name: str = "SyncProcess Placeholder"
         start_time = datetime.now()
-        tags: List[int] | None = None
+        tags: list[int] | None = None
 
-    SyncProcessSchemaList = RootModel[List[Schema]]
+    SyncProcessSchemaList = RootModel[list[Schema]]
 
     app = "plugins.proxbox"
     name = "sync_processes"

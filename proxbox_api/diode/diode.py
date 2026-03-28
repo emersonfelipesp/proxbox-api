@@ -21,7 +21,6 @@ def main():
         Ingest device with device type, platform, manufacturer, site, role, and tags.
         """
 
-       
         device = Device(
             name="TESTE",
             device_type="Device Type A",
@@ -34,22 +33,21 @@ def main():
             status="active",
             tags=["tag 1", "tag 2"],
         )
-        
-        
-        #device = Device(name="Device A")
-        
+
+        # device = Device(name="Device A")
+
         ip_address = IPAddress(
             address="172.16.0.1/24",
         )
 
         print(f"device: {device}")
 
-        #print(f"client: {client}")
-        #print(f"client (dir): {dir(client)}")
-        #print(f"client (version): {client._target}")
-        #print(f"ip_address: {ip_address}")
+        # print(f"client: {client}")
+        # print(f"client (dir): {dir(client)}")
+        # print(f"client (version): {client._target}")
+        # print(f"ip_address: {ip_address}")
         entities.append(Entity(ip_address=ip_address))
-        #entities.append(Entity(ip_address=ip_address))
+        # entities.append(Entity(ip_address=ip_address))
 
         response = client.ingest(entities=entities)
         print(f"response: {response}")

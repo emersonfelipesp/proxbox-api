@@ -45,10 +45,12 @@ Defined in `pyproject.toml`:
 
 ### Test dependencies
 
-Defined in `requirements-test.txt`:
+Defined in `pyproject.toml` under `[project.optional-dependencies]` → `test` (install with `uv sync --extra test --group dev`):
 
 - `pytest`
 - `httpx`
+- `playwright`
+- `pytest-cov`
 
 ## Runtime Flow
 

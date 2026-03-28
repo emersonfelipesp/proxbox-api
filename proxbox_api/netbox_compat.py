@@ -254,11 +254,7 @@ class VirtualMachine(_BaseCompat):
 
     def _lookup(self, payload: dict[str, Any]) -> dict[str, Any]:
         custom_fields = payload.get("custom_fields", {})
-        vmid = (
-            custom_fields.get("proxmox_vm_id")
-            if isinstance(custom_fields, dict)
-            else None
-        )
+        vmid = custom_fields.get("proxmox_vm_id") if isinstance(custom_fields, dict) else None
         if vmid is not None:
             return {"cf_proxmox_vm_id": int(vmid)}
         if "name" in payload:

@@ -1,12 +1,12 @@
 """FastAPI dependency providers shared by route modules."""
 
 # Sessions
-from proxbox_api.session.netbox import NetBoxSessionDep
-from proxbox_api.database import DatabaseSessionDep
-from proxbox_api.netbox_sdk_helpers import ensure_tag
+from typing import Annotated, Any
 
 from fastapi import Depends
-from typing import Annotated, Any
+
+from proxbox_api.netbox_sdk_helpers import ensure_tag
+from proxbox_api.session.netbox import NetBoxSessionDep
 
 
 async def proxbox_tag(netbox_session: NetBoxSessionDep):

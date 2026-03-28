@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_PROXMOX_OPENAPI_TAG = "latest"
 
 
@@ -16,11 +15,7 @@ def proxmox_generated_openapi_path(
     """Return canonical generated Proxmox OpenAPI artifact path for version tag."""
 
     return (
-        Path(__file__).resolve().parents[1]
-        / "generated"
-        / "proxmox"
-        / version_tag
-        / "openapi.json"
+        Path(__file__).resolve().parents[1] / "generated" / "proxmox" / version_tag / "openapi.json"
     )
 
 

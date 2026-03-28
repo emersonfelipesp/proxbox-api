@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import Session, SQLModel, create_engine
 
 from proxbox_api.database import get_session
 from proxbox_api.main import app
@@ -13,9 +13,7 @@ from proxbox_api.main import app
 @pytest.fixture
 def client(tmp_path: Path):
     sqlite_file = tmp_path / "test.db"
-    engine = create_engine(
-        f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine(f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
 
     def override_get_session():
@@ -60,9 +58,7 @@ def test_proxmox_endpoint_crud_lifecycle(client: TestClient):
         "port": 8443,
         "verify_ssl": True,
     }
-    update_response = client.put(
-        f"/proxmox/endpoints/{endpoint_id}", json=update_payload
-    )
+    update_response = client.put(f"/proxmox/endpoints/{endpoint_id}", json=update_payload)
     assert update_response.status_code == 200
     updated = update_response.json()
     assert updated["name"] == "pve-lab-1-updated"
@@ -90,9 +86,7 @@ def test_proxmox_endpoint_create_requires_auth_fields(client: TestClient):
 
     response = client.post("/proxmox/endpoints", json=invalid_payload)
     assert response.status_code == 400
-    assert (
-        response.json()["detail"] == "Provide password or both token_name/token_value"
-    )
+    assert response.json()["detail"] == "Provide password or both token_name/token_value"
 
 
 def test_netbox_endpoint_only_allows_single_instance(client: TestClient):

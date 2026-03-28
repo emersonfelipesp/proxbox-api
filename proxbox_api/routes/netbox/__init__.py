@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import select
 
+from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
-from proxbox_api.dependencies import DatabaseSessionDep as SessionDep, NetBoxSessionDep
+from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 
 # FastAPI Router
@@ -52,21 +53,13 @@ def _validate_netbox_credentials(nb: NetBoxEndpoint) -> None:
 
 
 @router.post("/endpoint")
-def create_netbox_endpoint(
-    netbox: NetBoxEndpoint, session: SessionDep
-) -> NetBoxEndpoint:
+def create_netbox_endpoint(netbox: NetBoxEndpoint, session: SessionDep) -> NetBoxEndpoint:
     existing_any = session.exec(select(NetBoxEndpoint)).first()
     if existing_any:
-        raise HTTPException(
-            status_code=400, detail="Only one NetBox endpoint is allowed"
-        )
+        raise HTTPException(status_code=400, detail="Only one NetBox endpoint is allowed")
 
-    if session.exec(
-        select(NetBoxEndpoint).where(NetBoxEndpoint.name == netbox.name)
-    ).first():
-        raise HTTPException(
-            status_code=400, detail="NetBox endpoint name already exists"
-        )
+    if session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.name == netbox.name)).first():
+        raise HTTPException(status_code=400, detail="NetBox endpoint name already exists")
     _normalize_netbox_endpoint_fields(netbox)
     _validate_netbox_credentials(netbox)
     session.add(netbox)
@@ -79,9 +72,7 @@ def create_netbox_endpoint(
 def get_netbox_endpoints(
     session: SessionDep, offset: int = 0, limit: Annotated[int, Query(le=100)] = 100
 ) -> list[NetBoxEndpoint]:
-    netbox_endpoints = session.exec(
-        select(NetBoxEndpoint).offset(offset).limit(limit)
-    ).all()
+    netbox_endpoints = session.exec(select(NetBoxEndpoint).offset(offset).limit(limit)).all()
     return list(netbox_endpoints)
 
 

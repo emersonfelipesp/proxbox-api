@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import select
 
+from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
-from proxbox_api.dependencies import DatabaseSessionDep as SessionDep
 
 router = APIRouter()
 
@@ -69,9 +69,7 @@ def create_proxmox_endpoint(
         select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == endpoint.name)
     ).first()
     if existing:
-        raise HTTPException(
-            status_code=400, detail="Proxmox endpoint name already exists"
-        )
+        raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
     db_endpoint = ProxmoxEndpoint(**endpoint.model_dump())
     session.add(db_endpoint)
@@ -115,9 +113,7 @@ def update_proxmox_endpoint(
             select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == update_data["name"])
         ).first()
         if existing and existing.id != endpoint_id:
-            raise HTTPException(
-                status_code=400, detail="Proxmox endpoint name already exists"
-            )
+            raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
     new_password = update_data.get("password", db_endpoint.password)
     new_token_name = update_data.get("token_name", db_endpoint.token_name)
