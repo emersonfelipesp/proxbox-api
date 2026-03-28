@@ -142,6 +142,61 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session):
     }
 
 
+def test_netbox_endpoint_rejects_v1_without_token(db_session):
+    with pytest.raises(HTTPException, match="token is required for NetBox API token v1"):
+        create_netbox_endpoint(
+            NetBoxEndpoint(
+                name="netbox-primary",
+                ip_address="10.0.0.20",
+                domain="netbox.local",
+                port=443,
+                token_version="v1",
+                token="",
+                verify_ssl=True,
+            ),
+            db_session,
+        )
+
+
+def test_netbox_endpoint_rejects_v2_incomplete_token(db_session):
+    with pytest.raises(
+        HTTPException,
+        match="token_key and token \\(secret\\) must both be set",
+    ):
+        create_netbox_endpoint(
+            NetBoxEndpoint(
+                name="netbox-primary",
+                ip_address="10.0.0.20",
+                domain="netbox.local",
+                port=443,
+                token_version="v2",
+                token_key="myid",
+                token="",
+                verify_ssl=True,
+            ),
+            db_session,
+        )
+
+
+def test_netbox_endpoint_accepts_v2_token(db_session):
+    created = create_netbox_endpoint(
+        NetBoxEndpoint(
+            name="netbox-v2",
+            ip_address="10.0.0.20",
+            domain="netbox.local",
+            port=443,
+            token_version="v2",
+            token_key="myid",
+            token="secretpart",
+            verify_ssl=True,
+        ),
+        db_session,
+    )
+    assert created.token_version == "v2"
+    assert created.token_key == "myid"
+    assert created.token == "secretpart"
+
+
 def test_netbox_status_and_openapi_routes_are_mocked(client_with_fake_netbox):
     fake_session = client_with_fake_netbox
 

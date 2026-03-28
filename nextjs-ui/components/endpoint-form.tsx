@@ -31,6 +31,8 @@ export function NetBoxEndpointForm({ mode, initial, submitting = false, onSubmit
   const [ipAddress, setIpAddress] = useState(initial?.ip_address ?? "")
   const [domain, setDomain] = useState(initial?.domain ?? "")
   const [port, setPort] = useState(initial?.port ?? 443)
+  const [tokenVersion, setTokenVersion] = useState(initial?.token_version ?? "v1")
+  const [tokenKey, setTokenKey] = useState(initial?.token_key ?? "")
   const [token, setToken] = useState(initial?.token ?? "")
   const [verifySsl, setVerifySsl] = useState(initial?.verify_ssl ?? true)
   const [error, setError] = useState<string | null>(null)
@@ -38,16 +40,27 @@ export function NetBoxEndpointForm({ mode, initial, submitting = false, onSubmit
   const title = mode === "create" ? "Create NetBox endpoint" : "Update NetBox endpoint"
   const submitLabel = mode === "create" ? "Create endpoint" : "Save changes"
 
+  const hasV1Token = Boolean(token.trim())
+  const hasV2Pair = Boolean(tokenKey.trim() && token.trim())
+  const hasPartialV2 = Boolean(tokenVersion === "v2" && (tokenKey.trim() || token.trim()) && !hasV2Pair)
+
   const canSubmit = useMemo(() => {
-    return Boolean(name.trim() && ipAddress.trim() && domain.trim() && token.trim())
-  }, [name, ipAddress, domain, token])
+    const core = Boolean(name.trim() && ipAddress.trim() && domain.trim())
+    if (!core) return false
+    if (tokenVersion === "v1") return hasV1Token
+    return hasV2Pair && !hasPartialV2
+  }, [name, ipAddress, domain, tokenVersion, hasV1Token, hasV2Pair, hasPartialV2])
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
 
     if (!canSubmit) {
-      setError("Fill all required fields.")
+      if (hasPartialV2) {
+        setError("Provide both token key and token secret for API token v2.")
+      } else {
+        setError("Fill all required fields.")
+      }
       return
     }
 
@@ -57,6 +70,8 @@ export function NetBoxEndpointForm({ mode, initial, submitting = false, onSubmit
       ip_address: ipAddress.trim(),
       domain: domain.trim(),
       port,
+      token_version: tokenVersion,
+      token_key: tokenVersion === "v2" ? tokenKey.trim() : null,
       token: token.trim(),
       verify_ssl: verifySsl,
     })
@@ -83,10 +98,63 @@ export function NetBoxEndpointForm({ mode, initial, submitting = false, onSubmit
           <input className={inputClass} type="number" min={1} max={65535} value={port} onChange={(e) => setPort(Number(e.target.value) || 443)} />
         </label>
       </div>
-      <label className="space-y-1 block">
-        <span className={labelClass}>Token *</span>
-        <input className={inputClass} type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="NetBox API token" />
-      </label>
+      <div className="space-y-2">
+        <span className={labelClass}>NetBox API token version *</span>
+        <div className="flex flex-wrap gap-4 text-sm text-[var(--panel-foreground)]">
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="netbox-token-version"
+              checked={tokenVersion === "v1"}
+              onChange={() => setTokenVersion("v1")}
+            />
+            v1 (legacy single token)
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="netbox-token-version"
+              checked={tokenVersion === "v2"}
+              onChange={() => setTokenVersion("v2")}
+            />
+            v2 (key + secret)
+          </label>
+        </div>
+      </div>
+      {tokenVersion === "v1" ? (
+        <label className="space-y-1 block">
+          <span className={labelClass}>API token *</span>
+          <input
+            className={inputClass}
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="NetBox v1 API token"
+          />
+        </label>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className={labelClass}>Token key *</span>
+            <input
+              className={inputClass}
+              value={tokenKey}
+              onChange={(e) => setTokenKey(e.target.value)}
+              placeholder="Public identifier (nbt_ prefix optional)"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className={labelClass}>Token secret *</span>
+            <input
+              className={inputClass}
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="Secret portion"
+            />
+          </label>
+        </div>
+      )}
       <label className="flex items-center gap-2 text-sm text-[var(--panel-foreground)]">
         <input type="checkbox" checked={verifySsl} onChange={(e) => setVerifySsl(e.target.checked)} />
         Verify SSL certificate

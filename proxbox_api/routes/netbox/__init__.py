@@ -1,13 +1,15 @@
 """NetBox route handlers for endpoint and status operations."""
 
-from fastapi import APIRouter, Depends, Query, HTTPException, Depends
-from sqlmodel import select
+from __future__ import annotations
 
 from typing import Annotated, Any
 
-from proxbox_api.exception import ProxboxException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlmodel import select
+
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import DatabaseSessionDep as SessionDep, NetBoxSessionDep
+from proxbox_api.exception import ProxboxException
 
 # FastAPI Router
 router = APIRouter()
@@ -15,6 +17,38 @@ router = APIRouter()
 #
 # Endpoints: /netbox/<endpoint>
 #
+
+
+def _normalize_netbox_endpoint_fields(nb: NetBoxEndpoint) -> None:
+    nb.token_version = (nb.token_version or "v1").strip().lower()
+    if nb.token_version not in ("v1", "v2"):
+        nb.token_version = "v1"
+    if nb.token_version == "v1":
+        nb.token_key = None
+    elif nb.token_key is not None:
+        stripped = nb.token_key.strip()
+        nb.token_key = stripped if stripped else None
+    nb.token = (nb.token or "").strip()
+
+
+def _validate_netbox_credentials(nb: NetBoxEndpoint) -> None:
+    secret = (nb.token or "").strip()
+    key = (nb.token_key or "").strip() if nb.token_key else ""
+    if nb.token_version == "v1":
+        if not secret:
+            raise HTTPException(
+                status_code=400,
+                detail="token is required for NetBox API token v1",
+            )
+        nb.token = secret
+        return
+    if not secret or not key:
+        raise HTTPException(
+            status_code=400,
+            detail="token_key and token (secret) must both be set for NetBox API token v2",
+        )
+    nb.token = secret
+    nb.token_key = key
 
 
 @router.post("/endpoint")
@@ -33,6 +67,8 @@ def create_netbox_endpoint(
         raise HTTPException(
             status_code=400, detail="NetBox endpoint name already exists"
         )
+    _normalize_netbox_endpoint_fields(netbox)
+    _validate_netbox_credentials(netbox)
     session.add(netbox)
     session.commit()
     session.refresh(netbox)
@@ -68,9 +104,11 @@ def update_netbox_endpoint(
     if not db_netbox:
         raise HTTPException(status_code=404, detail="NetBox Endpoint not found")
 
-    # Update the existing endpoint with new data
-    for key, value in netbox.dict(exclude_unset=True).items():
+    for key, value in netbox.model_dump(exclude_unset=True).items():
         setattr(db_netbox, key, value)
+
+    _normalize_netbox_endpoint_fields(db_netbox)
+    _validate_netbox_credentials(db_netbox)
 
     session.add(db_netbox)
     session.commit()
@@ -114,9 +152,6 @@ async def netbox_openapi(netbox_session: NetBoxSessionDep):
     **Returns:**
     - **dict:** The OpenAPI documentation retrieved from the Netbox session.
     """
-
-    from proxbox_api.session.netbox import get_netbox_session
-    from proxbox_api.database import get_session
 
     try:
         output = netbox_session.openapi()
