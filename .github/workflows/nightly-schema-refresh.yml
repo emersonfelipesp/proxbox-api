@@ -1,0 +1,47 @@
+name: Nightly Schema Refresh
+
+on:
+  schedule:
+    - cron: "11 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install -r requirements-test.txt
+          python -m pip install playwright
+
+      - name: Install Playwright browser
+        run: python -m playwright install chromium
+
+      - name: Refresh pinned schemas
+        run: python scripts/refresh_schemas.py
+
+      - name: Show schema drift summary
+        run: git diff --stat -- proxbox_api/generated
+
+      - name: Run schema contract tests
+        run: pytest -q tests/test_schema_contracts.py tests/test_vm_sync.py
+
+      - name: Upload generated artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: refreshed-schema-artifacts
+          path: |
+            proxbox_api/generated/proxmox/openapi.json
+            proxbox_api/generated/proxmox/pydantic_models.py
+            proxbox_api/generated/netbox/openapi.json
