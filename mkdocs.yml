@@ -1,0 +1,68 @@
+site_name: proxbox-api
+site_description: FastAPI backend for Proxmox and NetBox integration
+site_url: https://emersonfelipesp.github.io/proxbox-api/
+repo_url: https://github.com/emersonfelipesp/proxbox-api
+repo_name: emersonfelipesp/proxbox-api
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  alternate:
+    - name: English
+      link: /
+      lang: en
+    - name: Portugues (Brasil)
+      link: /pt-BR/
+      lang: pt-BR
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      reconfigure_material: true
+      languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
+        - locale: pt-BR
+          name: Portugues (Brasil)
+          build: true
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Configuration: getting-started/configuration.md
+  - Architecture:
+      - Overview: architecture/overview.md
+  - API:
+      - HTTP Reference: api/http-reference.md
+      - WebSocket Reference: api/websocket-reference.md
+  - Synchronization:
+      - Workflows: sync/workflows.md
+  - Development:
+      - Testing: development/testing.md
+      - Deployment: development/deployment.md
+      - Troubleshooting: development/troubleshooting.md
+      - Contributing: development/contributing.md

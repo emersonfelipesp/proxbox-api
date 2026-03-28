@@ -1,5 +1,21 @@
 # Installing proxbox-api (Plugin backend made using FastAPI)
 
+## Documentation (MkDocs Material)
+
+Project documentation is available under `docs/` and built with MkDocs Material.
+
+### Local docs build
+
+```bash
+pip install -r requirements-docs.txt
+mkdocs serve
+```
+
+### Languages
+
+- English (default)
+- Brazilian Portuguese (`pt-BR`) as optional translation
+
 ## Using docker (recommended)
 
 ### Pull the docker image
