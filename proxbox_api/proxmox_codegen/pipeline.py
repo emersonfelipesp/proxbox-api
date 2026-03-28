@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from proxbox_api.proxmox_codegen.apidoc_parser import (
     PROXMOX_API_VIEWER_URL,
@@ -20,6 +21,46 @@ from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
 from proxbox_api.proxmox_codegen.utils import dump_json, ensure_parent, utc_now_iso
+
+LATEST_VERSION_TAG = "latest"
+
+
+def _normalized_viewer_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    path = parsed.path or "/"
+    if path.endswith("index.html"):
+        path = path[: -len("index.html")]
+    path = path.rstrip("/")
+    if not path:
+        path = "/"
+    return urlunparse(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            path,
+            "",
+            "",
+            "",
+        )
+    )
+
+
+def _viewer_apidoc_js_url(source_url: str) -> str:
+    normalized = _normalized_viewer_url(source_url)
+    parsed = urlparse(normalized)
+    apidoc_path = f"{parsed.path.rstrip('/')}/apidoc.js"
+    return urlunparse((parsed.scheme, parsed.netloc, apidoc_path, "", "", ""))
+
+
+def _validate_source_for_version_tag(source_url: str, version_tag: str) -> None:
+    if version_tag != LATEST_VERSION_TAG:
+        return
+    if _normalized_viewer_url(source_url) != _normalized_viewer_url(
+        PROXMOX_API_VIEWER_URL
+    ):
+        raise ValueError(
+            "Version tag 'latest' is reserved for official Proxmox API viewer URL."
+        )
 
 
 def _merge_capture(
@@ -101,6 +142,7 @@ def generate_proxmox_codegen_bundle(
     output_dir: str | Path | None = None,
     *,
     source_url: str = PROXMOX_API_VIEWER_URL,
+    version_tag: str = LATEST_VERSION_TAG,
     worker_count: int = 10,
     retry_count: int = 2,
     retry_backoff_seconds: float = 0.35,
@@ -112,6 +154,7 @@ def generate_proxmox_codegen_bundle(
         generate_proxmox_codegen_bundle_async(
             output_dir=output_dir,
             source_url=source_url,
+            version_tag=version_tag,
             worker_count=worker_count,
             retry_count=retry_count,
             retry_backoff_seconds=retry_backoff_seconds,
@@ -124,6 +167,7 @@ async def generate_proxmox_codegen_bundle_async(
     output_dir: str | Path | None = None,
     *,
     source_url: str = PROXMOX_API_VIEWER_URL,
+    version_tag: str = LATEST_VERSION_TAG,
     worker_count: int = 10,
     retry_count: int = 2,
     retry_backoff_seconds: float = 0.35,
@@ -131,20 +175,27 @@ async def generate_proxmox_codegen_bundle_async(
 ) -> GenerationBundle:
     """Run full generation pipeline and optionally persist artifacts."""
 
+    cleaned_version_tag = version_tag.strip()
+    if not cleaned_version_tag:
+        raise ValueError("version_tag cannot be empty.")
+    _validate_source_for_version_tag(
+        source_url=source_url, version_tag=cleaned_version_tag
+    )
+
     viewer_capture = await crawl_proxmox_api_viewer_async(
         url=source_url,
         worker_count=worker_count,
         retry_count=retry_count,
         retry_backoff_seconds=retry_backoff_seconds,
         checkpoint_path=(
-            str(Path(output_dir) / "crawl_checkpoint.json")
+            str(Path(output_dir) / cleaned_version_tag / "crawl_checkpoint.json")
             if output_dir is not None
             else None
         ),
         checkpoint_every=checkpoint_every,
     )
 
-    apidoc_source = fetch_apidoc_js()
+    apidoc_source = fetch_apidoc_js(url=_viewer_apidoc_js_url(source_url))
     apidoc_tree = parse_api_schema(apidoc_source)
     apidoc_flat = flatten_api_schema(apidoc_tree)
 
@@ -160,7 +211,7 @@ async def generate_proxmox_codegen_bundle_async(
 
     openapi = generate_openapi_schema(
         operations,
-        version="generated-from-proxmox-api-viewer",
+        version=cleaned_version_tag,
         server_url="/api2/json",
     )
 
@@ -168,6 +219,7 @@ async def generate_proxmox_codegen_bundle_async(
 
     bundle = GenerationBundle(
         source_url=source_url,
+        version_tag=cleaned_version_tag,
         generated_at=utc_now_iso(),
         endpoint_count=len(merged_capture),
         operation_count=len(operations),
@@ -182,7 +234,7 @@ async def generate_proxmox_codegen_bundle_async(
     )
 
     if output_dir is not None:
-        base = Path(output_dir)
+        base = Path(output_dir) / cleaned_version_tag
         raw_path = base / "raw_capture.json"
         openapi_path = base / "openapi.json"
         models_path = base / "pydantic_models.py"

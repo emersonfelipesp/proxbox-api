@@ -55,6 +55,7 @@ class GenerationBundle(BaseModel):
     """Final bundle returned by the Proxmox generation pipeline."""
 
     source_url: str
+    version_tag: str
     generated_at: str
     endpoint_count: int
     operation_count: int

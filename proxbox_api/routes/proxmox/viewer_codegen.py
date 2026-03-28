@@ -9,8 +9,10 @@ from fastapi import APIRouter, Query
 from fastapi.responses import PlainTextResponse
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.proxmox_codegen.apidoc_parser import PROXMOX_API_VIEWER_URL
 from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle_async
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+    DEFAULT_PROXMOX_OPENAPI_TAG,
     load_proxmox_generated_openapi,
 )
 from proxbox_api.proxmox_to_netbox.netbox_schema import netbox_openapi_schema_source
@@ -49,6 +51,14 @@ async def generate_viewer_codegen_artifacts(
         le=500,
         description="Write crawl checkpoint after this many processed endpoints.",
     ),
+    source_url: str = Query(
+        default=PROXMOX_API_VIEWER_URL,
+        description="Proxmox API viewer URL to crawl.",
+    ),
+    version_tag: str = Query(
+        default=DEFAULT_PROXMOX_OPENAPI_TAG,
+        description="Version tag used for generated artifacts subdirectory.",
+    ),
 ):
     """Run Proxmox API Viewer to OpenAPI and Pydantic generation pipeline."""
 
@@ -58,6 +68,8 @@ async def generate_viewer_codegen_artifacts(
             output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
         bundle = await generate_proxmox_codegen_bundle_async(
             output_dir=output_dir,
+            source_url=source_url,
+            version_tag=version_tag,
             worker_count=workers,
             retry_count=retry_count,
             retry_backoff_seconds=retry_backoff,
@@ -68,6 +80,7 @@ async def generate_viewer_codegen_artifacts(
         return {
             "message": "Generation completed",
             "source_url": bundle.source_url,
+            "version_tag": bundle.version_tag,
             "generated_at": bundle.generated_at,
             "endpoint_count": bundle.endpoint_count,
             "operation_count": bundle.operation_count,
@@ -83,7 +96,9 @@ async def generate_viewer_codegen_artifacts(
                 "fallback_method_count": completeness.get("fallback_method_count"),
                 "missing_from_viewer": len(completeness.get("missing_from_viewer", [])),
             },
-            "output_dir": str(output_dir) if output_dir else None,
+            "output_dir": (
+                str(Path(output_dir) / bundle.version_tag) if output_dir else None
+            ),
             "retry": {
                 "retry_count": retry_count,
                 "retry_backoff": retry_backoff,
@@ -127,15 +142,25 @@ async def proxmox_viewer_openapi(
         le=500,
         description="Write crawl checkpoint after this many processed endpoints.",
     ),
+    source_url: str = Query(
+        default=PROXMOX_API_VIEWER_URL,
+        description="Proxmox API viewer URL used if regeneration is requested.",
+    ),
+    version_tag: str = Query(
+        default=DEFAULT_PROXMOX_OPENAPI_TAG,
+        description="Generated artifact version tag to load.",
+    ),
 ):
     """Return generated OpenAPI schema for Proxmox API viewer endpoints."""
 
     try:
         output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
-        openapi_path = output_dir / "openapi.json"
+        openapi_path = output_dir / version_tag / "openapi.json"
         if regenerate or not openapi_path.exists():
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,
+                source_url=source_url,
+                version_tag=version_tag,
                 worker_count=workers,
                 retry_count=retry_count,
                 retry_backoff_seconds=retry_backoff,
@@ -152,10 +177,15 @@ async def proxmox_viewer_openapi(
 
 
 @router.get("/openapi/embedded")
-async def proxmox_viewer_openapi_embedded():
+async def proxmox_viewer_openapi_embedded(
+    version_tag: str = Query(
+        default=DEFAULT_PROXMOX_OPENAPI_TAG,
+        description="Generated artifact version tag to load.",
+    ),
+):
     """Return generated Proxmox OpenAPI as consumed by custom FastAPI OpenAPI extension."""
 
-    schema = load_proxmox_generated_openapi()
+    schema = load_proxmox_generated_openapi(version_tag=version_tag)
     if not schema:
         raise ProxboxException(
             message="Generated Proxmox OpenAPI schema not found.",
@@ -208,15 +238,25 @@ async def proxmox_viewer_pydantic_models(
         le=500,
         description="Write crawl checkpoint after this many processed endpoints.",
     ),
+    source_url: str = Query(
+        default=PROXMOX_API_VIEWER_URL,
+        description="Proxmox API viewer URL used if regeneration is requested.",
+    ),
+    version_tag: str = Query(
+        default=DEFAULT_PROXMOX_OPENAPI_TAG,
+        description="Generated artifact version tag to load.",
+    ),
 ):
     """Return generated Pydantic v2 models source code for Proxmox API endpoints."""
 
     try:
         output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
-        models_path = output_dir / "pydantic_models.py"
+        models_path = output_dir / version_tag / "pydantic_models.py"
         if regenerate or not models_path.exists():
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,
+                source_url=source_url,
+                version_tag=version_tag,
                 worker_count=workers,
                 retry_count=retry_count,
                 retry_backoff_seconds=retry_backoff,

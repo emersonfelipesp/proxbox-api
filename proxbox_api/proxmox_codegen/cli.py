@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from proxbox_api.proxmox_codegen.apidoc_parser import PROXMOX_API_VIEWER_URL
 from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle
 
 
@@ -17,7 +18,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         default="proxbox_api/generated/proxmox",
-        help="Output directory for raw capture, OpenAPI JSON, and pydantic models.",
+        help="Base output directory; artifacts are written under <output-dir>/<version-tag>/.",
+    )
+    parser.add_argument(
+        "--source-url",
+        default=PROXMOX_API_VIEWER_URL,
+        help="Proxmox API viewer URL to crawl.",
+    )
+    parser.add_argument(
+        "--version-tag",
+        default="latest",
+        help="Version tag used for output subdirectory and OpenAPI info.version.",
     )
     parser.add_argument(
         "--workers",
@@ -55,6 +66,8 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     bundle = generate_proxmox_codegen_bundle(
         output_dir=output_dir,
+        source_url=args.source_url,
+        version_tag=args.version_tag,
         worker_count=max(1, args.workers),
         retry_count=max(0, args.retry_count),
         retry_backoff_seconds=max(0.0, args.retry_backoff),
@@ -67,6 +80,7 @@ def main() -> int:
         {
             "output_dir": str(output_dir),
             "source_url": bundle.source_url,
+            "version_tag": bundle.version_tag,
             "generated_at": bundle.generated_at,
             "endpoint_count": bundle.endpoint_count,
             "operation_count": bundle.operation_count,
