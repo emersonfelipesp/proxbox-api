@@ -12,23 +12,27 @@ from proxbox_api.schemas.virtualization import VMConfig
 from proxbox_api.exception import ProxboxException
 
 
-
 router = APIRouter()
+
+from proxbox_api.routes.proxmox.viewer_codegen import router as viewer_codegen_router
+
+router.include_router(
+    viewer_codegen_router, prefix="/viewer", tags=["proxmox / viewer"]
+)
 
 #
 # /proxmox/* API Endpoints
 #
 
+
 @router.get("/sessions")
-async def proxmox_sessions(
-    pxs: ProxmoxSessionsDep
-):
+async def proxmox_sessions(pxs: ProxmoxSessionsDep):
     """
     ### Asynchronously retrieves Proxmox session details and returns them as a JSON response.
-    
+
     **Args:**
     - **pxs (`ProxmoxSessionsDep`):** A dependency injection of Proxmox sessions.
-    
+
     **Returns:**
     - **list:** A list of dictionaries containing Proxmox session details, each with the following keys:
         - **domain (str):** The domain of the Proxmox session.
@@ -37,66 +41,61 @@ async def proxmox_sessions(
         - **name (str):** The name of the Proxmox session.
         - **mode (str):** The mode of the Proxmox session.
     """
-    
+
     json_response = []
-    
+
     for px in pxs:
         json_response.append(
             {
-                "ip_address": getattr(px, 'ip_address', None),
-                "domain": getattr(px, 'domain', None),
-                "http_port": getattr(px, 'http_port', None),
-                "user": getattr(px, 'user', None),
-                "name": getattr(px, 'name', None),
-                "mode": getattr(px, 'mode', None),
+                "ip_address": getattr(px, "ip_address", None),
+                "domain": getattr(px, "domain", None),
+                "http_port": getattr(px, "http_port", None),
+                "user": getattr(px, "user", None),
+                "name": getattr(px, "name", None),
+                "mode": getattr(px, "mode", None),
             }
         )
-    
+
     return json_response
 
 
-
-@router.get("/version", )
-async def proxmox_version(
-    pxs: ProxmoxSessionsDep
-):
+@router.get(
+    "/version",
+)
+async def proxmox_version(pxs: ProxmoxSessionsDep):
     """
     ### Retrieve the version information from multiple Proxmox sessions.
-    
+
     *Args:**
         **pxs (`ProxmoxSessionsDep`):** A dependency injection of Proxmox sessions.
-    
+
     **Returns:**
         **list:** A list of dictionaries containing the name and version of each Proxmox session.
     """
     json_response = []
-    
+
     for px in pxs:
         if px.CONNECTED:
-            session = getattr(px, 'session', None)
-            json_response.append(
-                {
-                    getattr(px, 'name', None): session.version.get()
-                }
-            )
-            
+            session = getattr(px, "session", None)
+            json_response.append({getattr(px, "name", None): session.version.get()})
+
     if not json_response:
-        raise HTTPException(status_code=404, detail="No Proxmox active connections found, not able to retrieve version information")
+        raise HTTPException(
+            status_code=404,
+            detail="No Proxmox active connections found, not able to retrieve version information",
+        )
 
     return json_response
 
 
-
 @router.get("/")
-async def proxmox(
-    pxs: ProxmoxSessionsDep
-):
+async def proxmox(pxs: ProxmoxSessionsDep):
     """
     #### Fetches and compiles data from multiple Proxmox sessions.
-    
+
     **Args:**
     - **pxs (ProxmoxSessionsDep):** A dependency injection of Proxmox sessions.
-    
+
     **Returns:**
     - **dict:** A dictionary containing:
         - **message (`str`):** A static message "Proxmox API".
@@ -110,7 +109,7 @@ async def proxmox(
             - **storage (`list`):** Result of the "storage" endpoint.
             - **version (`dict`):** Result of the "version" endpoint.
     """
-    
+
     json_response = []
 
     def minimize_result(endpoint_name):
@@ -119,32 +118,32 @@ async def proxmox(
         This function retrieves data from a specified Proxmox endpoint and extracts
         specific fields based on the endpoint name. The extracted fields are then
         returned as a list.
-        
+
         **Args:**
-        - **endpoint_name (`str`):** The name of the Proxmox endpoint to query. 
+        - **endpoint_name (`str`):** The name of the Proxmox endpoint to query.
         Supported values are "access" and "cluster".
-        
+
         **Returns:**
-        - **list:** A list of extracted fields from the Proxmox endpoint. For the 
-            - "access" endpoint, it returns a list of "subdir" values. For the 
+        - **list:** A list of extracted fields from the Proxmox endpoint. For the
+            - "access" endpoint, it returns a list of "subdir" values. For the
             - "cluster" endpoint, it returns a list of "name" values.
         """
-        
+
         endpoint_list = []
         result = px.session(endpoint_name).get()
-        
+
         match endpoint_name:
             case "access":
                 for obj in result:
                     endpoint_list.append(obj.get("subdir"))
-            
+
             case "cluster":
                 for obj in result:
                     endpoint_list.append(obj.get("name"))
-                
+
         return endpoint_list
-    
-    for px in pxs:  
+
+    for px in pxs:
         json_response.append(
             {
                 f"{px.name}": {
@@ -155,7 +154,7 @@ async def proxmox(
                     "storage": px.session.storage.get(),
                     "version": px.session.version.get(),
                 }
-            } 
+            }
         )
 
     return {
@@ -165,9 +164,9 @@ async def proxmox(
             "netbox": "https://github.com/netbox-community/netbox",
             "pynetbox": "https://github.com/netbox-community/pynetbox",
             "proxmoxer": "https://github.com/proxmoxer/proxmoxer",
-            "proxbox": "https://github.com/netdevopsbr/netbox-proxbox"
+            "proxbox": "https://github.com/netdevopsbr/netbox-proxbox",
         },
-        "clusters": json_response
+        "clusters": json_response,
     }
 
 
@@ -175,22 +174,30 @@ class BackupVerification(BaseModel):
     upid: str
     state: str
 
+
 class ProxmoxStorageContent(BaseModel):
     subtype: str | None = None
-    format: str | None = None # Format identifier ('raw', 'qcow2', 'subvol', 'iso', 'tgz' ...)
-    size: int | None = None # Volume size in bytes.
-    ctime: int | None = None # Creation time (seconds since the UNIX Epoch)
-    notes: str | None = None # Optional Notes. If they contain multiple lines, only the first one is returned here.
+    format: str | None = (
+        None  # Format identifier ('raw', 'qcow2', 'subvol', 'iso', 'tgz' ...)
+    )
+    size: int | None = None  # Volume size in bytes.
+    ctime: int | None = None  # Creation time (seconds since the UNIX Epoch)
+    notes: str | None = (
+        None  # Optional Notes. If they contain multiple lines, only the first one is returned here.
+    )
     content: str | None = None
     volid: str | None = None
     vmid: int | None = None
     notes: str | None = None
-    used: int | None = None     # Used space. Please note that most storage plugins do not report anything useful here.
+    used: int | None = (
+        None  # Used space. Please note that most storage plugins do not report anything useful here.
+    )
     encrypted: str | None = None
     verification: BackupVerification | None = None
-    
+
 
 ProxmoxStorageContentList = list[ProxmoxStorageContent]
+
 
 class ProxmoxStorage(BaseModel):
     type: str | None = None
@@ -211,15 +218,17 @@ class ProxmoxStorage(BaseModel):
     fingerprint: str | None = None
     mountpoint: Optional[str] = None
 
+
 ProxmoxStorageList = List[ProxmoxStorage]
 ClusterProxmoxStorage = List[dict[str, ProxmoxStorageList]]
 
-@router.get('/storage', response_model=ClusterProxmoxStorage)
+
+@router.get("/storage", response_model=ClusterProxmoxStorage)
 async def get_proxmox_storage(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
 ):
-    print('storage')
+    print("storage")
     """
     ### Retrieve the storage information from multiple Proxmox sessions.
     
@@ -227,10 +236,13 @@ async def get_proxmox_storage(
     result = []
     for proxmox in pxs:
         result.append({proxmox.name: proxmox.session.storage.get()})
-    
+
     return result
- 
-@router.get('/nodes/{node}/storage/{storage}/content', response_model=ProxmoxStorageContentList)
+
+
+@router.get(
+    "/nodes/{node}/storage/{storage}/content", response_model=ProxmoxStorageContentList
+)
 async def get_proxmox_node_storage_content(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -238,34 +250,33 @@ async def get_proxmox_node_storage_content(
         str,
         Path(
             title="Node",
-            description="The name of the node to retrieve the storage content for."
-        )
+            description="The name of the node to retrieve the storage content for.",
+        ),
     ],
     storage: Annotated[
         str,
         Path(
             title="Storage",
-            description="The name of the storage to retrieve the content for."
-        )
+            description="The name of the storage to retrieve the content for.",
+        ),
     ],
     vmid: Annotated[
         str,
         Query(
-            title="VM ID",
-            description="The ID of the VM to retrieve the content for."
-        )
+            title="VM ID", description="The ID of the VM to retrieve the content for."
+        ),
     ] = None,
     content: Annotated[
         str,
         Query(
             title="Content",
-            description="The type of content to retrieve. Example: 'backup'"
-        )
-    ] = None
+            description="The type of content to retrieve. Example: 'backup'",
+        ),
+    ] = None,
 ):
     """
     ### Retrieve the content of a specific storage volume.
-    
+
     **Args:**
     - **pxs (ProxmoxSessionsDep):** A dependency injection of Proxmox sessions.
     - **cluster_status (ClusterStatusDep):** A dependency injection of cluster status.
@@ -273,16 +284,18 @@ async def get_proxmox_node_storage_content(
     - **storage (str):** The name of the storage to retrieve the content for.
     - **vmid (str):** The ID of the VM to retrieve the content for.
     - **content (str):** The type of content to retrieve. Example: 'backup'
-    
+
     **Returns:**
     - **list:** A list of dictionaries (JSON)containing the content of the storage volume.
     """
-    
+
     for proxmox, cluster in zip(pxs, cluster_status):
         for cluster_node in cluster.node_list:
             if cluster_node.name == node:
-                return proxmox.session.nodes(node).storage(storage).content.get(vmid=vmid)
-    
+                return (
+                    proxmox.session.nodes(node).storage(storage).content.get(vmid=vmid)
+                )
+
     raise HTTPException(status_code=404, detail="Node or Storage not found")
 
 
@@ -293,55 +306,50 @@ async def top_level_endpoint(
 ):
     """
     ### Asynchronously retrieves data from multiple Proxmox sessions for a given top-level path.
-    
-    **Args:**    
+
+    **Args:**
     - **pxs (`ProxmoxSessionsDep`):** A dependency injection of Proxmox sessions.
     - **top_level (`ProxmoxUpperPaths`):** The top-level path to query in each Proxmox session.
-    
+
     **Returns:**
     - **list:** A list of dictionaries containing the session name as the key and the response data as the value.
     """
-    
+
     json_response = []
-    
+
     for px in pxs:
-        json_response.append(
-            {  
-                px.name: px.session(top_level).get()
-            }
-        )
-    
+        json_response.append({px.name: px.session(top_level).get()})
+
     return json_response
 
+
 @router.get(
-    '/{node}/{type}/{vmid}/config',
+    "/{node}/{type}/{vmid}/config",
     response_model=VMConfig,
     response_model_exclude_none=True,
-    response_model_exclude_unset=True
+    response_model_exclude_unset=True,
 )
 async def get_vm_config(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
-    name: str = Query(title="Cluster", description="Proxmox Cluster Name", default=None),
+    name: str = Query(
+        title="Cluster", description="Proxmox Cluster Name", default=None
+    ),
     node: str = Path(..., title="Node", description="Proxmox Node Name"),
     type: str = Path(..., title="Type", description="Proxmox VM Type"),
     vmid: int = Path(..., title="VM ID", description="Proxmox VM ID"),
 ):
-    '''
+    """
     Loops through all Proxmox Clusters looking for a match in the node name.
     If found, it returns the VM Config.
-    '''
-    
+    """
+
     # Early error return.
     if not type:
-        return {
-            "message": "VM Type is required. Use 'qemu' or 'lxc'."
-        }
+        return {"message": "VM Type is required. Use 'qemu' or 'lxc'."}
     else:
-        if type not in ('qemu', 'lxc'):
-            return {
-                "message": "Invalid VM Type. Use 'qemu' or 'lxc'."
-            }
+        if type not in ("qemu", "lxc"):
+            return {"message": "Invalid VM Type. Use 'qemu' or 'lxc'."}
 
     try:
         config = None
@@ -349,29 +357,30 @@ async def get_vm_config(
             try:
                 for cluster_node in cluster.node_list:
                     if str(node) == str(cluster_node.name):
-                        if type == 'qemu':
+                        if type == "qemu":
                             config = px.session.nodes(node).qemu(vmid).config.get()
-                        elif type == 'lxc':
+                        elif type == "lxc":
                             config = px.session.nodes(node).lxc(vmid).config.get()
-                            
-                        if config: return config
-            
+
+                        if config:
+                            return config
+
             except ResourceException as error:
                 raise ProxboxException(
                     message="Error getting VM Config",
-                    python_exception=f"Error: {str(error)}"
+                    python_exception=f"Error: {str(error)}",
                 )
 
         if config is None:
             raise ProxboxException(
                 message="VM Config not found.",
-                detail="VM Config not found. Check if the 'node', 'type', and 'vmid' are correct."
-            )            
-    
+                detail="VM Config not found. Check if the 'node', 'type', and 'vmid' are correct.",
+            )
+
     except ProxboxException:
         raise
     except Exception as error:
         raise ProxboxException(
             message="Unknown error getting VM Config. Search parameters probably wrong.",
-            detail="Check if the node, type, and vmid are correct."
+            detail="Check if the node, type, and vmid are correct.",
         )
