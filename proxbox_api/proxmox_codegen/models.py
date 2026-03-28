@@ -16,6 +16,8 @@ class RawMethodCapture(BaseModel):
     path: str
     method_name: str | None = None
     description: str | None = None
+    viewer_description: str | None = None
+    viewer_usage: str | None = None
     parameters: dict[str, Any] | None = None
     returns: dict[str, Any] | None = None
     permissions: dict[str, Any] | None = None

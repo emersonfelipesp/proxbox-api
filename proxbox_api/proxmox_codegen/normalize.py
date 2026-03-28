@@ -82,6 +82,31 @@ def _operation_id(path: str, method: str) -> str:
     return slugify_identifier(f"{method.lower()}_{path_token}")
 
 
+def _compose_operation_description(method_data: dict[str, Any]) -> str | None:
+    """Build Markdown operation description from viewer Description and Usage sections."""
+
+    viewer_description = method_data.get("viewer_description")
+    short_description = method_data.get("description")
+    viewer_usage = method_data.get("viewer_usage")
+
+    parts: list[str] = []
+    if isinstance(viewer_description, str) and viewer_description.strip():
+        parts.append(viewer_description.strip())
+    elif isinstance(short_description, str) and short_description.strip():
+        parts.append(short_description.strip())
+
+    if isinstance(viewer_usage, str) and viewer_usage.strip():
+        usage = viewer_usage.strip()
+        if parts:
+            parts.append(f"## Usage\n{usage}")
+        else:
+            parts.append(f"## Usage\n{usage}")
+
+    if not parts:
+        return None
+    return "\n\n".join(parts)
+
+
 def _build_path_params(path: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for param in extract_path_params(path):
@@ -174,7 +199,7 @@ def normalize_captured_endpoints(
                     path=path,
                     operation_id=_operation_id(path=path, method=method),
                     summary=method_data.get("method_name"),
-                    description=method_data.get("description"),
+                    description=_compose_operation_description(method_data),
                     path_params=_build_path_params(path=path, parameters=parameters),
                     query_params=_build_query_params(path=path, parameters=parameters),
                     request_body_schema=(
@@ -191,6 +216,11 @@ def normalize_captured_endpoints(
                         "unstable": method_data.get("unstable"),
                         "raw_sections": method_data.get("raw_sections", []),
                         "source": method_data.get("source"),
+                        "viewer_sections": {
+                            "description": method_data.get("viewer_description"),
+                            "usage": method_data.get("viewer_usage"),
+                            "short_description": method_data.get("description"),
+                        },
                     },
                 )
             )

@@ -8,10 +8,23 @@ from typing import Any
 from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, slugify_identifier
 
 
+def _resolved_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(schema, dict):
+        return None
+    if isinstance(schema.get("oneOf"), list) and schema["oneOf"]:
+        first = schema["oneOf"][0]
+        if isinstance(first, dict):
+            return first
+    return schema
+
+
 def _python_type(schema: dict[str, Any] | None) -> str:
+    schema = _resolved_schema(schema)
     if not isinstance(schema, dict):
         return "Any"
     schema_type = schema.get("type")
+    if schema_type == "null":
+        return "None"
     if schema_type == "string":
         return "str"
     if schema_type == "integer":
@@ -28,7 +41,7 @@ def _python_type(schema: dict[str, Any] | None) -> str:
     return "Any"
 
 
-def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> str:
+def _generate_object_model(model_name: str, schema: dict[str, Any]) -> str:
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
     required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
 
@@ -55,6 +68,27 @@ def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> str:
         )
 
     return "\n".join(lines)
+
+
+def _generate_root_model(model_name: str, schema: dict[str, Any]) -> str:
+    field_type = _python_type(schema)
+    description = schema.get("description")
+    description_expr = (
+        f", description={description!r}" if isinstance(description, str) and description else ""
+    )
+    return "\n".join(
+        [
+            f"class {model_name}(RootModel[{field_type}]):",
+            f"    root: {field_type} = Field(...{description_expr})",
+        ]
+    )
+
+
+def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> str:
+    schema = _resolved_schema(schema) or {}
+    if schema.get("type") == "object":
+        return _generate_object_model(model_name, schema)
+    return _generate_root_model(model_name, schema)
 
 
 def _request_schema_for_operation(path: str, operation: dict[str, Any]) -> dict[str, Any] | None:
@@ -95,7 +129,7 @@ def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:
         "",
         "from typing import Any",
         "",
-        "from pydantic import BaseModel, ConfigDict, Field",
+        "from pydantic import BaseModel, ConfigDict, Field, RootModel",
         "",
         "",
         "class ProxmoxBaseModel(BaseModel):",

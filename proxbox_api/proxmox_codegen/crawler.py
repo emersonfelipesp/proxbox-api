@@ -28,6 +28,48 @@ class CrawlConfig:
     checkpoint_every: int = 50
 
 
+def _normalize_doc_section_text(value: Any) -> str | None:
+    """Normalize rendered doc section text while preserving paragraph breaks."""
+
+    if not isinstance(value, str):
+        return None
+
+    lines = [line.strip() for line in value.splitlines()]
+    normalized_lines: list[str] = []
+    pending_blank = False
+
+    for line in lines:
+        if not line:
+            pending_blank = True
+            continue
+        if pending_blank and normalized_lines:
+            normalized_lines.append("")
+        normalized_lines.append(line)
+        pending_blank = False
+
+    normalized = "\n".join(normalized_lines).strip()
+    return normalized or None
+
+
+def _normalize_doc_sections(sections: list[dict[str, Any]] | None) -> dict[str, str]:
+    """Reduce rendered doc sections into a heading-keyed text map."""
+
+    normalized: dict[str, str] = {}
+    if not isinstance(sections, list):
+        return normalized
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        heading = section.get("heading")
+        body = _normalize_doc_section_text(section.get("body"))
+        if not isinstance(heading, str) or not body:
+            continue
+        normalized[heading.strip()] = body
+
+    return normalized
+
+
 async def _setup_page(page: Page, config: CrawlConfig) -> list[dict[str, Any]]:
     await page.goto(config.url, wait_until="networkidle", timeout=config.timeout_ms)
     await page.wait_for_timeout(900)
@@ -135,6 +177,65 @@ async def _extract_method_data(page: Page, path: str, method: str) -> dict[str, 
     )
 
 
+async def _extract_rendered_doc_sections(page: Page) -> dict[str, str]:
+    """Read rendered section content from the active method tab in the viewer doc panel."""
+
+    sections = await page.evaluate(
+        """
+        () => {
+          const docview = document.querySelector('#docview');
+          if (!docview) {
+            return [];
+          }
+
+          const activePanel =
+            docview.querySelector('.x-tabpanel-child.x-panel-active') ||
+            docview.querySelector('.x-panel-active') ||
+            docview;
+
+          const contentRoot =
+            activePanel.querySelector('.x-panel-body') ||
+            activePanel.querySelector('.x-component-default') ||
+            activePanel;
+
+          const blocks = [];
+          const headings = contentRoot.querySelectorAll('h1, h2, h3, h4, .x-title-text, .x-fieldset-header-text');
+
+          headings.forEach((headingNode) => {
+            const heading = (headingNode.textContent || '').trim();
+            if (!heading || !['Description', 'Usage'].includes(heading)) {
+              return;
+            }
+
+            const bodyParts = [];
+            let cursor = headingNode.nextElementSibling;
+            while (cursor) {
+              const text = (cursor.innerText || cursor.textContent || '').trim();
+              const nextHeading = (cursor.textContent || '').trim();
+              if (cursor.matches('h1, h2, h3, h4, .x-title-text, .x-fieldset-header-text') && nextHeading) {
+                break;
+              }
+              if (text) {
+                bodyParts.push(text);
+              }
+              cursor = cursor.nextElementSibling;
+            }
+
+            if (bodyParts.length) {
+              blocks.push({
+                heading,
+                body: bodyParts.join('\\n\\n'),
+              });
+            }
+          });
+
+          return blocks;
+        }
+        """
+    )
+    return _normalize_doc_sections(sections)
+
+
 def _synthesize_raw_sections(method_data: dict[str, Any]) -> list[str]:
     returns = method_data.get("returns")
     if not isinstance(returns, dict):
@@ -172,6 +273,7 @@ async def _capture_endpoint(
 
     for method in methods:
         raw_sections: list[str] = []
+        rendered_sections: dict[str, str] = {}
         if selected:
             tab = page.locator("#docview .x-tab-inner", has_text=method).first
             try:
@@ -193,6 +295,7 @@ async def _capture_endpoint(
 
             pre_texts = await page.locator("#docview pre").all_text_contents()
             raw_sections = [text.strip() for text in pre_texts if text.strip()]
+            rendered_sections = await _extract_rendered_doc_sections(page)
 
         method_data = await _extract_method_data(page, path, method)
         if not method_data:
@@ -202,6 +305,8 @@ async def _capture_endpoint(
             raw_sections = _synthesize_raw_sections(method_data)
 
         method_data["raw_sections"] = raw_sections
+        method_data["viewer_description"] = rendered_sections.get("Description")
+        method_data["viewer_usage"] = rendered_sections.get("Usage")
         method_data["source"] = "viewer"
         endpoint["methods"][method] = method_data
 
