@@ -1347,9 +1347,16 @@ OpenAPI contract under:</p>
 <ul>
 <li>Routes are built at startup for every generated version present under <code>proxbox_api/generated/proxmox/</code>.</li>
 <li>Routes are rebuilt on demand with <code>POST /proxmox/viewer/routes/refresh</code>.</li>
+<li><code>POST /proxmox/viewer/routes/refresh</code> with no query parameters rebuilds all available generated versions.</li>
+<li><code>POST /proxmox/viewer/routes/refresh?version_tag=8.3.0</code> rebuilds only that mounted version.</li>
 <li>The unversioned <code>/proxmox/api2/json/*</code> alias forwards to the <code>latest</code> generated contract.</li>
 <li>Request bodies and responses are validated with runtime-generated Pydantic models.</li>
 <li>Generated routes appear in FastAPI <code>/docs</code> and <code>/openapi.json</code>.</li>
+</ul>
+<p>Version discovery:</p>
+<ul>
+<li>A version is mountable only when <code>proxbox_api/generated/proxmox/&lt;version-tag&gt;/openapi.json</code> exists.</li>
+<li>Non-version entries such as <code>__pycache__</code> and files at the root of <code>generated/proxmox/</code> are ignored.</li>
 </ul>
 <p>Target selection:</p>
 <ul>
@@ -1366,6 +1373,14 @@ OpenAPI contract under:</p>
 <li><code>GET /proxmox/api2/8.3.0/json/nodes/{node}/qemu/{vmid}/config</code></li>
 <li><code>POST /proxmox/api2/latest/json/access/acl</code></li>
 <li><code>GET /proxmox/api2/json/cluster/resources</code> as the compatibility alias for <code>latest</code></li>
+</ul>
+<p>Refresh response shape:</p>
+<ul>
+<li><code>mounted_versions</code>: the versioned route sets currently mounted in FastAPI.</li>
+<li><code>alias_version_tag</code>: the version used by <code>/proxmox/api2/json/*</code>.</li>
+<li><code>versions.&lt;tag&gt;.path_count</code>: number of OpenAPI paths mounted for that version.</li>
+<li><code>versions.&lt;tag&gt;.method_count</code>: number of <code>GET</code>/<code>POST</code>/<code>PUT</code>/<code>DELETE</code> operations mounted for that version.</li>
+<li><code>versions.&lt;tag&gt;.schema_version</code>: the <code>info.version</code> value from the generated OpenAPI document.</li>
 </ul>
 <h2 id="dcim-routes-dcim">DCIM routes (<code>/dcim</code>)<a class="headerlink" href="#dcim-routes-dcim" title="Permanent link">&para;</a></h2>
 <ul>
