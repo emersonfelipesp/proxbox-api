@@ -80,7 +80,7 @@ app.openapi = custom_openapi
 
 
 from sqlmodel import select
-from proxbox_api.database import NetBoxEndpoint, get_session
+from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
 from proxbox_api.session.netbox import get_netbox_session
 from proxbox_api.netbox_compat import NetBoxBase
 from sqlalchemy.exc import OperationalError
@@ -89,6 +89,7 @@ netbox_endpoint = None
 database_session = None
 netbox_endpoints = []
 try:
+    create_db_and_tables()
     database_session = next(get_session())
     netbox_session = get_netbox_session(database_session=database_session)
     NetBoxBase.nb = netbox_session
@@ -135,7 +136,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 

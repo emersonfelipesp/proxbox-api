@@ -15,10 +15,12 @@ from proxbox_api.exception import ProxboxException
 router = APIRouter()
 
 from proxbox_api.routes.proxmox.viewer_codegen import router as viewer_codegen_router
+from proxbox_api.routes.proxmox.endpoints import router as endpoints_router
 
 router.include_router(
     viewer_codegen_router, prefix="/viewer", tags=["proxmox / viewer"]
 )
+router.include_router(endpoints_router, tags=["proxmox / endpoints"])
 
 #
 # /proxmox/* API Endpoints
