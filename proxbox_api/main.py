@@ -38,6 +38,7 @@ from proxbox_api.routes.proxmox.cluster import (
     router as px_cluster_router,
 )
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
+from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 
@@ -296,6 +297,16 @@ app.include_router(
 
 # Extras Routes
 app.include_router(extras_router, prefix="/extras", tags=["extras"])
+
+
+@app.on_event("startup")
+async def register_runtime_generated_proxmox_routes() -> None:
+    """Mount generated live Proxmox proxy routes after the static app routers are loaded."""
+
+    try:
+        register_generated_proxmox_routes(app)
+    except ProxboxException:
+        pass
 
 
 @app.websocket("/")

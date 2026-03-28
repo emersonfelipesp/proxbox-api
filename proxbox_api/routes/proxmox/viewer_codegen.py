@@ -16,6 +16,10 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
     load_proxmox_generated_openapi,
 )
+from proxbox_api.routes.proxmox.runtime_generated import (
+    generated_proxmox_route_state,
+    register_generated_proxmox_routes,
+)
 
 router = APIRouter()
 
@@ -201,6 +205,23 @@ async def proxmox_netbox_integration_contracts():
         "proxmox_generated_path_count": len((proxmox.get("paths") or {}).keys()) if proxmox else 0,
         "netbox_schema_source": netbox_openapi_schema_source(),
     }
+
+
+@router.post("/routes/refresh")
+async def refresh_generated_proxmox_routes(
+    version_tag: str | None = Query(
+        default=None,
+        description="Optional generated artifact version tag to rebuild. Omit to rebuild all available versions.",
+    ),
+):
+    """Rebuild runtime-generated live Proxmox routes from the embedded OpenAPI contract."""
+
+    from proxbox_api.main import app
+
+    normalized_version_tag = version_tag if isinstance(version_tag, str) else None
+    result = register_generated_proxmox_routes(app, version_tag=normalized_version_tag)
+    result["state"] = generated_proxmox_route_state()
+    return result
 
 
 @router.get("/pydantic", response_class=PlainTextResponse)

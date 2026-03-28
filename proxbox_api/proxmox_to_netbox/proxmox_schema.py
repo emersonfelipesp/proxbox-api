@@ -19,6 +19,30 @@ def proxmox_generated_openapi_path(
     )
 
 
+def proxmox_generated_openapi_root() -> Path:
+    """Return the directory containing generated Proxmox OpenAPI artifacts."""
+
+    return Path(__file__).resolve().parents[1] / "generated" / "proxmox"
+
+
+def available_proxmox_openapi_versions() -> list[str]:
+    """List generated Proxmox version tags that have an embedded OpenAPI artifact."""
+
+    root = proxmox_generated_openapi_root()
+    if not root.exists():
+        return []
+
+    versions: list[str] = []
+    for child in sorted(root.iterdir(), key=lambda entry: entry.name):
+        if not child.is_dir():
+            continue
+        if child.name.startswith("__"):
+            continue
+        if (child / "openapi.json").exists():
+            versions.append(child.name)
+    return versions
+
+
 def load_proxmox_generated_openapi(
     version_tag: str = DEFAULT_PROXMOX_OPENAPI_TAG,
 ) -> dict[str, Any]:

@@ -73,6 +73,39 @@ Validation rules:
 - `GET /proxmox/viewer/openapi/embedded`
 - `GET /proxmox/viewer/integration/contracts`
 - `GET /proxmox/viewer/pydantic`
+- `POST /proxmox/viewer/routes/refresh`
+
+### Runtime-generated live proxy routes
+
+`proxbox-api` now mounts runtime-generated Proxmox proxy routes from the embedded generated
+OpenAPI contract under:
+
+- `/proxmox/api2/{version_tag}/json/*`
+- `/proxmox/api2/json/*` as a compatibility alias to `latest`
+
+Behavior:
+
+- Routes are built at startup for every generated version present under `proxbox_api/generated/proxmox/`.
+- Routes are rebuilt on demand with `POST /proxmox/viewer/routes/refresh`.
+- The unversioned `/proxmox/api2/json/*` alias forwards to the `latest` generated contract.
+- Request bodies and responses are validated with runtime-generated Pydantic models.
+- Generated routes appear in FastAPI `/docs` and `/openapi.json`.
+
+Target selection:
+
+- If exactly one Proxmox endpoint exists, generated routes use it automatically.
+- If more than one endpoint exists, pass one of:
+  - `target_name`
+  - `target_domain`
+  - `target_ip_address`
+- `source` selects whether endpoints come from the local database or NetBox plugin records.
+
+Examples of generated route shapes:
+
+- `GET /proxmox/api2/latest/json/cluster/resources`
+- `GET /proxmox/api2/8.3.0/json/nodes/{node}/qemu/{vmid}/config`
+- `POST /proxmox/api2/latest/json/access/acl`
+- `GET /proxmox/api2/json/cluster/resources` as the compatibility alias for `latest`
 
 ## DCIM routes (`/dcim`)
 
