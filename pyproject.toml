@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "httpx",
+    "playwright",
     "pytest",
     "pytest-cov",
 ]
