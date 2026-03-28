@@ -60,6 +60,7 @@ TEST_GENERATED_OPENAPI = {
             "post": {
                 "operationId": "post_access_acl",
                 "summary": "Update ACL",
+                "description": "Updates ACL entries.\n\n## Usage\npvesh set /access/acl --path /vms --roles PVEAdmin",
                 "requestBody": {
                     "required": True,
                     "content": {
@@ -215,6 +216,7 @@ def test_generated_routes_appear_in_openapi():
     assert {"source", "target_name", "target_domain", "target_ip_address"} <= parameter_names
     assert post_acl["requestBody"]["content"]["application/json"]["schema"]["$ref"]
     assert "proxmox / live-generated / latest" in post_acl["tags"]
+    assert "## Usage" in post_acl["description"]
 
 
 def test_generated_proxy_route_forwards_request_and_validates_response(

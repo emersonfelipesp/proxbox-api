@@ -8,7 +8,7 @@ import sys
 import threading
 from copy import deepcopy
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path as FilePath
 from types import ModuleType
 from typing import Any, Literal
 
@@ -23,8 +23,8 @@ from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, 
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
     available_proxmox_openapi_versions,
-    proxmox_generated_route_cache_path,
     load_proxmox_generated_openapi,
+    proxmox_generated_route_cache_path,
 )
 from proxbox_api.session.proxmox import resolve_proxmox_target_session
 
@@ -116,7 +116,7 @@ def _version_sort_key(version_tag: str) -> tuple[int, str]:
     return (0 if version_tag == DEFAULT_PROXMOX_OPENAPI_TAG else 1, version_tag)
 
 
-def _generated_route_cache_path() -> Path:
+def _generated_route_cache_path() -> FilePath:
     return proxmox_generated_route_cache_path()
 
 
@@ -159,7 +159,7 @@ def _write_generated_route_cache(
     *,
     documents: dict[str, dict[str, Any]],
     alias_version_tag: str,
-) -> Path:
+) -> FilePath:
     cache_path = _generated_route_cache_path()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_payload = {
