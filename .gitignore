@@ -1,4 +1,5 @@
-development/
+# Local scratch dir at repo root only (not docs/development/)
+/development/
 pynetbox_api/
 pynetbox_api
 # Ignore pem files

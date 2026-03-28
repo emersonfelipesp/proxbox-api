@@ -1,0 +1,34 @@
+# Contributing
+
+## Development workflow
+
+1. Create a feature branch from `main`.
+2. Implement changes with minimal, focused scope.
+3. Add or update tests for behavior changes.
+4. Run verification commands locally.
+5. Open pull request with clear summary.
+
+## Coding conventions
+
+- Keep route handlers focused on orchestration.
+- Move reusable business logic into services/utilities.
+- Use typed models for request/response contracts.
+- Raise `ProxboxException` for expected domain failures.
+
+## Documentation expectations
+
+- Update `docs/` when endpoint behavior changes.
+- Keep English docs as source-of-truth.
+- Update `docs/pt-br/` for translated key pages.
+
+## Pull request checklist
+
+- [ ] Tests pass (`pytest`).
+- [ ] Code compiles (`python -m compileall proxbox_api`).
+- [ ] Docs build passes (`mkdocs build --strict`) when docs changed.
+- [ ] API behavior changes are documented.
+
+## Security and secrets
+
+- Never commit real API tokens, passwords, or certificates.
+- Use placeholders in docs and examples.
