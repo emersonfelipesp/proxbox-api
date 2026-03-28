@@ -123,6 +123,27 @@ class FakeFailThenSucceedProxmoxAPI(FakeProxmoxAPI):
         super().__init__(host, **kwargs)
 
 
+class FakePermissionDeniedVersionResource(FakeProxmoxResource):
+    pass
+
+
+class FakePermissionDeniedClusterResource(FakeProxmoxResource):
+    def get(self, *args, **kwargs):
+        raise RuntimeError("403 Forbidden: Permission check failed (/, Sys.Audit)")
+
+
+class FakePermissionDeniedProxmoxAPI:
+    def __init__(self, host, **kwargs):
+        self.host = host
+        self.kwargs = kwargs
+        self.version = FakePermissionDeniedVersionResource({"version": "8.3.0"})
+
+    def __call__(self, path):
+        if path == "cluster/status":
+            return FakePermissionDeniedClusterResource(None)
+        raise AssertionError(f"unexpected path {path}")
+
+
 @dataclass
 class SerializableRecord:
     id: int
@@ -240,6 +261,56 @@ def test_proxmox_session_falls_back_to_ip_when_domain_fails(monkeypatch):
 
     assert session.CONNECTED is True
     assert getattr(session.proxmoxer, "host", None) == "10.0.0.10"
+
+
+def test_proxmox_session_normalizes_token_string_value(monkeypatch):
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
+
+    session = ProxmoxSession(
+        {
+            "ip_address": "10.0.0.10",
+            "domain": "pve.local",
+            "http_port": 8006,
+            "user": "root@pam",
+            "password": None,
+            "token": {
+                "name": "",
+                "value": "PVEAPIToken=root@pam!sync=secret-value",
+            },
+            "ssl": False,
+        }
+    )
+
+    assert session.CONNECTED is True
+    assert session.token_name == "sync"
+    assert session.token_value == "secret-value"
+    assert session.proxmoxer.kwargs["token_name"] == "sync"
+    assert session.proxmoxer.kwargs["token_value"] == "secret-value"
+
+
+def test_proxmox_session_allows_version_when_cluster_status_permission_denied(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.session.proxmox.ProxmoxAPI",
+        FakePermissionDeniedProxmoxAPI,
+    )
+
+    session = ProxmoxSession(
+        {
+            "ip_address": "10.0.0.10",
+            "domain": None,
+            "http_port": 8006,
+            "user": "root@pam",
+            "password": None,
+            "token": {"name": "proxbox2", "value": "secret"},
+            "ssl": False,
+        }
+    )
+
+    assert session.CONNECTED is True
+    assert session.permission_limited is True
+    assert session.mode == "restricted"
+    assert session.name == "10.0.0.10"
+    assert session.version == {"version": "8.3.0"}
 
 
 def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):

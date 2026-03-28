@@ -1,6 +1,7 @@
 """Proxmox session management and dependency provider utilities."""
 
 from json import JSONDecodeError
+import re
 from typing import Annotated, Any
 
 from fastapi import Depends, Query
@@ -49,6 +50,7 @@ class ProxmoxSession:
 
     def __init__(self, cluster_config: Any):
         self.CONNECTED = False
+        self.permission_limited = False
         #
         # Validate cluster_config type
         #
@@ -90,6 +92,8 @@ class ProxmoxSession:
             self.token_name = cluster_config["token"]["name"]
             self.token_value = cluster_config["token"]["value"]
             self.ssl = cluster_config["ssl"]
+
+            self._normalize_token_auth_fields()
 
         except KeyError:
             raise ProxboxException(
@@ -135,15 +139,24 @@ class ProxmoxSession:
             try:
                 """Test Proxmox Connection and return Cluster Status API response as class attribute"""
                 self.cluster_status = self.session("cluster/status").get()
-            except ProxboxException as error:
-                raise error
-
             except Exception as error:
-                raise ProxboxException(
-                    message=f"After instatiating object connection, could not make API call to Proxmox '{self.domain}:{self.http_port}' using token name '{self.token_name}'.",
-                    detail="Unknown error.",
-                    python_exception=f"{__name__}: {error}",
-                )
+                if self._is_permission_denied_error(error):
+                    logger.warning(
+                        "Connected to Proxmox %s:%s but cluster/status is forbidden; continuing in restricted mode",
+                        self.domain or self.ip_address,
+                        self.http_port,
+                    )
+                    self.permission_limited = True
+                    self.cluster_status = []
+                else:
+                    raise ProxboxException(
+                        message=(
+                            "After instatiating object connection, could not make API call to "
+                            f"Proxmox '{self.domain}:{self.http_port}' using token name '{self.token_name}'."
+                        ),
+                        detail="Unknown error.",
+                        python_exception=f"{__name__}: {error}",
+                    )
 
         #
         # Add more attributes to class about Proxmox Session
@@ -152,22 +165,27 @@ class ProxmoxSession:
         self.cluster_name = None
         self.node_name = None
         self.fingerprints = None
+        self.name = self.domain or self.ip_address
 
         if self.CONNECTED:
-            self.mode = self.get_cluster_mode()
-            if self.mode == "cluster":
-                cluster_name: str = self.get_cluster_name()
+            if self.permission_limited:
+                self.mode = "restricted"
+                self.fingerprints = []
+            else:
+                self.mode = self.get_cluster_mode()
+                if self.mode == "cluster":
+                    cluster_name: str = self.get_cluster_name()
 
-                self.cluster_name = cluster_name
-                self.name = cluster_name
-                self.fingerprints: list = self.get_node_fingerprints(self.proxmoxer)
+                    self.cluster_name = cluster_name
+                    self.name = cluster_name
+                    self.fingerprints: list = self.get_node_fingerprints(self.proxmoxer)
 
-            elif self.mode == "standalone":
-                standalone_node_name: str = self.get_standalone_name()
+                elif self.mode == "standalone":
+                    standalone_node_name: str = self.get_standalone_name()
 
-                self.node_name = standalone_node_name
-                self.name = standalone_node_name
-                self.fingerprints = None
+                    self.node_name = standalone_node_name
+                    self.name = standalone_node_name
+                    self.fingerprints = None
 
     def __repr__(self):
         return f"Proxmox Connection Object. URL: {self.domain}:{self.http_port}"
@@ -183,9 +201,8 @@ class ProxmoxSession:
                 detail="ProxmoxSession class only accepts 'token' or 'password' as authentication method",
             )
 
-        error_message = (
-            f"Error trying to initialize Proxmox API connection using TOKEN NAME '{self.token_name}' and TOKEN_VALUE provided",
-        )
+        target = self.domain or self.ip_address
+        error_message = f"Error trying to initialize Proxmox API connection to '{target}:{self.http_port}' using {auth_method} authentication"
 
         # Establish Proxmox Session with Token
         USE_IP_ADDRESS = False
@@ -250,6 +267,38 @@ class ProxmoxSession:
                     detail="Unknown error.",
                     python_exception=f"{error}",
                 )
+
+    def _normalize_token_auth_fields(self) -> None:
+        """Normalize token fields from common Proxmox token string formats."""
+
+        token_name = (self.token_name or "").strip()
+        token_value = (self.token_value or "").strip()
+
+        if token_name and token_name.startswith("PVEAPIToken=") and "!" in token_name:
+            token_name = token_name.split("!", 1)[1].strip()
+
+        # Accept full token strings like:
+        # - PVEAPIToken=root@pam!tokenid=secret
+        # - root@pam!tokenid=secret
+        if token_value and ("!" in token_value or token_value.startswith("PVEAPIToken=")):
+            full_token_match = re.match(
+                r"^(?:PVEAPIToken=)?(?P<user>[^!]+)!(?P<name>[^=]+)=(?P<value>.+)$",
+                token_value,
+            )
+            if full_token_match:
+                parsed_name = full_token_match.group("name").strip()
+                parsed_value = full_token_match.group("value").strip()
+                if parsed_name:
+                    token_name = parsed_name
+                token_value = parsed_value
+
+        self.token_name = token_name or None
+        self.token_value = token_value or None
+
+    @staticmethod
+    def _is_permission_denied_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return "permission check failed" in text or "403 forbidden" in text
 
     #
     # Get Proxmox Details about Cluster and Nodes
