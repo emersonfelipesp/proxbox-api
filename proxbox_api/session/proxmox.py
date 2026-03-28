@@ -1,3 +1,5 @@
+"""Proxmox session management and dependency provider utilities."""
+
 from fastapi import Depends, Query
 from typing import Annotated, Any
 

@@ -1,3 +1,5 @@
+"""In-memory cache helper used across API workflows."""
+
 from typing import Any
 
 class Cache:

@@ -1,3 +1,5 @@
+"""Virtualization schema models and VM configuration validator."""
+
 from pydantic import BaseModel, model_validator
 from typing import Dict, Any, List
 import re

@@ -1,3 +1,5 @@
+"""Virtualization route namespace and placeholder endpoints."""
+
 # FastAPI Imports
 from fastapi import APIRouter, Depends
 from typing import Annotated

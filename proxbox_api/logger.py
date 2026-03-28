@@ -1,3 +1,5 @@
+"""Logging setup utilities for console and file outputs."""
+
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from fastapi import WebSocket

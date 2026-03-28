@@ -1,3 +1,5 @@
+"""Legacy utility helpers for sync status rendering."""
+
 def return_status_html(status: str, use_css: bool):
     undefined_html_raw = "undefined"
     undefined_html_css = f"<span class='badge text-bg-grey'><strong>{undefined_html_raw}</strong></span>"

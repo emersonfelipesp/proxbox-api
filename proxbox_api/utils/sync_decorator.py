@@ -1,3 +1,5 @@
+"""Decorator that tracks sync process lifecycle in NetBox."""
+
 from functools import wraps
 from datetime import datetime
 import traceback

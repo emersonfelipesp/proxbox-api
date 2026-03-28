@@ -1,3 +1,5 @@
+"""Proxmox node endpoints and node interface response schemas."""
+
 from fastapi import APIRouter, Path, Depends, Query
 from pydantic import BaseModel
 from typing import Annotated

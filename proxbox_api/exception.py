@@ -1,3 +1,5 @@
+"""Custom exception types and async exception logging helpers."""
+
 
 from fastapi import WebSocket
     
