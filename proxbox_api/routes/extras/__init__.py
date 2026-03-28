@@ -4,24 +4,22 @@ from fastapi import APIRouter, Depends
 from fastapi import WebSocket
 from typing import Annotated
 
-from pynetbox_api.extras.custom_field import CustomField
+from proxbox_api.netbox_compat import CustomField
 import asyncio
 
 router = APIRouter()
+
+
 @router.get(
-    '/extras/custom-fields/create',
-    response_model=CustomField.SchemaList,
+    "/extras/custom-fields/create",
+    response_model=list[dict],
     response_model_exclude_none=True,
-    response_model_exclude_unset=True
+    response_model_exclude_unset=True,
 )
-async def create_custom_fields(
-    websocket = WebSocket
-):
+async def create_custom_fields(websocket=WebSocket):
     custom_fields: list = [
         {
-            "object_types": [
-                "virtualization.virtualmachine"
-            ],
+            "object_types": ["virtualization.virtualmachine"],
             "type": "integer",
             "name": "proxmox_vm_id",
             "label": "VM ID",
@@ -31,12 +29,10 @@ async def create_custom_fields(
             "weight": 100,
             "filter_logic": "loose",
             "search_weight": 1000,
-            "group_name": "Proxmox"
+            "group_name": "Proxmox",
         },
         {
-            "object_types": [
-                "virtualization.virtualmachine"
-            ],
+            "object_types": ["virtualization.virtualmachine"],
             "type": "boolean",
             "name": "proxmox_start_at_boot",
             "label": "Start at Boot",
@@ -46,12 +42,10 @@ async def create_custom_fields(
             "weight": 100,
             "filter_logic": "loose",
             "search_weight": 1000,
-            "group_name": "Proxmox"
+            "group_name": "Proxmox",
         },
         {
-            "object_types": [
-                "virtualization.virtualmachine"
-            ],
+            "object_types": ["virtualization.virtualmachine"],
             "type": "boolean",
             "name": "proxmox_unprivileged_container",
             "label": "Unprivileged Container",
@@ -61,12 +55,10 @@ async def create_custom_fields(
             "weight": 100,
             "filter_logic": "loose",
             "search_weight": 1000,
-            "group_name": "Proxmox"
+            "group_name": "Proxmox",
         },
         {
-            "object_types": [
-                "virtualization.virtualmachine"
-            ],
+            "object_types": ["virtualization.virtualmachine"],
             "type": "boolean",
             "name": "proxmox_qemu_agent",
             "label": "QEMU Guest Agent",
@@ -76,12 +68,10 @@ async def create_custom_fields(
             "weight": 100,
             "filter_logic": "loose",
             "search_weight": 1000,
-            "group_name": "Proxmox"
+            "group_name": "Proxmox",
         },
         {
-            "object_types": [
-                "virtualization.virtualmachine"
-            ],
+            "object_types": ["virtualization.virtualmachine"],
             "type": "text",
             "name": "proxmox_search_domain",
             "label": "Search Domain",
@@ -91,17 +81,21 @@ async def create_custom_fields(
             "weight": 100,
             "filter_logic": "loose",
             "search_weight": 1000,
-            "group_name": "Proxmox"
-        }
+            "group_name": "Proxmox",
+        },
     ]
-    
+
     async def create_custom_field_task(custom_field: dict):
         return await asyncio.to_thread(lambda: CustomField(**custom_field))
 
     # Create Custom Fields
-    return await asyncio.gather(*[
-        create_custom_field_task(custom_field_dict)
-        for custom_field_dict in custom_fields
-    ])              
+    fields = await asyncio.gather(
+        *[
+            create_custom_field_task(custom_field_dict)
+            for custom_field_dict in custom_fields
+        ]
+    )
+    return [field.dict() if hasattr(field, "dict") else field for field in fields]
 
-CreateCustomFieldsDep = Annotated[CustomField.SchemaList, Depends(create_custom_fields)]   
+
+CreateCustomFieldsDep = Annotated[list[dict], Depends(create_custom_fields)]
