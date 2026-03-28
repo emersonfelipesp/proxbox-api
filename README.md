@@ -40,6 +40,15 @@ uv run mkdocs serve
 
 ## Using docker (recommended)
 
+The image is built from this repository with **uv** and **`uv.lock`** (multi-stage Dockerfile): dependencies install in a builder stage, then only `.venv` and `proxbox_api/` are copied into the runtime image.
+
+### Build from source (this repo)
+
+```bash
+docker build -t proxbox-api:local .
+docker run -d -p 8000:8000 --name proxbox-api proxbox-api:local
+```
+
 ### Pull the docker image
 
 ```
