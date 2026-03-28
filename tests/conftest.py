@@ -8,7 +8,10 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from proxbox_api.database import get_session
 from proxbox_api.main import app
-from proxbox_api.routes.proxmox.runtime_generated import clear_generated_proxmox_routes
+from proxbox_api.routes.proxmox.runtime_generated import (
+    clear_generated_proxmox_route_cache,
+    clear_generated_proxmox_routes,
+)
 from proxbox_api.session.netbox import get_netbox_session
 
 
@@ -47,10 +50,12 @@ class FakeNetBoxSession:
 @pytest.fixture(autouse=True)
 def reset_fastapi_state() -> None:
     app.dependency_overrides.clear()
+    clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
     yield
     app.dependency_overrides.clear()
+    clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
 

@@ -80,18 +80,21 @@ Validation rules:
 `proxbox-api` now mounts runtime-generated Proxmox proxy routes from the embedded generated
 OpenAPI contract under:
 
-- `/proxmox/api2/{version_tag}/json/*`
-- `/proxmox/api2/json/*` as a compatibility alias to `latest`
+- `/proxmox/api2/{version_tag}/*`
+- `/proxmox/api2/*` as a compatibility alias to `latest`
 
 Behavior:
 
 - Routes are built at startup for every generated version present under `proxbox_api/generated/proxmox/`.
+- The mounted route set is cached in `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
+- On `uvicorn --reload`, startup prefers that cache manifest so the previously mounted live route set is preserved in development.
 - Routes are rebuilt on demand with `POST /proxmox/viewer/routes/refresh`.
 - `POST /proxmox/viewer/routes/refresh` with no query parameters rebuilds all available generated versions.
 - `POST /proxmox/viewer/routes/refresh?version_tag=8.3.0` rebuilds only that mounted version.
-- The unversioned `/proxmox/api2/json/*` alias forwards to the `latest` generated contract.
+- The unversioned `/proxmox/api2/*` alias forwards to the `latest` generated contract.
 - Request bodies and responses are validated with runtime-generated Pydantic models.
 - Generated routes appear in FastAPI `/docs` and `/openapi.json`.
+- `latest` routes are mounted before older version tags so they appear first in Swagger.
 
 Version discovery:
 
@@ -109,15 +112,17 @@ Target selection:
 
 Examples of generated route shapes:
 
-- `GET /proxmox/api2/latest/json/cluster/resources`
-- `GET /proxmox/api2/8.3.0/json/nodes/{node}/qemu/{vmid}/config`
-- `POST /proxmox/api2/latest/json/access/acl`
-- `GET /proxmox/api2/json/cluster/resources` as the compatibility alias for `latest`
+- `GET /proxmox/api2/latest/cluster/resources`
+- `GET /proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config`
+- `POST /proxmox/api2/latest/access/acl`
+- `GET /proxmox/api2/cluster/resources` as the compatibility alias for `latest`
 
 Refresh response shape:
 
 - `mounted_versions`: the versioned route sets currently mounted in FastAPI.
-- `alias_version_tag`: the version used by `/proxmox/api2/json/*`.
+- `alias_version_tag`: the version used by `/proxmox/api2/*`.
+- `cache_path`: persisted manifest path used to preserve generated routes across reloads.
+- `cache_source`: whether the last registration used the persisted runtime cache or scanned generated artifacts.
 - `versions.<tag>.path_count`: number of OpenAPI paths mounted for that version.
 - `versions.<tag>.method_count`: number of `GET`/`POST`/`PUT`/`DELETE` operations mounted for that version.
 - `versions.<tag>.schema_version`: the `info.version` value from the generated OpenAPI document.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,8 +10,11 @@ from sqlmodel import Session
 
 from proxbox_api.database import ProxmoxEndpoint, get_session
 from proxbox_api.main import app
-from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_openapi_versions
+from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+    available_proxmox_openapi_versions,
+)
 from proxbox_api.routes.proxmox.runtime_generated import (
+    clear_generated_proxmox_routes,
     generated_proxmox_route_state,
     register_generated_proxmox_routes,
 )
@@ -198,11 +202,15 @@ def test_generated_routes_appear_in_openapi():
     )
 
     schema = app.openapi()
-    assert "/proxmox/api2/latest/json/cluster/resources" in schema["paths"]
-    assert "/proxmox/api2/8.3.0/json/nodes/{node}/qemu/{vmid}/config" in schema["paths"]
-    assert "/proxmox/api2/json/access/acl" in schema["paths"]
+    assert "/proxmox/api2/latest/cluster/resources" in schema["paths"]
+    assert "/proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config" in schema["paths"]
+    assert "/proxmox/api2/access/acl" in schema["paths"]
 
-    post_acl = schema["paths"]["/proxmox/api2/latest/json/access/acl"]["post"]
+    assert list(schema["paths"]).index("/proxmox/api2/latest/cluster/resources") < list(
+        schema["paths"]
+    ).index("/proxmox/api2/8.3.0/cluster/resources")
+
+    post_acl = schema["paths"]["/proxmox/api2/latest/access/acl"]["post"]
     parameter_names = {parameter["name"] for parameter in post_acl["parameters"]}
     assert {"source", "target_name", "target_domain", "target_ip_address"} <= parameter_names
     assert post_acl["requestBody"]["content"]["application/json"]["schema"]["$ref"]
@@ -245,7 +253,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
 
     with TestClient(app) as client:
         response = client.post(
-            "/proxmox/api2/latest/json/access/acl",
+            "/proxmox/api2/latest/access/acl",
             json={
                 "path": "/vms",
                 "roles": "PVEAdmin",
@@ -253,7 +261,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
             },
         )
         alias_response = client.post(
-            "/proxmox/api2/json/access/acl",
+            "/proxmox/api2/access/acl",
             json={
                 "path": "/vms",
                 "roles": "PVEAdmin",
@@ -318,9 +326,9 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
     )
 
     with TestClient(app) as client:
-        missing_selector = client.get("/proxmox/api2/latest/json/cluster/resources")
+        missing_selector = client.get("/proxmox/api2/latest/cluster/resources")
         selected = client.get(
-            "/proxmox/api2/latest/json/cluster/resources",
+            "/proxmox/api2/latest/cluster/resources",
             params={"target_domain": "pve02.local", "type": "vm"},
         )
 
@@ -346,9 +354,11 @@ def test_refresh_generated_routes_endpoint_rebuilds_runtime_state(monkeypatch):
     state = generated_proxmox_route_state()
 
     assert result["route_count"] == 9
-    assert result["state"]["mounted_versions"] == ["8.3.0", "latest"]
+    assert result["state"]["mounted_versions"] == ["latest", "8.3.0"]
     assert state["versions"]["latest"]["schema_version"] == "test-generated"
     assert state["versions"]["8.3.0"]["schema_version"] == "8.3.0-generated"
+    assert result["cache_source"] == "generated-artifacts"
+    assert Path(result["cache_path"]).exists()
 
 
 def test_refresh_generated_routes_endpoint_rebuilds_single_version(monkeypatch):
@@ -363,6 +373,7 @@ def test_refresh_generated_routes_endpoint_rebuilds_single_version(monkeypatch):
     assert result["route_count"] == 3
     assert result["state"]["mounted_versions"] == ["8.3.0"]
     assert state["versions"]["8.3.0"]["schema_version"] == "8.3.0-generated"
+    assert result["cache_source"] == "generated-artifacts"
 
 
 def test_available_proxmox_openapi_versions_ignores_non_version_entries(tmp_path, monkeypatch):
@@ -387,3 +398,70 @@ def test_available_proxmox_openapi_versions_ignores_non_version_entries(tmp_path
     )
 
     assert available_proxmox_openapi_versions() == ["8.3.0", "latest"]
+
+
+def test_register_generated_routes_uses_persisted_cache_on_reload(tmp_path, monkeypatch):
+    generated_root = tmp_path / "generated" / "proxmox"
+    cache_path = generated_root / "runtime_generated_routes_cache.json"
+    latest_dir = generated_root / "latest"
+    latest_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.proxmox_generated_openapi_root",
+        lambda: Path(generated_root),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.proxmox.runtime_generated.proxmox_generated_route_cache_path",
+        lambda: Path(cache_path),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_openapi_versions",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.proxmox.runtime_generated.load_proxmox_generated_openapi",
+        lambda version_tag="latest": {},
+    )
+
+    register_generated_proxmox_routes(
+        app,
+        openapi_documents={"latest": TEST_GENERATED_OPENAPI},
+    )
+    clear_generated_proxmox_routes(app)
+
+    result = register_generated_proxmox_routes(app)
+    state = generated_proxmox_route_state()
+
+    assert cache_path.exists()
+    assert result["cache_source"] == "runtime-cache"
+    assert state["loaded_from_cache"] is True
+    assert "/proxmox/api2/latest/cluster/resources" in app.openapi()["paths"]
+
+
+def test_register_generated_routes_writes_cache_manifest(tmp_path, monkeypatch):
+    generated_root = tmp_path / "generated" / "proxmox"
+    cache_path = generated_root / "runtime_generated_routes_cache.json"
+
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.proxmox_generated_openapi_root",
+        lambda: Path(generated_root),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.proxmox.runtime_generated.proxmox_generated_route_cache_path",
+        lambda: Path(cache_path),
+    )
+
+    result = register_generated_proxmox_routes(
+        app,
+        openapi_documents={
+            "latest": TEST_GENERATED_OPENAPI,
+            "8.3.0": TEST_GENERATED_OPENAPI_V83,
+        },
+    )
+
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+
+    assert result["cache_path"] == str(cache_path)
+    assert payload["mounted_versions"] == ["latest", "8.3.0"]
+    assert payload["documents"]["latest"]["info"]["version"] == "test-generated"
+    assert payload["documents"]["8.3.0"]["info"]["version"] == "8.3.0-generated"
