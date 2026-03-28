@@ -146,8 +146,8 @@ def test_get_netbox_session_wraps_async_facade(monkeypatch, db_engine):
 
         monkeypatch.setattr(
             netbox_session_module,
-            "api",
-            lambda url, token: AsyncNetBoxFacade(),
+            "netbox_api_from_endpoint",
+            lambda ep: AsyncNetBoxFacade(),
         )
         wrapped = netbox_session_module.get_netbox_session(session)
 
@@ -223,3 +223,41 @@ def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
 
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"
+
+
+def test_netbox_v2_config_produces_bearer_authorization():
+    from netbox_sdk.config import authorization_header_value
+
+    from proxbox_api.session.netbox import netbox_config_from_endpoint
+
+    ep = NetBoxEndpoint(
+        name="nb",
+        ip_address="10.0.0.2",
+        domain="nb.example.com",
+        port=443,
+        token_version="v2",
+        token_key="myid",
+        token="s3cr37",
+        verify_ssl=True,
+    )
+    auth = authorization_header_value(netbox_config_from_endpoint(ep))
+    assert auth == "Bearer nbt_myid.s3cr37"
+
+
+def test_netbox_v1_config_produces_token_authorization():
+    from netbox_sdk.config import authorization_header_value
+
+    from proxbox_api.session.netbox import netbox_config_from_endpoint
+
+    ep = NetBoxEndpoint(
+        name="nb",
+        ip_address="10.0.0.2",
+        domain="nb.example.com",
+        port=443,
+        token_version="v1",
+        token_key=None,
+        token="abc123deadbeef",
+        verify_ssl=True,
+    )
+    auth = authorization_header_value(netbox_config_from_endpoint(ep))
+    assert auth == "Token abc123deadbeef"

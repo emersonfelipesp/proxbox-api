@@ -3,12 +3,12 @@ name = "proxbox_api"
 version = "0.0.2.post1"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.115.6",
     "proxmoxer>=2.2.0",
     "pynetbox>=7.4.1",
-    "netbox-sdk==0.0.5",
+    "netbox-sdk>=0.0.6",
     "sqlmodel>=0.0.22",
 ]
 

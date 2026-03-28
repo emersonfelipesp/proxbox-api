@@ -8,7 +8,10 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from netbox_sdk.config import authorization_header_value
+
 from proxbox_api.database import NetBoxEndpoint, get_session
+from proxbox_api.session.netbox import netbox_config_from_endpoint
 from sqlmodel import select
 
 
@@ -44,8 +47,9 @@ def fetch_live_netbox_openapi(timeout: int = 20) -> dict[str, Any] | None:
         return None
 
     headers = {"Accept": "application/json"}
-    if endpoint.token:
-        headers["Authorization"] = f"Token {endpoint.token}"
+    auth = authorization_header_value(netbox_config_from_endpoint(endpoint))
+    if auth:
+        headers["Authorization"] = auth
 
     for url in _candidate_schema_urls(endpoint.url):
         try:

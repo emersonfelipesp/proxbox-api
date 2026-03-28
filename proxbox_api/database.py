@@ -1,9 +1,12 @@
 """SQLModel database configuration and endpoint models."""
 
-from typing import Annotated
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import Depends
+from sqlalchemy import inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 # Get the path to the proxbox-api root directory (2 levels up from this file)
@@ -28,6 +31,8 @@ class NetBoxEndpoint(SQLModel, table=True):
     ip_address: str = Field(index=True)
     domain: str = Field(index=True)
     port: int = Field(default=443)  # Default to HTTPS port
+    token_version: str = Field(default="v1")
+    token_key: str | None = Field(default=None)
     token: str = Field()
     verify_ssl: bool = Field(default=True)
 
@@ -63,9 +68,40 @@ class ProxmoxEndpoint(SQLModel, table=True):
         return self.domain or self.ip_address
 
 
+def _migrate_netbox_endpoint_columns() -> None:
+    """Add token_version / token_key to existing SQLite netboxendpoint rows."""
+    table = NetBoxEndpoint.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    stmts: list[str] = []
+    if "token_version" not in existing:
+        stmts.append(
+            f"ALTER TABLE {table} ADD COLUMN token_version VARCHAR DEFAULT 'v1'"
+        )
+    if "token_key" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN token_key VARCHAR")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+        conn.execute(
+            text(
+                f"UPDATE {table} SET token_version = 'v1' "
+                "WHERE token_version IS NULL OR TRIM(COALESCE(token_version, '')) = ''"
+            )
+        )
+
+
 def create_db_and_tables():
     # Create missing tables without deleting existing data.
     SQLModel.metadata.create_all(engine)
+    _migrate_netbox_endpoint_columns()
 
 
 def get_session():
