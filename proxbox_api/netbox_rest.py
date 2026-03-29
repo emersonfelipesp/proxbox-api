@@ -311,23 +311,40 @@ async def rest_reconcile_async(
     desired_model = schema.model_validate(payload)
     desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
 
-    existing = await rest_first_async(nb, path, query={**lookup, "limit": 2})
+    async def _find_existing() -> RestRecord | None:
+        for candidate in _candidate_reuse_lookups(lookup, desired_payload):
+            existing_record = await rest_first_async(nb, path, query={**candidate, "limit": 2})
+            if existing_record:
+                return existing_record
+        return None
+
+    async def _reconcile(existing_record: RestRecord) -> RestRecord:
+        current_model = schema.model_validate(current_normalizer(existing_record.serialize()))
+        current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+
+        patch_payload = {
+            key: value
+            for key, value in desired_payload.items()
+            if current_payload.get(key) != value
+        }
+        if patch_payload:
+            for field, value in patch_payload.items():
+                setattr(existing_record, field, value)
+            await existing_record.save()
+        return existing_record
+
+    existing = await _find_existing()
     if existing is None:
-        return await rest_create_async(nb, path, desired_payload)
+        try:
+            return await rest_create_async(nb, path, desired_payload)
+        except ProxboxException as error:
+            if _is_duplicate_error(error.detail):
+                existing = await _find_existing()
+                if existing is not None:
+                    return await _reconcile(existing)
+            raise
 
-    current_model = schema.model_validate(current_normalizer(existing.serialize()))
-    current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
-
-    patch_payload = {
-        key: value
-        for key, value in desired_payload.items()
-        if current_payload.get(key) != value
-    }
-    if patch_payload:
-        for field, value in patch_payload.items():
-            setattr(existing, field, value)
-        await existing.save()
-    return existing
+    return await _reconcile(existing)
 
 
 def rest_ensure(

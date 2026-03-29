@@ -14,16 +14,11 @@ from proxbox_api.dependencies import (
 )
 from proxbox_api.exception import ProxboxException  # Proxbox Exception
 from proxbox_api.logger import logger  # Logger
-from proxbox_api.netbox_rest import rest_create, rest_ensure, rest_list, rest_reconcile_async
+from proxbox_api.netbox_rest import rest_create, rest_list, rest_reconcile_async
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_compat import (
-    Cluster,
-    Device,
-    DeviceRole,
-    IPAddress,
     VirtualMachine,
-    VMInterface,
 )
 from proxbox_api.routes.extras import CreateCustomFieldsDep  # Create Custom Fields
 from proxbox_api.routes.proxmox import (
@@ -35,6 +30,12 @@ from proxbox_api.routes.proxmox.cluster import (
     ClusterStatusDep,
 )  # Cluster Status and Resources
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxBackupSyncState,
+    NetBoxDeviceRoleSyncState,
+    NetBoxIpAddressSyncState,
+    NetBoxVirtualMachineInterfaceSyncState,
+)
 from proxbox_api.schemas.virtualization import (  # Schemas
     CPU,
     Backup,
@@ -46,6 +47,15 @@ from proxbox_api.schemas.virtualization import (  # Schemas
 )
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
+)
+from proxbox_api.services.sync.devices import (
+    _ensure_cluster,
+    _ensure_cluster_type,
+    _ensure_device,
+    _ensure_device_role as _ensure_proxmox_node_role,
+    _ensure_device_type,
+    _ensure_manufacturer,
+    _ensure_site,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils import (
@@ -205,6 +215,14 @@ async def create_virtual_machines(
     successful_vms = 0  # Track successful VM creations
     failed_vms = 0  # Track failed VM creations
     tag_id = int(getattr(tag, "id", 0) or 0)
+    tag_refs = [
+        {
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+        }
+    ]
+    tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
     flattened_results = []
 
     journal_messages.append("## Virtual Machine Sync Process Started")
@@ -281,13 +299,61 @@ async def create_virtual_machines(
             )
 
         try:
-            cluster = await asyncio.to_thread(
-                lambda: Cluster(name=cluster_name, tags=[getattr(tag, "id")])
+            cluster_mode = next(
+                (
+                    cluster_state.mode
+                    for cluster_state in cluster_status
+                    if getattr(cluster_state, "name", None) == cluster_name
+                ),
+                "cluster",
             )
-            device = await asyncio.to_thread(
-                lambda: Device(name=resource.get("node"), tags=[getattr(tag, "id")])
+            cluster_type = await _ensure_cluster_type(
+                nb,
+                mode=cluster_mode,
+                tag_refs=tag_refs,
             )
-            role = await asyncio.to_thread(lambda: DeviceRole(**vm_role_mapping.get(vm_type, {})))
+            cluster = await _ensure_cluster(
+                nb,
+                cluster_name=cluster_name,
+                cluster_type_id=getattr(cluster_type, "id", None),
+                mode=cluster_mode,
+                tag_refs=tag_refs,
+            )
+            manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
+            device_type = await _ensure_device_type(
+                nb,
+                manufacturer_id=getattr(manufacturer, "id", None),
+                tag_refs=tag_refs,
+            )
+            device_role = await _ensure_proxmox_node_role(nb, tag_refs=tag_refs)
+            site = await _ensure_site(nb, cluster_name=cluster_name, tag_refs=tag_refs)
+            device = await _ensure_device(
+                nb,
+                device_name=resource.get("node"),
+                cluster_id=getattr(cluster, "id", None),
+                device_type_id=getattr(device_type, "id", None),
+                role_id=getattr(device_role, "id", None),
+                site_id=getattr(site, "id", None),
+                tag_refs=tag_refs,
+            )
+            role = await rest_reconcile_async(
+                nb,
+                "/api/dcim/device-roles/",
+                lookup={"slug": vm_role_mapping.get(vm_type, {}).get("slug")},
+                payload={
+                    **vm_role_mapping.get(vm_type, {}),
+                    "tags": tag_refs,
+                },
+                schema=NetBoxDeviceRoleSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "color": record.get("color"),
+                    "description": record.get("description"),
+                    "vm_role": record.get("vm_role"),
+                    "tags": record.get("tags"),
+                },
+            )
 
             print(f"Cluster: {cluster} / {cluster.id}")
             print(f"Device: {device} / {device.id}")
@@ -369,26 +435,62 @@ async def create_virtual_machines(
                         bridge_name = value.get("bridge", None)
                         bridge = {}
                         if bridge_name:
-                            bridge = VMInterface(
-                                name=bridge_name,
-                                virtual_machine=virtual_machine.get("id"),
-                                type="bridge",
-                                description=f"Bridge interface of Device {resource.get('node')}.",
-                                tags=[tag_id],
+                            bridge = await rest_reconcile_async(
+                                nb,
+                                "/api/virtualization/interfaces/",
+                                lookup={
+                                    "virtual_machine_id": virtual_machine.get("id"),
+                                    "name": bridge_name,
+                                },
+                                payload={
+                                    "name": bridge_name,
+                                    "virtual_machine": virtual_machine.get("id"),
+                                    "type": "bridge",
+                                    "description": f"Bridge interface of Device {resource.get('node')}.",
+                                    "tags": tag_refs,
+                                },
+                                schema=NetBoxVirtualMachineInterfaceSyncState,
+                                current_normalizer=lambda record: {
+                                    "name": record.get("name"),
+                                    "virtual_machine": record.get("virtual_machine"),
+                                    "type": record.get("type"),
+                                    "description": record.get("description"),
+                                    "bridge": record.get("bridge"),
+                                    "enabled": record.get("enabled"),
+                                    "mac_address": record.get("mac_address"),
+                                    "tags": record.get("tags"),
+                                },
                             )
 
                         if not isinstance(bridge, dict):
                             bridge = bridge.dict()
 
-                        vm_interface = await asyncio.to_thread(
-                            lambda: VMInterface(
-                                virtual_machine=virtual_machine.get("id"),
-                                name=value.get("name", interface_name),
-                                enabled=True,
-                                bridge=bridge.get("id", None),
-                                mac_address=value.get("virtio", value.get("hwaddr", None)),
-                                tags=[tag_id],
-                            )
+                        vm_interface = await rest_reconcile_async(
+                            nb,
+                            "/api/virtualization/interfaces/",
+                            lookup={
+                                "virtual_machine_id": virtual_machine.get("id"),
+                                "name": value.get("name", interface_name),
+                            },
+                            payload={
+                                "virtual_machine": virtual_machine.get("id"),
+                                "name": value.get("name", interface_name),
+                                "enabled": True,
+                                "bridge": bridge.get("id", None),
+                                "mac_address": value.get("virtio", value.get("hwaddr", None)),
+                                "tags": tag_refs,
+                            },
+                            schema=NetBoxVirtualMachineInterfaceSyncState,
+                            current_normalizer=lambda record: {
+                                "name": record.get("name"),
+                                "virtual_machine": record.get("virtual_machine"),
+                                "enabled": record.get("enabled"),
+                                "bridge": record.get("bridge"),
+                                "mac_address": record.get("mac_address"),
+                                "type": record.get("type"),
+                                "description": record.get("description"),
+                                "tags": record.get("tags"),
+                            },
                         )
 
                         if not isinstance(vm_interface, dict):
@@ -398,12 +500,25 @@ async def create_virtual_machines(
 
                         interface_ip = value.get("ip", None)
                         if interface_ip and interface_ip != "dhcp":
-                            IPAddress(
-                                address=interface_ip,
-                                assigned_object_type="virtualization.vminterface",
-                                assigned_object_id=vm_interface.get("id"),
-                                status="active",
-                                tags=[tag_id],
+                            await rest_reconcile_async(
+                                nb,
+                                "/api/ipam/ip-addresses/",
+                                lookup={"address": interface_ip},
+                                payload={
+                                    "address": interface_ip,
+                                    "assigned_object_type": "virtualization.vminterface",
+                                    "assigned_object_id": vm_interface.get("id"),
+                                    "status": "active",
+                                    "tags": tag_refs,
+                                },
+                                schema=NetBoxIpAddressSyncState,
+                                current_normalizer=lambda record: {
+                                    "address": record.get("address"),
+                                    "assigned_object_type": record.get("assigned_object_type"),
+                                    "assigned_object_id": record.get("assigned_object_id"),
+                                    "status": record.get("status"),
+                                    "tags": record.get("tags"),
+                                },
                             )
 
         return virtual_machine
@@ -739,13 +854,25 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
             "format": backup.get("format"),
         }
 
-        netbox_backup = await asyncio.to_thread(
-            lambda: rest_ensure(
-                nb,
-                "/api/plugins/proxbox/backups/",
-                lookup={"volume_id": volume_id},
-                payload=backup_payload,
-            )
+        netbox_backup = await rest_reconcile_async(
+            nb,
+            "/api/plugins/proxbox/backups/",
+            lookup={"volume_id": volume_id},
+            payload=backup_payload,
+            schema=NetBoxBackupSyncState,
+            current_normalizer=lambda record: {
+                "storage": record.get("storage"),
+                "virtual_machine": record.get("virtual_machine"),
+                "subtype": record.get("subtype"),
+                "creation_time": record.get("creation_time"),
+                "size": record.get("size"),
+                "verification_state": record.get("verification_state"),
+                "verification_upid": record.get("verification_upid"),
+                "volume_id": record.get("volume_id"),
+                "notes": record.get("notes"),
+                "vmid": record.get("vmid"),
+                "format": record.get("format"),
+            },
         )
 
         # Create a journal entry for the backup

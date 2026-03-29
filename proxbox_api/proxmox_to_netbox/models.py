@@ -106,6 +106,8 @@ class NetBoxManufacturerSyncState(NetBoxNamedSlugTaggedState):
 
 class NetBoxDeviceRoleSyncState(NetBoxNamedSlugTaggedState):
     color: str
+    description: str | None = None
+    vm_role: bool | None = None
 
 
 class NetBoxSiteSyncState(NetBoxNamedSlugTaggedState):
@@ -154,6 +156,76 @@ class NetBoxDeviceTypeSyncState(BaseModel):
     @classmethod
     def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
         return NetBoxNamedSlugTaggedState.normalize_tags(value)
+
+
+class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    name: str
+    enabled: bool | None = None
+    bridge: int | None = None
+    mac_address: str | None = None
+    type: str | None = None
+    description: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("virtual_machine", "bridge", mode="before")
+    @classmethod
+    def normalize_relations(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return NetBoxNamedSlugTaggedState.normalize_tags(value)
+
+
+class NetBoxIpAddressSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    address: str
+    assigned_object_type: str | None = None
+    assigned_object_id: int | None = None
+    status: str = "active"
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("assigned_object_id", mode="before")
+    @classmethod
+    def normalize_assigned_object_id(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str:
+        text = str(_status_value(value) or "active").strip().lower()
+        return text or "active"
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return NetBoxNamedSlugTaggedState.normalize_tags(value)
+
+
+class NetBoxBackupSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    storage: str | None = None
+    virtual_machine: int
+    subtype: str | None = None
+    creation_time: str | None = None
+    size: int | None = None
+    verification_state: str | None = None
+    verification_upid: str | None = None
+    volume_id: str
+    notes: str | None = None
+    vmid: str | int | None = None
+    format: str | None = None
+
+    @field_validator("virtual_machine", mode="before")
+    @classmethod
+    def normalize_virtual_machine(cls, value: Any) -> Any:
+        return _relation_id(value)
 
 
 class ProxmoxVmResourceInput(BaseModel):
