@@ -963,11 +963,27 @@ async def create_virtual_disks():
     pass
 
 
+def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
+    """Collect Proxmox volume IDs for backup content rows (volid / NetBox volume_id)."""
+    out: set[str] = set()
+    for item in items:
+        if item.get("content") != "backup":
+            continue
+        vid = item.get("volid")
+        if isinstance(vid, str) and vid:
+            out.add(vid)
+    return out
+
+
 async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
     nb = netbox_session
+    vmid_log: str | int | None = None
     try:
+        if not isinstance(backup, dict):
+            return None
         # Get the virtual machine on NetBox by the VM ID.
         vmid = backup.get("vmid", None)
+        vmid_log = vmid
         if not vmid:
             return None
 
@@ -1047,27 +1063,30 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
         return netbox_backup
 
     except Exception as error:
-        print(f"Error creating NetBox backup for VM {vmid}: {error}")
+        print(f"Error creating NetBox backup for VM {vmid_log}: {error}")
         return None
 
 
-async def process_backups_batch(backup_tasks: list, batch_size: int = 10) -> list:
+async def process_backups_batch(
+    backup_tasks: list, batch_size: int = 10
+) -> tuple[list, int]:
     """
     Process a list of backup tasks in batches to avoid overwhelming the API.
 
-    Args:
-        backup_tasks: List of backup creation tasks
-        batch_size: Number of tasks to process in each batch
-
     Returns:
-        List of successfully created backups
+        (successful_reconcile_results, failure_count) where failures are exceptions from gather.
     """
-    results = []
+    results: list = []
+    failures = 0
     for i in range(0, len(backup_tasks), batch_size):
         batch = backup_tasks[i : i + batch_size]
         batch_results = await asyncio.gather(*batch, return_exceptions=True)
-        results.extend([r for r in batch_results if r is not None])
-    return results
+        for r in batch_results:
+            if isinstance(r, Exception):
+                failures += 1
+            elif r is not None:
+                results.append(r)
+    return results, failures
 
 
 async def get_node_backups(
@@ -1077,20 +1096,13 @@ async def get_node_backups(
     storage: str,
     netbox_session: NetBoxSessionDep,
     vmid: str | None = None,
-) -> list:
+) -> tuple[list, set[str]]:
     nb = netbox_session
     """
     Get backups for a specific node and storage.
-    
-    Args:
-        pxs: Proxmox sessions
-        cluster_status: Cluster status information
-        node: Node name
-        storage: Storage name
-        vmid: Optional VM ID to filter backups
-        
+
     Returns:
-        List of backup tasks
+        (async tasks for NetBox reconcile, set of Proxmox volid strings seen on storage)
     """
     for proxmox, cluster in zip(pxs, cluster_status):
         if cluster and cluster.node_list:
@@ -1106,15 +1118,17 @@ async def get_node_backups(
                             content="backup",
                         )
 
-                        return [
+                        volids = _volids_from_proxmox_storage_backup_items(backups)
+                        tasks = [
                             create_netbox_backups(backup, nb)
                             for backup in backups
                             if backup.get("content") == "backup"
                         ]
+                        return tasks, volids
                     except Exception as error:
                         print(f"Error getting backups for node {node}: {error}")
                         continue
-    return []
+    return [], set()
 
 
 @router.get("/backups/create")
@@ -1141,13 +1155,14 @@ async def create_virtual_machine_backups(
         Query(title="VM ID", description="The ID of the VM to retrieve the content for."),
     ] = None,
 ):
-    backup_tasks = await get_node_backups(
+    backup_tasks, _volids = await get_node_backups(
         pxs, cluster_status, node, storage, netbox_session=netbox_session, vmid=vmid
     )
     if not backup_tasks:
         raise ProxboxException(message="Node or Storage not found.")
 
-    return await process_backups_batch(backup_tasks)
+    reconciled, _failures = await process_backups_batch(backup_tasks)
+    return reconciled
 
 
 async def _create_all_virtual_machine_backups(
@@ -1165,8 +1180,9 @@ async def _create_all_virtual_machine_backups(
     sync_process = None
     results = []
     journal_messages = []  # Store all journal messages
-    duplicate_count = 0  # Track number of duplicate backups
+    failure_count = 0
     deleted_count = 0  # Track number of deleted backups
+    backup_sync_ok = False
 
     try:
         # Create sync process
@@ -1234,7 +1250,7 @@ async def _create_all_virtual_machine_backups(
                             "nodes", []
                         ):
                             try:
-                                node_backup_tasks = await get_node_backups(
+                                node_backup_tasks, node_volids = await get_node_backups(
                                     pxs=pxs,
                                     cluster_status=cluster_status,
                                     node=cluster_node.name,
@@ -1242,11 +1258,7 @@ async def _create_all_virtual_machine_backups(
                                     netbox_session=nb,
                                 )
                                 all_backup_tasks.extend(node_backup_tasks)
-
-                                # Add backup identifiers to the set
-                                for backup in node_backup_tasks:
-                                    if isinstance(backup, dict) and backup.get("volume_id"):
-                                        proxmox_backups.add(backup.get("volume_id"))
+                                proxmox_backups.update(node_volids)
 
                                 journal_messages.append(
                                     f"- Node `{cluster_node.name}` in storage `{storage.get('storage')}`: Found {len(node_backup_tasks)} backups"
@@ -1284,26 +1296,13 @@ async def _create_all_virtual_machine_backups(
         journal_messages.append(f"- Total backups to process: {len(all_backup_tasks)}")
 
         # Process all backups in batches
-        results = await process_backups_batch(all_backup_tasks)
+        results, failure_count = await process_backups_batch(all_backup_tasks)
 
-        # Count successful and duplicate backups
-        successful_backups = [
-            r for r in results if isinstance(r, dict) and r.get("status") != "duplicate"
-        ]
-        duplicate_backups = [
-            r for r in results if isinstance(r, dict) and r.get("status") == "duplicate"
-        ]
-        duplicate_count = len(duplicate_backups)
-
-        journal_messages.append(f"- Successfully created: {len(successful_backups)} backups")
-        if duplicate_count > 0:
-            journal_messages.append(f"- Skipped {duplicate_count} duplicate backups")
-            # Add details about duplicate backups
-            journal_messages.append("\n### Duplicate Backups")
-            for dup in duplicate_backups:
-                journal_messages.append(
-                    f"- VM ID {dup.get('vmid')} in storage {dup.get('storage')} (created at {dup.get('creation_time')})"
-                )
+        journal_messages.append(
+            f"- Reconciled {len(results)} backup record(s) in NetBox (create/update via API)"
+        )
+        if failure_count:
+            journal_messages.append(f"- Tasks that raised errors: {failure_count}")
 
         # Handle deletion of nonexistent backups if requested
         if delete_nonexistent_backup:
@@ -1311,12 +1310,14 @@ async def _create_all_virtual_machine_backups(
             try:
                 # Get all backups from NetBox
                 netbox_backups = rest_list(nb, "/api/plugins/proxbox/backups/")
+                skipped_no_volid = 0
 
                 for backup in netbox_backups:
-                    print(
-                        f"Backup: {backup} | Backup Volume ID: {backup.volume_id} | Proxmox Backups: {proxmox_backups}"
-                    )
-                    if backup.volume_id not in proxmox_backups:
+                    vid = backup.volume_id
+                    if not vid:
+                        skipped_no_volid += 1
+                        continue
+                    if vid not in proxmox_backups:
                         try:
                             # Delete the backup
                             backup.delete()
@@ -1329,6 +1330,12 @@ async def _create_all_virtual_machine_backups(
                                 f"- ❌ Failed to delete backup for VM ID {backup.vmid}: {str(error)}"
                             )
 
+                if skipped_no_volid:
+                    journal_messages.append(
+                        f"- Skipped {skipped_no_volid} NetBox backup(s) with empty volume_id "
+                        "(cannot match Proxmox)"
+                    )
+
                 if deleted_count > 0:
                     journal_messages.append(f"\nTotal backups deleted: {deleted_count}")
                 else:
@@ -1339,14 +1346,11 @@ async def _create_all_virtual_machine_backups(
                 journal_messages.append(f"\n### ❌ Error\n{error_msg}")
                 # Don't raise the exception as this is not critical for the sync process
 
+        backup_sync_ok = True
+
     except Exception as error:
         error_msg = f"Error during backup sync: {str(error)}"
         journal_messages.append(f"\n### ❌ Error\n{error_msg}")
-        if sync_process:
-            sync_process.status = "not-started"
-            sync_process.completed_at = str(datetime.now())
-            sync_process.runtime = float((datetime.now() - start_time).total_seconds())
-            sync_process.save()
         if use_websocket and websocket:
             await websocket.send_json(
                 {
@@ -1362,9 +1366,12 @@ async def _create_all_virtual_machine_backups(
         # Always update sync process status
         if sync_process:
             end_time = datetime.now()
-            sync_process.status = "completed" if results else "not-started"
             sync_process.completed_at = str(end_time)
             sync_process.runtime = float((end_time - start_time).total_seconds())
+            if backup_sync_ok:
+                sync_process.status = "completed"
+            elif sync_process.status == "syncing":
+                sync_process.status = "failed"
             sync_process.save()
 
             # Add final summary
@@ -1372,9 +1379,9 @@ async def _create_all_virtual_machine_backups(
             journal_messages.append(f"- **Status**: {sync_process.status}")
             journal_messages.append(f"- **Runtime**: {sync_process.runtime} seconds")
             journal_messages.append(f"- **End Time**: {end_time}")
-            journal_messages.append(f"- **Total Backups Processed**: {len(results)}")
-            journal_messages.append(f"- **New Backups Created**: {len(results) - duplicate_count}")
-            journal_messages.append(f"- **Duplicate Backups Skipped**: {duplicate_count}")
+            journal_messages.append(
+                f"- **Backup tasks OK**: {len(results)} reconciled, {failure_count} task error(s)"
+            )
             if delete_nonexistent_backup:
                 journal_messages.append(f"- **Backups Deleted**: {deleted_count}")
 
@@ -1392,16 +1399,18 @@ async def _create_all_virtual_machine_backups(
             if not journal_entry:
                 print("Warning: Journal entry creation returned None")
 
-            if use_websocket and websocket:
+            if use_websocket and websocket and backup_sync_ok:
                 await websocket.send_json(
                     {
                         "step": "backups",
                         "status": "completed",
-                        "message": f"Backup sync completed. {len(results) - duplicate_count} created, {duplicate_count} skipped.",
+                        "message": (
+                            f"Backup sync completed. {len(results)} reconciled, "
+                            f"{failure_count} task error(s), {deleted_count} deleted."
+                        ),
                         "result": {
-                            "total": len(results),
-                            "created": len(results) - duplicate_count,
-                            "duplicates": duplicate_count,
+                            "reconciled": len(results),
+                            "failed_tasks": failure_count,
                             "deleted": deleted_count,
                         },
                     }
