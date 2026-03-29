@@ -27,9 +27,11 @@ def get_cluster_status(
 ) -> list[generated_models.GetClusterStatusResponseItem]:
     return _wrap_backend_call(
         "Error fetching Proxmox cluster status",
-        lambda: generated_models.GetClusterStatusResponse.model_validate(
-            session.session("cluster/status").get()
-        ).root,
+        lambda: (
+            generated_models.GetClusterStatusResponse.model_validate(
+                session.session("cluster/status").get()
+            ).root
+        ),
     )
 
 
@@ -39,11 +41,13 @@ def get_cluster_resources(
 ) -> list[generated_models.GetClusterResourcesResponseItem]:
     return _wrap_backend_call(
         "Error fetching Proxmox cluster resources",
-        lambda: generated_models.GetClusterResourcesResponse.model_validate(
-            session.session("cluster/resources").get(type=resource_type)
-            if resource_type
-            else session.session("cluster/resources").get()
-        ).root,
+        lambda: (
+            generated_models.GetClusterResourcesResponse.model_validate(
+                session.session("cluster/resources").get(type=resource_type)
+                if resource_type
+                else session.session("cluster/resources").get()
+            ).root
+        ),
     )
 
 
@@ -73,9 +77,9 @@ def get_storage_list(
 ) -> list[generated_models.GetStorageResponseItem]:
     return _wrap_backend_call(
         "Error fetching Proxmox storage list",
-        lambda: generated_models.GetStorageResponse.model_validate(
-            session.session.storage.get()
-        ).root,
+        lambda: (
+            generated_models.GetStorageResponse.model_validate(session.session.storage.get()).root
+        ),
     )
 
 
@@ -88,9 +92,11 @@ def get_node_storage_content(
     params = {key: value for key, value in kwargs.items() if value is not None}
     return _wrap_backend_call(
         "Error fetching Proxmox node storage content",
-        lambda: generated_models.GetNodesNodeStorageStorageContentResponse.model_validate(
-            session.session.nodes(node).storage(storage).content.get(**params)
-        ).root,
+        lambda: (
+            generated_models.GetNodesNodeStorageStorageContentResponse.model_validate(
+                session.session.nodes(node).storage(storage).content.get(**params)
+            ).root
+        ),
     )
 
 

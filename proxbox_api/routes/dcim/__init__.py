@@ -9,14 +9,12 @@ from fastapi.responses import StreamingResponse
 from proxbox_api.dependencies import ProxboxTagDep
 from proxbox_api.netbox_rest import nested_tag_payload, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState, NetBoxIpAddressSyncState
+from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 
 # Proxmox Deps
 from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfacesDep
-from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep
-from proxbox_api.services.sync.devices import create_proxmox_devices
-from proxbox_api.session.netbox import NetBoxAsyncSessionDep
-from proxbox_api.session.netbox import NetBoxSessionDep
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep, create_proxmox_devices
+from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()

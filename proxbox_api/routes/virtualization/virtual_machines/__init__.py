@@ -16,11 +16,18 @@ from proxbox_api.dependencies import (
 )
 from proxbox_api.exception import ProxboxException  # Proxbox Exception
 from proxbox_api.logger import logger  # Logger
-from proxbox_api.netbox_rest import rest_create, rest_create_async, rest_list, rest_reconcile_async
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_compat import (
     VirtualMachine,
+)
+from proxbox_api.netbox_rest import rest_create, rest_create_async, rest_list, rest_reconcile_async
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxBackupSyncState,
+    NetBoxDeviceRoleSyncState,
+    NetBoxIpAddressSyncState,
+    NetBoxVirtualMachineCreateBody,
+    NetBoxVirtualMachineInterfaceSyncState,
 )
 from proxbox_api.routes.extras import CreateCustomFieldsDep  # Create Custom Fields
 from proxbox_api.routes.proxmox import (
@@ -31,13 +38,6 @@ from proxbox_api.routes.proxmox.cluster import (
     ClusterResourcesDep,
     ClusterStatusDep,
 )  # Cluster Status and Resources
-from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
-from proxbox_api.proxmox_to_netbox.models import (
-    NetBoxBackupSyncState,
-    NetBoxDeviceRoleSyncState,
-    NetBoxIpAddressSyncState,
-    NetBoxVirtualMachineInterfaceSyncState,
-)
 from proxbox_api.schemas.virtualization import (  # Schemas
     CPU,
     Backup,
@@ -47,17 +47,19 @@ from proxbox_api.schemas.virtualization import (  # Schemas
     Snapshot,
     VirtualMachineSummary,
 )
-from proxbox_api.services.sync.virtual_machines import (
-    build_netbox_virtual_machine_payload,
-)
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
     _ensure_device,
-    _ensure_device_role as _ensure_proxmox_node_role,
     _ensure_device_type,
     _ensure_manufacturer,
     _ensure_site,
+)
+from proxbox_api.services.sync.devices import (
+    _ensure_device_role as _ensure_proxmox_node_role,
+)
+from proxbox_api.services.sync.virtual_machines import (
+    build_netbox_virtual_machine_payload,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils import (

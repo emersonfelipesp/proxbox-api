@@ -6,22 +6,21 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 
-from netbox_sdk.client import ApiResponse
 import pytest
 from fastapi import HTTPException
+from netbox_sdk.client import ApiResponse
 
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.main import (
     create_sync_process,
     full_update_sync,
+    full_update_sync_stream,
     get_sync_processes,
     standalone_info,
 )
-from proxbox_api.main import full_update_sync_stream
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.extras import create_custom_fields
-from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
     delete_netbox_endpoint,
@@ -30,10 +29,6 @@ from proxbox_api.routes.netbox import (
     netbox_openapi,
     netbox_status,
     update_netbox_endpoint,
-)
-from proxbox_api.routes.virtualization.virtual_machines import (
-    create_netbox_backups,
-    create_virtual_machines,
 )
 from proxbox_api.routes.proxmox.endpoints import (
     ProxmoxEndpointCreate,
@@ -44,6 +39,11 @@ from proxbox_api.routes.proxmox.endpoints import (
     get_proxmox_endpoints,
     update_proxmox_endpoint,
 )
+from proxbox_api.routes.virtualization.virtual_machines import (
+    create_netbox_backups,
+    create_virtual_machines,
+)
+from proxbox_api.services.sync.devices import create_proxmox_devices
 
 
 def test_root_route_returns_service_metadata():
