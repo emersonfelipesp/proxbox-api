@@ -9,7 +9,7 @@ Esta documentacao cobre instalacao, configuracao, arquitetura, referencias de AP
 - Armazena dados locais de bootstrap para conexoes NetBox e Proxmox em SQLite.
 - Expoe APIs REST para gerenciamento de endpoints NetBox e Proxmox.
 - Expoe endpoints de dados Proxmox e orquestracao de sincronizacao.
-- Fornece endpoints WebSocket para feedback de sincronizacoes longas.
+- Fornece endpoints WebSocket e SSE streaming para feedback de sincronizacao em tempo real.
 - Inclui extensao OpenAPI gerada para contratos do API viewer do Proxmox.
 
 ## Idioma

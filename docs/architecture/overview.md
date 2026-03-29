@@ -57,4 +57,4 @@
 
 - Sync endpoints orchestrate Proxmox discovery and NetBox object creation.
 - Journal entries and sync-process records are used for traceability.
-- WebSocket endpoints stream long-running sync progress.
+- WebSocket and SSE streaming endpoints provide real-time sync progress with per-object granularity.

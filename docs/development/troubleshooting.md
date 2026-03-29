@@ -67,3 +67,53 @@ Note:
 If needed:
 
 - Backup `database.db` before schema experiments.
+
+## SSE streaming issues
+
+### Empty or stalled stream
+
+Symptom:
+
+- SSE `/stream` endpoint connects but no events arrive.
+
+Resolution:
+
+- Verify NetBox and Proxmox endpoints are configured (`GET /netbox/endpoint`, `GET /proxmox/endpoints`).
+- Check API logs for exceptions during the sync task.
+- Confirm the HTTP client is not buffering (use `Accept: text/event-stream` header).
+- Ensure `Cache-Control: no-cache` is respected by any intermediate proxy.
+
+### Stream timeout
+
+Symptom:
+
+- SSE stream disconnects before sync completes.
+
+Resolution:
+
+- Increase client-side timeout or use streaming-aware HTTP client.
+- For large inventories, consider using lower `PROXBOX_VM_SYNC_MAX_CONCURRENCY` values to reduce NetBox API pressure and avoid cascading timeouts.
+- Check `PROXBOX_NETBOX_TIMEOUT` is sufficient for your NetBox server response time.
+
+### SSE response contains hop-by-hop header error
+
+Symptom:
+
+- HTTP 500 with `AssertionError: Hop-by-hop header not allowed` in Django proxy environments.
+
+Resolution:
+
+- SSE responses must not include `Connection: keep-alive` header when served through WSGI middleware (e.g., Django plugin proxy).
+- Ensure stream responses only use `Cache-Control: no-cache` and `X-Accel-Buffering: no` headers.
+
+### Stream returns error event instead of complete
+
+Symptom:
+
+- Sync finishes with `event: error` followed by `event: complete` with `ok: false`.
+
+Resolution:
+
+- Check the `error` and `detail` fields in the error event payload.
+- Common causes: NetBox API unreachable, Proxmox auth failure, missing required NetBox plugin models.
+- Re-run with WebSocket mode (`/ws`) for more verbose logging if needed.

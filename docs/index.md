@@ -9,7 +9,7 @@ This documentation covers installation, configuration, architecture, API referen
 - Stores local endpoint bootstrap data in SQLite for NetBox and Proxmox connections.
 - Exposes REST APIs for Proxmox and NetBox endpoint management.
 - Exposes Proxmox data and sync orchestration endpoints.
-- Provides WebSocket endpoints for long-running sync feedback.
+- Provides WebSocket and SSE streaming endpoints for real-time sync feedback.
 - Includes a generated OpenAPI extension for Proxmox API viewer contracts.
 
 ## Main capabilities
