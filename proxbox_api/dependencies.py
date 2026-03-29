@@ -7,10 +7,10 @@ from fastapi import Depends
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_sdk_helpers import ensure_tag
-from proxbox_api.session.netbox import NetBoxSessionDep
+from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
 
 
-async def proxbox_tag(netbox_session: NetBoxSessionDep):
+async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep):
     try:
         return await ensure_tag(
             netbox_session,

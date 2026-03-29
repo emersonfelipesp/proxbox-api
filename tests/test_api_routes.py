@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 import pytest
 from fastapi import HTTPException
@@ -8,6 +9,7 @@ from fastapi import HTTPException
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.main import full_update_sync, standalone_info
+from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
     delete_netbox_endpoint,
@@ -33,6 +35,11 @@ def test_root_route_returns_service_metadata():
     body = asyncio.run(standalone_info())
     assert body["message"] == "Proxbox Backend made in FastAPI framework"
     assert body["proxbox"]["github"].endswith("netbox-proxbox")
+
+
+def test_sync_entrypoints_share_proxbox_tag_dependency():
+    for entrypoint in (create_proxmox_devices, create_virtual_machines, full_update_sync):
+        assert "tag" in inspect.signature(entrypoint).parameters
 
 
 def test_proxmox_endpoint_crud_lifecycle(db_session):

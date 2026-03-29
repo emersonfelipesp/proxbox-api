@@ -31,6 +31,7 @@ from proxbox_api.services.proxmox_helpers import (
 )
 from proxbox_api.session import netbox as netbox_session_module
 from proxbox_api.session.proxmox import ProxmoxSession, proxmox_sessions
+from proxbox_api.session.netbox import get_netbox_async_session
 
 
 class AsyncEndpoint:
@@ -368,6 +369,31 @@ def test_get_netbox_session_requires_endpoint(db_engine):
     with Session(db_engine) as session:
         with pytest.raises(ProxboxException, match="No NetBox endpoint found"):
             netbox_session_module.get_netbox_session(session)
+
+
+def test_get_netbox_async_session_returns_async_facade(monkeypatch, db_engine):
+    with Session(db_engine) as session:
+        session.add(
+            NetBoxEndpoint(
+                name="netbox",
+                ip_address="10.0.0.20",
+                domain="netbox.local",
+                port=443,
+                token="secret",
+                verify_ssl=True,
+            )
+        )
+        session.commit()
+
+        async_facade = AsyncNetBoxFacade()
+        monkeypatch.setattr(
+            netbox_session_module,
+            "netbox_api_from_endpoint",
+            lambda ep: async_facade,
+        )
+        returned = get_netbox_async_session(session)
+
+    assert returned is async_facade
 
 
 def test_typed_cluster_status_wraps_model_validation_failures(monkeypatch):

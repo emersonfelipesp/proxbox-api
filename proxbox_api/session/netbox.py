@@ -86,3 +86,4 @@ def get_netbox_async_session(database_session: DatabaseSessionDep) -> Api:
 
 
 NetBoxSessionDep = Annotated[Any, Depends(get_netbox_session)]
+NetBoxAsyncSessionDep = Annotated[Any, Depends(get_netbox_async_session)]
