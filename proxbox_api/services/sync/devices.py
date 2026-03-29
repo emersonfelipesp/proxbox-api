@@ -13,6 +13,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     nested_tag_payload,
+    rest_create_async,
     rest_reconcile_async,
 )
 from proxbox_api.proxmox_to_netbox.models import (
@@ -473,14 +474,16 @@ async def create_proxmox_devices(
         # Create journal entry
         try:
             if sync_process and hasattr(sync_process, "id"):
-                journal_entry = nb.extras.journal_entries.create(
+                journal_entry = await rest_create_async(
+                    nb,
+                    "/api/extras/journal-entries/",
                     {
                         "assigned_object_type": "netbox_proxbox.syncprocess",
                         "assigned_object_id": sync_process.id,
                         "kind": "info",
                         "comments": "\n".join(journal_messages),
                         "tags": tag_refs,
-                    }
+                    },
                 )
 
                 if not journal_entry:

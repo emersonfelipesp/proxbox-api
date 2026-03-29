@@ -318,6 +318,20 @@ async def rest_reconcile_async(
                 return existing_record
         return None
 
+    async def _scan_existing() -> RestRecord | None:
+        records = await rest_list_async(nb, path, query={"limit": 200})
+        candidates = _candidate_reuse_lookups(lookup, desired_payload)
+        for record in records:
+            try:
+                current_model = schema.model_validate(current_normalizer(record.serialize()))
+            except Exception:
+                continue
+            current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+            for candidate in candidates:
+                if all(current_payload.get(key) == value for key, value in candidate.items()):
+                    return record
+        return None
+
     async def _reconcile(existing_record: RestRecord) -> RestRecord:
         current_model = schema.model_validate(current_normalizer(existing_record.serialize()))
         current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
@@ -338,10 +352,11 @@ async def rest_reconcile_async(
         try:
             return await rest_create_async(nb, path, desired_payload)
         except ProxboxException as error:
-            if _is_duplicate_error(error.detail):
-                existing = await _find_existing()
-                if existing is not None:
-                    return await _reconcile(existing)
+            existing = await _find_existing()
+            if existing is None and _is_duplicate_error(error.detail):
+                existing = await _scan_existing()
+            if existing is not None:
+                return await _reconcile(existing)
             raise
 
     return await _reconcile(existing)
