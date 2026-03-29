@@ -42,8 +42,10 @@ class AsyncEndpoint:
         self.existing = existing
         self.created = created or {"id": 99}
         self.created_payload = None
+        self.get_calls = []
 
     async def get(self, **kwargs):
+        self.get_calls.append(kwargs)
         return self.existing
 
     async def create(self, payload):
@@ -304,6 +306,36 @@ def test_ensure_record_get_or_create_behavior():
     assert existing == {"id": 10}
     assert created == {"id": 11}
     assert created_endpoint.created_payload == {"name": "vm02"}
+
+
+def test_ensure_record_reuses_duplicate_resource_via_payload_fallback():
+    class DuplicateThenNameLookupEndpoint(AsyncEndpoint):
+        async def get(self, **kwargs):
+            self.get_calls.append(kwargs)
+            if kwargs.get("name") == "Proxmox Node":
+                return {"id": 44, "name": "Proxmox Node", "slug": "proxmox-node"}
+            return None
+
+        async def create(self, payload):
+            self.created_payload = payload
+            raise RuntimeError('{"name":["already exists"]}')
+
+    endpoint = DuplicateThenNameLookupEndpoint()
+
+    existing = asyncio.run(
+        ensure_record(
+            endpoint,
+            {"slug": "proxmox-node"},
+            {
+                "name": "Proxmox Node",
+                "slug": "proxmox-node",
+                "color": "00bcd4",
+            },
+        )
+    )
+
+    assert existing == {"id": 44, "name": "Proxmox Node", "slug": "proxmox-node"}
+    assert endpoint.get_calls == [{"slug": "proxmox-node"}, {"name": "Proxmox Node"}]
 
 
 def test_ensure_tag_creates_missing_tag():

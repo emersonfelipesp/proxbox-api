@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+from datetime import datetime
 from types import SimpleNamespace
 
 from netbox_sdk.client import ApiResponse
@@ -23,7 +24,10 @@ from proxbox_api.routes.netbox import (
     netbox_status,
     update_netbox_endpoint,
 )
-from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
+from proxbox_api.routes.virtualization.virtual_machines import (
+    create_netbox_backups,
+    create_virtual_machines,
+)
 from proxbox_api.routes.proxmox.endpoints import (
     ProxmoxEndpointCreate,
     ProxmoxEndpointUpdate,
@@ -640,3 +644,124 @@ def test_create_virtual_machines_handles_empty_clusters_and_journal_failures():
     )
 
     assert result == []
+
+
+def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
+    class FakeVirtualMachineModel:
+        def find(self, **kwargs):
+            assert kwargs == {"cf_proxmox_vm_id": 101}
+            return {"id": 55, "name": "vm101"}
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET" and path == "/api/plugins/proxbox/backups/":
+                if query == {"volume_id": "backup-store:vm/101/2026-03-29", "limit": 2}:
+                    return ApiResponse(
+                        status=200,
+                        text=json.dumps(
+                            {
+                                "count": 0 if len(self.calls) == 1 else 1,
+                                "results": (
+                                    []
+                                    if len(self.calls) == 1
+                                    else [
+                                        {
+                                            "id": 900,
+                                            "volume_id": "backup-store:vm/101/2026-03-29",
+                                            "virtual_machine": 55,
+                                            "storage": "backup-store",
+                                        }
+                                    ]
+                                ),
+                            }
+                        ),
+                    )
+            if method == "POST" and path == "/api/plugins/proxbox/backups/":
+                return ApiResponse(
+                    status=400,
+                    text=json.dumps({"volume_id": ["backup with this volume id already exists."]}),
+                )
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    journal_payloads = []
+
+    fake_netbox = type(
+        "FakeNetBoxSession",
+        (),
+        {
+            "client": FakeClient(),
+            "extras": type(
+                "Extras",
+                (),
+                {
+                    "journal_entries": type(
+                        "JournalEntries",
+                        (),
+                        {"create": lambda self, payload: journal_payloads.append(payload)},
+                    )()
+                },
+            )(),
+        },
+    )()
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.VirtualMachine",
+        FakeVirtualMachineModel,
+    )
+
+    backup = asyncio.run(
+        create_netbox_backups(
+            {
+                "vmid": "101",
+                "volid": "backup-store:vm/101/2026-03-29",
+                "subtype": "qemu",
+                "format": "zst",
+                "size": 1024,
+                "ctime": 1711660800,
+                "verification": {"state": "ok", "upid": "UPID:1"},
+            },
+            fake_netbox,
+        )
+    )
+
+    assert backup.id == 900
+    assert fake_netbox.client.calls == [
+        (
+            "GET",
+            "/api/plugins/proxbox/backups/",
+            {"volume_id": "backup-store:vm/101/2026-03-29", "limit": 2},
+            None,
+            True,
+        ),
+        (
+            "POST",
+            "/api/plugins/proxbox/backups/",
+            None,
+                {
+                    "storage": "backup-store",
+                    "virtual_machine": 55,
+                    "subtype": "qemu",
+                    "creation_time": datetime.fromtimestamp(1711660800).isoformat(),
+                    "size": 1024,
+                    "verification_state": "ok",
+                    "verification_upid": "UPID:1",
+                "volume_id": "backup-store:vm/101/2026-03-29",
+                "notes": None,
+                "vmid": "101",
+                "format": "zst",
+            },
+            True,
+        ),
+        (
+            "GET",
+            "/api/plugins/proxbox/backups/",
+            {"volume_id": "backup-store:vm/101/2026-03-29", "limit": 2},
+            None,
+            True,
+        ),
+    ]
+    assert journal_payloads[0]["assigned_object_id"] == 900

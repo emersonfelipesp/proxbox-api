@@ -14,7 +14,7 @@ from proxbox_api.dependencies import (
 )
 from proxbox_api.exception import ProxboxException  # Proxbox Exception
 from proxbox_api.logger import logger  # Logger
-from proxbox_api.netbox_rest import rest_create, rest_list
+from proxbox_api.netbox_rest import rest_create, rest_ensure, rest_list
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_compat import (
@@ -709,55 +709,40 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
         if ctime:
             creation_time = datetime.fromtimestamp(ctime).isoformat()
 
-        try:
-            # Create the backup on NetBox using a cached session
-            netbox_backup = await asyncio.to_thread(
-                lambda: rest_create(
-                    nb,
-                    "/api/plugins/proxbox/backups/",
-                    {
-                        "storage": storage_name,
-                        "virtual_machine": virtual_machine.get("id"),
-                        "subtype": backup.get("subtype"),
-                        "creation_time": creation_time,
-                        "size": backup.get("size"),
-                        "verification_state": verification_state,
-                        "verification_upid": verification_upid,
-                        "volume_id": volume_id,
-                        "notes": backup.get("notes"),
-                        "vmid": vmid,
-                        "format": backup.get("format"),
-                    },
-                )
+        backup_payload = {
+            "storage": storage_name,
+            "virtual_machine": virtual_machine.get("id"),
+            "subtype": backup.get("subtype"),
+            "creation_time": creation_time,
+            "size": backup.get("size"),
+            "verification_state": verification_state,
+            "verification_upid": verification_upid,
+            "volume_id": volume_id,
+            "notes": backup.get("notes"),
+            "vmid": vmid,
+            "format": backup.get("format"),
+        }
+
+        netbox_backup = await asyncio.to_thread(
+            lambda: rest_ensure(
+                nb,
+                "/api/plugins/proxbox/backups/",
+                lookup={"volume_id": volume_id},
+                payload=backup_payload,
             )
+        )
 
-            # Create a journal entry for the backup
-            nb.extras.journal_entries.create(
-                {
-                    "assigned_object_type": "netbox_proxbox.vmbackup",
-                    "assigned_object_id": netbox_backup.id,
-                    "kind": "info",
-                    "comments": f"Backup created for VM {vmid} in storage {storage_name}",
-                }
-            )
+        # Create a journal entry for the backup
+        nb.extras.journal_entries.create(
+            {
+                "assigned_object_type": "netbox_proxbox.vmbackup",
+                "assigned_object_id": netbox_backup.id,
+                "kind": "info",
+                "comments": f"Backup created for VM {vmid} in storage {storage_name}",
+            }
+        )
 
-            return netbox_backup
-
-        except Exception as error:
-            # Check if the error is due to a duplicate backup
-            if "already exists" in str(error):
-                # Return a special object indicating this is a duplicate
-                return {
-                    "status": "duplicate",
-                    "virtual_machine": virtual_machine,
-                    "storage": storage_name,
-                    "volume_id": volume_id,
-                    "creation_time": creation_time,
-                    "vmid": vmid,
-                }
-            else:
-                # For other errors, raise the exception
-                raise
+        return netbox_backup
 
     except Exception as error:
         print(f"Error creating NetBox backup for VM {vmid}: {error}")
