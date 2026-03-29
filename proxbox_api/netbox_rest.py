@@ -96,6 +96,44 @@ def _extract_payload(response: ApiResponse) -> Any:
     return response.json()
 
 
+def _is_duplicate_error(detail: Any) -> bool:
+    if isinstance(detail, dict):
+        return any(_is_duplicate_error(value) for value in detail.values())
+    if isinstance(detail, list):
+        return any(_is_duplicate_error(value) for value in detail)
+    return "already exists" in str(detail).lower()
+
+
+def _candidate_reuse_lookups(
+    lookup: dict[str, Any],
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[tuple[str, Any], ...]] = set()
+
+    def _add(candidate: dict[str, Any]) -> None:
+        normalized = {key: value for key, value in candidate.items() if value not in (None, "")}
+        if not normalized:
+            return
+        key = tuple(sorted(normalized.items()))
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(normalized)
+
+    _add(lookup)
+
+    for field in ("slug", "name", "model"):
+        value = payload.get(field)
+        if value not in (None, ""):
+            _add({field: value})
+
+    if payload.get("manufacturer") not in (None, "") and payload.get("model") not in (None, ""):
+        _add({"manufacturer_id": payload["manufacturer"], "model": payload["model"]})
+
+    return candidates
+
+
 class RestRecord:
     """Minimal mutable record wrapper for direct NetBox REST resources."""
 
@@ -233,23 +271,26 @@ async def rest_ensure_async(
     lookup: dict[str, Any],
     payload: dict[str, Any],
 ) -> RestRecord:
-    existing = await rest_first_async(
-        nb,
-        path,
-        query={**lookup, "limit": 2},
-    )
-    if existing:
-        return existing
-    try:
-        return await rest_create_async(nb, path, payload)
-    except ProxboxException:
-        retry = await rest_first_async(
+    for candidate in _candidate_reuse_lookups(lookup, payload):
+        existing = await rest_first_async(
             nb,
             path,
-            query={**lookup, "limit": 2},
+            query={**candidate, "limit": 2},
         )
-        if retry:
-            return retry
+        if existing:
+            return existing
+    try:
+        return await rest_create_async(nb, path, payload)
+    except ProxboxException as error:
+        if _is_duplicate_error(error.detail):
+            for candidate in _candidate_reuse_lookups(lookup, payload):
+                retry = await rest_first_async(
+                    nb,
+                    path,
+                    query={**candidate, "limit": 2},
+                )
+                if retry:
+                    return retry
         raise
 
 

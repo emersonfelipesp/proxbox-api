@@ -12,7 +12,7 @@ from sqlmodel import Session
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import ensure_tag_async, rest_create
+from proxbox_api.netbox_rest import ensure_tag_async, rest_create, rest_ensure_async
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
@@ -396,6 +396,56 @@ def test_rest_create_returns_sync_record_that_can_save_and_delete():
     record.status = "completed"
     assert record.save().status == "completed"
     assert record.delete() is True
+
+
+def test_rest_ensure_async_reuses_duplicate_resource_via_payload_fallback():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/virtualization/cluster-types/"): lambda query, payload: (
+                200,
+                {
+                    "count": 1 if query.get("name") == "Cluster" else 0,
+                    "results": (
+                        [{"id": 11, "name": "Cluster", "slug": "cluster"}]
+                        if query.get("name") == "Cluster"
+                        else []
+                    ),
+                },
+            ),
+            ("POST", "/api/virtualization/cluster-types/"): (
+                400,
+                {
+                    "name": ["cluster type with this name already exists."],
+                    "slug": ["cluster type with this slug already exists."],
+                },
+            ),
+        }
+    )
+
+    reused = asyncio.run(
+        rest_ensure_async(
+            session,
+            "/api/virtualization/cluster-types/",
+            lookup={"slug": "cluster"},
+            payload={
+                "name": "Cluster",
+                "slug": "cluster",
+                "description": "Proxmox cluster mode",
+            },
+        )
+    )
+
+    assert reused.id == 11
+    assert session.client.calls == [
+        ("GET", "/api/virtualization/cluster-types/", {"slug": "cluster", "limit": 2}, None, True),
+        (
+            "GET",
+            "/api/virtualization/cluster-types/",
+            {"name": "Cluster", "limit": 2},
+            None,
+            True,
+        ),
+    ]
 
 
 def test_sync_proxy_runs_async_methods_synchronously():
