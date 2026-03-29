@@ -965,11 +965,13 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
         if not vmid:
             return None
 
-        # Get the virtual machine on NetBox by the VM ID.
-        # Use a cached session to avoid repeated API calls
-        virtual_machine = await asyncio.to_thread(
-            lambda: VirtualMachine().find(cf_proxmox_vm_id=int(vmid))
+        # Get the virtual machine on NetBox by the VM ID using custom field filter
+        vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": int(vmid)},
         )
+        virtual_machine = vms[0] if vms else None
 
         if not virtual_machine:
             return None
