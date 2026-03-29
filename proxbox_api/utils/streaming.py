@@ -22,13 +22,16 @@ class WebSocketSSEBridge:
     async def send_json(self, payload: dict[str, Any]) -> None:
         """Support sync services that call ``await websocket.send_json(...)``."""
         object_name = str(payload.get("object") or "sync")
-        status = "completed" if payload.get("end") is True else "progress"
+        row_id = self._extract_row_id(payload)
+        status = "completed" if payload.get("end") is True else self._extract_status(payload)
+        message = self._build_message(object_name, payload, row_id, status)
         await self.emit(
             "step",
             {
                 "step": object_name,
                 "status": status,
-                "message": f"{object_name} {status}",
+                "message": message,
+                "rowid": row_id,
                 "payload": payload,
             },
         )
@@ -46,3 +49,45 @@ class WebSocketSSEBridge:
                 break
             event, data = item
             yield sse_event(event, data)
+
+    @staticmethod
+    def _extract_row_id(payload: dict[str, Any]) -> str | None:
+        data = payload.get("data")
+        if isinstance(data, dict):
+            row_id = data.get("rowid") or data.get("name")
+            if row_id not in (None, ""):
+                return str(row_id)
+        return None
+
+    @staticmethod
+    def _extract_status(payload: dict[str, Any]) -> str:
+        data = payload.get("data")
+        if payload.get("end") is True:
+            return "completed"
+        if isinstance(data, dict):
+            if data.get("error"):
+                return "failed"
+            if data.get("completed") is True:
+                return "completed"
+            return "progress"
+        return "progress"
+
+    @staticmethod
+    def _build_message(
+        object_name: str,
+        payload: dict[str, Any],
+        row_id: str | None,
+        status: str,
+    ) -> str:
+        if payload.get("end") is True:
+            return f"{object_name} stream completed"
+        data = payload.get("data")
+        if isinstance(data, dict):
+            error = data.get("error")
+            if error:
+                return str(error)
+            if status == "completed":
+                return f"Synced {object_name} {row_id or ''}".strip()
+            if row_id:
+                return f"Processing {object_name} {row_id}"
+        return f"{object_name} {status}"

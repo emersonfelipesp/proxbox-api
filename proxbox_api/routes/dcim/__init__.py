@@ -17,7 +17,7 @@ from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep
 from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
-from proxbox_api.utils.streaming import sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 
@@ -45,6 +45,21 @@ async def create_devices_stream(
     tag: ProxboxTagDep,
 ):
     async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await create_proxmox_devices(
+                    netbox_session=netbox_session,
+                    clusters_status=clusters_status,
+                    tag=tag,
+                    websocket=bridge,
+                    use_websocket=True,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
         try:
             yield sse_event(
                 "step",
@@ -54,12 +69,9 @@ async def create_devices_stream(
                     "message": "Starting devices synchronization.",
                 },
             )
-            result = await create_proxmox_devices(
-                netbox_session=netbox_session,
-                clusters_status=clusters_status,
-                tag=tag,
-                use_websocket=False,
-            )
+            async for frame in bridge.iter_sse():
+                yield frame
+            result = await sync_task
             yield sse_event(
                 "step",
                 {

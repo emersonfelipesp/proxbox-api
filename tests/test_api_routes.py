@@ -12,7 +12,13 @@ from fastapi import HTTPException
 
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
-from proxbox_api.main import create_sync_process, full_update_sync, get_sync_processes, standalone_info
+from proxbox_api.main import (
+    create_sync_process,
+    full_update_sync,
+    get_sync_processes,
+    standalone_info,
+)
+from proxbox_api.main import full_update_sync_stream
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.extras import create_custom_fields
 from proxbox_api.services.sync.devices import create_proxmox_devices
@@ -279,6 +285,7 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session():
     )
     assert first_post["object_types"] == ["virtualization.virtualmachine"]
     assert first_post["ui_editable"] == "hidden"
+
 
 def test_sync_process_routes_use_rest_helpers(monkeypatch):
     class FakeClient:
@@ -686,6 +693,86 @@ def test_create_virtual_machines_handles_empty_clusters_and_journal_failures():
     assert result == []
 
 
+def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):
+    class _Tag:
+        id = 1
+
+    class _StreamingResponseStub:
+        def __init__(self, content, media_type=None, headers=None):
+            self.content = content
+            self.media_type = media_type
+            self.headers = headers or {}
+
+    async def _fake_devices(**kwargs):
+        bridge = kwargs.get("websocket")
+        if bridge is not None:
+            await bridge.send_json(
+                {
+                    "object": "device",
+                    "type": "create",
+                    "data": {"rowid": "pve01", "completed": False},
+                }
+            )
+            await bridge.send_json(
+                {
+                    "object": "device",
+                    "type": "create",
+                    "data": {"rowid": "pve01", "completed": True},
+                }
+            )
+        return [{"id": 1, "name": "pve01"}]
+
+    async def _fake_vms(**kwargs):
+        bridge = kwargs.get("websocket")
+        if bridge is not None:
+            await bridge.send_json(
+                {
+                    "object": "virtual_machine",
+                    "type": "create",
+                    "data": {"rowid": "vm01", "completed": False},
+                }
+            )
+            await bridge.send_json(
+                {
+                    "object": "virtual_machine",
+                    "type": "create",
+                    "data": {"rowid": "vm01", "completed": True},
+                }
+            )
+        return [{"id": 101, "name": "vm01"}]
+
+    monkeypatch.setattr("proxbox_api.main.StreamingResponse", _StreamingResponseStub)
+    monkeypatch.setattr("proxbox_api.main.create_proxmox_devices", _fake_devices)
+    monkeypatch.setattr("proxbox_api.main.create_virtual_machines", _fake_vms)
+
+    response = asyncio.run(
+        full_update_sync_stream(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=_Tag(),
+        )
+    )
+
+    frames = asyncio.run(_collect_async_frames(response.content))
+    payload = "".join(frames)
+
+    assert "Processing device pve01" in payload
+    assert "Synced device pve01" in payload
+    assert "Processing virtual_machine vm01" in payload
+    assert "Synced virtual_machine vm01" in payload
+    assert "event: complete" in payload
+
+
+async def _collect_async_frames(stream) -> list[str]:
+    output = []
+    async for frame in stream:
+        output.append(frame)
+    return output
+
+
 def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
     class FakeVirtualMachineModel:
         def find(self, **kwargs):
@@ -715,7 +802,9 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
                                             "virtual_machine": 55,
                                             "storage": "backup-store",
                                             "subtype": "qemu",
-                                            "creation_time": datetime.fromtimestamp(1711660800).isoformat(),
+                                            "creation_time": datetime.fromtimestamp(
+                                                1711660800
+                                            ).isoformat(),
                                             "size": 1024,
                                             "verification_state": "ok",
                                             "verification_upid": "UPID:1",
@@ -791,18 +880,18 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
             "POST",
             "/api/plugins/proxbox/backups/",
             None,
-                {
-                    "storage": "backup-store",
-                    "virtual_machine": 55,
-                    "subtype": "qemu",
-                    "creation_time": datetime.fromtimestamp(1711660800).isoformat(),
-                    "size": 1024,
-                    "verification_state": "ok",
-                    "verification_upid": "UPID:1",
-                    "volume_id": "backup-store:vm/101/2026-03-29",
-                    "vmid": "101",
-                    "format": "zst",
-                },
+            {
+                "storage": "backup-store",
+                "virtual_machine": 55,
+                "subtype": "qemu",
+                "creation_time": datetime.fromtimestamp(1711660800).isoformat(),
+                "size": 1024,
+                "verification_state": "ok",
+                "verification_upid": "UPID:1",
+                "volume_id": "backup-store:vm/101/2026-03-29",
+                "vmid": "101",
+                "format": "zst",
+            },
             True,
         ),
         (
