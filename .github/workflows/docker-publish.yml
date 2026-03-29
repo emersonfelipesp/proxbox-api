@@ -47,6 +47,42 @@ jobs:
         env:
           RELEASE_REF: ${{ inputs.release_ref }}
 
+      - name: Keep release tag in env
+        run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
+
+      - name: Create Docker test script
+        run: |
+          cat <<'EOF' > /tmp/docker-tests.sh
+          #!/bin/sh
+          set -eux
+          uv sync --frozen --extra test --group dev
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run python -m compileall proxbox_api scripts tests
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests
+          EOF
+          chmod +x /tmp/docker-tests.sh
+
+      - name: Build amd64 image for pre-release tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run pre-release tests in Docker image
+        run: |
+          docker run --rm \
+            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
+            /tmp/docker-tests.sh
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -78,3 +114,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Pull release + latest images
+        run: |
+          docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}
+          docker pull emersonfelipesp/proxbox-api:latest
+
+      - name: Run post-release tests in Docker images
+        run: |
+          for TAG in "${{ env.IMAGE_TAG }}" latest; do
+            docker run --rm \
+              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              emersonfelipesp/proxbox-api:"$TAG" \
+              /tmp/docker-tests.sh
+          done
