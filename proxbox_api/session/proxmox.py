@@ -394,15 +394,31 @@ async def proxmox_sessions(
             description="HTTP Port of Proxmox Cluster or Proxmox Node (if standalone).",
         ),
     ] = 8006,
+    endpoint_ids: Annotated[
+        str | None,
+        Query(
+            title="Proxmox Endpoint IDs",
+            description="Comma-separated list of Proxmox endpoint database IDs to filter by.",
+        ),
+    ] = None,
 ):
     """
     Default Behavior: Instantiate Proxmox Sessions and return a list of Proxmox Sessions objects.
     If 'name' is provided, return only the Proxmox Session with that name.
+    If 'endpoint_ids' is provided, filter by those database IDs.
     """
+
+    endpoint_id_list = None
+    if endpoint_ids:
+        try:
+            endpoint_id_list = [int(eid.strip()) for eid in endpoint_ids.split(",") if eid.strip()]
+        except ValueError:
+            pass
 
     proxmox_schemas = await load_proxmox_session_schemas(
         database_session=database_session,
         source=source,
+        endpoint_ids=endpoint_id_list,
     )
 
     def return_single_session(field, value):
@@ -489,6 +505,7 @@ def _parse_netbox_endpoint(endpoint: Any) -> ProxmoxSessionSchema:
 async def load_proxmox_session_schemas(
     database_session: DatabaseSessionDep,
     source: str = "database",
+    endpoint_ids: list[int] | None = None,
 ) -> list[ProxmoxSessionSchema]:
     """Load configured Proxmox endpoint schemas without creating Proxmox API sessions."""
 
@@ -496,9 +513,13 @@ async def load_proxmox_session_schemas(
         netbox_session = get_netbox_async_session(database_session=database_session)
 
         try:
+            url = "/api/plugins/proxbox/endpoints/proxmox/"
+            if endpoint_ids:
+                ids_param = ",".join(str(eid) for eid in endpoint_ids)
+                url = f"{url}?id={ids_param}"
             netbox_endpoints = await rest_list_async(
                 netbox_session,
-                "/api/plugins/proxbox/endpoints/proxmox/",
+                url,
             )
         except JSONDecodeError as error:
             raise ProxboxException(
@@ -507,7 +528,10 @@ async def load_proxmox_session_schemas(
             )
         return [_parse_netbox_endpoint(endpoint) for endpoint in netbox_endpoints]
 
-    db_endpoints = database_session.exec(select(ProxmoxEndpoint)).all()
+    query = select(ProxmoxEndpoint)
+    if endpoint_ids:
+        query = query.where(ProxmoxEndpoint.id.in_(endpoint_ids))
+    db_endpoints = database_session.exec(query).all()
     return [_parse_db_endpoint(endpoint) for endpoint in db_endpoints]
 
 
