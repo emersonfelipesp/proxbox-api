@@ -367,27 +367,10 @@ async def full_update_sync(
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
 ):
-    start_time = datetime.now()
-    sync_process = None
+    sync_nodes: list = []
+    sync_vms: list = []
 
     try:
-        sync_process = netbox_session.plugins.proxbox.__getattr__("sync-processes").create(
-            name=f"sync-all-{start_time}",
-            sync_type="all",
-            status="not-started",
-            started_at=str(start_time),
-            completed_at=None,
-            runtime=None,
-            tags=[tag.get("id", 0)],
-        )
-    except Exception as error:
-        print(error)
-        raise ProxboxException(
-            message="Error while creating sync process.", python_exception=str(error)
-        )
-
-    try:
-        # Sync Nodes
         sync_nodes = await create_proxmox_devices(
             netbox_session=netbox_session,
             clusters_status=cluster_status,
@@ -395,38 +378,37 @@ async def full_update_sync(
             tag=tag,
             use_websocket=False,
         )
+    except ProxboxException:
+        raise
     except Exception as error:
         print(error)
         raise ProxboxException(message="Error while syncing nodes.", python_exception=str(error))
 
-    if sync_nodes:
-        # Sync Virtual Machines
-        try:
-            sync_vms = await create_virtual_machines(
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                custom_fields=custom_fields,
-                tag=tag,
-                use_websocket=False,
-            )
-        except Exception as error:
-            print(error)
-            raise ProxboxException(
-                message="Error while syncing virtual machines.",
-                python_exception=str(error),
-            )
+    try:
+        sync_vms = await create_virtual_machines(
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=custom_fields,
+            tag=tag,
+            use_websocket=False,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:
+        print(error)
+        raise ProxboxException(
+            message="Error while syncing virtual machines.",
+            python_exception=str(error),
+        )
 
-    if sync_process:
-        end_time = datetime.now()
-        sync_process.status = "completed"
-        sync_process.completed_at = str(end_time)
-        sync_process.runtime = float((end_time - start_time).total_seconds())
-        sync_process.save()
-
-        print(sync_process)
-        print(sync_process.runtime)
-    return sync_nodes, sync_vms
+    return {
+        "status": "completed",
+        "devices": sync_nodes,
+        "virtual_machines": sync_vms,
+        "devices_count": len(sync_nodes),
+        "virtual_machines_count": len(sync_vms),
+    }
 
 
 @app.websocket("/ws")
@@ -471,7 +453,7 @@ async def websocket_sync_commands(
                 print(f"Error while receiving data from WebSocket: {error}")
                 break
 
-            if data == "Full Update Sync":
+            if data in {"Full Update Sync", "Full Update"}:
                 sync_process = None
 
                 try:
@@ -512,7 +494,7 @@ async def websocket_sync_commands(
                     sync_process.completed_at = str(datetime.now())
                     sync_process.save()
 
-            if data == "Sync Nodes":
+            elif data == "Sync Nodes":
                 print("Sync Nodes")
                 await websocket.send_text("Sync Nodes")
                 await create_proxmox_devices(
