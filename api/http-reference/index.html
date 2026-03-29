@@ -734,6 +734,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#full-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Full update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sse-streaming-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE streaming format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#extras-routes-extras" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1221,6 +1243,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#full-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Full update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sse-streaming-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE streaming format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#extras-routes-extras" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1414,7 +1458,8 @@ OpenAPI contract under:</p>
 <h2 id="dcim-routes-dcim">DCIM routes (<code>/dcim</code>)<a class="headerlink" href="#dcim-routes-dcim" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /dcim/devices</code></li>
-<li><code>GET /dcim/devices/create</code></li>
+<li><code>GET /dcim/devices/create</code> - create NetBox devices from Proxmox nodes (returns JSON on completion).</li>
+<li><code>GET /dcim/devices/create/stream</code> - SSE streaming variant. Emits per-device <code>step</code> events with granular progress while devices are being created.</li>
 <li><code>GET /dcim/devices/{node}/interfaces/create</code></li>
 <li><code>GET /dcim/devices/interfaces/create</code></li>
 </ul>
@@ -1422,7 +1467,8 @@ OpenAPI contract under:</p>
 <ul>
 <li><code>GET /virtualization/cluster-types/create</code> (placeholder)</li>
 <li><code>GET /virtualization/clusters/create</code> (placeholder)</li>
-<li><code>GET /virtualization/virtual-machines/create</code></li>
+<li><code>GET /virtualization/virtual-machines/create</code> - create NetBox VMs from Proxmox resources (returns JSON on completion).</li>
+<li><code>GET /virtualization/virtual-machines/create/stream</code> - SSE streaming variant. Emits per-VM <code>step</code> events with granular progress while VMs are being created.</li>
 <li><code>GET /virtualization/virtual-machines/</code></li>
 <li><code>GET /virtualization/virtual-machines/{id}</code></li>
 <li><code>GET /virtualization/virtual-machines/summary/example</code></li>
@@ -1430,6 +1476,44 @@ OpenAPI contract under:</p>
 <li><code>GET /virtualization/virtual-machines/backups/all/create</code></li>
 </ul>
 <p>Additional test/helper and TODO endpoints also exist in this route group.</p>
+<h2 id="full-update">Full update<a class="headerlink" href="#full-update" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>GET /full-update</code> - runs device sync then VM sync, returns combined JSON result.</li>
+<li><code>GET /full-update/stream</code> - SSE streaming variant. Emits per-object <code>step</code> events for both devices and VMs during the full synchronization.</li>
+</ul>
+<h2 id="sse-streaming-format">SSE streaming format<a class="headerlink" href="#sse-streaming-format" title="Permanent link">&para;</a></h2>
+<p>All <code>/stream</code> endpoints return <code>Content-Type: text/event-stream</code> and emit three event types:</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>step</code></td>
+<td>Progress frame. Contains <code>step</code> (object kind, e.g. <code>device</code>, <code>virtual_machine</code>), <code>status</code> (<code>started</code>, <code>progress</code>, <code>completed</code>, <code>failed</code>), <code>message</code> (human-readable), <code>rowid</code> (object name/ID), and <code>payload</code> (original websocket-style JSON).</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td>Error frame. Contains <code>step</code>, <code>status: "failed"</code>, <code>error</code>, and <code>detail</code>.</td>
+</tr>
+<tr>
+<td><code>complete</code></td>
+<td>Final frame. Contains <code>ok</code> (boolean), <code>message</code>, and optionally <code>result</code> or <code>errors</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Example <code>step</code> event for a device:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>event: step
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>data: {&quot;step&quot;:&quot;device&quot;,&quot;status&quot;:&quot;progress&quot;,&quot;message&quot;:&quot;Processing device pve01&quot;,&quot;rowid&quot;:&quot;pve01&quot;,&quot;payload&quot;:{&quot;object&quot;:&quot;device&quot;,&quot;type&quot;:&quot;create&quot;,&quot;data&quot;:{&quot;rowid&quot;:&quot;pve01&quot;,&quot;completed&quot;:false}}}
+</code></pre></div>
+<p>Headers:</p>
+<ul>
+<li><code>Cache-Control: no-cache</code></li>
+<li><code>X-Accel-Buffering: no</code></li>
+</ul>
 <h2 id="extras-routes-extras">Extras routes (<code>/extras</code>)<a class="headerlink" href="#extras-routes-extras" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /extras/extras/custom-fields/create</code></li>

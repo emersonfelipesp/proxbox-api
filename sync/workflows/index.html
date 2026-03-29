@@ -751,6 +751,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sse-streaming-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE streaming mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#websocket-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebSocket mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tracking-and-observability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1021,6 +1043,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sse-streaming-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE streaming mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#websocket-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebSocket mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tracking-and-observability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1109,16 +1153,43 @@
 <li>Handles duplicate detection.</li>
 <li>Optional deletion of backups missing in Proxmox source.</li>
 </ul>
+<h2 id="sse-streaming-mode">SSE streaming mode<a class="headerlink" href="#sse-streaming-mode" title="Permanent link">&para;</a></h2>
+<p>Each sync flow has a corresponding <code>/stream</code> endpoint that emits Server-Sent Events in real time:</p>
+<ul>
+<li><code>GET /full-update/stream</code></li>
+<li><code>GET /dcim/devices/create/stream</code></li>
+<li><code>GET /virtualization/virtual-machines/create/stream</code></li>
+</ul>
+<p>How it works:</p>
+<ol>
+<li>The stream endpoint creates a <code>WebSocketSSEBridge</code> instance.</li>
+<li>The sync service is called with <code>use_websocket=True</code> and the bridge as the <code>websocket</code> argument.</li>
+<li>As the sync service processes each object, it calls <code>await websocket.send_json(...)</code> with per-object progress.</li>
+<li>The bridge converts each websocket payload into an SSE <code>step</code> event with normalized fields (<code>step</code>, <code>status</code>, <code>message</code>, <code>rowid</code>, <code>payload</code>).</li>
+<li>The stream endpoint iterates <code>bridge.iter_sse()</code> and yields each SSE frame to the HTTP client.</li>
+<li>On completion, the bridge is closed and a final <code>complete</code> event is emitted.</li>
+</ol>
+<p>This provides granular progress like:</p>
+<ul>
+<li><code>Processing device pve01</code></li>
+<li><code>Synced device pve01</code></li>
+<li><code>Processing virtual_machine vm101</code></li>
+<li><code>Synced virtual_machine vm101</code></li>
+</ul>
+<h2 id="websocket-mode">WebSocket mode<a class="headerlink" href="#websocket-mode" title="Permanent link">&para;</a></h2>
+<p>The <code>/ws</code> websocket endpoint provides interactive sync with the same per-object progress, but over a bidirectional WebSocket channel. The <code>full-update</code> command triggers the same sync logic but sends JSON messages directly to the websocket client.</p>
 <h2 id="tracking-and-observability">Tracking and observability<a class="headerlink" href="#tracking-and-observability" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Sync process records are created in NetBox plugin objects.</li>
 <li>Journal entries are written with summary and errors.</li>
-<li>WebSocket workflows provide interactive status output.</li>
+<li>WebSocket and SSE workflows provide interactive/real-time status output.</li>
 </ul>
 <h2 id="failure-handling">Failure handling<a class="headerlink" href="#failure-handling" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Domain errors are raised via <code>ProxboxException</code> and returned as structured JSON by app-level handler.</li>
+<li>Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500.</li>
 <li>Route handlers perform best-effort continuation in certain batch loops.</li>
+<li>In SSE streaming mode, errors are emitted as <code>event: error</code> frames followed by a final <code>event: complete</code> with <code>ok: false</code>.</li>
 </ul>
 
 
