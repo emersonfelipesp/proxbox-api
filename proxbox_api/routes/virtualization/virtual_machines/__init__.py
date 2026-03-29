@@ -1195,7 +1195,7 @@ async def create_all_virtual_machine_backups(
                                     cluster_status=cluster_status,
                                     node=cluster_node.name,
                                     storage=storage.get("storage"),
-                                    nb=nb,
+                                    netbox_session=nb,
                                 )
                                 all_backup_tasks.extend(node_backup_tasks)
 
