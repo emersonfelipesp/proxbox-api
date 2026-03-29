@@ -1,5 +1,5 @@
 # Build dependencies and the app into a virtualenv with uv (reproducible via uv.lock).
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.13-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY proxbox_api ./proxbox_api/
 RUN uv sync --frozen --no-dev
 
 # Runtime image: copy only the venv and application sources.
-FROM python:3.12-slim-bookworm
+FROM python:3.13-slim-bookworm
 
 WORKDIR /app
 
