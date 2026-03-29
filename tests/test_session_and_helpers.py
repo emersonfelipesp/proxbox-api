@@ -90,6 +90,15 @@ class AsyncIterableEndpoint:
             yield item
 
 
+class FauxAsyncNamespace:
+    child = SimpleNamespace(value=1)
+
+    def __getattr__(self, name):
+        if name == "__aiter__":
+            return object()
+        raise AttributeError(name)
+
+
 class RestClientStub:
     def __init__(self, responses):
         self._responses = responses
@@ -724,6 +733,15 @@ def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
 def test_sync_proxy_runs_async_methods_synchronously():
     facade = SyncProxy(AsyncNetBoxFacade())
     assert facade.status() == {"netbox": "ok"}
+
+
+def test_sync_proxy_does_not_treat_plain_namespace_as_async_iterable():
+    proxy = SyncProxy(SimpleNamespace(app=FauxAsyncNamespace()))
+
+    app = proxy.app
+
+    assert isinstance(app, SyncProxy)
+    assert app.child.value == 1
 
 
 def test_get_netbox_session_wraps_async_facade(monkeypatch, db_engine):

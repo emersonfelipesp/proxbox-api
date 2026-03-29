@@ -6,16 +6,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from proxbox_api.dependencies import ProxboxTagDep
-
-# NetBox compatibility wrappers
-from proxbox_api.netbox_compat import (
-    Interface,
-    IPAddress,
-)
+from proxbox_api.netbox_rest import nested_tag_payload, rest_reconcile_async
+from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState, NetBoxIpAddressSyncState
 
 # Proxmox Deps
 from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfacesDep
 from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep
+from proxbox_api.session.netbox import NetBoxAsyncSessionDep
 
 router = APIRouter()
 
@@ -36,7 +33,7 @@ async def create_devices(proxmox_create_devices_dep: ProxmoxCreateDevicesDep):
     return proxmox_create_devices_dep
 
 
-async def create_interface_and_ip(tag: ProxboxTagDep, node_interface, node):
+async def create_interface_and_ip(netbox_session: NetBoxAsyncSessionDep, tag: ProxboxTagDep, node_interface, node):
     interface_type_mapping: dict = {
         "lo": "loopback",
         "bridge": "bridge",
@@ -48,26 +45,51 @@ async def create_interface_and_ip(tag: ProxboxTagDep, node_interface, node):
 
     node_data = node if isinstance(node, dict) else {}
 
-    interface = Interface(
-        device=node_data.get("id", 0),
-        name=node_interface.iface,
-        status="active",
-        type=interface_type_mapping.get(node_interface.type, "other"),
-        tags=[getattr(tag, "id", 0)],
+    interface = await rest_reconcile_async(
+        netbox_session,
+        "/api/dcim/interfaces/",
+        lookup={
+            "device_id": node_data.get("id", 0),
+            "name": node_interface.iface,
+        },
+        payload={
+            "device": node_data.get("id", 0),
+            "name": node_interface.iface,
+            "status": "active",
+            "type": interface_type_mapping.get(node_interface.type, "other"),
+            "tags": nested_tag_payload(tag),
+        },
+        schema=NetBoxInterfaceSyncState,
+        current_normalizer=lambda record: {
+            "device": record.get("device"),
+            "name": record.get("name"),
+            "status": record.get("status"),
+            "type": record.get("type"),
+            "tags": record.get("tags"),
+        },
     )
-
-    try:
-        interface_id = getattr(interface, "id", interface.get("id", None))
-    except (AttributeError, TypeError):
-        interface_id = None
+    interface_id = getattr(interface, "id", None) or interface.get("id", None)
 
     if node_cidr and interface_id is not None:
-        IPAddress(
-            address=node_cidr,
-            assigned_object_type="dcim.interface",
-            assigned_object_id=int(interface_id),
-            status="active",
-            tags=[getattr(tag, "id", 0)],
+        await rest_reconcile_async(
+            netbox_session,
+            "/api/ipam/ip-addresses/",
+            lookup={"address": node_cidr},
+            payload={
+                "address": node_cidr,
+                "assigned_object_type": "dcim.interface",
+                "assigned_object_id": int(interface_id),
+                "status": "active",
+                "tags": nested_tag_payload(tag),
+            },
+            schema=NetBoxIpAddressSyncState,
+            current_normalizer=lambda record: {
+                "address": record.get("address"),
+                "assigned_object_type": record.get("assigned_object_type"),
+                "assigned_object_id": record.get("assigned_object_id"),
+                "status": record.get("status"),
+                "tags": record.get("tags"),
+            },
         )
 
     return interface
@@ -82,6 +104,7 @@ async def create_interface_and_ip(tag: ProxboxTagDep, node_interface, node):
 async def create_proxmox_device_interfaces(
     node: str,
     nodes: ProxmoxCreateDevicesDep,
+    netbox_session: NetBoxAsyncSessionDep,
     tag: ProxboxTagDep,
     node_interfaces: ProxmoxNodeInterfacesDep,
 ):
@@ -91,7 +114,10 @@ async def create_proxmox_device_interfaces(
         break
 
     interfaces = await asyncio.gather(
-        *[create_interface_and_ip(tag, node_interface, node) for node_interface in node_interfaces]
+        *[
+            create_interface_and_ip(netbox_session, tag, node_interface, node)
+            for node_interface in node_interfaces
+        ]
     )
     return [
         interface.dict() if hasattr(interface, "dict") else interface for interface in interfaces

@@ -14,6 +14,7 @@ from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.main import create_sync_process, full_update_sync, get_sync_processes, standalone_info
 from proxbox_api.netbox_sdk_sync import SyncProxy
+from proxbox_api.routes.extras import create_custom_fields
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
@@ -249,6 +250,35 @@ def test_create_proxmox_devices_surfaces_real_netbox_detail():
             )
         )
     assert excinfo.value.detail == "tags: expected object, got integer"
+
+
+def test_create_custom_fields_uses_rest_reconcile_with_async_session():
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
+            if method == "POST" and path == "/api/extras/custom-fields/":
+                body = {"id": len([c for c in self.calls if c[0] == "POST"]), **payload}
+                return ApiResponse(status=201, text=json.dumps(body))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    session = SimpleNamespace(client=FakeClient())
+
+    result = asyncio.run(create_custom_fields(netbox_session=session))
+
+    assert len(result) == 5
+    assert all(field["group_name"] == "Proxmox" for field in result)
+    first_post = next(
+        payload
+        for method, path, _query, payload, _expect_json in session.client.calls
+        if method == "POST" and path == "/api/extras/custom-fields/"
+    )
+    assert first_post["object_types"] == ["virtualization.virtualmachine"]
+    assert first_post["ui_editable"] == "hidden"
 
 def test_sync_process_routes_use_rest_helpers(monkeypatch):
     class FakeClient:

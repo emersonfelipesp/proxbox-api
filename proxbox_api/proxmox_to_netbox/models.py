@@ -46,6 +46,21 @@ def _status_value(value: Any) -> Any:
     return value
 
 
+def _normalized_tag_list(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            normalized.append(item)
+        else:
+            text = str(item or "").strip()
+            if text:
+                normalized.append({"slug": text, "name": text})
+    normalized.sort(key=lambda tag: str(tag.get("slug") or tag.get("name") or ""))
+    return normalized
+
+
 class NetBoxTagRef(BaseModel):
     """Normalized nested NetBox tag payload used in create and diff operations."""
 
@@ -82,18 +97,7 @@ class NetBoxNamedSlugTaggedState(BaseModel):
     @field_validator("tags", mode="before")
     @classmethod
     def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
-        if value is None:
-            return []
-        normalized: list[dict[str, Any]] = []
-        for item in value:
-            if isinstance(item, dict):
-                normalized.append(item)
-            else:
-                text = str(item or "").strip()
-                if text:
-                    normalized.append({"slug": text, "name": text})
-        normalized.sort(key=lambda tag: str(tag.get("slug") or tag.get("name") or ""))
-        return normalized
+        return _normalized_tag_list(value)
 
 
 class NetBoxClusterTypeSyncState(NetBoxNamedSlugTaggedState):
@@ -136,7 +140,7 @@ class NetBoxClusterSyncState(BaseModel):
     @field_validator("tags", mode="before")
     @classmethod
     def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
-        return NetBoxNamedSlugTaggedState.normalize_tags(value)
+        return _normalized_tag_list(value)
 
 
 class NetBoxDeviceTypeSyncState(BaseModel):
@@ -155,7 +159,80 @@ class NetBoxDeviceTypeSyncState(BaseModel):
     @field_validator("tags", mode="before")
     @classmethod
     def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
-        return NetBoxNamedSlugTaggedState.normalize_tags(value)
+        return _normalized_tag_list(value)
+
+
+class NetBoxCustomFieldSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str
+    type: str
+    label: str
+    description: str | None = None
+    ui_visible: str = "always"
+    ui_editable: str = "hidden"
+    weight: int = 100
+    filter_logic: str = "loose"
+    search_weight: int = 1000
+    group_name: str | None = None
+    object_types: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "name",
+        "type",
+        "label",
+        "description",
+        "ui_visible",
+        "ui_editable",
+        "filter_logic",
+        "group_name",
+        mode="before",
+    )
+    @classmethod
+    def normalize_text(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("weight", "search_weight", mode="before")
+    @classmethod
+    def normalize_int(cls, value: Any) -> int:
+        return int(value or 0)
+
+    @field_validator("object_types", mode="before")
+    @classmethod
+    def normalize_object_types(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return sorted(dict.fromkeys(items))
+
+
+class NetBoxInterfaceSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    device: int
+    name: str
+    status: str = "active"
+    type: str
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("device", mode="before")
+    @classmethod
+    def normalize_device(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str:
+        text = str(_status_value(value) or "active").strip().lower()
+        return text or "active"
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return _normalized_tag_list(value)
 
 
 class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
@@ -178,7 +255,7 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     @field_validator("tags", mode="before")
     @classmethod
     def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
-        return NetBoxNamedSlugTaggedState.normalize_tags(value)
+        return _normalized_tag_list(value)
 
 
 class NetBoxIpAddressSyncState(BaseModel):
@@ -378,18 +455,7 @@ class NetBoxDeviceSyncState(BaseModel):
     @field_validator("tags", mode="before")
     @classmethod
     def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
-        if value is None:
-            return []
-        normalized: list[dict[str, Any]] = []
-        for item in value:
-            if isinstance(item, dict):
-                normalized.append(item)
-            else:
-                text = str(item or "").strip()
-                if text:
-                    normalized.append({"slug": text, "name": text})
-        normalized.sort(key=lambda tag: str(tag.get("slug") or tag.get("name") or ""))
-        return normalized
+        return _normalized_tag_list(value)
 
     @model_validator(mode="after")
     def validate_required_relations(self):

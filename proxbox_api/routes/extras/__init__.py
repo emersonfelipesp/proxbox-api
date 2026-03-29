@@ -1,11 +1,12 @@
 """Extras route handlers for NetBox custom field management."""
 
-import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, WebSocket
 
-from proxbox_api.netbox_compat import CustomField
+from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.proxmox_to_netbox.models import NetBoxCustomFieldSyncState
+from proxbox_api.session.netbox import NetBoxAsyncSessionDep
 
 router = APIRouter()
 
@@ -16,7 +17,10 @@ router = APIRouter()
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
-async def create_custom_fields(websocket=WebSocket):
+async def create_custom_fields(
+    netbox_session: NetBoxAsyncSessionDep,
+    websocket=WebSocket,
+):
     custom_fields: list = [
         {
             "object_types": ["virtualization.virtualmachine"],
@@ -84,15 +88,31 @@ async def create_custom_fields(websocket=WebSocket):
             "group_name": "Proxmox",
         },
     ]
+    fields = []
 
-    async def create_custom_field_task(custom_field: dict):
-        return await asyncio.to_thread(lambda: CustomField(**custom_field))
-
-    # Create Custom Fields
-    fields = await asyncio.gather(
-        *[create_custom_field_task(custom_field_dict) for custom_field_dict in custom_fields]
-    )
-    return [field.dict() if hasattr(field, "dict") else field for field in fields]
+    for custom_field in custom_fields:
+        record = await rest_reconcile_async(
+            netbox_session,
+            "/api/extras/custom-fields/",
+            lookup={"name": custom_field["name"]},
+            payload=custom_field,
+            schema=NetBoxCustomFieldSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "type": record.get("type"),
+                "label": record.get("label"),
+                "description": record.get("description"),
+                "ui_visible": record.get("ui_visible"),
+                "ui_editable": record.get("ui_editable"),
+                "weight": record.get("weight"),
+                "filter_logic": record.get("filter_logic"),
+                "search_weight": record.get("search_weight"),
+                "group_name": record.get("group_name"),
+                "object_types": record.get("object_types"),
+            },
+        )
+        fields.append(record.serialize())
+    return fields
 
 
 CreateCustomFieldsDep = Annotated[list[dict], Depends(create_custom_fields)]
