@@ -131,15 +131,19 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
             "count": 0,
             "results": [],
         },
-        ("GET", "/api/dcim/sites/", (("limit", 2), ("slug", "proxmox-default-site"))): {
+        ("GET", "/api/dcim/sites/", (("limit", 2), ("slug", "proxmox-default-site-lab"))): {
             "count": 0,
             "results": [],
         },
-        ("GET", "/api/dcim/sites/", (("limit", 2), ("name", "Proxmox Default Site"))): {
+        ("GET", "/api/dcim/sites/", (("limit", 2), ("name", "Proxmox Default Site - lab"))): {
             "count": 0,
             "results": [],
         },
         ("GET", "/api/dcim/devices/", (("limit", 2), ("name", "pve01"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/devices/", (("limit", 2), ("name", "pve01"), ("site_id", 16))): {
             "count": 0,
             "results": [],
         },
@@ -150,7 +154,7 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
         ("POST", "/api/dcim/manufacturers/"): {"id": 13, "name": "Proxmox"},
         ("POST", "/api/dcim/device-types/"): {"id": 14, "model": "Proxmox Generic Device"},
         ("POST", "/api/dcim/device-roles/"): {"id": 15, "name": "Proxmox Node"},
-        ("POST", "/api/dcim/sites/"): {"id": 16, "name": "Proxmox Default Site"},
+        ("POST", "/api/dcim/sites/"): {"id": 16, "name": "Proxmox Default Site - lab"},
         ("POST", "/api/dcim/devices/"): {"id": 17, "name": "pve01"},
     }
 

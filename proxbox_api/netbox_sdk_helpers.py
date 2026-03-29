@@ -33,7 +33,8 @@ def _is_duplicate_error(detail: Any) -> bool:
         return any(_is_duplicate_error(value) for value in detail.values())
     if isinstance(detail, list):
         return any(_is_duplicate_error(value) for value in detail)
-    return "already exists" in str(detail).lower()
+    text = str(detail).lower()
+    return "already exists" in text or "must be unique" in text
 
 
 def _candidate_reuse_lookups(
@@ -59,6 +60,9 @@ def _candidate_reuse_lookups(
         value = payload.get(field)
         if value not in (None, ""):
             _add({field: value})
+
+    if payload.get("name") not in (None, "") and payload.get("site") not in (None, ""):
+        _add({"name": payload["name"], "site_id": payload["site"]})
 
     if payload.get("manufacturer") not in (None, "") and payload.get("model") not in (None, ""):
         _add({"manufacturer_id": payload["manufacturer"], "model": payload["model"]})

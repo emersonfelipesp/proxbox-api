@@ -14,7 +14,7 @@ from proxbox_api.dependencies import (
 )
 from proxbox_api.exception import ProxboxException  # Proxbox Exception
 from proxbox_api.logger import logger  # Logger
-from proxbox_api.netbox_rest import rest_create, rest_ensure, rest_list
+from proxbox_api.netbox_rest import rest_create, rest_ensure, rest_list, rest_reconcile_async
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_compat import (
@@ -34,6 +34,7 @@ from proxbox_api.routes.proxmox.cluster import (
     ClusterResourcesDep,
     ClusterStatusDep,
 )  # Cluster Status and Resources
+from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
 from proxbox_api.schemas.virtualization import (  # Schemas
     CPU,
     Backup,
@@ -309,10 +310,25 @@ async def create_virtual_machines(
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
         )
 
-        virtual_machine = await asyncio.to_thread(
-            lambda: VirtualMachine(
-                **netbox_vm_payload,
-            )
+        virtual_machine = await rest_reconcile_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            lookup={"cf_proxmox_vm_id": int(resource.get("vmid"))},
+            payload=netbox_vm_payload,
+            schema=NetBoxVirtualMachineCreateBody,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "status": record.get("status"),
+                "cluster": record.get("cluster"),
+                "device": record.get("device"),
+                "role": record.get("role"),
+                "vcpus": record.get("vcpus"),
+                "memory": record.get("memory"),
+                "disk": record.get("disk"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+                "description": record.get("description"),
+            },
         )
 
         print(f"Virtual Machine: {virtual_machine} / {virtual_machine.id}")

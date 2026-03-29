@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from netbox_sdk.client import ApiResponse
+from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_sdk_helpers import to_dict
@@ -101,7 +102,8 @@ def _is_duplicate_error(detail: Any) -> bool:
         return any(_is_duplicate_error(value) for value in detail.values())
     if isinstance(detail, list):
         return any(_is_duplicate_error(value) for value in detail)
-    return "already exists" in str(detail).lower()
+    text = str(detail).lower()
+    return "already exists" in text or "must be unique" in text
 
 
 def _candidate_reuse_lookups(
@@ -127,6 +129,9 @@ def _candidate_reuse_lookups(
         value = payload.get(field)
         if value not in (None, ""):
             _add({field: value})
+
+    if payload.get("name") not in (None, "") and payload.get("site") not in (None, ""):
+        _add({"name": payload["name"], "site_id": payload["site"]})
 
     if payload.get("manufacturer") not in (None, "") and payload.get("model") not in (None, ""):
         _add({"manufacturer_id": payload["manufacturer"], "model": payload["model"]})
@@ -294,6 +299,37 @@ async def rest_ensure_async(
         raise
 
 
+async def rest_reconcile_async(
+    nb: Any,
+    path: str,
+    *,
+    lookup: dict[str, Any],
+    payload: dict[str, Any],
+    schema: type[BaseModel],
+    current_normalizer,
+) -> RestRecord:
+    desired_model = schema.model_validate(payload)
+    desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
+
+    existing = await rest_first_async(nb, path, query={**lookup, "limit": 2})
+    if existing is None:
+        return await rest_create_async(nb, path, desired_payload)
+
+    current_model = schema.model_validate(current_normalizer(existing.serialize()))
+    current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+
+    patch_payload = {
+        key: value
+        for key, value in desired_payload.items()
+        if current_payload.get(key) != value
+    }
+    if patch_payload:
+        for field, value in patch_payload.items():
+            setattr(existing, field, value)
+        await existing.save()
+    return existing
+
+
 def rest_ensure(
     nb: Any,
     path: str,
@@ -302,6 +338,29 @@ def rest_ensure(
     payload: dict[str, Any],
 ) -> Any:
     return _wrap_sync(_run(rest_ensure_async(nb, path, lookup=lookup, payload=payload)))
+
+
+def rest_reconcile(
+    nb: Any,
+    path: str,
+    *,
+    lookup: dict[str, Any],
+    payload: dict[str, Any],
+    schema: type[BaseModel],
+    current_normalizer,
+) -> Any:
+    return _wrap_sync(
+        _run(
+            rest_reconcile_async(
+                nb,
+                path,
+                lookup=lookup,
+                payload=payload,
+                schema=schema,
+                current_normalizer=current_normalizer,
+            )
+        )
+    )
 
 
 def nested_tag_payload(tag: Any) -> list[dict[str, Any]]:
