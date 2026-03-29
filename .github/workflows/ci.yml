@@ -5,6 +5,7 @@ on:
     branches: [main, testing]
   pull_request:
     branches: [main, testing]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -17,7 +18,6 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          # Matches Dockerfile base; dependency versions come from uv.lock (not the runner image).
           python-version: "3.12"
 
       - name: Sync dependencies
@@ -44,3 +44,43 @@ jobs:
         with:
           name: proxbox-api-coverage
           path: coverage.xml
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra e2e --group dev
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run E2E tests
+        run: uv run pytest tests/e2e/ -n auto --tb=short -v
+
+      - name: Upload Playwright Report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+      - name: Upload Playwright Trace
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-trace
+          path: .playwright/trace/
+          retention-days: 7
