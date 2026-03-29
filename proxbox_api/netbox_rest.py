@@ -103,6 +103,7 @@ class RestRecord:
         object.__setattr__(self, "_api", api)
         object.__setattr__(self, "_list_path", _normalize_path(list_path))
         object.__setattr__(self, "_data", dict(values))
+        object.__setattr__(self, "_dirty_fields", set())
 
     @property
     def id(self) -> Any:
@@ -142,21 +143,30 @@ class RestRecord:
         raise AttributeError(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name in {"_api", "_list_path", "_data"}:
+        if name in {"_api", "_list_path", "_data", "_dirty_fields"}:
             object.__setattr__(self, name, value)
         else:
             self._data[name] = value
+            self._dirty_fields.add(name)
 
     async def save(self) -> RestRecord:
+        payload = {
+            field: self._data[field]
+            for field in object.__getattribute__(self, "_dirty_fields")
+            if field in self._data
+        }
+        if not payload:
+            return self
         response = await self._api.client.request(
             "PATCH",
             self._detail_path,
-            payload=self.serialize(),
+            payload=payload,
         )
         payload = _extract_payload(response)
         if not isinstance(payload, dict):
             raise ProxboxException(message="NetBox returned invalid JSON for record update")
         object.__setattr__(self, "_data", payload)
+        object.__setattr__(self, "_dirty_fields", set())
         return self
 
     async def delete(self) -> bool:
