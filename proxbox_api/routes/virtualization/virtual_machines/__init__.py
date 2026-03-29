@@ -1142,22 +1142,16 @@ async def create_virtual_machine_backups(
     return await process_backups_batch(backup_tasks)
 
 
-@router.get("/backups/all/create")
-async def create_all_virtual_machine_backups(
-    netbox_session: NetBoxSessionDep,
-    pxs: ProxmoxSessionsDep,
-    cluster_status: ClusterStatusDep,
-    tag: ProxboxTagDep,
-    delete_nonexistent_backup: Annotated[
-        bool,
-        Query(
-            title="Delete Nonexistent Backup",
-            description="If true, deletes backups that exist in NetBox but not in Proxmox.",
-        ),
-    ] = False,
-    websocket: WebSocketSSEBridge | None = None,
-    use_websocket: bool = False,
+async def _create_all_virtual_machine_backups(
+    netbox_session,
+    pxs,
+    cluster_status,
+    tag,
+    delete_nonexistent_backup=False,
+    websocket=None,
+    use_websocket=False,
 ):
+    """Internal function that handles backup sync with optional websocket support."""
     nb = netbox_session
     start_time = datetime.now()
     sync_process = None
@@ -1409,6 +1403,29 @@ async def create_all_virtual_machine_backups(
     return results
 
 
+@router.get("/backups/all/create")
+async def create_all_virtual_machine_backups(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    tag: ProxboxTagDep,
+    delete_nonexistent_backup: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Backup",
+            description="If true, deletes backups that exist in NetBox but not in Proxmox.",
+        ),
+    ] = False,
+):
+    return await _create_all_virtual_machine_backups(
+        netbox_session=netbox_session,
+        pxs=pxs,
+        cluster_status=cluster_status,
+        tag=tag,
+        delete_nonexistent_backup=delete_nonexistent_backup,
+    )
+
+
 @router.get("/backups/all/create/stream", response_model=None)
 async def create_all_virtual_machine_backups_stream(
     netbox_session: NetBoxSessionDep,
@@ -1428,7 +1445,7 @@ async def create_all_virtual_machine_backups_stream(
 
         async def _run_sync():
             try:
-                return await create_all_virtual_machine_backups(
+                return await _create_all_virtual_machine_backups(
                     netbox_session=netbox_session,
                     pxs=pxs,
                     cluster_status=cluster_status,
