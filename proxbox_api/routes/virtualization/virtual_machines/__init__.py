@@ -198,6 +198,8 @@ async def create_virtual_machines(
     total_vms = 0  # Track total VMs processed
     successful_vms = 0  # Track successful VM creations
     failed_vms = 0  # Track failed VM creations
+    tag_id = int(getattr(tag, "id", 0) or 0)
+    flattened_results = []
 
     journal_messages.append("## Virtual Machine Sync Process Started")
     journal_messages.append(f"- **Start Time**: {start_time}")
@@ -226,7 +228,7 @@ async def create_virtual_machines(
                 "slug": "virtual-machine-qemu",
                 "color": "00ffff",
                 "description": "Proxmox Virtual Machine",
-                "tags": [tag.id],
+                "tags": [tag_id],
                 "vm_role": True,
             },
             "lxc": {
@@ -234,7 +236,7 @@ async def create_virtual_machines(
                 "slug": "container-lxc",
                 "color": "7fffd4",
                 "description": "Proxmox LXC Container",
-                "tags": [tag.id],
+                "tags": [tag_id],
                 "vm_role": True,
             },
             "undefined": {
@@ -242,7 +244,7 @@ async def create_virtual_machines(
                 "slug": "unknown",
                 "color": "000000",
                 "description": "VM Type not found. Neither QEMU nor LXC.",
-                "tags": [tag.id],
+                "tags": [tag_id],
                 "vm_role": True,
             },
         }
@@ -351,7 +353,7 @@ async def create_virtual_machines(
                                 virtual_machine=virtual_machine.get("id"),
                                 type="bridge",
                                 description=f"Bridge interface of Device {resource.get('node')}.",
-                                tags=[tag.id],
+                                tags=[tag_id],
                             )
 
                         if not isinstance(bridge, dict):
@@ -364,7 +366,7 @@ async def create_virtual_machines(
                                 enabled=True,
                                 bridge=bridge.get("id", None),
                                 mac_address=value.get("virtio", value.get("hwaddr", None)),
-                                tags=[tag.id],
+                                tags=[tag_id],
                             )
                         )
 
@@ -380,7 +382,7 @@ async def create_virtual_machines(
                                 assigned_object_type="virtualization.vminterface",
                                 assigned_object_id=vm_interface.get("id"),
                                 status="active",
-                                tags=[tag.id],
+                                tags=[tag_id],
                             )
 
         return virtual_machine
@@ -432,14 +434,19 @@ async def create_virtual_machines(
         )
 
         logger.info(f"VM Creation Result list: {result_list}")
-        for result in result_list[0]:
-            if isinstance(result, Exception):
-                print("python_exception: ", result.python_exception)
-                print("str(result): ", str(result))
-                print("")
+        for cluster_result in result_list:
+            if isinstance(cluster_result, Exception):
+                continue
+            for result in cluster_result:
+                if isinstance(result, Exception):
+                    print(
+                        "python_exception: ",
+                        getattr(result, "python_exception", str(result)),
+                    )
+                    print("str(result): ", str(result))
+                    print("")
 
         # Flatten the nested results and process them
-        flattened_results = []
         for cluster_results in result_list:
             if isinstance(cluster_results, Exception):
                 failed_vms += 1
@@ -481,17 +488,23 @@ async def create_virtual_machines(
             f"- **Failed**: {failed_vms}",
         ]
 
-        journal_entry = nb.extras.journal_entries.create(
-            {
-                "assigned_object_type": "netbox_proxbox.syncprocess",
-                "assigned_object_id": sync_process.id,
-                "kind": "info",
-                "comments": "\n".join(journal_messages),
-            }
-        )
+        try:
+            if sync_process and hasattr(sync_process, "id"):
+                journal_entry = nb.extras.journal_entries.create(
+                    {
+                        "assigned_object_type": "netbox_proxbox.syncprocess",
+                        "assigned_object_id": sync_process.id,
+                        "kind": "info",
+                        "comments": "\n".join(journal_messages),
+                    }
+                )
 
-        if not journal_entry:
-            print("Warning: Journal entry creation returned None")
+                if not journal_entry:
+                    print("Warning: Journal entry creation returned None")
+            else:
+                print("Warning: Cannot create journal entry - sync_process is None or has no id")
+        except Exception as journal_error:
+            print(f"Warning: Failed to create journal entry: {str(journal_error)}")
 
     return flattened_results
 
