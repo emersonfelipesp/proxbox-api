@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import Depends, WebSocket
+from fastapi import Depends
 
 from proxbox_api.cache import global_cache
 from proxbox_api.dependencies import ProxboxTagDep
@@ -57,7 +57,9 @@ async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object
     )
 
 
-async def _ensure_cluster(nb, *, cluster_name: str, cluster_type_id: int | None, mode: str, tag_refs):
+async def _ensure_cluster(
+    nb, *, cluster_name: str, cluster_type_id: int | None, mode: str, tag_refs
+):
     return await rest_reconcile_async(
         nb,
         "/api/virtualization/clusters/",
@@ -220,7 +222,7 @@ async def create_proxmox_devices(
     netbox_session: NetBoxSessionDep,
     clusters_status: ClusterStatusDep,
     tag: ProxboxTagDep,
-    websocket: WebSocket = None,
+    websocket=None,
     node: str | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
@@ -320,7 +322,9 @@ async def create_proxmox_devices(
                     except Exception as error:
                         raise _wrap_device_phase_error("cluster", error) from error
 
-                    journal_messages.append("- Creating device type, role, manufacturer, and site placeholders")
+                    journal_messages.append(
+                        "- Creating device type, role, manufacturer, and site placeholders"
+                    )
                     try:
                         manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
                     except Exception as error:

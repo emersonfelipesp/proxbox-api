@@ -49,7 +49,7 @@ from proxbox_api.routes.virtualization.virtual_machines import (
 )
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.netbox import get_netbox_session
-from proxbox_api.utils.streaming import sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 # Sessions
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -442,6 +442,8 @@ async def full_update_sync_stream(
     async def event_stream():
         sync_nodes: list = []
         sync_vms: list = []
+        devices_bridge = WebSocketSSEBridge()
+        vm_bridge = WebSocketSSEBridge()
         try:
             yield sse_event(
                 "step",
@@ -459,13 +461,25 @@ async def full_update_sync_stream(
                     "message": "Starting devices synchronization.",
                 },
             )
-            sync_nodes = await create_proxmox_devices(
-                netbox_session=netbox_session,
-                clusters_status=cluster_status,
-                node=None,
-                tag=tag,
-                use_websocket=False,
-            )
+
+            async def _run_devices_sync():
+                try:
+                    return await create_proxmox_devices(
+                        netbox_session=netbox_session,
+                        clusters_status=cluster_status,
+                        node=None,
+                        tag=tag,
+                        websocket=devices_bridge,
+                        use_websocket=True,
+                    )
+                finally:
+                    await devices_bridge.close()
+
+            devices_task = asyncio.create_task(_run_devices_sync())
+            async for frame in devices_bridge.iter_sse():
+                yield frame
+            sync_nodes = await devices_task
+
             yield sse_event(
                 "step",
                 {
@@ -484,15 +498,27 @@ async def full_update_sync_stream(
                     "message": "Starting virtual machines synchronization.",
                 },
             )
-            sync_vms = await create_virtual_machines(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                custom_fields=custom_fields,
-                tag=tag,
-                use_websocket=False,
-            )
+
+            async def _run_vms_sync():
+                try:
+                    return await create_virtual_machines(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        cluster_resources=cluster_resources,
+                        custom_fields=custom_fields,
+                        tag=tag,
+                        websocket=vm_bridge,
+                        use_websocket=True,
+                    )
+                finally:
+                    await vm_bridge.close()
+
+            vms_task = asyncio.create_task(_run_vms_sync())
+            async for frame in vm_bridge.iter_sse():
+                yield frame
+            sync_vms = await vms_task
+
             yield sse_event(
                 "step",
                 {

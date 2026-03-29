@@ -64,7 +64,7 @@ from proxbox_api.utils import (
     return_status_html,
     sync_process,
 )  # Return Status HTML and Sync Process
-from proxbox_api.utils.streaming import sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 
@@ -684,6 +684,24 @@ async def create_virtual_machines_stream(
     tag: ProxboxTagDep,
 ):
     async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await create_virtual_machines(
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    cluster_resources=cluster_resources,
+                    custom_fields=custom_fields,
+                    tag=tag,
+                    websocket=bridge,
+                    use_websocket=True,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
         try:
             yield sse_event(
                 "step",
@@ -693,15 +711,10 @@ async def create_virtual_machines_stream(
                     "message": "Starting virtual machines synchronization.",
                 },
             )
-            result = await create_virtual_machines(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                custom_fields=custom_fields,
-                tag=tag,
-                use_websocket=False,
-            )
+            async for frame in bridge.iter_sse():
+                yield frame
+
+            result = await sync_task
             yield sse_event(
                 "step",
                 {
