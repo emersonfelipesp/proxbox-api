@@ -26,9 +26,12 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxBackupSyncState,
     NetBoxDeviceRoleSyncState,
     NetBoxIpAddressSyncState,
+    NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineCreateBody,
     NetBoxVirtualMachineInterfaceSyncState,
+    ProxmoxVmConfigInput,
 )
+from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
 from proxbox_api.routes.extras import CreateCustomFieldsDep  # Create Custom Fields
 from proxbox_api.routes.proxmox import (
     get_proxmox_node_storage_content,
@@ -401,7 +404,10 @@ async def create_virtual_machines(
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            lookup={"cf_proxmox_vm_id": int(resource.get("vmid"))},
+            lookup={
+                "cf_proxmox_vm_id": int(resource.get("vmid")),
+                "cluster_id": int(getattr(cluster, "id", 0) or 0),
+            },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             current_normalizer=lambda record: {
@@ -539,6 +545,33 @@ async def create_virtual_machines(
                                     "assigned_object_type": record.get("assigned_object_type"),
                                     "assigned_object_id": record.get("assigned_object_id"),
                                     "status": record.get("status"),
+                                    "tags": record.get("tags"),
+                                },
+                            )
+
+                        netbox_vm_disks = parse_vm_config_disks(vm_config)
+                        for netbox_disk in netbox_vm_disks:
+                            netbox_disk.virtual_machine = virtual_machine.get("id")
+                            await rest_reconcile_async(
+                                nb,
+                                "/api/virtualization/virtual-disks/",
+                                lookup={
+                                    "virtual_machine_id": virtual_machine.get("id"),
+                                    "name": netbox_disk.name,
+                                },
+                                payload={
+                                    "virtual_machine": virtual_machine.get("id"),
+                                    "name": netbox_disk.name,
+                                    "size": netbox_disk.size,
+                                    "description": netbox_disk.description,
+                                    "tags": tag_refs,
+                                },
+                                schema=NetBoxVirtualDiskSyncState,
+                                current_normalizer=lambda record: {
+                                    "virtual_machine": record.get("virtual_machine"),
+                                    "name": record.get("name"),
+                                    "size": record.get("size"),
+                                    "description": record.get("description"),
                                     "tags": record.get("tags"),
                                 },
                             )
