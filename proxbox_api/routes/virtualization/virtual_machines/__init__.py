@@ -1155,6 +1155,8 @@ async def create_all_virtual_machine_backups(
             description="If true, deletes backups that exist in NetBox but not in Proxmox.",
         ),
     ] = False,
+    websocket: WebSocketSSEBridge | None = None,
+    use_websocket: bool = False,
 ):
     nb = netbox_session
     start_time = datetime.now()
@@ -1192,6 +1194,15 @@ async def create_all_virtual_machine_backups(
     try:
         sync_process.status = "syncing"
         sync_process.save()
+
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "backups",
+                    "status": "started",
+                    "message": "Starting backup synchronization.",
+                }
+            )
 
         journal_messages.append("\n## Backup Discovery")
         all_backup_tasks = []
@@ -1247,7 +1258,25 @@ async def create_all_virtual_machine_backups(
         if not all_backup_tasks:
             error_msg = "No backups found to process"
             journal_messages.append(f"\n### ⚠️ Warning\n{error_msg}")
+            if use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "step": "backups",
+                        "status": "warning",
+                        "message": error_msg,
+                    }
+                )
             raise ProxboxException(message=error_msg)
+
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "backups",
+                    "status": "discovered",
+                    "message": f"Found {len(all_backup_tasks)} backups to process.",
+                    "count": len(all_backup_tasks),
+                }
+            )
 
         journal_messages.append("\n## Backup Processing")
         journal_messages.append(f"- Total backups to process: {len(all_backup_tasks)}")
@@ -1316,6 +1345,15 @@ async def create_all_virtual_machine_backups(
             sync_process.completed_at = str(datetime.now())
             sync_process.runtime = float((datetime.now() - start_time).total_seconds())
             sync_process.save()
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "backups",
+                    "status": "failed",
+                    "message": error_msg,
+                    "error": str(error),
+                }
+            )
         raise ProxboxException(message=error_msg)
 
     finally:
@@ -1351,5 +1389,111 @@ async def create_all_virtual_machine_backups(
 
             if not journal_entry:
                 print("Warning: Journal entry creation returned None")
+
+            if use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "step": "backups",
+                        "status": "completed",
+                        "message": f"Backup sync completed. {len(results) - duplicate_count} created, {duplicate_count} skipped.",
+                        "result": {
+                            "total": len(results),
+                            "created": len(results) - duplicate_count,
+                            "duplicates": duplicate_count,
+                            "deleted": deleted_count,
+                        },
+                    }
+                )
+
     print("Syncing Backups Finished.")
     return results
+
+
+@router.get("/backups/all/create/stream", response_model=None)
+async def create_all_virtual_machine_backups_stream(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    tag: ProxboxTagDep,
+    delete_nonexistent_backup: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Backup",
+            description="If true, deletes backups that exist in NetBox but not in Proxmox.",
+        ),
+    ] = False,
+):
+    async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await create_all_virtual_machine_backups(
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    tag=tag,
+                    delete_nonexistent_backup=delete_nonexistent_backup,
+                    websocket=bridge,
+                    use_websocket=True,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "backups",
+                    "status": "started",
+                    "message": "Starting backup synchronization.",
+                },
+            )
+            async for frame in bridge.iter_sse():
+                yield frame
+            result = await sync_task
+            yield sse_event(
+                "step",
+                {
+                    "step": "backups",
+                    "status": "completed",
+                    "message": "Backup synchronization finished.",
+                    "result": {"count": len(result) if result else 0},
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Backup sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "backups",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Backup sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
