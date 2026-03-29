@@ -87,6 +87,10 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
             "count": 0,
             "results": [],
         },
+        ("GET", "/api/virtualization/cluster-types/", (("limit", 2), ("name", "Cluster"))): {
+            "count": 0,
+            "results": [],
+        },
         ("GET", "/api/virtualization/clusters/", (("limit", 2), ("name", "lab"))): {
             "count": 0,
             "results": [],
@@ -95,7 +99,23 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
             "count": 0,
             "results": [],
         },
+        ("GET", "/api/dcim/manufacturers/", (("limit", 2), ("name", "Proxmox"))): {
+            "count": 0,
+            "results": [],
+        },
         ("GET", "/api/dcim/device-types/", (("limit", 2), ("model", "Proxmox Generic Device"))): {
+            "count": 0,
+            "results": [],
+        },
+        (
+            "GET",
+            "/api/dcim/device-types/",
+            (("limit", 2), ("manufacturer_id", 13), ("model", "Proxmox Generic Device")),
+        ): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/device-types/", (("limit", 2), ("slug", "proxmox-generic-device"))): {
             "count": 0,
             "results": [],
         },
@@ -103,7 +123,15 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
             "count": 0,
             "results": [],
         },
+        ("GET", "/api/dcim/device-roles/", (("limit", 2), ("name", "Proxmox Node"))): {
+            "count": 0,
+            "results": [],
+        },
         ("GET", "/api/dcim/sites/", (("limit", 2), ("slug", "proxmox-default-site"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/sites/", (("limit", 2), ("name", "Proxmox Default Site"))): {
             "count": 0,
             "results": [],
         },
