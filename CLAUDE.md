@@ -83,12 +83,17 @@ Defined in `pyproject.toml`:
 
 ### Test dependencies
 
-Defined in `pyproject.toml` under `[project.optional-dependencies]` → `test` (install with `uv sync --extra test --group dev`):
+Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (install with `uv sync --extra test --group dev`):
 
 - `pytest`
 - `httpx`
 - `playwright`
 - `pytest-cov`
+
+### Environment variables
+
+- `PROXBOX_NETBOX_TIMEOUT`: NetBox API client timeout in seconds (default: `120`). Controls `netbox-sdk` `Config.timeout` and `aiohttp` request timeouts.
+- `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: Maximum concurrent VM creation tasks during sync (default: `4`). Uses an `asyncio.Semaphore` to limit parallel NetBox API load.
 
 ## Runtime Flow
 
@@ -108,11 +113,13 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` → `test` (
 4. Service and route workflows create or update NetBox objects (clusters, devices, VMs, interfaces, backups).
 5. Sync metadata is recorded in NetBox sync-process objects and journal entries.
 6. Optional websocket messages stream progress updates to clients.
+7. SSE streaming endpoints (`/full-update/stream`, `/devices/create/stream`, `/virtualization/virtual-machines/create/stream`) proxy sync progress via `text/event-stream`. The `WebSocketSSEBridge` utility converts websocket-style progress JSON into SSE frames with per-object granularity (e.g., `Processing device pve01`, `Synced virtual_machine vm101`).
 
 ### Error handling
 
 - Domain-specific errors use `ProxboxException`.
 - FastAPI exception handler in `main.py` returns structured JSON for `ProxboxException`.
+- A global `@app.exception_handler(Exception)` returns structured JSON for unhandled errors (status 500), including the exception message and traceback string.
 - Lower-level exceptions should be wrapped with context before propagation.
 
 ## Testing and Verification

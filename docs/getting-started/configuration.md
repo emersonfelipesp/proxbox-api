@@ -82,6 +82,13 @@ Authentication rules for create and update:
 - Proxmox sessions default to local database endpoint records.
 - Legacy source mode (`source=netbox`) is still supported in Proxmox session dependency behavior.
 
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROXBOX_NETBOX_TIMEOUT` | `120` | NetBox API client timeout in seconds. Applied to `netbox-sdk` config and underlying `aiohttp` requests. Increase if NetBox responses are slow under load. |
+| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent VM creation tasks during synchronization. Uses an `asyncio.Semaphore` to limit parallel NetBox API load. Lower values reduce timeout risk; higher values increase throughput on fast backends. |
+
 ## CORS behavior
 
 - Origins are populated from NetBox endpoint records plus default development origins.
