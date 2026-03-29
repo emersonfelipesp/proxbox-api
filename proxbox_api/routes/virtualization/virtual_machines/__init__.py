@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
 from proxbox_api.dependencies import (
@@ -62,6 +63,7 @@ from proxbox_api.utils import (
     return_status_html,
     sync_process,
 )  # Return Status HTML and Sync Process
+from proxbox_api.utils.streaming import sse_event
 
 router = APIRouter()
 
@@ -651,6 +653,81 @@ async def create_virtual_machines(
             print(f"Warning: Failed to create journal entry: {str(journal_error)}")
 
     return flattened_results
+
+
+@router.get("/create/stream", response_model=None)
+async def create_virtual_machines_stream(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+):
+    async def event_stream():
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-machines",
+                    "status": "started",
+                    "message": "Starting virtual machines synchronization.",
+                },
+            )
+            result = await create_virtual_machines(
+                netbox_session=netbox_session,
+                pxs=pxs,
+                cluster_status=cluster_status,
+                cluster_resources=cluster_resources,
+                custom_fields=custom_fields,
+                tag=tag,
+                use_websocket=False,
+            )
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-machines",
+                    "status": "completed",
+                    "message": "Virtual machines synchronization finished.",
+                    "result": {"count": len(result)},
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Virtual machines sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-machines",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual machines sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get(

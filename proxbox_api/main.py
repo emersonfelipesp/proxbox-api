@@ -5,7 +5,7 @@ import os
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import OperationalError
@@ -49,6 +49,7 @@ from proxbox_api.routes.virtualization.virtual_machines import (
 )
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.netbox import get_netbox_session
+from proxbox_api.utils.streaming import sse_event
 
 # Sessions
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -237,8 +238,7 @@ async def get_sync_processes():
 
     try:
         sync_processes = [
-            process.serialize()
-            for process in rest_list(nb, "/api/plugins/proxbox/sync-processes/")
+            process.serialize() for process in rest_list(nb, "/api/plugins/proxbox/sync-processes/")
         ]
         return sync_processes
     except Exception as error:
@@ -353,6 +353,7 @@ async def websocket_virtual_machines(
             print(f"Error while closing WebSocket connection: {error}")
 
     await create_virtual_machines(
+        netbox_session=netbox_session,
         pxs=pxs,
         cluster_status=cluster_status,
         cluster_resources=cluster_resources,
@@ -391,6 +392,7 @@ async def full_update_sync(
 
     try:
         sync_vms = await create_virtual_machines(
+            netbox_session=netbox_session,
             pxs=pxs,
             cluster_status=cluster_status,
             cluster_resources=cluster_resources,
@@ -414,6 +416,142 @@ async def full_update_sync(
         "devices_count": len(sync_nodes),
         "virtual_machines_count": len(sync_vms),
     }
+
+
+@app.get("/full-update/stream", response_model=None)
+async def full_update_sync_stream(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+):
+    async def event_stream():
+        sync_nodes: list = []
+        sync_vms: list = []
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "stream",
+                    "status": "started",
+                    "message": "Full update stream connected.",
+                },
+            )
+            yield sse_event(
+                "step",
+                {
+                    "step": "devices",
+                    "status": "started",
+                    "message": "Starting devices synchronization.",
+                },
+            )
+            sync_nodes = await create_proxmox_devices(
+                netbox_session=netbox_session,
+                clusters_status=cluster_status,
+                node=None,
+                tag=tag,
+                use_websocket=False,
+            )
+            yield sse_event(
+                "step",
+                {
+                    "step": "devices",
+                    "status": "completed",
+                    "message": "Devices synchronization finished.",
+                    "result": {"count": len(sync_nodes)},
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-machines",
+                    "status": "started",
+                    "message": "Starting virtual machines synchronization.",
+                },
+            )
+            sync_vms = await create_virtual_machines(
+                netbox_session=netbox_session,
+                pxs=pxs,
+                cluster_status=cluster_status,
+                cluster_resources=cluster_resources,
+                custom_fields=custom_fields,
+                tag=tag,
+                use_websocket=False,
+            )
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-machines",
+                    "status": "completed",
+                    "message": "Virtual machines synchronization finished.",
+                    "result": {"count": len(sync_vms)},
+                },
+            )
+
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Full update sync completed.",
+                    "result": {
+                        "devices": sync_nodes,
+                        "virtual_machines": sync_vms,
+                        "devices_count": len(sync_nodes),
+                        "virtual_machines_count": len(sync_vms),
+                    },
+                },
+            )
+        except ProxboxException as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "full-update",
+                    "status": "failed",
+                    "error": error.message,
+                    "detail": error.detail,
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": error.message,
+                    "errors": [{"detail": error.detail or error.message}],
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "full-update",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Full update sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+        finally:
+            return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.websocket("/ws")
@@ -489,6 +627,7 @@ async def websocket_sync_commands(
                 if sync_nodes:
                     # Sync Virtual Machines
                     await create_virtual_machines(
+                        netbox_session=nb,
                         pxs=pxs,
                         cluster_status=cluster_status,
                         cluster_resources=cluster_resources,
@@ -517,6 +656,7 @@ async def websocket_sync_commands(
 
             elif data == "Sync Virtual Machines":
                 await create_virtual_machines(
+                    netbox_session=nb,
                     pxs=pxs,
                     cluster_status=cluster_status,
                     cluster_resources=cluster_resources,
