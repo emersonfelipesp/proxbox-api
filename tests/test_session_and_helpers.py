@@ -13,7 +13,7 @@ from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import ensure_tag_async, rest_create, rest_ensure_async, rest_reconcile_async
-from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState
+from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState, NetBoxSiteSyncState
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
@@ -634,6 +634,90 @@ def test_rest_reconcile_async_patches_only_schema_detected_changes():
             {"description": "Proxmox Node pve01"},
             True,
         ),
+    ]
+
+
+def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
+    site_queries = {"count": 0}
+
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/sites/"): lambda query, payload: (
+                200,
+                {
+                    "count": (
+                        1
+                        if query.get("name") == "Proxmox Default Site - lab"
+                        and site_queries.__setitem__("count", site_queries["count"] + 1) is None
+                        and site_queries["count"] > 1
+                        else 0
+                    ),
+                    "results": (
+                        [
+                            {
+                                "id": 16,
+                                "name": "Proxmox Default Site - lab",
+                                "slug": "proxmox-default-site-lab",
+                                "status": {"value": "active"},
+                                "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                                "url": "https://netbox.local/api/dcim/sites/16/",
+                            }
+                        ]
+                        if query.get("name") == "Proxmox Default Site - lab"
+                        and site_queries["count"] > 1
+                        else []
+                    ),
+                },
+            ),
+            ("POST", "/api/dcim/sites/"): (
+                400,
+                {
+                    "name": ["site with this name already exists."],
+                    "slug": ["site with this slug already exists."],
+                },
+            ),
+        }
+    )
+
+    reused = asyncio.run(
+        rest_reconcile_async(
+            session,
+            "/api/dcim/sites/",
+            lookup={"slug": "proxmox-default-site-lab"},
+            payload={
+                "name": "Proxmox Default Site - lab",
+                "slug": "proxmox-default-site-lab",
+                "status": "active",
+                "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+            },
+            schema=NetBoxSiteSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "slug": record.get("slug"),
+                "status": record.get("status"),
+                "tags": record.get("tags"),
+            },
+        )
+    )
+
+    assert reused.id == 16
+    assert session.client.calls == [
+        ("GET", "/api/dcim/sites/", {"slug": "proxmox-default-site-lab", "limit": 2}, None, True),
+        ("GET", "/api/dcim/sites/", {"name": "Proxmox Default Site - lab", "limit": 2}, None, True),
+        (
+            "POST",
+            "/api/dcim/sites/",
+            None,
+            {
+                "name": "Proxmox Default Site - lab",
+                "slug": "proxmox-default-site-lab",
+                "status": "active",
+                "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+            },
+            True,
+        ),
+        ("GET", "/api/dcim/sites/", {"slug": "proxmox-default-site-lab", "limit": 2}, None, True),
+        ("GET", "/api/dcim/sites/", {"name": "Proxmox Default Site - lab", "limit": 2}, None, True),
     ]
 
 
