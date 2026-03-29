@@ -21,6 +21,7 @@ Use this root guide first, then jump to the nearest scoped guide for the area yo
 - `proxbox_api/generated/proxmox/CLAUDE.md`
 - `proxbox_api/proxmox_codegen/CLAUDE.md`
 - `proxbox_api/proxmox_to_netbox/CLAUDE.md`
+- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md`
 - `proxbox_api/proxmox_to_netbox/mappers/CLAUDE.md`
 - `proxbox_api/routes/CLAUDE.md`
 - `proxbox_api/routes/dcim/CLAUDE.md`
@@ -142,6 +143,7 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 - Keep route handlers focused on request orchestration; move reusable logic to services or utilities.
 - Maintain ASCII-only content in documentation and source text unless a file already requires otherwise.
 - Add concise module-level docstrings to all Python modules.
+- **ALL normalization and parsing MUST be done inside Pydantic schemas.** See `proxbox_api/proxmox_to_netbox/CLAUDE.md` for details.
 
 ## Directory Map
 
@@ -156,6 +158,7 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 - `proxbox_api/proxmox_codegen/`: Proxmox API viewer extraction and schema generation pipeline.
 - `proxbox_api/generated/proxmox/`: generated OpenAPI and Pydantic artifacts.
 - `proxbox_api/proxmox_to_netbox/`: Proxmox input to NetBox output schema transformations.
+- `proxbox_api/proxmox_to_netbox/schemas/`: Schema-driven parsing modules (disk parsing, etc.).
 - `proxbox_api/generated/netbox/`: cached NetBox OpenAPI contract artifacts.
 
 ## Safe Extension Pattern

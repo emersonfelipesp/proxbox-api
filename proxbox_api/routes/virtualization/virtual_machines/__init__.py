@@ -31,7 +31,6 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     ProxmoxVmConfigInput,
 )
-from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
 from proxbox_api.routes.extras import CreateCustomFieldsDep  # Create Custom Fields
 from proxbox_api.routes.proxmox import (
     get_proxmox_node_storage_content,
@@ -549,21 +548,20 @@ async def create_virtual_machines(
                                 },
                             )
 
-                        netbox_vm_disks = parse_vm_config_disks(vm_config)
-                        for netbox_disk in netbox_vm_disks:
-                            netbox_disk.virtual_machine = virtual_machine.get("id")
+                        vm_config_obj = ProxmoxVmConfigInput.model_validate(vm_config)
+                        for disk_entry in vm_config_obj.disks:
                             await rest_reconcile_async(
                                 nb,
                                 "/api/virtualization/virtual-disks/",
                                 lookup={
                                     "virtual_machine_id": virtual_machine.get("id"),
-                                    "name": netbox_disk.name,
+                                    "name": disk_entry.name,
                                 },
                                 payload={
                                     "virtual_machine": virtual_machine.get("id"),
-                                    "name": netbox_disk.name,
-                                    "size": netbox_disk.size,
-                                    "description": netbox_disk.description,
+                                    "name": disk_entry.name,
+                                    "size": disk_entry.size,
+                                    "description": disk_entry.description,
                                     "tags": tag_refs,
                                 },
                                 schema=NetBoxVirtualDiskSyncState,
