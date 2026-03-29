@@ -154,7 +154,8 @@ Test coverage:
 ## DCIM routes (`/dcim`)
 
 - `GET /dcim/devices`
-- `GET /dcim/devices/create`
+- `GET /dcim/devices/create` - create NetBox devices from Proxmox nodes (returns JSON on completion).
+- `GET /dcim/devices/create/stream` - SSE streaming variant. Emits per-device `step` events with granular progress while devices are being created.
 - `GET /dcim/devices/{node}/interfaces/create`
 - `GET /dcim/devices/interfaces/create`
 
@@ -162,7 +163,8 @@ Test coverage:
 
 - `GET /virtualization/cluster-types/create` (placeholder)
 - `GET /virtualization/clusters/create` (placeholder)
-- `GET /virtualization/virtual-machines/create`
+- `GET /virtualization/virtual-machines/create` - create NetBox VMs from Proxmox resources (returns JSON on completion).
+- `GET /virtualization/virtual-machines/create/stream` - SSE streaming variant. Emits per-VM `step` events with granular progress while VMs are being created.
 - `GET /virtualization/virtual-machines/`
 - `GET /virtualization/virtual-machines/{id}`
 - `GET /virtualization/virtual-machines/summary/example`
@@ -170,6 +172,33 @@ Test coverage:
 - `GET /virtualization/virtual-machines/backups/all/create`
 
 Additional test/helper and TODO endpoints also exist in this route group.
+
+## Full update
+
+- `GET /full-update` - runs device sync then VM sync, returns combined JSON result.
+- `GET /full-update/stream` - SSE streaming variant. Emits per-object `step` events for both devices and VMs during the full synchronization.
+
+## SSE streaming format
+
+All `/stream` endpoints return `Content-Type: text/event-stream` and emit three event types:
+
+| Event    | Description |
+|----------|-------------|
+| `step`   | Progress frame. Contains `step` (object kind, e.g. `device`, `virtual_machine`), `status` (`started`, `progress`, `completed`, `failed`), `message` (human-readable), `rowid` (object name/ID), and `payload` (original websocket-style JSON). |
+| `error`  | Error frame. Contains `step`, `status: "failed"`, `error`, and `detail`. |
+| `complete` | Final frame. Contains `ok` (boolean), `message`, and optionally `result` or `errors`. |
+
+Example `step` event for a device:
+
+```
+event: step
+data: {"step":"device","status":"progress","message":"Processing device pve01","rowid":"pve01","payload":{"object":"device","type":"create","data":{"rowid":"pve01","completed":false}}}
+```
+
+Headers:
+
+- `Cache-Control: no-cache`
+- `X-Accel-Buffering: no`
 
 ## Extras routes (`/extras`)
 
