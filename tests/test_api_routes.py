@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+from types import SimpleNamespace
 
 from netbox_sdk.client import ApiResponse
 import pytest
@@ -44,6 +45,170 @@ def test_sync_entrypoints_share_proxbox_tag_dependency():
     for entrypoint in (create_proxmox_devices, create_virtual_machines, full_update_sync):
         assert "tag" in inspect.signature(entrypoint).parameters
 
+
+def test_create_proxmox_devices_uses_request_scoped_rest_session():
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+
+            if method == "POST" and path == "/api/plugins/proxbox/sync-processes/":
+                return ApiResponse(
+                    status=201,
+                    text=json.dumps(
+                        {
+                            "id": 1,
+                            "name": "sync-devices",
+                            "status": "not-started",
+                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
+                        }
+                    ),
+                )
+            if method == "PATCH" and path == "/api/plugins/proxbox/sync-processes/1/":
+                body = {
+                    "id": 1,
+                    "name": "sync-devices",
+                    "status": payload.get("status", "completed"),
+                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
+                }
+                return ApiResponse(status=200, text=json.dumps(body))
+
+            lookup_key = (method, path, tuple(sorted((query or {}).items())))
+            if lookup_key in lookup_responses:
+                return ApiResponse(status=200, text=json.dumps(lookup_responses[lookup_key]))
+            if (method, path) in create_responses:
+                return ApiResponse(status=201, text=json.dumps(create_responses[(method, path)]))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    lookup_responses = {
+        ("GET", "/api/virtualization/cluster-types/", (("limit", 2), ("slug", "cluster"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/virtualization/clusters/", (("limit", 2), ("name", "lab"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/manufacturers/", (("limit", 2), ("slug", "proxmox"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/device-types/", (("limit", 2), ("model", "Proxmox Generic Device"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/device-roles/", (("limit", 2), ("slug", "proxmox-node"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/sites/", (("limit", 2), ("slug", "proxmox-default-site"))): {
+            "count": 0,
+            "results": [],
+        },
+        ("GET", "/api/dcim/devices/", (("limit", 2), ("name", "pve01"))): {
+            "count": 0,
+            "results": [],
+        },
+    }
+    create_responses = {
+        ("POST", "/api/virtualization/cluster-types/"): {"id": 11, "name": "Cluster"},
+        ("POST", "/api/virtualization/clusters/"): {"id": 12, "name": "lab"},
+        ("POST", "/api/dcim/manufacturers/"): {"id": 13, "name": "Proxmox"},
+        ("POST", "/api/dcim/device-types/"): {"id": 14, "model": "Proxmox Generic Device"},
+        ("POST", "/api/dcim/device-roles/"): {"id": 15, "name": "Proxmox Node"},
+        ("POST", "/api/dcim/sites/"): {"id": 16, "name": "Proxmox Default Site"},
+        ("POST", "/api/dcim/devices/"): {"id": 17, "name": "pve01"},
+    }
+
+    fake_session = SimpleNamespace(
+        client=FakeClient(),
+        extras=SimpleNamespace(journal_entries=SimpleNamespace(create=lambda payload: payload)),
+    )
+    cluster_status = [
+        SimpleNamespace(
+            name="lab",
+            mode="cluster",
+            node_list=[SimpleNamespace(name="pve01")],
+        )
+    ]
+    tag = SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722")
+
+    result = asyncio.run(
+        create_proxmox_devices(
+            netbox_session=fake_session,
+            clusters_status=cluster_status,
+            tag=tag,
+        )
+    )
+
+    assert result == [{"id": 17, "name": "pve01"}]
+    device_create = next(
+        payload
+        for method, path, _query, payload, _expect_json in fake_session.client.calls
+        if method == "POST" and path == "/api/dcim/devices/"
+    )
+    assert device_create["tags"] == [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}]
+
+
+def test_create_proxmox_devices_surfaces_real_netbox_detail():
+    class FakeClient:
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            if method == "POST" and path == "/api/plugins/proxbox/sync-processes/":
+                return ApiResponse(
+                    status=201,
+                    text=json.dumps(
+                        {
+                            "id": 1,
+                            "name": "sync-devices",
+                            "status": "not-started",
+                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
+                        }
+                    ),
+                )
+            if method == "PATCH" and path == "/api/plugins/proxbox/sync-processes/1/":
+                body = {
+                    "id": 1,
+                    "name": "sync-devices",
+                    "status": payload.get("status", "failed"),
+                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
+                }
+                return ApiResponse(status=200, text=json.dumps(body))
+            if method == "GET":
+                return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
+            if method == "POST" and path == "/api/dcim/devices/":
+                return ApiResponse(
+                    status=400,
+                    text=json.dumps({"detail": "tags: expected object, got integer"}),
+                )
+            return ApiResponse(status=201, text=json.dumps({"id": 99, "name": "placeholder"}))
+
+    fake_session = SimpleNamespace(
+        client=FakeClient(),
+        extras=SimpleNamespace(journal_entries=SimpleNamespace(create=lambda payload: payload)),
+    )
+    cluster_status = [
+        SimpleNamespace(
+            name="lab",
+            mode="cluster",
+            node_list=[SimpleNamespace(name="pve01")],
+        )
+    ]
+    tag = SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722")
+
+    with pytest.raises(
+        ProxboxException,
+        match="Error during device sync: Error creating NetBox device",
+    ) as excinfo:
+        asyncio.run(
+            create_proxmox_devices(
+                netbox_session=fake_session,
+                clusters_status=cluster_status,
+                tag=tag,
+            )
+        )
+    assert excinfo.value.detail == "tags: expected object, got integer"
 
 def test_sync_process_routes_use_rest_helpers(monkeypatch):
     class FakeClient:
