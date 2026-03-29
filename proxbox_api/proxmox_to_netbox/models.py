@@ -13,6 +13,8 @@ from pydantic import (
     model_validator,
 )
 
+from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
+
 
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -305,6 +307,26 @@ class NetBoxBackupSyncState(BaseModel):
         return _relation_id(value)
 
 
+class NetBoxVirtualDiskSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    name: str
+    size: int
+    description: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("virtual_machine", mode="before")
+    @classmethod
+    def normalize_virtual_machine(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return _normalized_tag_list(value)
+
+
 class ProxmoxVmResourceInput(BaseModel):
     """Raw Proxmox VM resource payload from cluster resources endpoint."""
 
@@ -362,6 +384,14 @@ class ProxmoxVmConfigInput(BaseModel):
     @property
     def unprivileged_container(self) -> bool:
         return _as_bool(self.unprivileged)
+
+    @computed_field(return_type=list[ProxmoxDiskEntry])
+    @property
+    def disks(self) -> list[ProxmoxDiskEntry]:
+        """Parse disk entries from VM config into ProxmoxDiskEntry objects."""
+        from proxbox_api.proxmox_to_netbox.schemas.disks import parse_vm_config_disks
+
+        return parse_vm_config_disks(self.model_extra or {})
 
 
 class NetBoxVirtualMachineCreateBody(BaseModel):
