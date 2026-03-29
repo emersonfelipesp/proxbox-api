@@ -1,0 +1,42 @@
+name: Release Docker verification
+
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  verify-image:
+    name: verify Docker image on release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Docker test script
+        run: |
+          cat <<'EOF' > /tmp/docker-tests.sh
+          #!/bin/sh
+          set -eux
+          uv sync --frozen --extra test --group dev
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run python -m compileall proxbox_api scripts tests
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests
+          EOF
+          chmod +x /tmp/docker-tests.sh
+
+      - name: Pull release and latest images
+        run: |
+          RELEASE_TAG=${{ github.event.release.tag_name }}
+          docker pull emersonfelipesp/proxbox-api:$RELEASE_TAG
+          docker pull emersonfelipesp/proxbox-api:latest
+
+      - name: Run tests on release tag
+        run: |
+          RELEASE_TAG=${{ github.event.release.tag_name }}
+          for TAG in "$RELEASE_TAG" latest; do
+            docker run --rm \
+              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              emersonfelipesp/proxbox-api:"$TAG" \
+              /tmp/docker-tests.sh
+          done
