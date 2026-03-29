@@ -34,6 +34,128 @@ def _mb_from_bytes(value: Any) -> int:
     return as_int // 1_000_000
 
 
+def _relation_id(value: Any) -> Any:
+    if isinstance(value, dict):
+        return value.get("id")
+    return value
+
+
+def _status_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return value.get("value") or value.get("label")
+    return value
+
+
+class NetBoxTagRef(BaseModel):
+    """Normalized nested NetBox tag payload used in create and diff operations."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    name: str | None = None
+    slug: str
+    color: str | None = None
+
+    @field_validator("name", "slug", "color", mode="before")
+    @classmethod
+    def normalize_text(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        text = str(value).strip()
+        return text or None
+
+    @model_validator(mode="after")
+    def default_name_from_slug(self):
+        if not self.name and self.slug:
+            self.name = self.slug
+        return self
+
+
+class NetBoxNamedSlugTaggedState(BaseModel):
+    """Shared normalized schema for named NetBox objects with slug and tags."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str
+    slug: str
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(item)
+            else:
+                text = str(item or "").strip()
+                if text:
+                    normalized.append({"slug": text, "name": text})
+        normalized.sort(key=lambda tag: str(tag.get("slug") or tag.get("name") or ""))
+        return normalized
+
+
+class NetBoxClusterTypeSyncState(NetBoxNamedSlugTaggedState):
+    description: str | None = None
+
+
+class NetBoxManufacturerSyncState(NetBoxNamedSlugTaggedState):
+    pass
+
+
+class NetBoxDeviceRoleSyncState(NetBoxNamedSlugTaggedState):
+    color: str
+
+
+class NetBoxSiteSyncState(NetBoxNamedSlugTaggedState):
+    status: str = "active"
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str:
+        text = str(_status_value(value) or "active").strip().lower()
+        return text or "active"
+
+
+class NetBoxClusterSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str
+    type: int | None = None
+    description: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return NetBoxNamedSlugTaggedState.normalize_tags(value)
+
+
+class NetBoxDeviceTypeSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    model: str
+    slug: str
+    manufacturer: int | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("manufacturer", mode="before")
+    @classmethod
+    def normalize_manufacturer(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return NetBoxNamedSlugTaggedState.normalize_tags(value)
+
+
 class ProxmoxVmResourceInput(BaseModel):
     """Raw Proxmox VM resource payload from cluster resources endpoint."""
 
@@ -125,6 +247,11 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
         text = str(value or "active").strip().lower()
         return mapping.get(text, "active")
 
+    @field_validator("cluster", "device", "role", mode="before")
+    @classmethod
+    def normalize_relations(cls, value: Any) -> Any:
+        return _relation_id(value)
+
     @model_validator(mode="after")
     def validate_required_relations(self):
         if self.cluster <= 0:
@@ -133,6 +260,71 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
             raise ValueError("device must be positive when provided")
         if self.role is not None and self.role <= 0:
             raise ValueError("role must be positive when provided")
+        return self
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[int]:
+        if value is None:
+            return []
+        normalized: list[int] = []
+        for item in value:
+            if isinstance(item, dict):
+                item = item.get("id")
+            try:
+                normalized.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(normalized))
+
+
+class NetBoxDeviceSyncState(BaseModel):
+    """Validated NetBox device sync body/state used for create and diff operations."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str
+    status: str = "active"
+    cluster: int | None = None
+    device_type: int | None = None
+    role: int | None = None
+    site: int | None = None
+    description: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str:
+        text = str(_status_value(value) or "active").strip().lower()
+        return text or "active"
+
+    @field_validator("cluster", "device_type", "role", "site", mode="before")
+    @classmethod
+    def normalize_relations(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(item)
+            else:
+                text = str(item or "").strip()
+                if text:
+                    normalized.append({"slug": text, "name": text})
+        normalized.sort(key=lambda tag: str(tag.get("slug") or tag.get("name") or ""))
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_required_relations(self):
+        for field_name in ("cluster", "device_type", "role", "site"):
+            value = getattr(self, field_name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{field_name} must be positive when provided")
         return self
 
 

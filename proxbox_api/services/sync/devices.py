@@ -1,6 +1,7 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
 import asyncio
+import re
 from datetime import datetime
 from typing import Annotated
 
@@ -12,15 +13,30 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     nested_tag_payload,
-    rest_ensure_async,
+    rest_reconcile_async,
+)
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxClusterSyncState,
+    NetBoxClusterTypeSyncState,
+    NetBoxDeviceRoleSyncState,
+    NetBoxDeviceSyncState,
+    NetBoxDeviceTypeSyncState,
+    NetBoxManufacturerSyncState,
+    NetBoxSiteSyncState,
 )
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.utils import return_status_html, sync_process
 
 
+def _slugify(value: str) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-") or "cluster"
+
+
 async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object:
-    return await rest_ensure_async(
+    return await rest_reconcile_async(
         nb,
         "/api/virtualization/cluster-types/",
         lookup={"slug": mode},
@@ -30,11 +46,18 @@ async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object
             "description": f"Proxmox {mode} mode",
             "tags": tag_refs,
         },
+        schema=NetBoxClusterTypeSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "description": record.get("description"),
+            "tags": record.get("tags"),
+        },
     )
 
 
 async def _ensure_cluster(nb, *, cluster_name: str, cluster_type_id: int | None, mode: str, tag_refs):
-    return await rest_ensure_async(
+    return await rest_reconcile_async(
         nb,
         "/api/virtualization/clusters/",
         lookup={"name": cluster_name},
@@ -44,11 +67,18 @@ async def _ensure_cluster(nb, *, cluster_name: str, cluster_type_id: int | None,
             "description": f"Proxmox {mode} cluster.",
             "tags": tag_refs,
         },
+        schema=NetBoxClusterSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "type": record.get("type"),
+            "description": record.get("description"),
+            "tags": record.get("tags"),
+        },
     )
 
 
 async def _ensure_manufacturer(nb, *, tag_refs: list[dict]) -> object:
-    return await rest_ensure_async(
+    return await rest_reconcile_async(
         nb,
         "/api/dcim/manufacturers/",
         lookup={"slug": "proxmox"},
@@ -57,11 +87,17 @@ async def _ensure_manufacturer(nb, *, tag_refs: list[dict]) -> object:
             "slug": "proxmox",
             "tags": tag_refs,
         },
+        schema=NetBoxManufacturerSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "tags": record.get("tags"),
+        },
     )
 
 
 async def _ensure_device_type(nb, *, manufacturer_id: int | None, tag_refs: list[dict]) -> object:
-    return await rest_ensure_async(
+    return await rest_reconcile_async(
         nb,
         "/api/dcim/device-types/",
         lookup={"model": "Proxmox Generic Device"},
@@ -71,11 +107,18 @@ async def _ensure_device_type(nb, *, manufacturer_id: int | None, tag_refs: list
             "manufacturer": manufacturer_id,
             "tags": tag_refs,
         },
+        schema=NetBoxDeviceTypeSyncState,
+        current_normalizer=lambda record: {
+            "model": record.get("model"),
+            "slug": record.get("slug"),
+            "manufacturer": record.get("manufacturer"),
+            "tags": record.get("tags"),
+        },
     )
 
 
 async def _ensure_device_role(nb, *, tag_refs: list[dict]) -> object:
-    return await rest_ensure_async(
+    return await rest_reconcile_async(
         nb,
         "/api/dcim/device-roles/",
         lookup={"slug": "proxmox-node"},
@@ -85,19 +128,35 @@ async def _ensure_device_role(nb, *, tag_refs: list[dict]) -> object:
             "color": "00bcd4",
             "tags": tag_refs,
         },
+        schema=NetBoxDeviceRoleSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "color": record.get("color"),
+            "tags": record.get("tags"),
+        },
     )
 
 
-async def _ensure_site(nb, *, tag_refs: list[dict]) -> object:
-    return await rest_ensure_async(
+async def _ensure_site(nb, *, cluster_name: str, tag_refs: list[dict]) -> object:
+    site_name = f"Proxmox Default Site - {cluster_name}"
+    site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
+    return await rest_reconcile_async(
         nb,
         "/api/dcim/sites/",
-        lookup={"slug": "proxmox-default-site"},
+        lookup={"slug": site_slug},
         payload={
-            "name": "Proxmox Default Site",
-            "slug": "proxmox-default-site",
+            "name": site_name,
+            "slug": site_slug,
             "status": "active",
             "tags": tag_refs,
+        },
+        schema=NetBoxSiteSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "status": record.get("status"),
+            "tags": record.get("tags"),
         },
     )
 
@@ -112,19 +171,31 @@ async def _ensure_device(
     site_id: int | None,
     tag_refs: list[dict],
 ) -> object:
-    return await rest_ensure_async(
+    payload = {
+        "name": device_name,
+        "tags": tag_refs,
+        "cluster": cluster_id,
+        "status": "active",
+        "description": f"Proxmox Node {device_name}",
+        "device_type": device_type_id,
+        "role": role_id,
+        "site": site_id,
+    }
+    return await rest_reconcile_async(
         nb,
         "/api/dcim/devices/",
-        lookup={"name": device_name},
-        payload={
-            "name": device_name,
-            "tags": tag_refs,
-            "cluster": cluster_id,
-            "status": "active",
-            "description": f"Proxmox Node {device_name}",
-            "device_type": device_type_id,
-            "role": role_id,
-            "site": site_id,
+        lookup={"name": device_name, "site_id": site_id},
+        payload=payload,
+        schema=NetBoxDeviceSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "status": record.get("status"),
+            "cluster": record.get("cluster"),
+            "device_type": record.get("device_type"),
+            "role": record.get("role"),
+            "site": record.get("site"),
+            "description": record.get("description"),
+            "tags": record.get("tags"),
         },
     )
 
@@ -269,7 +340,11 @@ async def create_proxmox_devices(
                         raise _wrap_device_phase_error("device role", error) from error
 
                     try:
-                        site = await _ensure_site(nb, tag_refs=tag_refs)
+                        site = await _ensure_site(
+                            nb,
+                            cluster_name=cluster_status.name,
+                            tag_refs=tag_refs,
+                        )
                     except Exception as error:
                         raise _wrap_device_phase_error("site", error) from error
 

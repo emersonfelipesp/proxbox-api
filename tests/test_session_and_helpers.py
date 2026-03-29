@@ -12,7 +12,8 @@ from sqlmodel import Session
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import ensure_tag_async, rest_create, rest_ensure_async
+from proxbox_api.netbox_rest import ensure_tag_async, rest_create, rest_ensure_async, rest_reconcile_async
+from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
@@ -338,6 +339,36 @@ def test_ensure_record_reuses_duplicate_resource_via_payload_fallback():
     assert endpoint.get_calls == [{"slug": "proxmox-node"}, {"name": "Proxmox Node"}]
 
 
+def test_ensure_record_reuses_unique_constraint_duplicate():
+    class UniqueConstraintEndpoint(AsyncEndpoint):
+        async def get(self, **kwargs):
+            self.get_calls.append(kwargs)
+            if kwargs.get("name") == "pve01" and kwargs.get("site_id") == 22:
+                return {"id": 88, "name": "pve01", "site": 22}
+            return None
+
+        async def create(self, payload):
+            self.created_payload = payload
+            raise RuntimeError('{"__all__":["Device name must be unique per site."]}')
+
+    endpoint = UniqueConstraintEndpoint()
+
+    existing = asyncio.run(
+        ensure_record(
+            endpoint,
+            {"name": "pve01"},
+            {
+                "name": "pve01",
+                "site": 22,
+                "status": "active",
+            },
+        )
+    )
+
+    assert existing == {"id": 88, "name": "pve01", "site": 22}
+    assert endpoint.get_calls == [{"name": "pve01"}, {"name": "pve01", "site_id": 22}]
+
+
 def test_ensure_tag_creates_missing_tag():
     facade = AsyncNetBoxFacade()
     created = asyncio.run(
@@ -475,6 +506,132 @@ def test_rest_ensure_async_reuses_duplicate_resource_via_payload_fallback():
             "/api/virtualization/cluster-types/",
             {"name": "Cluster", "limit": 2},
             None,
+            True,
+        ),
+    ]
+
+
+def test_rest_ensure_async_reuses_unique_constraint_duplicate():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): lambda query, payload: (
+                200,
+                {
+                    "count": 1
+                    if query.get("name") == "pve01" and query.get("site_id") == 22
+                    else 0,
+                    "results": (
+                        [{"id": 77, "name": "pve01", "site": 22}]
+                        if query.get("name") == "pve01" and query.get("site_id") == 22
+                        else []
+                    ),
+                },
+            ),
+            ("POST", "/api/dcim/devices/"): (
+                400,
+                {"__all__": ["Device name must be unique per site."]},
+            ),
+        }
+    )
+
+    reused = asyncio.run(
+        rest_ensure_async(
+            session,
+            "/api/dcim/devices/",
+            lookup={"name": "pve01"},
+            payload={
+                "name": "pve01",
+                "site": 22,
+                "status": "active",
+            },
+        )
+    )
+
+    assert reused.id == 77
+    assert session.client.calls == [
+        ("GET", "/api/dcim/devices/", {"name": "pve01", "limit": 2}, None, True),
+        ("GET", "/api/dcim/devices/", {"name": "pve01", "site_id": 22, "limit": 2}, None, True),
+    ]
+
+
+def test_rest_reconcile_async_patches_only_schema_detected_changes():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [
+                        {
+                            "id": 55,
+                            "name": "pve01",
+                            "status": {"value": "active"},
+                            "cluster": {"id": 12, "name": "lab"},
+                            "device_type": {"id": 14, "model": "Proxmox Generic Device"},
+                            "role": {"id": 15, "name": "Proxmox Node"},
+                            "site": {"id": 16, "name": "Proxmox Default Site - lab"},
+                            "description": "old description",
+                            "tags": [{"slug": "proxbox"}],
+                            "url": "https://netbox.local/api/dcim/devices/55/",
+                        }
+                    ],
+                },
+            ),
+            ("PATCH", "/api/dcim/devices/55/"): (
+                200,
+                {
+                    "id": 55,
+                    "name": "pve01",
+                    "status": {"value": "active"},
+                    "cluster": {"id": 12, "name": "lab"},
+                    "device_type": {"id": 14, "model": "Proxmox Generic Device"},
+                    "role": {"id": 15, "name": "Proxmox Node"},
+                    "site": {"id": 16, "name": "Proxmox Default Site - lab"},
+                    "description": "Proxmox Node pve01",
+                    "tags": [{"slug": "proxbox"}],
+                    "url": "https://netbox.local/api/dcim/devices/55/",
+                },
+            ),
+        }
+    )
+
+    updated = asyncio.run(
+        rest_reconcile_async(
+            session,
+            "/api/dcim/devices/",
+            lookup={"name": "pve01", "site_id": 16},
+            payload={
+                "name": "pve01",
+                "status": "active",
+                "cluster": 12,
+                "device_type": 14,
+                "role": 15,
+                "site": 16,
+                "description": "Proxmox Node pve01",
+                "tags": ["proxbox"],
+            },
+            schema=NetBoxDeviceSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "status": record.get("status"),
+                "cluster": record.get("cluster"),
+                "device_type": record.get("device_type"),
+                "role": record.get("role"),
+                "site": record.get("site"),
+                "description": record.get("description"),
+                "tags": record.get("tags"),
+            },
+        )
+    )
+
+    assert updated.description == "Proxmox Node pve01"
+    assert session.client.calls == [
+        ("GET", "/api/dcim/devices/", {"name": "pve01", "site_id": 16, "limit": 2}, None, True),
+        (
+            "PATCH",
+            "/api/dcim/devices/55/",
+            None,
+            {"description": "Proxmox Node pve01"},
             True,
         ),
     ]
