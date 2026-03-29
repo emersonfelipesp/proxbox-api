@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any
 
 from fastapi import Depends
@@ -13,6 +14,20 @@ from sqlmodel import select
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_sdk_sync import SyncProxy
+
+
+_DEFAULT_NETBOX_TIMEOUT = 120.0
+
+
+def _resolve_netbox_timeout() -> float:
+    raw_value = os.environ.get("PROXBOX_NETBOX_TIMEOUT", "").strip()
+    if not raw_value:
+        return _DEFAULT_NETBOX_TIMEOUT
+    try:
+        timeout = float(raw_value)
+    except ValueError:
+        return _DEFAULT_NETBOX_TIMEOUT
+    return timeout if timeout > 0 else _DEFAULT_NETBOX_TIMEOUT
 
 
 def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
@@ -28,6 +43,7 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
         token_version=tv,
         token_key=key,
         token_secret=endpoint.token,
+        timeout=_resolve_netbox_timeout(),
     )
 
 

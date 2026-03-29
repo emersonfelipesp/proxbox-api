@@ -2,6 +2,7 @@
 
 # FastAPI Imports
 import asyncio
+import os
 from datetime import datetime
 from typing import Annotated
 
@@ -66,6 +67,17 @@ from proxbox_api.utils import (
 from proxbox_api.utils.streaming import sse_event
 
 router = APIRouter()
+
+
+def _resolve_vm_sync_concurrency() -> int:
+    raw_value = os.environ.get("PROXBOX_VM_SYNC_MAX_CONCURRENCY", "").strip()
+    if not raw_value:
+        return 4
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return 4
+    return max(1, value)
 
 
 @router.get("/sync-process/journal-entry/test/create")
@@ -531,6 +543,13 @@ async def create_virtual_machines(
 
         return virtual_machine
 
+    max_concurrency = _resolve_vm_sync_concurrency()
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _run_vm_task(cluster_name: str, resource: dict):
+        async with semaphore:
+            return await create_vm_task(cluster_name, resource)
+
     async def _create_cluster_vms(cluster: dict) -> list:
         """
         Create virtual machines for a cluster.
@@ -546,7 +565,7 @@ async def create_virtual_machines(
         for cluster_name, resources in cluster.items():
             for resource in resources:
                 if resource.get("type") in ("qemu", "lxc"):
-                    tasks.append(create_vm_task(cluster_name, resource))
+                    tasks.append(_run_vm_task(cluster_name, resource))
 
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
@@ -724,7 +743,6 @@ async def create_virtual_machines_stream(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
     )
