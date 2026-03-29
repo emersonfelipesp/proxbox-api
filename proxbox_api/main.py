@@ -166,6 +166,18 @@ async def proxmoxer_exception_handler(request: Request, exc: ProxboxException):
     )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "message": "Internal server error",
+            "detail": str(exc),
+            "python_exception": str(exc),
+        },
+    )
+
+
 @app.get("/")
 async def standalone_info():
     return {
