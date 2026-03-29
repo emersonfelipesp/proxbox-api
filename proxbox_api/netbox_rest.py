@@ -223,7 +223,9 @@ class RestRecord:
         return True
 
 
-async def rest_list_async(nb: Any, path: str, *, query: dict[str, Any] | None = None) -> list[RestRecord]:
+async def rest_list_async(
+    nb: Any, path: str, *, query: dict[str, Any] | None = None
+) -> list[RestRecord]:
     api = _unwrap_api(nb)
     response = await api.client.request("GET", _normalize_path(path), query=query)
     payload = _extract_payload(response)
@@ -236,8 +238,7 @@ async def rest_list_async(nb: Any, path: str, *, query: dict[str, Any] | None = 
     if not isinstance(results, list):
         raise ProxboxException(message="NetBox REST list response missing results list")
     return [
-        RestRecord(api, path, item if isinstance(item, dict) else to_dict(item))
-        for item in results
+        RestRecord(api, path, item if isinstance(item, dict) else to_dict(item)) for item in results
     ]
 
 
@@ -397,12 +398,8 @@ def rest_reconcile(
 
 
 def nested_tag_payload(tag: Any) -> list[dict[str, Any]]:
-    slug = getattr(tag, "slug", None) or getattr(tag, "get", lambda *args, **kwargs: None)(
-        "slug"
-    )
-    name = getattr(tag, "name", None) or getattr(tag, "get", lambda *args, **kwargs: None)(
-        "name"
-    )
+    slug = getattr(tag, "slug", None) or getattr(tag, "get", lambda *args, **kwargs: None)("slug")
+    name = getattr(tag, "name", None) or getattr(tag, "get", lambda *args, **kwargs: None)("name")
     if not slug or not name:
         return []
     payload = {"name": name, "slug": slug}
