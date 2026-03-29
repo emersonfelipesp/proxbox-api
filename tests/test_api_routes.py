@@ -17,6 +17,7 @@ from proxbox_api.routes.netbox import (
     netbox_status,
     update_netbox_endpoint,
 )
+from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 from proxbox_api.routes.proxmox.endpoints import (
     ProxmoxEndpointCreate,
     ProxmoxEndpointUpdate,
@@ -314,3 +315,63 @@ def test_full_update_sync_wraps_vm_phase_unexpected_errors(monkeypatch):
                 tag=type("Tag", (), {"id": 1})(),
             )
         )
+
+
+def test_create_virtual_machines_handles_empty_clusters_and_journal_failures():
+    class FakeSyncProcess:
+        id = 101
+        status = "not-started"
+        runtime = None
+
+        def save(self):
+            return None
+
+    class FakeSyncProcessesEndpoint:
+        def create(self, payload):
+            return FakeSyncProcess()
+
+    class FakeJournalEntriesEndpoint:
+        def create(self, payload):
+            raise RuntimeError("journal create failed")
+
+    fake_netbox = type(
+        "FakeNetBoxSession",
+        (),
+        {
+            "plugins": type(
+                "Plugins",
+                (),
+                {
+                    "proxbox": type(
+                        "ProxboxPlugin",
+                        (),
+                        {
+                            "__getattr__": staticmethod(
+                                lambda name: FakeSyncProcessesEndpoint()
+                                if name == "sync-processes"
+                                else None
+                            )
+                        },
+                    )()
+                },
+            )(),
+            "extras": type(
+                "Extras",
+                (),
+                {"journal_entries": FakeJournalEntriesEndpoint()},
+            )(),
+        },
+    )()
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=fake_netbox,
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=type("Tag", (), {"id": 1})(),
+        )
+    )
+
+    assert result == []

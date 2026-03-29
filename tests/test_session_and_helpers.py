@@ -8,6 +8,7 @@ import pytest
 from sqlmodel import Session
 
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
+from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
@@ -50,6 +51,14 @@ class AsyncTagsEndpoint(AsyncEndpoint):
     pass
 
 
+class FailingAsyncTagsEndpoint(AsyncEndpoint):
+    async def get(self, **kwargs):
+        return None
+
+    async def create(self, payload):
+        raise RuntimeError("tag create failed")
+
+
 class AsyncNetBoxFacade:
     def __init__(self):
         self.status_calls = 0
@@ -58,6 +67,11 @@ class AsyncNetBoxFacade:
     async def status(self):
         self.status_calls += 1
         return {"netbox": "ok"}
+
+
+class AsyncFailingTagFacade:
+    def __init__(self):
+        self.extras = SimpleNamespace(tags=FailingAsyncTagsEndpoint())
 
 
 class AsyncIterableEndpoint:
@@ -316,6 +330,11 @@ def test_ensure_tag_creates_missing_tag():
     assert facade.extras.tags.created_payload["slug"] == "proxbox"
 
 
+def test_proxbox_tag_wraps_tag_creation_failures():
+    with pytest.raises(ProxboxException, match="Error ensuring Proxbox tag"):
+        asyncio.run(proxbox_tag(AsyncFailingTagFacade()))
+
+
 def test_sync_proxy_runs_async_methods_synchronously():
     facade = SyncProxy(AsyncNetBoxFacade())
     assert facade.status() == {"netbox": "ok"}
@@ -349,6 +368,30 @@ def test_get_netbox_session_requires_endpoint(db_engine):
     with Session(db_engine) as session:
         with pytest.raises(ProxboxException, match="No NetBox endpoint found"):
             netbox_session_module.get_netbox_session(session)
+
+
+def test_typed_cluster_status_wraps_model_validation_failures(monkeypatch):
+    session = FakeTypedProxmoxSession()
+
+    monkeypatch.setattr(
+        "proxbox_api.services.proxmox_helpers.generated_models.GetClusterStatusResponse.model_validate",
+        lambda payload: (_ for _ in ()).throw(ValueError("bad cluster payload")),
+    )
+
+    with pytest.raises(ProxboxException, match="Error fetching Proxmox cluster status"):
+        get_typed_cluster_status(session)
+
+
+def test_typed_vm_config_wraps_model_validation_failures(monkeypatch):
+    session = FakeTypedProxmoxSession()
+
+    monkeypatch.setattr(
+        "proxbox_api.services.proxmox_helpers.generated_models.GetNodesNodeQemuVmidConfigResponse.model_validate",
+        lambda payload: (_ for _ in ()).throw(ValueError("bad vm config")),
+    )
+
+    with pytest.raises(ProxboxException, match="Error fetching Proxmox VM config"):
+        get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
 
 
 def test_proxmox_session_supports_token_auth(monkeypatch):
