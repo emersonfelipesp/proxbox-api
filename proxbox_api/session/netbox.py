@@ -15,7 +15,6 @@ from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_sdk_sync import SyncProxy
 
-
 _DEFAULT_NETBOX_TIMEOUT = 120.0
 
 

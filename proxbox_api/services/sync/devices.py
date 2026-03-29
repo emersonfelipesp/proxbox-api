@@ -1,6 +1,5 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
-import asyncio
 import re
 from datetime import datetime
 from typing import Annotated
