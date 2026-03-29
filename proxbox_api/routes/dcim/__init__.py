@@ -4,6 +4,7 @@ import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import ProxboxTagDep
 from proxbox_api.netbox_rest import nested_tag_payload, rest_reconcile_async
@@ -12,7 +13,11 @@ from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState, NetBo
 # Proxmox Deps
 from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfacesDep
 from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep
+from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep
+from proxbox_api.session.netbox import NetBoxSessionDep
+from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.utils.streaming import sse_event
 
 router = APIRouter()
 
@@ -33,8 +38,79 @@ async def create_devices(proxmox_create_devices_dep: ProxmoxCreateDevicesDep):
     return proxmox_create_devices_dep
 
 
-async def create_interface_and_ip(netbox_session: NetBoxAsyncSessionDep, tag: ProxboxTagDep, node_interface, node):
-    interface_type_mapping: dict = {
+@router.get("/devices/create/stream", response_model=None)
+async def create_devices_stream(
+    netbox_session: NetBoxSessionDep,
+    clusters_status: ClusterStatusDep,
+    tag: ProxboxTagDep,
+):
+    async def event_stream():
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "devices",
+                    "status": "started",
+                    "message": "Starting devices synchronization.",
+                },
+            )
+            result = await create_proxmox_devices(
+                netbox_session=netbox_session,
+                clusters_status=clusters_status,
+                tag=tag,
+                use_websocket=False,
+            )
+            yield sse_event(
+                "step",
+                {
+                    "step": "devices",
+                    "status": "completed",
+                    "message": "Devices synchronization finished.",
+                    "result": {"count": len(result)},
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Devices sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "devices",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Devices sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def create_interface_and_ip(
+    netbox_session: NetBoxAsyncSessionDep, tag: ProxboxTagDep, node_interface, node
+):
+    interface_type_mapping = {
         "lo": "loopback",
         "bridge": "bridge",
         "bond": "lag",
@@ -54,7 +130,7 @@ async def create_interface_and_ip(netbox_session: NetBoxAsyncSessionDep, tag: Pr
         },
         payload={
             "device": node_data.get("id", 0),
-            "name": node_interface.iface,
+            "name": str(node_interface.iface),
             "status": "active",
             "type": interface_type_mapping.get(node_interface.type, "other"),
             "tags": nested_tag_payload(tag),
