@@ -17,6 +17,7 @@ from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 # Proxbox API Imports
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_compat import NetBoxBase
+from proxbox_api.netbox_rest import rest_create, rest_list
 from proxbox_api.openapi_custom import custom_openapi_builder
 
 # ProxBox Admin Panel Routes
@@ -237,7 +238,7 @@ async def get_sync_processes():
     try:
         sync_processes = [
             process.serialize()
-            for process in nb.plugins.proxbox.__getattr__("sync-processes").all()
+            for process in rest_list(nb, "/api/plugins/proxbox/sync-processes/")
         ]
         return sync_processes
     except Exception as error:
@@ -257,12 +258,16 @@ async def create_sync_process():
         raise ProxboxException(message="Failed to establish NetBox session")
 
     try:
-        sync_process = nb.plugins.proxbox.__getattr__("sync-processes").create(
-            name=f"sync-process-{datetime.now()}",
-            sync_type="all",
-            status="not-started",
-            started_at=str(datetime.now()),
-            completed_at=str(datetime.now()),
+        sync_process = rest_create(
+            nb,
+            "/api/plugins/proxbox/sync-processes/",
+            {
+                "name": f"sync-process-{datetime.now()}",
+                "sync_type": "all",
+                "status": "not-started",
+                "started_at": str(datetime.now()),
+                "completed_at": str(datetime.now()),
+            },
         )
         return sync_process
     except Exception as error:
@@ -457,11 +462,15 @@ async def websocket_sync_commands(
                 sync_process = None
 
                 try:
-                    sync_process = nb.plugins.proxbox.__getattr__("sync-processes").create(
-                        name=f"sync-process-{datetime.now()}",
-                        sync_type="all",
-                        status="not-started",
-                        started_at=str(datetime.now()),
+                    sync_process = rest_create(
+                        nb,
+                        "/api/plugins/proxbox/sync-processes/",
+                        {
+                            "name": f"sync-process-{datetime.now()}",
+                            "sync_type": "all",
+                            "status": "not-started",
+                            "started_at": str(datetime.now()),
+                        },
                     )
                 except Exception as error:
                     print(error)

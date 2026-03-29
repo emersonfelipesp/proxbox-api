@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from netbox_sdk.client import ApiResponse
 import pytest
 from sqlmodel import Session
 
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_rest import ensure_tag_async, rest_create
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
@@ -84,38 +87,25 @@ class AsyncIterableEndpoint:
             yield item
 
 
-class AsyncNetBoxPluginsFacade:
-    def __init__(self, items):
-        self.plugins = SimpleNamespace(
-            proxbox=SimpleNamespace(
-                __getattr__=lambda name: (
-                    AsyncIterableEndpoint(items) if name == "endpoints/proxmox" else None
-                )
-            )
-        )
+class RestClientStub:
+    def __init__(self, responses):
+        self._responses = responses
+        self.calls = []
+
+    async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+        self.calls.append((method, path, query, payload, expect_json))
+        key = (method, path)
+        response = self._responses[key]
+        if callable(response):
+            response = response(query, payload)
+        status, body = response
+        text = body if isinstance(body, str) else json.dumps(body)
+        return ApiResponse(status=status, text=text, headers={"Content-Type": "application/json"})
 
 
-class BrokenAsyncEndpoint:
-    def all(self):
-        raise ValueError("Resource does not expose list path: plugins/proxbox/endpoints/proxmox")
-
-
-class AsyncNetBoxFallbackFacade:
-    def __init__(self, payload):
-        self._payload = payload
-        self.plugins = SimpleNamespace(
-            proxbox=SimpleNamespace(
-                __getattr__=lambda name: (
-                    BrokenAsyncEndpoint() if name == "endpoints/proxmox" else None
-                )
-            )
-        )
-        self.client = SimpleNamespace(request=self._request)
-
-    async def _request(self, method, path):
-        assert method == "GET"
-        assert path == "/api/plugins/proxbox/endpoints/proxmox/"
-        return SimpleNamespace(json=lambda: self._payload)
+class AsyncNetBoxRestFacade:
+    def __init__(self, responses):
+        self.client = RestClientStub(responses)
 
 
 class FakeProxmoxResource:
@@ -336,6 +326,78 @@ def test_proxbox_tag_wraps_tag_creation_failures():
         asyncio.run(proxbox_tag(AsyncFailingTagFacade()))
 
 
+def test_ensure_tag_async_uses_rest_client():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/extras/tags/"): (200, {"count": 0, "results": []}),
+            ("POST", "/api/extras/tags/"): (201, {"id": 99, "name": "Proxbox", "slug": "proxbox"}),
+        }
+    )
+
+    created = asyncio.run(
+        ensure_tag_async(
+            session,
+            name="Proxbox",
+            slug="proxbox",
+            color="9e9e9e",
+            description="Synced by proxbox-api",
+        )
+    )
+
+    assert created.id == 99
+    assert session.client.calls == [
+        ("GET", "/api/extras/tags/", {"slug": "proxbox", "limit": 2}, None, True),
+        (
+            "POST",
+            "/api/extras/tags/",
+            None,
+            {
+                "name": "Proxbox",
+                "slug": "proxbox",
+                "color": "9e9e9e",
+                "description": "Synced by proxbox-api",
+            },
+            True,
+        ),
+    ]
+
+
+def test_rest_create_returns_sync_record_that_can_save_and_delete():
+    api = AsyncNetBoxRestFacade(
+        {
+            ("POST", "/api/plugins/proxbox/sync-processes/"): (
+                201,
+                {
+                    "id": 101,
+                    "name": "sync-devices",
+                    "status": "not-started",
+                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
+                },
+            ),
+            ("PATCH", "/api/plugins/proxbox/sync-processes/101/"): (
+                200,
+                {
+                    "id": 101,
+                    "name": "sync-devices",
+                    "status": "completed",
+                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
+                },
+            ),
+            ("DELETE", "/api/plugins/proxbox/sync-processes/101/"): (204, ""),
+        }
+    )
+
+    record = rest_create(
+        SyncProxy(api),
+        "/api/plugins/proxbox/sync-processes/",
+        {"name": "sync-devices", "status": "not-started"},
+    )
+
+    record.status = "completed"
+    assert record.save().status == "completed"
+    assert record.delete() is True
+
+
 def test_sync_proxy_runs_async_methods_synchronously():
     facade = SyncProxy(AsyncNetBoxFacade())
     assert facade.status() == {"netbox": "ok"}
@@ -538,51 +600,30 @@ def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
 def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
 
-    endpoint = SimpleNamespace(
-        ip_address=SimpleNamespace(address="10.0.0.10/24"),
-        domain="pve.local",
-        port=8006,
-        username="root@pam",
-        password="password",
-        verify_ssl=False,
-        token_name=None,
-        token_value=None,
-    )
-
     monkeypatch.setattr(
         "proxbox_api.session.proxmox.get_netbox_async_session",
-        lambda database_session: AsyncNetBoxPluginsFacade([endpoint]),
-    )
-
-    with Session(db_engine) as session:
-        sessions = asyncio.run(proxmox_sessions(session, source="netbox"))
-
-    assert len(sessions) == 1
-    assert sessions[0].name == "lab-cluster"
-
-
-def test_proxmox_sessions_reads_netbox_endpoints_via_client_fallback(monkeypatch, db_engine):
-    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
-
-    payload = {
-        "count": 1,
-        "results": [
+        lambda database_session: AsyncNetBoxRestFacade(
             {
-                "ip_address": {"address": "10.0.0.10/24"},
-                "domain": "pve.local",
-                "port": 8006,
-                "username": "root@pam",
-                "password": "password",
-                "verify_ssl": False,
-                "token_name": None,
-                "token_value": None,
+                ("GET", "/api/plugins/proxbox/endpoints/proxmox/"): (
+                    200,
+                    {
+                        "count": 1,
+                        "results": [
+                            {
+                                "ip_address": {"address": "10.0.0.10/24"},
+                                "domain": "pve.local",
+                                "port": 8006,
+                                "username": "root@pam",
+                                "password": "password",
+                                "verify_ssl": False,
+                                "token_name": None,
+                                "token_value": None,
+                            }
+                        ],
+                    },
+                )
             }
-        ],
-    }
-
-    monkeypatch.setattr(
-        "proxbox_api.session.proxmox.get_netbox_async_session",
-        lambda database_session: AsyncNetBoxFallbackFacade(payload),
+        ),
     )
 
     with Session(db_engine) as session:

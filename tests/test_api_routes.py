@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 
+from netbox_sdk.client import ApiResponse
 import pytest
 from fastapi import HTTPException
 
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
-from proxbox_api.main import full_update_sync, standalone_info
+from proxbox_api.main import create_sync_process, full_update_sync, get_sync_processes, standalone_info
+from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
@@ -40,6 +43,54 @@ def test_root_route_returns_service_metadata():
 def test_sync_entrypoints_share_proxbox_tag_dependency():
     for entrypoint in (create_proxmox_devices, create_virtual_machines, full_update_sync):
         assert "tag" in inspect.signature(entrypoint).parameters
+
+
+def test_sync_process_routes_use_rest_helpers(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET":
+                body = {
+                    "count": 1,
+                    "results": [
+                        {
+                            "id": 5,
+                            "name": "sync-all",
+                            "sync_type": "all",
+                            "status": "completed",
+                            "started_at": "2025-03-13T15:08:09.051478Z",
+                            "completed_at": "2025-03-13T15:08:09.051478Z",
+                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/5/",
+                            "display": "sync-all (all)",
+                        }
+                    ],
+                }
+            else:
+                body = {
+                    "id": 6,
+                    "name": "sync-all",
+                    "sync_type": "all",
+                    "status": "not-started",
+                    "started_at": "2025-03-13T15:08:09.051478Z",
+                    "completed_at": "2025-03-13T15:08:09.051478Z",
+                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/6/",
+                    "display": "sync-all (all)",
+                }
+            return ApiResponse(status=200 if method == "GET" else 201, text=json.dumps(body))
+
+    fake_session = SyncProxy(type("FakeApi", (), {"client": FakeClient()})())
+    monkeypatch.setattr("proxbox_api.main.get_raw_netbox_session", lambda: fake_session)
+
+    listed = asyncio.run(get_sync_processes())
+    created = asyncio.run(create_sync_process())
+
+    assert listed[0]["sync_type"] == "all"
+    assert created.sync_type == "all"
+    assert fake_session.client.calls[0][0:2] == ("GET", "/api/plugins/proxbox/sync-processes/")
+    assert fake_session.client.calls[1][0:2] == ("POST", "/api/plugins/proxbox/sync-processes/")
 
 
 def test_proxmox_endpoint_crud_lifecycle(db_session):
@@ -333,9 +384,39 @@ def test_create_virtual_machines_handles_empty_clusters_and_journal_failures():
         def save(self):
             return None
 
-    class FakeSyncProcessesEndpoint:
-        def create(self, payload):
-            return FakeSyncProcess()
+    class FakeClient:
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            if method == "POST" and path == "/api/plugins/proxbox/sync-processes/":
+                return ApiResponse(
+                    status=201,
+                    text=json.dumps(
+                        {
+                            "id": 101,
+                            "name": "sync-vms",
+                            "sync_type": "virtual-machines",
+                            "status": "not-started",
+                            "started_at": "2025-03-13T15:08:09.051478Z",
+                            "completed_at": None,
+                            "runtime": None,
+                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
+                            "display": "sync-vms (virtual-machines)",
+                        }
+                    ),
+                )
+            if method == "PATCH" and path == "/api/plugins/proxbox/sync-processes/101/":
+                body = {
+                    "id": 101,
+                    "name": "sync-vms",
+                    "sync_type": "virtual-machines",
+                    "status": payload.get("status", "completed"),
+                    "started_at": "2025-03-13T15:08:09.051478Z",
+                    "completed_at": payload.get("completed_at"),
+                    "runtime": payload.get("runtime"),
+                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
+                    "display": "sync-vms (virtual-machines)",
+                }
+                return ApiResponse(status=200, text=json.dumps(body))
+            raise AssertionError((method, path, query, payload, expect_json))
 
     class FakeJournalEntriesEndpoint:
         def create(self, payload):
@@ -345,23 +426,7 @@ def test_create_virtual_machines_handles_empty_clusters_and_journal_failures():
         "FakeNetBoxSession",
         (),
         {
-            "plugins": type(
-                "Plugins",
-                (),
-                {
-                    "proxbox": type(
-                        "ProxboxPlugin",
-                        (),
-                        {
-                            "__getattr__": staticmethod(
-                                lambda name: FakeSyncProcessesEndpoint()
-                                if name == "sync-processes"
-                                else None
-                            )
-                        },
-                    )()
-                },
-            )(),
+            "client": FakeClient(),
             "extras": type(
                 "Extras",
                 (),

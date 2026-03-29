@@ -6,13 +6,13 @@ from typing import Annotated, Any
 from fastapi import Depends
 
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_sdk_helpers import ensure_tag
+from proxbox_api.netbox_rest import ensure_tag_async
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
 
 
 async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep):
     try:
-        return await ensure_tag(
+        return await ensure_tag_async(
             netbox_session,
             name="Proxbox",
             slug="proxbox",
