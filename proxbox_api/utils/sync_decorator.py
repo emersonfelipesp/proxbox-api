@@ -5,6 +5,7 @@ from datetime import datetime
 from functools import wraps
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_rest import rest_create
 
 
 def sync_process(sync_type: str):
@@ -42,7 +43,9 @@ def sync_process(sync_type: str):
                 tag_id = getattr(tag, "id", 0)
                 tags = [tag_id] if tag_id > 0 else []
 
-                sync_process = netbox_session.plugins.proxbox.__getattr__("sync-processes").create(
+                sync_process = rest_create(
+                    netbox_session,
+                    "/api/plugins/proxbox/sync-processes/",
                     {
                         "name": f"sync-{sync_type}-{start_time_str}",
                         "sync_type": sync_type,
@@ -51,7 +54,7 @@ def sync_process(sync_type: str):
                         "completed_at": None,
                         "runtime": None,
                         "tags": tags,
-                    }
+                    },
                 )
 
                 # Add to kwargs to make it accessible in the function

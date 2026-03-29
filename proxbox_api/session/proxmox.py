@@ -13,6 +13,7 @@ from sqlmodel import select
 from proxbox_api.database import DatabaseSessionDep, ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
 
 # Pynetbox-api Imports
@@ -494,35 +495,16 @@ async def load_proxmox_session_schemas(
     if source == "netbox":
         netbox_session = get_netbox_async_session(database_session=database_session)
 
-        async def fetch_netbox_endpoints() -> list[Any]:
-            endpoint = netbox_session.plugins.proxbox.__getattr__("endpoints/proxmox")
-            try:
-                results = []
-                async for item in endpoint.all():
-                    results.append(item)
-                return results
-            except ValueError:
-                response = await netbox_session.client.request(
-                    "GET", "/api/plugins/proxbox/endpoints/proxmox/"
-                )
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise ProxboxException(
-                        message="Invalid NetBox response while fetching Proxmox endpoints",
-                    )
-                results = payload.get("results")
-                if not isinstance(results, list):
-                    raise ProxboxException(
-                        message="NetBox Proxmox endpoints response missing results list",
-                    )
-                return results
-            except JSONDecodeError as error:
-                raise ProxboxException(
-                    message="NetBox returned invalid JSON while fetching Proxmox endpoints",
-                    python_exception=str(error),
-                )
-
-        netbox_endpoints = await fetch_netbox_endpoints()
+        try:
+            netbox_endpoints = await rest_list_async(
+                netbox_session,
+                "/api/plugins/proxbox/endpoints/proxmox/",
+            )
+        except JSONDecodeError as error:
+            raise ProxboxException(
+                message="NetBox returned invalid JSON while fetching Proxmox endpoints",
+                python_exception=str(error),
+            )
         return [_parse_netbox_endpoint(endpoint) for endpoint in netbox_endpoints]
 
     db_endpoints = database_session.exec(select(ProxmoxEndpoint)).all()

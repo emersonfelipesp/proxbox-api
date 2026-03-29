@@ -14,6 +14,7 @@ from proxbox_api.dependencies import (
 )
 from proxbox_api.exception import ProxboxException  # Proxbox Exception
 from proxbox_api.logger import logger  # Logger
+from proxbox_api.netbox_rest import rest_create, rest_list
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_compat import (
@@ -67,11 +68,15 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
 
     try:
         # Create sync process first
-        sync_process = nb.plugins.proxbox.__getattr__("sync-processes").create(
-            name=f"journal-entry-test-{datetime.now().isoformat()}",
-            sync_type="virtual-machines",
-            status="not-started",
-            started_at=start_time,
+        sync_process = rest_create(
+            nb,
+            "/api/plugins/proxbox/sync-processes/",
+            {
+                "name": f"journal-entry-test-{datetime.now().isoformat()}",
+                "sync_type": "virtual-machines",
+                "status": "not-started",
+                "started_at": start_time,
+            },
         )
         print(f"Created sync process: {sync_process}")
 
@@ -707,18 +712,22 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
         try:
             # Create the backup on NetBox using a cached session
             netbox_backup = await asyncio.to_thread(
-                lambda: nb.plugins.proxbox.__getattr__("backups").create(
-                    storage=storage_name,
-                    virtual_machine=virtual_machine.get("id"),
-                    subtype=backup.get("subtype"),
-                    creation_time=creation_time,
-                    size=backup.get("size"),
-                    verification_state=verification_state,
-                    verification_upid=verification_upid,
-                    volume_id=volume_id,
-                    notes=backup.get("notes"),
-                    vmid=vmid,
-                    format=backup.get("format"),
+                lambda: rest_create(
+                    nb,
+                    "/api/plugins/proxbox/backups/",
+                    {
+                        "storage": storage_name,
+                        "virtual_machine": virtual_machine.get("id"),
+                        "subtype": backup.get("subtype"),
+                        "creation_time": creation_time,
+                        "size": backup.get("size"),
+                        "verification_state": verification_state,
+                        "verification_upid": verification_upid,
+                        "volume_id": volume_id,
+                        "notes": backup.get("notes"),
+                        "vmid": vmid,
+                        "format": backup.get("format"),
+                    },
                 )
             )
 
@@ -878,14 +887,18 @@ async def create_all_virtual_machine_backups(
 
     try:
         # Create sync process
-        sync_process = nb.plugins.proxbox.__getattr__("sync-processes").create(
-            name=f"sync-virtual-machines-backups-{start_time}",
-            sync_type="vm-backups",
-            status="not-started",
-            started_at=str(start_time),
-            completed_at=None,
-            runtime=None,
-            tags=[tag.id],
+        sync_process = rest_create(
+            nb,
+            "/api/plugins/proxbox/sync-processes/",
+            {
+                "name": f"sync-virtual-machines-backups-{start_time}",
+                "sync_type": "vm-backups",
+                "status": "not-started",
+                "started_at": str(start_time),
+                "completed_at": None,
+                "runtime": None,
+                "tags": [tag.id],
+            },
         )
 
         journal_messages.append("## Backup Sync Process Started")
@@ -987,7 +1000,7 @@ async def create_all_virtual_machine_backups(
             journal_messages.append("\n## Deleting Nonexistent Backups")
             try:
                 # Get all backups from NetBox
-                netbox_backups = nb.plugins.proxbox.__getattr__("backups").all()
+                netbox_backups = rest_list(nb, "/api/plugins/proxbox/backups/")
 
                 for backup in netbox_backups:
                     print(
