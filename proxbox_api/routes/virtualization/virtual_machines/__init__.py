@@ -21,7 +21,13 @@ from proxbox_api.logger import logger  # Logger
 from proxbox_api.netbox_compat import (
     VirtualMachine,
 )
-from proxbox_api.netbox_rest import rest_create, rest_create_async, rest_list, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    rest_create,
+    rest_create_async,
+    rest_list,
+    rest_list_async,
+    rest_reconcile_async,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxBackupSyncState,
     NetBoxDeviceRoleSyncState,
