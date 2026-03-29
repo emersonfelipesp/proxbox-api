@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
+from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -53,7 +54,7 @@ def _wrap_sync(value: Any) -> Any:
         return tuple(_wrap_sync(item) for item in value)
     if isinstance(value, dict):
         return value
-    if hasattr(value, "__aiter__"):
+    if isinstance(value, (AsyncIterator, AsyncIterable)):
         return _wrap_sync(_collect_async_iter(value))
     if hasattr(value, "serialize") or hasattr(value, "__dict__"):
         return SyncProxy(value)
