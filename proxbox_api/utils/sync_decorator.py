@@ -80,6 +80,12 @@ def sync_process(sync_type: str):
                 if sync_process:
                     sync_process.status = "failed"
                     sync_process.save()
+                if isinstance(error, ProxboxException):
+                    raise ProxboxException(
+                        message=error.message,
+                        detail=error.detail,
+                        python_exception=error.python_exception,
+                    )
                 raise ProxboxException(message=f"Error during {sync_type} sync", detail=str(error))
 
         return wrapper

@@ -1,7 +1,6 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
 import asyncio
-import traceback
 from datetime import datetime
 from typing import Annotated
 
@@ -11,17 +10,137 @@ from proxbox_api.cache import global_cache
 from proxbox_api.dependencies import ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_compat import (
-    Cluster,
-    ClusterType,
-    Device,
-    DeviceRole,
-    DeviceType,
-    Site,
+from proxbox_api.netbox_rest import (
+    nested_tag_payload,
+    rest_ensure_async,
 )
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.utils import return_status_html, sync_process
+
+
+async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object:
+    return await rest_ensure_async(
+        nb,
+        "/api/virtualization/cluster-types/",
+        lookup={"slug": mode},
+        payload={
+            "name": mode.capitalize(),
+            "slug": mode,
+            "description": f"Proxmox {mode} mode",
+            "tags": tag_refs,
+        },
+    )
+
+
+async def _ensure_cluster(nb, *, cluster_name: str, cluster_type_id: int | None, mode: str, tag_refs):
+    return await rest_ensure_async(
+        nb,
+        "/api/virtualization/clusters/",
+        lookup={"name": cluster_name},
+        payload={
+            "name": cluster_name,
+            "type": cluster_type_id,
+            "description": f"Proxmox {mode} cluster.",
+            "tags": tag_refs,
+        },
+    )
+
+
+async def _ensure_manufacturer(nb, *, tag_refs: list[dict]) -> object:
+    return await rest_ensure_async(
+        nb,
+        "/api/dcim/manufacturers/",
+        lookup={"slug": "proxmox"},
+        payload={
+            "name": "Proxmox",
+            "slug": "proxmox",
+            "tags": tag_refs,
+        },
+    )
+
+
+async def _ensure_device_type(nb, *, manufacturer_id: int | None, tag_refs: list[dict]) -> object:
+    return await rest_ensure_async(
+        nb,
+        "/api/dcim/device-types/",
+        lookup={"model": "Proxmox Generic Device"},
+        payload={
+            "model": "Proxmox Generic Device",
+            "slug": "proxmox-generic-device",
+            "manufacturer": manufacturer_id,
+            "tags": tag_refs,
+        },
+    )
+
+
+async def _ensure_device_role(nb, *, tag_refs: list[dict]) -> object:
+    return await rest_ensure_async(
+        nb,
+        "/api/dcim/device-roles/",
+        lookup={"slug": "proxmox-node"},
+        payload={
+            "name": "Proxmox Node",
+            "slug": "proxmox-node",
+            "color": "00bcd4",
+            "tags": tag_refs,
+        },
+    )
+
+
+async def _ensure_site(nb, *, tag_refs: list[dict]) -> object:
+    return await rest_ensure_async(
+        nb,
+        "/api/dcim/sites/",
+        lookup={"slug": "proxmox-default-site"},
+        payload={
+            "name": "Proxmox Default Site",
+            "slug": "proxmox-default-site",
+            "status": "active",
+            "tags": tag_refs,
+        },
+    )
+
+
+async def _ensure_device(
+    nb,
+    *,
+    device_name: str,
+    cluster_id: int | None,
+    device_type_id: int | None,
+    role_id: int | None,
+    site_id: int | None,
+    tag_refs: list[dict],
+) -> object:
+    return await rest_ensure_async(
+        nb,
+        "/api/dcim/devices/",
+        lookup={"name": device_name},
+        payload={
+            "name": device_name,
+            "tags": tag_refs,
+            "cluster": cluster_id,
+            "status": "active",
+            "description": f"Proxmox Node {device_name}",
+            "device_type": device_type_id,
+            "role": role_id,
+            "site": site_id,
+        },
+    )
+
+
+def _wrap_device_phase_error(phase: str, error: Exception) -> ProxboxException:
+    if isinstance(error, ProxboxException):
+        return ProxboxException(
+            message=f"Error creating NetBox {phase}",
+            detail=error.detail or error.message,
+            python_exception=error.python_exception,
+        )
+    return ProxboxException(
+        message=f"Error creating NetBox {phase}",
+        detail=str(error),
+        python_exception=str(error),
+    )
 
 
 @sync_process(sync_type="devices")
@@ -35,8 +154,7 @@ async def create_proxmox_devices(
     use_css: bool = False,
     sync_process=None,
 ):
-    tag_id = getattr(tag, "id", 0)
-    tags = [tag_id] if tag_id > 0 else []
+    tag_refs = nested_tag_payload(tag)
 
     # GET /api/plugins/proxbox/sync-processes/
     nb = netbox_session
@@ -109,49 +227,68 @@ async def create_proxmox_devices(
                     journal_messages.append(
                         f"- Creating cluster type: {cluster_status.mode.capitalize()}"
                     )
-                    cluster_type = await asyncio.to_thread(
-                        lambda: ClusterType(
-                            name=cluster_status.mode.capitalize(),
-                            slug=cluster_status.mode,
-                            description=f"Proxmox {cluster_status.mode} mode",
-                            tags=tags,
+                    try:
+                        cluster_type = await _ensure_cluster_type(
+                            nb,
+                            mode=cluster_status.mode,
+                            tag_refs=tag_refs,
                         )
-                    )
+                    except Exception as error:
+                        raise _wrap_device_phase_error("cluster type", error) from error
 
                     journal_messages.append(f"- Creating cluster: {cluster_status.name}")
-                    cluster = await asyncio.to_thread(
-                        lambda: Cluster(
-                            name=cluster_status.name,
-                            type=getattr(cluster_type, "id", None),
-                            description=f"Proxmox {cluster_status.mode} cluster.",
-                            tags=tags,
+                    try:
+                        cluster = await _ensure_cluster(
+                            nb,
+                            cluster_name=cluster_status.name,
+                            cluster_type_id=getattr(cluster_type, "id", None),
+                            mode=cluster_status.mode,
+                            tag_refs=tag_refs,
                         )
-                    )
+                    except Exception as error:
+                        raise _wrap_device_phase_error("cluster", error) from error
 
-                    journal_messages.append("- Creating device type, role, and site placeholders")
-                    device_type = await asyncio.to_thread(
-                        lambda: DeviceType(bootstrap_placeholder=True)
-                    )
-                    role = await asyncio.to_thread(lambda: DeviceRole(bootstrap_placeholder=True))
-                    site = await asyncio.to_thread(lambda: Site(bootstrap_placeholder=True))
+                    journal_messages.append("- Creating device type, role, manufacturer, and site placeholders")
+                    try:
+                        manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
+                    except Exception as error:
+                        raise _wrap_device_phase_error("manufacturer", error) from error
+
+                    try:
+                        device_type = await _ensure_device_type(
+                            nb,
+                            manufacturer_id=getattr(manufacturer, "id", None),
+                            tag_refs=tag_refs,
+                        )
+                    except Exception as error:
+                        raise _wrap_device_phase_error("device type", error) from error
+
+                    try:
+                        role = await _ensure_device_role(nb, tag_refs=tag_refs)
+                    except Exception as error:
+                        raise _wrap_device_phase_error("device role", error) from error
+
+                    try:
+                        site = await _ensure_site(nb, tag_refs=tag_refs)
+                    except Exception as error:
+                        raise _wrap_device_phase_error("site", error) from error
 
                     netbox_device = None
 
                     if cluster is not None:
                         journal_messages.append(f"- Creating device: {device_name}")
-                        # TODO: Based on name.ip create Device IP Address
-                        netbox_device = await asyncio.to_thread(
-                            lambda: Device(
-                                name=device_name,
-                                tags=tags,
-                                cluster=getattr(cluster, "id", None),
-                                status="active",
-                                description=f"Proxmox Node {device_name}",
-                                device_type=getattr(device_type, "id", None),
-                                role=getattr(role, "id", None),
-                                site=getattr(site, "id", None),
+                        try:
+                            netbox_device = await _ensure_device(
+                                nb,
+                                device_name=device_name,
+                                cluster_id=getattr(cluster, "id", None),
+                                device_type_id=getattr(device_type, "id", None),
+                                role_id=getattr(role, "id", None),
+                                site_id=getattr(site, "id", None),
+                                tag_refs=tag_refs,
                             )
-                        )
+                        except Exception as error:
+                            raise _wrap_device_phase_error("device", error) from error
 
                         journal_messages.append(
                             f"- ✅ Device created/synced successfully: {device_name}"
@@ -219,10 +356,12 @@ async def create_proxmox_devices(
                     failed_devices += 1
                     error_msg = f"Error creating device {device_name}: {str(error)}"
                     journal_messages.append(f"- ❌ {error_msg}")
-                    traceback.print_exc()
+                    if isinstance(error, ProxboxException):
+                        raise error
                     raise ProxboxException(
-                        message="Unknown Error creating device in Netbox",
-                        detail=f"Error: {str(error)}",
+                        message="Error creating NetBox device",
+                        detail=str(error),
+                        python_exception=str(error),
                     )
 
         # Send end message to websocket to indicate that the creation of devices is finished.
@@ -242,10 +381,18 @@ async def create_proxmox_devices(
         journal_messages.append(f"- **Successfully Created**: {successful_devices}")
         journal_messages.append(f"- **Failed**: {failed_devices}")
 
+    except ProxboxException as error:
+        error_msg = f"Error during device sync: {error.message}"
+        journal_messages.append(f"\n### ❌ Error\n{error_msg}")
+        raise ProxboxException(
+            message=error_msg,
+            detail=error.detail,
+            python_exception=error.python_exception,
+        )
     except Exception as error:
         error_msg = f"Error during device sync: {str(error)}"
         journal_messages.append(f"\n### ❌ Error\n{error_msg}")
-        raise ProxboxException(message=error_msg)
+        raise ProxboxException(message=error_msg, detail=str(error), python_exception=str(error))
 
     finally:
         # Create journal entry
@@ -257,7 +404,7 @@ async def create_proxmox_devices(
                         "assigned_object_id": sync_process.id,
                         "kind": "info",
                         "comments": "\n".join(journal_messages),
-                        "tags": tags,
+                        "tags": tag_refs,
                     }
                 )
 

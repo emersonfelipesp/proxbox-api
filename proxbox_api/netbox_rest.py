@@ -226,6 +226,61 @@ def rest_create(nb: Any, path: str, payload: dict[str, Any]) -> Any:
     return _wrap_sync(_run(rest_create_async(nb, path, payload)))
 
 
+async def rest_ensure_async(
+    nb: Any,
+    path: str,
+    *,
+    lookup: dict[str, Any],
+    payload: dict[str, Any],
+) -> RestRecord:
+    existing = await rest_first_async(
+        nb,
+        path,
+        query={**lookup, "limit": 2},
+    )
+    if existing:
+        return existing
+    try:
+        return await rest_create_async(nb, path, payload)
+    except ProxboxException:
+        retry = await rest_first_async(
+            nb,
+            path,
+            query={**lookup, "limit": 2},
+        )
+        if retry:
+            return retry
+        raise
+
+
+def rest_ensure(
+    nb: Any,
+    path: str,
+    *,
+    lookup: dict[str, Any],
+    payload: dict[str, Any],
+) -> Any:
+    return _wrap_sync(_run(rest_ensure_async(nb, path, lookup=lookup, payload=payload)))
+
+
+def nested_tag_payload(tag: Any) -> list[dict[str, Any]]:
+    slug = getattr(tag, "slug", None) or getattr(tag, "get", lambda *args, **kwargs: None)(
+        "slug"
+    )
+    name = getattr(tag, "name", None) or getattr(tag, "get", lambda *args, **kwargs: None)(
+        "name"
+    )
+    if not slug or not name:
+        return []
+    payload = {"name": name, "slug": slug}
+    color = getattr(tag, "color", None) or getattr(tag, "get", lambda *args, **kwargs: None)(
+        "color"
+    )
+    if color:
+        payload["color"] = color
+    return [payload]
+
+
 async def ensure_tag_async(
     nb: Any,
     *,
