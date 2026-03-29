@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
-from proxbox_api.main import standalone_info
+from proxbox_api.main import full_update_sync, standalone_info
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
     delete_netbox_endpoint,
@@ -214,3 +214,103 @@ def test_netbox_status_route_wraps_dependency_errors():
 
     with pytest.raises(ProxboxException, match="Error fetching status from NetBox API."):
         asyncio.run(netbox_status(BrokenNetBoxSession()))
+
+
+def test_full_update_sync_returns_structured_payload(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.main.create_proxmox_devices",
+        lambda **kwargs: asyncio.sleep(0, result=[{"id": 1, "name": "node01"}]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.main.create_virtual_machines",
+        lambda **kwargs: asyncio.sleep(0, result=[{"id": 101, "name": "vm01"}]),
+    )
+
+    body = asyncio.run(
+        full_update_sync(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=type("Tag", (), {"id": 1})(),
+        )
+    )
+
+    assert body == {
+        "status": "completed",
+        "devices": [{"id": 1, "name": "node01"}],
+        "virtual_machines": [{"id": 101, "name": "vm01"}],
+        "devices_count": 1,
+        "virtual_machines_count": 1,
+    }
+
+
+def test_full_update_sync_handles_empty_device_result(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.main.create_proxmox_devices",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.main.create_virtual_machines",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+
+    body = asyncio.run(
+        full_update_sync(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=type("Tag", (), {"id": 1})(),
+        )
+    )
+
+    assert body["devices"] == []
+    assert body["virtual_machines"] == []
+    assert body["devices_count"] == 0
+    assert body["virtual_machines_count"] == 0
+
+
+def test_full_update_sync_reraises_device_phase_proxbox_exception(monkeypatch):
+    async def _fail_devices(**kwargs):
+        raise ProxboxException(message="Error while syncing nodes.", detail="device failed")
+
+    monkeypatch.setattr("proxbox_api.main.create_proxmox_devices", _fail_devices)
+
+    with pytest.raises(ProxboxException, match="Error while syncing nodes."):
+        asyncio.run(
+            full_update_sync(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[],
+                custom_fields=[],
+                tag=type("Tag", (), {"id": 1})(),
+            )
+        )
+
+
+def test_full_update_sync_wraps_vm_phase_unexpected_errors(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.main.create_proxmox_devices",
+        lambda **kwargs: asyncio.sleep(0, result=[{"id": 1}]),
+    )
+
+    async def _fail_vms(**kwargs):
+        raise RuntimeError("vm exploded")
+
+    monkeypatch.setattr("proxbox_api.main.create_virtual_machines", _fail_vms)
+
+    with pytest.raises(ProxboxException, match="Error while syncing virtual machines."):
+        asyncio.run(
+            full_update_sync(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[],
+                custom_fields=[],
+                tag=type("Tag", (), {"id": 1})(),
+            )
+        )
