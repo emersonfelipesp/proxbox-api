@@ -928,6 +928,67 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#sse-streaming-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE streaming issues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SSE streaming issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#empty-or-stalled-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Empty or stalled stream
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sse-response-contains-hop-by-hop-header-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE response contains hop-by-hop header error
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-returns-error-event-instead-of-complete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream returns error event instead of complete
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1064,6 +1125,67 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#sse-streaming-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE streaming issues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SSE streaming issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#empty-or-stalled-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Empty or stalled stream
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sse-response-contains-hop-by-hop-header-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE response contains hop-by-hop header error
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-returns-error-event-instead-of-complete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream returns error event instead of complete
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1151,6 +1273,51 @@
 <p>If needed:</p>
 <ul>
 <li>Backup <code>database.db</code> before schema experiments.</li>
+</ul>
+<h2 id="sse-streaming-issues">SSE streaming issues<a class="headerlink" href="#sse-streaming-issues" title="Permanent link">&para;</a></h2>
+<h3 id="empty-or-stalled-stream">Empty or stalled stream<a class="headerlink" href="#empty-or-stalled-stream" title="Permanent link">&para;</a></h3>
+<p>Symptom:</p>
+<ul>
+<li>SSE <code>/stream</code> endpoint connects but no events arrive.</li>
+</ul>
+<p>Resolution:</p>
+<ul>
+<li>Verify NetBox and Proxmox endpoints are configured (<code>GET /netbox/endpoint</code>, <code>GET /proxmox/endpoints</code>).</li>
+<li>Check API logs for exceptions during the sync task.</li>
+<li>Confirm the HTTP client is not buffering (use <code>Accept: text/event-stream</code> header).</li>
+<li>Ensure <code>Cache-Control: no-cache</code> is respected by any intermediate proxy.</li>
+</ul>
+<h3 id="stream-timeout">Stream timeout<a class="headerlink" href="#stream-timeout" title="Permanent link">&para;</a></h3>
+<p>Symptom:</p>
+<ul>
+<li>SSE stream disconnects before sync completes.</li>
+</ul>
+<p>Resolution:</p>
+<ul>
+<li>Increase client-side timeout or use streaming-aware HTTP client.</li>
+<li>For large inventories, consider using lower <code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code> values to reduce NetBox API pressure and avoid cascading timeouts.</li>
+<li>Check <code>PROXBOX_NETBOX_TIMEOUT</code> is sufficient for your NetBox server response time.</li>
+</ul>
+<h3 id="sse-response-contains-hop-by-hop-header-error">SSE response contains hop-by-hop header error<a class="headerlink" href="#sse-response-contains-hop-by-hop-header-error" title="Permanent link">&para;</a></h3>
+<p>Symptom:</p>
+<ul>
+<li>HTTP 500 with <code>AssertionError: Hop-by-hop header not allowed</code> in Django proxy environments.</li>
+</ul>
+<p>Resolution:</p>
+<ul>
+<li>SSE responses must not include <code>Connection: keep-alive</code> header when served through WSGI middleware (e.g., Django plugin proxy).</li>
+<li>Ensure stream responses only use <code>Cache-Control: no-cache</code> and <code>X-Accel-Buffering: no</code> headers.</li>
+</ul>
+<h3 id="stream-returns-error-event-instead-of-complete">Stream returns error event instead of complete<a class="headerlink" href="#stream-returns-error-event-instead-of-complete" title="Permanent link">&para;</a></h3>
+<p>Symptom:</p>
+<ul>
+<li>Sync finishes with <code>event: error</code> followed by <code>event: complete</code> with <code>ok: false</code>.</li>
+</ul>
+<p>Resolution:</p>
+<ul>
+<li>Check the <code>error</code> and <code>detail</code> fields in the error event payload.</li>
+<li>Common causes: NetBox API unreachable, Proxmox auth failure, missing required NetBox plugin models.</li>
+<li>Re-run with WebSocket mode (<code>/ws</code>) for more verbose logging if needed.</li>
 </ul>
 
 
