@@ -14,7 +14,7 @@ from proxbox_api.dependencies import (
 )
 from proxbox_api.exception import ProxboxException  # Proxbox Exception
 from proxbox_api.logger import logger  # Logger
-from proxbox_api.netbox_rest import rest_create, rest_list, rest_reconcile_async
+from proxbox_api.netbox_rest import rest_create, rest_create_async, rest_list, rest_reconcile_async
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_compat import (
@@ -93,23 +93,27 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
 
         # Try to create journal entries using the string format
         try:
-            journal_entry_sync = nb.extras.journal_entries.create(
+            journal_entry_sync = await rest_create_async(
+                nb,
+                "/api/extras/journal-entries/",
                 {
                     "assigned_object_type": "netbox_proxbox.syncprocess",
                     "assigned_object_id": sync_process.id,
                     "kind": "info",
                     "comments": "Journal Entry Test for Sync Process",
-                }
+                },
             )
             print(f"Created sync process journal entry: {journal_entry_sync}")
 
-            journal_entry_sync = nb.extras.journal_entries.create(
+            journal_entry_sync = await rest_create_async(
+                nb,
+                "/api/extras/journal-entries/",
                 {
                     "assigned_object_type": "netbox_proxbox.syncprocess",
                     "assigned_object_id": sync_process.id,
                     "kind": "info",
                     "comments": "2 - Journal Entry Test for Sync Process",
-                }
+                },
             )
             print(f"2 Created sync process journal entry: {journal_entry_sync}")
         except Exception as sync_error:
@@ -118,13 +122,15 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
                 print(f"Response content: {sync_error.response.content}")
 
         try:
-            journal_entry_backup = nb.extras.journal_entries.create(
+            journal_entry_backup = await rest_create_async(
+                nb,
+                "/api/extras/journal-entries/",
                 {
                     "assigned_object_type": "netbox_proxbox.vmbackup",
                     "assigned_object_id": 1887,
                     "kind": "info",
                     "comments": "Journal Entry Test for VM Backup",
-                }
+                },
             )
             print(f"Created VM backup journal entry: {journal_entry_backup}")
 
@@ -626,13 +632,15 @@ async def create_virtual_machines(
 
         try:
             if sync_process and hasattr(sync_process, "id"):
-                journal_entry = nb.extras.journal_entries.create(
+                journal_entry = await rest_create_async(
+                    nb,
+                    "/api/extras/journal-entries/",
                     {
                         "assigned_object_type": "netbox_proxbox.syncprocess",
                         "assigned_object_id": sync_process.id,
                         "kind": "info",
                         "comments": "\n".join(journal_messages),
-                    }
+                    },
                 )
 
                 if not journal_entry:
@@ -876,13 +884,15 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
         )
 
         # Create a journal entry for the backup
-        nb.extras.journal_entries.create(
+        await rest_create_async(
+            nb,
+            "/api/extras/journal-entries/",
             {
                 "assigned_object_type": "netbox_proxbox.vmbackup",
                 "assigned_object_id": netbox_backup.id,
                 "kind": "info",
                 "comments": f"Backup created for VM {vmid} in storage {storage_name}",
-            }
+            },
         )
 
         return netbox_backup
@@ -1187,13 +1197,15 @@ async def create_all_virtual_machine_backups(
             if delete_nonexistent_backup:
                 journal_messages.append(f"- **Backups Deleted**: {deleted_count}")
 
-            journal_entry = nb.extras.journal_entries.create(
+            journal_entry = await rest_create_async(
+                nb,
+                "/api/extras/journal-entries/",
                 {
                     "assigned_object_type": "netbox_proxbox.syncprocess",
                     "assigned_object_id": sync_process.id,
                     "kind": "info",
                     "comments": "\n".join(journal_messages),
-                }
+                },
             )
 
             if not journal_entry:

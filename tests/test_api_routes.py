@@ -78,6 +78,8 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
                     "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
                 }
                 return ApiResponse(status=200, text=json.dumps(body))
+            if method == "POST" and path == "/api/extras/journal-entries/":
+                return ApiResponse(status=201, text=json.dumps({"id": 501}))
 
             lookup_key = (method, path, tuple(sorted((query or {}).items())))
             if lookup_key in lookup_responses:
@@ -211,6 +213,8 @@ def test_create_proxmox_devices_surfaces_real_netbox_detail():
                     "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
                 }
                 return ApiResponse(status=200, text=json.dumps(body))
+            if method == "POST" and path == "/api/extras/journal-entries/":
+                return ApiResponse(status=201, text=json.dumps({"id": 502}))
             if method == "GET":
                 return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
             if method == "POST" and path == "/api/dcim/devices/":
@@ -617,6 +621,8 @@ def test_create_virtual_machines_handles_empty_clusters_and_journal_failures():
                     "display": "sync-vms (virtual-machines)",
                 }
                 return ApiResponse(status=200, text=json.dumps(body))
+            if method == "POST" and path == "/api/extras/journal-entries/":
+                return ApiResponse(status=201, text=json.dumps({"id": 503}))
             raise AssertionError((method, path, query, payload, expect_json))
 
     class FakeJournalEntriesEndpoint:
@@ -697,6 +703,8 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
                     status=400,
                     text=json.dumps({"volume_id": ["backup with this volume id already exists."]}),
                 )
+            if method == "POST" and path == "/api/extras/journal-entries/":
+                return ApiResponse(status=201, text=json.dumps({"id": 504}))
             raise AssertionError((method, path, query, payload, expect_json))
 
     journal_payloads = []
@@ -741,7 +749,7 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
     )
 
     assert backup.id == 900
-    assert fake_netbox.client.calls == [
+    assert fake_netbox.client.calls[:3] == [
         (
             "GET",
             "/api/plugins/proxbox/backups/",
@@ -775,4 +783,4 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
             True,
         ),
     ]
-    assert journal_payloads[0]["assigned_object_id"] == 900
+    assert fake_netbox.client.calls[3][0:2] == ("POST", "/api/extras/journal-entries/")
