@@ -67,7 +67,10 @@ def _candidate_reuse_lookups(
     if payload.get("manufacturer") not in (None, "") and payload.get("model") not in (None, ""):
         _add({"manufacturer_id": payload["manufacturer"], "model": payload["model"]})
 
-    if payload.get("virtual_machine") not in (None, "") and payload.get("volume_id") not in (None, ""):
+    if payload.get("virtual_machine") not in (None, "") and payload.get("volume_id") not in (
+        None,
+        "",
+    ):
         _add(
             {
                 "virtual_machine_id": payload["virtual_machine"],

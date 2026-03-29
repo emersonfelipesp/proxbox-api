@@ -7,7 +7,7 @@ from fastapi import Depends
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import ensure_tag_async
-from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
+from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep  # noqa: F401
 
 
 async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep):

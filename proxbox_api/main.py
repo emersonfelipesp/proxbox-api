@@ -49,10 +49,10 @@ from proxbox_api.routes.virtualization.virtual_machines import (
 )
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.netbox import get_netbox_session
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 # Sessions
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 """
 CORS ORIGINS

@@ -5,17 +5,22 @@ import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from netbox_sdk.client import ApiResponse
 import pytest
+from netbox_sdk.client import ApiResponse
 from sqlmodel import Session
 
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import ensure_tag_async, rest_create, rest_ensure_async, rest_reconcile_async
-from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState, NetBoxSiteSyncState
+from proxbox_api.netbox_rest import (
+    ensure_tag_async,
+    rest_create,
+    rest_ensure_async,
+    rest_reconcile_async,
+)
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
+from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState, NetBoxSiteSyncState
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.services.proxmox_helpers import (
@@ -34,8 +39,8 @@ from proxbox_api.services.proxmox_helpers import (
     get_vm_config as get_typed_vm_config,
 )
 from proxbox_api.session import netbox as netbox_session_module
-from proxbox_api.session.proxmox import ProxmoxSession, proxmox_sessions
 from proxbox_api.session.netbox import get_netbox_async_session
+from proxbox_api.session.proxmox import ProxmoxSession, proxmox_sessions
 
 
 class AsyncEndpoint:
