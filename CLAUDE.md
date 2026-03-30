@@ -127,12 +127,12 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 
 ### Pre-commit Checklist
 
-Before pushing any changes, run these checks locally:
+Before pushing any changes, run these checks locally using `rtk`:
 
 ```bash
 # Lint and format check
-uv run ruff check .
-uv run ruff format --check .
+rtk ruff check .
+rtk ruff format --check .
 
 # Bytecode compile check
 uv run python -m compileall proxbox_api scripts tests
@@ -142,7 +142,7 @@ uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
 # Run unit tests
-uv run pytest tests
+rtk pytest tests
 ```
 
 If any check fails, fix locally until all checks pass before pushing.
