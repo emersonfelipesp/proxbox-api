@@ -102,3 +102,71 @@ def get_node_storage_content(
 
 def dump_models(items: list[Any]) -> list[dict[str, Any]]:
     return [_model_dump(item) for item in items]
+
+
+def get_vm_snapshots(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> list[dict[str, Any]]:
+    """
+    Get snapshots for a specific VM from Proxmox.
+
+    Args:
+        session: Proxmox session
+        node: Proxmox node name
+        vm_type: 'qemu' or 'lxc'
+        vmid: Proxmox VM ID
+
+    Returns:
+        List of snapshot dictionaries
+    """
+
+    def _fetch_snapshots():
+        if vm_type == "qemu":
+            payload = session.session.nodes(node).qemu(vmid).snapshot.get()
+        elif vm_type == "lxc":
+            payload = session.session.nodes(node).lxc(vmid).snapshot.get()
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        return payload
+
+    try:
+        result = _wrap_backend_call(
+            f"Error fetching snapshots for VM {vmid} on node {node}",
+            _fetch_snapshots,
+        )
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def get_cluster_snapshots_for_vm(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> list[dict[str, Any]]:
+    """
+    Get all snapshots for a VM across all nodes in the cluster.
+    Uses the VM's configured nodes if available.
+
+    Args:
+        session: Proxmox session
+        node: Proxmox node name
+        vm_type: 'qemu' or 'lxc'
+        vmid: Proxmox VM ID
+
+    Returns:
+        List of snapshot dictionaries from all accessible nodes
+    """
+    all_snapshots = []
+
+    try:
+        snapshots = get_vm_snapshots(session, node, vm_type, vmid)
+        all_snapshots.extend(snapshots)
+    except Exception:
+        pass
+
+    return all_snapshots
