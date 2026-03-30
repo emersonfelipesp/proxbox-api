@@ -784,7 +784,7 @@ def test_every_generated_proxy_route_has_mock_based_schema_validated_coverage(
         lambda: tmp_path / "runtime_generated_routes_cache.json",
     )
     monkeypatch.setattr(
-        "proxbox_api.main.register_generated_proxmox_routes",
+        "proxbox_api.app.factory.register_generated_proxmox_routes",
         lambda _app: None,
     )
 

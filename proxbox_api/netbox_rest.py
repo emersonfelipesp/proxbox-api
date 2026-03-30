@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-import threading
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 from urllib.parse import urlsplit
@@ -13,30 +11,9 @@ from netbox_sdk.client import ApiResponse
 from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
-
-
-def _run(coro: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    result: dict[str, Any] = {"value": None, "error": None}
-
-    def _runner() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except Exception as error:
-            result["error"] = error
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-    if result["error"] is not None:
-        raise result["error"]
-    return result["value"]
 
 
 def _unwrap_api(nb: Any) -> Any:
@@ -47,7 +24,7 @@ def _unwrap_api(nb: Any) -> Any:
 
 def _wrap_sync(value: Any) -> Any:
     if inspect.iscoroutine(value):
-        return _wrap_sync(_run(value))
+        return _wrap_sync(run_coroutine_blocking(value))
     if isinstance(value, list):
         return [_wrap_sync(item) for item in value]
     if isinstance(value, tuple):
@@ -65,7 +42,7 @@ def _collect_async_iter(it: Any) -> list[Any]:
     async def _collect() -> list[Any]:
         return [item async for item in it]
 
-    return _run(_collect())
+    return run_coroutine_blocking(_collect())
 
 
 def _normalize_path(path: str) -> str:
@@ -243,7 +220,7 @@ async def rest_list_async(
 
 
 def rest_list(nb: Any, path: str, *, query: dict[str, Any] | None = None) -> list[Any]:
-    return _wrap_sync(_run(rest_list_async(nb, path, query=query)))
+    return _wrap_sync(run_coroutine_blocking(rest_list_async(nb, path, query=query)))
 
 
 async def rest_first_async(
@@ -268,7 +245,7 @@ async def rest_create_async(nb: Any, path: str, payload: dict[str, Any]) -> Rest
 
 
 def rest_create(nb: Any, path: str, payload: dict[str, Any]) -> Any:
-    return _wrap_sync(_run(rest_create_async(nb, path, payload)))
+    return _wrap_sync(run_coroutine_blocking(rest_create_async(nb, path, payload)))
 
 
 async def rest_ensure_async(
@@ -371,7 +348,7 @@ def rest_ensure(
     lookup: dict[str, Any],
     payload: dict[str, Any],
 ) -> Any:
-    return _wrap_sync(_run(rest_ensure_async(nb, path, lookup=lookup, payload=payload)))
+    return _wrap_sync(run_coroutine_blocking(rest_ensure_async(nb, path, lookup=lookup, payload=payload)))
 
 
 def rest_reconcile(
@@ -384,7 +361,7 @@ def rest_reconcile(
     current_normalizer,
 ) -> Any:
     return _wrap_sync(
-        _run(
+        run_coroutine_blocking(
             rest_reconcile_async(
                 nb,
                 path,

@@ -150,7 +150,7 @@ class TestDevicesSync:
             },
         )
 
-        from proxbox_api.services.sync.devices import _slugify
+        from proxbox_api.services.sync.device_ensure import _slugify
 
         site_name = f"Proxmox Default Site - {cluster_name}"
         site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
@@ -329,7 +329,7 @@ class TestDevicesSync:
             },
         )
 
-        from proxbox_api.services.sync.devices import _slugify
+        from proxbox_api.services.sync.device_ensure import _slugify
 
         site_name = f"Proxmox Default Site - {cluster.name}"
         site_slug = f"proxmox-default-site-{_slugify(cluster.name)}"
@@ -481,7 +481,7 @@ class TestDevicesSync:
                 },
             )
 
-            from proxbox_api.services.sync.devices import _slugify
+            from proxbox_api.services.sync.device_ensure import _slugify
 
             site_name = f"Proxmox Default Site - {cluster.name}"
             site_slug = f"proxmox-default-site-{_slugify(cluster.name)}"
@@ -660,7 +660,7 @@ class TestDevicesSync:
             },
         )
 
-        from proxbox_api.services.sync.devices import _slugify
+        from proxbox_api.services.sync.device_ensure import _slugify
 
         site_name = f"Proxmox Default Site - {cluster_name}"
         site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
