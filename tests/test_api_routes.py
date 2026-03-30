@@ -757,6 +757,7 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
                 "volume_id": "backup-store:vm/101/2026-03-29",
                 "vmid": "101",
                 "format": "zst",
+                "tags": [],
             },
             True,
         ),
