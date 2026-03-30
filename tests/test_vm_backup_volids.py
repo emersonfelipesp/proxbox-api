@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from proxbox_api.routes.virtualization.virtual_machines import (
     _volids_from_proxmox_storage_backup_items,
 )

@@ -78,6 +78,9 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103"]
 
 [tool.ruff.lint.per-file-ignores]
 "proxbox_api/**/*.py" = ["ANN201", "D103"]
+# Pytest tests: public test_* names trigger ANN201/D103; keep checks focused on package code.
+"tests/**/*.py" = ["ANN201", "D103"]
+"scripts/**/*.py" = ["D103"]
 "proxbox_api/app/**/*.py" = []
 "proxbox_api/netbox_async_bridge.py" = []
 "proxbox_api/services/sync/device_ensure.py" = []

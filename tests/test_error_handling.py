@@ -1,7 +1,5 @@
 """Tests for global error handling and validation edge cases."""
 
-# ruff: noqa: ANN201, D103
-
 from __future__ import annotations
 
 import asyncio

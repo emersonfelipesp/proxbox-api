@@ -27,6 +27,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 
+
 @router.get("/virtual-disks/create")
 @sync_process("vm-disks")
 async def create_virtual_disks(

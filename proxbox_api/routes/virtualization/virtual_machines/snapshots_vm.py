@@ -26,6 +26,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 
+
 async def _create_all_virtual_machine_snapshots(
     netbox_session,
     pxs,

@@ -353,7 +353,9 @@ def rest_ensure(
     lookup: dict[str, Any],
     payload: dict[str, Any],
 ) -> Any:
-    return _wrap_sync(run_coroutine_blocking(rest_ensure_async(nb, path, lookup=lookup, payload=payload)))
+    return _wrap_sync(
+        run_coroutine_blocking(rest_ensure_async(nb, path, lookup=lookup, payload=payload))
+    )
 
 
 def rest_reconcile(

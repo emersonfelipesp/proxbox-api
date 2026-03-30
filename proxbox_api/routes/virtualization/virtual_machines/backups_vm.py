@@ -37,6 +37,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 
+
 def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
     """Collect Proxmox volume IDs for backup content rows (volid / NetBox volume_id)."""
     out: set[str] = set()
@@ -603,4 +604,3 @@ async def create_all_virtual_machine_backups_stream(
             "X-Accel-Buffering": "no",
         },
     )
-
