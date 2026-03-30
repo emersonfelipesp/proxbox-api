@@ -338,7 +338,7 @@ class TestBackupsSync:
         """Set up cluster dependencies."""
         await self._get_cluster_type(nb, cluster.mode, tag_refs)
 
-        await rest_reconcile_async(
+        manufacturer = await rest_reconcile_async(
             nb,
             "/api/dcim/manufacturers/",
             lookup={"slug": "proxmox"},
@@ -362,7 +362,7 @@ class TestBackupsSync:
             payload={
                 "model": "Proxmox Generic Device",
                 "slug": "proxmox-generic-device",
-                "manufacturer": None,
+                "manufacturer": manufacturer.id,
                 "tags": tag_refs,
             },
             schema=NetBoxDeviceTypeSyncState,
