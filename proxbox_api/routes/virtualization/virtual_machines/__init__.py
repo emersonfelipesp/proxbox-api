@@ -1660,6 +1660,7 @@ async def _create_all_virtual_machine_snapshots(
     netbox_session,
     pxs,
     cluster_status,
+    cluster_resources,
     tag,
     websocket=None,
     use_websocket=False,
@@ -1682,6 +1683,7 @@ async def _create_all_virtual_machine_snapshots(
             netbox_session=nb,
             pxs=pxs,
             cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
             tag=tag,
             websocket=websocket,
             use_websocket=use_websocket,
@@ -1721,6 +1723,7 @@ async def create_virtual_machine_snapshots(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
     vmid: Annotated[
         int | None,
@@ -1735,6 +1738,7 @@ async def create_virtual_machine_snapshots(
         netbox_session=netbox_session,
         pxs=pxs,
         cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
         tag=tag,
         vmid=vmid,
         node=node,
@@ -1746,12 +1750,14 @@ async def create_all_virtual_machine_snapshots(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
 ):
     return await _create_all_virtual_machine_snapshots(
         netbox_session=netbox_session,
         pxs=pxs,
         cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
         tag=tag,
     )
 
@@ -1761,6 +1767,7 @@ async def create_all_virtual_machine_snapshots_stream(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
 ):
     async def event_stream():
@@ -1772,6 +1779,7 @@ async def create_all_virtual_machine_snapshots_stream(
                     netbox_session=netbox_session,
                     pxs=pxs,
                     cluster_status=cluster_status,
+                    cluster_resources=cluster_resources,
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
