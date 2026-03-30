@@ -9,6 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from proxbox_api.app import bootstrap
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_create
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
@@ -31,7 +32,7 @@ async def base_websocket(websocket: WebSocket) -> None:
             await asyncio.sleep(2)
 
     except WebSocketDisconnect:
-        print("WebSocket connection closed")
+        logger.info("WebSocket / connection closed")
 
 
 @websocket_router.websocket("/ws/virtual-machines")
@@ -43,17 +44,30 @@ async def websocket_virtual_machines(
     tag: ProxboxTagDep,
     websocket: WebSocket,
 ) -> None:
-    print("route ws/virtual-machines reached")
+    logger.info("WebSocket /ws/virtual-machines connection attempt")
 
     try:
         await websocket.accept()
         await websocket.send_text("Connected!")
-    except Exception as error:  # noqa: BLE001
-        print(f"Error while accepting WebSocket connection: {error}")
+    except Exception:  # noqa: BLE001
+        logger.exception("Error while accepting WebSocket /ws/virtual-machines")
         try:
-            await websocket.close()
+            await websocket.close(code=1011)
         except Exception as close_err:  # noqa: BLE001
-            print(f"Error while closing WebSocket connection: {close_err}")
+            logger.warning("Error while closing WebSocket after accept failure: %s", close_err)
+        return
+
+    if bootstrap.netbox_session is None:
+        msg = (
+            "Error: NetBox session is not available. "
+            "Check database connectivity and NetBox endpoint configuration."
+        )
+        try:
+            await websocket.send_text(msg)
+            await websocket.close(code=1011)
+        except Exception as send_err:  # noqa: BLE001
+            logger.warning("Could not notify client about missing NetBox session: %s", send_err)
+        return
 
     await create_virtual_machines(
         netbox_session=bootstrap.netbox_session,
@@ -81,29 +95,36 @@ async def websocket_sync_commands(
 
     nb = netbox_session
 
-    print("route ws reached")
+    logger.info("WebSocket /ws connection attempt")
     try:
         await websocket.accept()
         connection_open = True
 
         await websocket.send_text("Connected!")
-    except Exception as error:  # noqa: BLE001
-        print(f"Error while accepting WebSocket connection: {error}")
+    except Exception:  # noqa: BLE001
+        logger.exception("Error while accepting WebSocket /ws")
         try:
-            await websocket.close()
+            await websocket.close(code=1011)
         except Exception as close_err:  # noqa: BLE001
-            print(f"Error while closing WebSocket connection: {close_err}")
+            logger.warning("Error while closing WebSocket after accept failure: %s", close_err)
 
-    await websocket.send_text("Connected 2!")
+    if not connection_open:
+        return
+
+    try:
+        await websocket.send_text("Connected 2!")
+    except Exception as error:  # noqa: BLE001
+        logger.warning("Could not send secondary WebSocket greeting: %s", error)
+        return
 
     try:
         while True:
             try:
                 data = await websocket.receive_text()
-                print(f"Received message: {data}")
+                logger.debug("WebSocket /ws received: %s", data)
                 await websocket.send_text(f"Received message: {data}")
             except Exception as error:  # noqa: BLE001
-                print(f"Error while receiving data from WebSocket: {error}")
+                logger.warning("Error while receiving WebSocket /ws data: %s", error)
                 break
 
             if data in {"Full Update Sync", "Full Update"}:
@@ -121,7 +142,7 @@ async def websocket_sync_commands(
                         },
                     )
                 except Exception as error:  # noqa: BLE001
-                    print(error)
+                    logger.warning("Could not create sync process record: %s", error)
 
                 sync_nodes = await create_proxmox_devices(
                     netbox_session=nb,
@@ -150,7 +171,7 @@ async def websocket_sync_commands(
                     sync_process.save()
 
             elif data == "Sync Nodes":
-                print("Sync Nodes")
+                logger.info("WebSocket /ws: Sync Nodes command")
                 await websocket.send_text("Sync Nodes")
                 await create_proxmox_devices(
                     netbox_session=nb,
@@ -180,7 +201,7 @@ async def websocket_sync_commands(
                 )
 
     except WebSocketDisconnect as error:
-        print(f"WebSocket Disconnected: {error}")
+        logger.info("WebSocket /ws disconnected: %s", error)
         connection_open = False
     finally:
         if connection_open and websocket.client_state.CONNECTED:

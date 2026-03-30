@@ -7,12 +7,13 @@ Core FastAPI package: app bootstrap, shared dependencies, persistence, and helpe
 ## Modules and Responsibilities
 
 - `__init__.py`: Top-level package exports for proxbox_api.
+- `app/`: Application composition — `factory.create_app()`, `bootstrap`, `exceptions`, `websockets`, `cors`, and other app-level wiring (see root `proxbox-api/CLAUDE.md` for error handling and startup).
 - `cache.py`: In-memory cache helper used across API workflows.
 - `database.py`: SQLModel database configuration and NetBox endpoint model.
 - `dependencies.py`: FastAPI dependency providers shared by route modules.
 - `exception.py`: Custom exception types and async exception logging helpers.
 - `logger.py`: Logging setup utilities for console and file outputs.
-- `main.py`: FastAPI application entrypoint and route registration.
+- `main.py`: Re-exports `app` from `proxbox_api.app.factory` and symbols used by tests (e.g. `full_update_sync`, `create_virtual_machines`); ASGI entry for uvicorn.
 - `openapi_custom.py`: FastAPI OpenAPI override and Proxmox generated-schema embedding.
 - `proxmox_codegen/`: Proxmox API Viewer crawler and OpenAPI/Pydantic code generation pipeline.
 - `proxmox_to_netbox/`: Schema-driven normalization from Proxmox payloads to NetBox create payloads.
@@ -21,7 +22,7 @@ Core FastAPI package: app bootstrap, shared dependencies, persistence, and helpe
 
 ## Key Data Flow and Dependencies
 
-- main.py builds the FastAPI app and includes all routers under /netbox, /proxmox, /dcim, /virtualization, and /extras.
+- `app.factory.create_app()` builds the FastAPI app and includes routers under /netbox, /proxmox, /dcim, /virtualization, and /extras; `main.py` imports that `app`.
 - database.py and session/netbox.py provide database-backed NetBox connection material used by most routes and sync services.
 - services/sync modules and routes/virtualization/virtual_machines drive synchronization from Proxmox to NetBox objects.
 

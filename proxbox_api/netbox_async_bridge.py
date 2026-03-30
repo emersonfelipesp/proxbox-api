@@ -1,4 +1,10 @@
-"""Run asyncio coroutines from synchronous code when an event loop may already be running."""
+"""Run asyncio coroutines from synchronous code when an event loop may already be running.
+
+When ``asyncio.get_running_loop()`` succeeds, this helper spawns a daemon thread and
+runs ``asyncio.run(coro)`` there. That nested event loop does not inherit the caller's
+context variables or cancellation; long-running coroutines are not forcibly timed out
+here. Prefer native async call paths when possible.
+"""
 
 from __future__ import annotations
 

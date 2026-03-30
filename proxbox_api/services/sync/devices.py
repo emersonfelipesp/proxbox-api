@@ -299,11 +299,13 @@ async def create_proxmox_devices(
                 )
 
                 if not journal_entry:
-                    print("Warning: Journal entry creation returned None")
+                    logger.warning("Journal entry creation returned None")
             else:
-                print("Warning: Cannot create journal entry - sync_process is None or has no id")
+                logger.warning(
+                    "Cannot create journal entry - sync_process is None or has no id",
+                )
         except Exception as journal_error:
-            print(f"Warning: Failed to create journal entry: {str(journal_error)}")
+            logger.warning("Failed to create journal entry: %s", journal_error)
 
     return device_list
 

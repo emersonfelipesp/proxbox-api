@@ -62,11 +62,15 @@ async def proxmox_sessions(
     """
 
     endpoint_id_list = None
-    if endpoint_ids:
+    if endpoint_ids is not None and endpoint_ids.strip():
         try:
             endpoint_id_list = [int(eid.strip()) for eid in endpoint_ids.split(",") if eid.strip()]
-        except ValueError:
-            pass
+        except ValueError as error:
+            raise ProxboxException(
+                message="Invalid Proxmox endpoint_ids query parameter",
+                detail="endpoint_ids must be a comma-separated list of integers.",
+                python_exception=str(error),
+            ) from error
 
     proxmox_schemas = await load_proxmox_session_schemas(
         database_session=database_session,

@@ -47,7 +47,7 @@ Use this root guide first, then jump to the nearest scoped guide for the area yo
 
 ### Layers
 
-- API layer (`proxbox_api/main.py` and `proxbox_api/routes/*`): FastAPI app setup, route registration, endpoint handlers, websocket handlers, and response modeling.
+- API layer (`proxbox_api/app/*` factory, `proxbox_api/main.py` entrypoint, `proxbox_api/routes/*`): FastAPI app composition, route registration, endpoint handlers, websocket handlers, and response modeling.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): Establishes NetBox and Proxmox client sessions and provides FastAPI dependency aliases.
 - Service layer (`proxbox_api/services/sync/*`): Synchronization workflows for creating and updating NetBox objects from Proxmox data.
 - Schema and enum layer (`proxbox_api/schemas/*`, `proxbox_api/enum/*`): Pydantic models and enums for validation, payload normalization, and response contracts.
@@ -58,9 +58,11 @@ Use this root guide first, then jump to the nearest scoped guide for the area yo
 
 ### Runtime Components
 
-- FastAPI app object: Created in `proxbox_api/main.py` with CORS middleware and router inclusion.
-- NetBox API client: Built from a stored endpoint record in SQLite via `get_netbox_session`.
-- Proxmox API clients: Built dynamically from NetBox plugin endpoint objects via `ProxmoxSession`.
+- FastAPI app object: Built by `proxbox_api.app.factory.create_app()`; `proxbox_api.main` imports `app` and re-exports symbols used by tests (e.g. `full_update_sync`, `create_virtual_machines`).
+- Application lifespan: Registers generated live Proxmox proxy routes (`register_generated_proxmox_routes`); failures are logged and optionally fatal (see **Environment variables**).
+- Bootstrap state: `proxbox_api.app.bootstrap` holds `database_session`, `netbox_session`, `netbox_endpoints`, `init_ok`, and `last_init_error` after `init_database_and_netbox()` runs at app creation time.
+- NetBox API client: Built from a stored endpoint record in SQLite via `get_netbox_session` (dependency and `bootstrap.netbox_session` for legacy WebSocket paths).
+- Proxmox API clients: Built dynamically from DB or NetBox plugin endpoint records via `ProxmoxSession` and `proxmox_sessions` dependency.
 - Sync process tracking: Implemented through the `sync_process` decorator and journal entry creation against NetBox plugin objects.
 
 ## Entrypoints
@@ -95,16 +97,19 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 
 - `PROXBOX_NETBOX_TIMEOUT`: NetBox API client timeout in seconds (default: `120`). Controls `netbox-sdk` `Config.timeout` and `aiohttp` request timeouts.
 - `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: Maximum concurrent VM creation tasks during sync (default: `4`). Uses an `asyncio.Semaphore` to limit parallel NetBox API load.
+- `PROXBOX_CORS_EXTRA_ORIGINS`: Comma-separated extra CORS origins (see `proxbox_api.app.cors.build_cors_origins`).
+- `PROXBOX_EXPOSE_INTERNAL_ERRORS`: When set to `1`, `true`, or `yes`, unhandled exceptions return `detail` and `python_exception` derived from the raw exception in the JSON 500 body. When unset (default), the client receives a generic `detail` and `python_exception: null`; the full traceback is logged server-side only (`proxbox_api.app.exceptions`).
+- `PROXBOX_STRICT_STARTUP`: When set to `1`, `true`, or `yes`, failure to mount generated Proxmox proxy routes during lifespan raises `ProxboxException` and fails startup instead of logging a warning only (`proxbox_api.app.factory`).
 
 ## Runtime Flow
 
 ### Startup
 
-1. Import and initialize FastAPI app in `main.py`.
-2. Open local SQLite session (`database.db`) and retrieve NetBox endpoint configuration.
-3. Build a NetBox client and attach it to compatibility wrappers for model-style operations.
-4. Resolve CORS origins from database-backed endpoint records.
-5. Register routers for Proxmox, NetBox, DCIM, virtualization, and extras APIs.
+1. `create_app()` runs `proxbox_api.app.bootstrap.init_database_and_netbox()`: create tables, open a DB session, build the default NetBox client, set `NetBoxBase.nb`, load `netbox_endpoints` for CORS (with retry on `OperationalError`). Failures are logged; `init_ok` / `last_init_error` record outcome; `netbox_session` and `NetBoxBase.nb` are cleared on bootstrap failure.
+2. Construct `FastAPI` with lifespan hook that calls `register_generated_proxmox_routes` (warn or strict per `PROXBOX_STRICT_STARTUP`).
+3. Mount static files, CORS middleware (`build_cors_origins`), and global exception handlers.
+4. Include root routers from `proxbox_api.app.*` (cache, sync-processes, full-update, websockets) and domain routers (admin, netbox, proxmox, dcim, virtualization, extras).
+5. `main.py` imports `app` from the factory path for ASGI servers and test clients.
 
 ### Synchronization flow (high level)
 
@@ -118,10 +123,25 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 
 ### Error handling
 
-- Domain-specific errors use `ProxboxException`.
-- FastAPI exception handler in `main.py` returns structured JSON for `ProxboxException`.
-- A global `@app.exception_handler(Exception)` returns structured JSON for unhandled errors (status 500), including the exception message and traceback string.
-- Lower-level exceptions should be wrapped with context before propagation.
+- **Domain errors:** Use `ProxboxException` for predictable API failures. Handler in `proxbox_api.app.exceptions` returns HTTP 400 JSON with `message`, `detail`, and `python_exception`.
+
+- **Unhandled errors:** The same module registers a catch-all `Exception` handler (HTTP 500). By default the response hides internal details from clients; set `PROXBOX_EXPOSE_INTERNAL_ERRORS` or run with `app.debug` true to return `str(exc)` in `detail` / `python_exception`. Full exceptions are always logged with `logger.exception`.
+
+- **Bootstrap:** Database or NetBox client initialization failures are logged at ERROR; operators can inspect `proxbox_api.app.bootstrap.init_ok` and `last_init_error` for health or diagnostics. A missing NetBox session must not leave a stale `NetBoxBase.nb` reference after a failed init.
+
+- **Lifespan / generated routes:** If `register_generated_proxmox_routes` raises `ProxboxException`, startup continues by default with a WARNING log unless `PROXBOX_STRICT_STARTUP` is enabled.
+
+- **Proxmox dependency validation:** Invalid `endpoint_ids` query (non-empty but not a comma-separated list of integers) raises `ProxboxException` instead of silently ignoring the filter (`proxbox_api.session.proxmox_providers`).
+
+- **WebSockets:** `/ws/virtual-machines` returns immediately after a failed `accept` and does not run VM sync. If `bootstrap.netbox_session` is `None`, the handler sends an explanatory text message and closes with code `1011` before calling `create_virtual_machines`. `/ws` returns early if accept fails (no follow-up greeting on a dead socket); operational messages use `logger` instead of `print`.
+
+- **REST reconcile scan:** `rest_reconcile_async` may skip malformed records when scanning for duplicates; skips are logged at DEBUG in `proxbox_api.netbox_rest` to aid troubleshooting.
+
+- **Blocking async bridge:** `proxbox_api.netbox_async_bridge.run_coroutine_blocking` runs `asyncio.run` in a daemon thread when a loop is already running; it does not inherit caller contextvars and has no built-in timeout (see module docstring).
+
+- **Virtual machine read routes:** `GET .../virtual-machines/{id}` returns **404** when not found and **502** on NetBox errors (no empty `{}` body). Stub routes (`/{id}/summary`, interface helpers) return **501** with explicit `detail` (`read_vm.py`).
+
+- **Observability:** Prefer `proxbox_api.logger.logger` over `print` in application code; journal and sync warnings in services/routes should use WARNING level.
 
 ## Testing and Verification
 
@@ -183,6 +203,6 @@ If any check fails, fix locally until all checks pass before pushing.
 1. Define or update schemas and enums first.
 2. Add business logic in service modules.
 3. Wire dependencies and expose endpoint handlers in routes.
-4. Register routers in `main.py`.
+4. Register routers in `proxbox_api.app.factory.create_app()` (or the appropriate `app.include_router` in a dedicated router module).
 5. Add or update tests under `proxbox_api/`.
 6. Run compile and test checks before submitting changes.

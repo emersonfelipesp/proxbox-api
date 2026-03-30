@@ -87,7 +87,7 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
                 "started_at": start_time,
             },
         )
-        print(f"Created sync process: {sync_process}")
+        logger.info("Created sync process: %s", sync_process)
 
         # Try to create journal entries using the string format
         try:
@@ -101,7 +101,7 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
                     "comments": "Journal Entry Test for Sync Process",
                 },
             )
-            print(f"Created sync process journal entry: {journal_entry_sync}")
+            logger.info("Created sync process journal entry: %s", journal_entry_sync)
 
             journal_entry_sync = await rest_create_async(
                 nb,
@@ -113,11 +113,11 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
                     "comments": "2 - Journal Entry Test for Sync Process",
                 },
             )
-            print(f"2 Created sync process journal entry: {journal_entry_sync}")
+            logger.info("Second sync process journal entry: %s", journal_entry_sync)
         except Exception as sync_error:
-            print(f"Error creating sync process journal entry: {str(sync_error)}")
+            logger.warning("Error creating sync process journal entry: %s", sync_error)
             if hasattr(sync_error, "response"):
-                print(f"Response content: {sync_error.response.content}")
+                logger.debug("Journal error response: %s", sync_error.response.content)
 
         try:
             journal_entry_backup = await rest_create_async(
@@ -130,18 +130,15 @@ async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
                     "comments": "Journal Entry Test for VM Backup",
                 },
             )
-            print(f"Created VM backup journal entry: {journal_entry_backup}")
+            logger.info("Created VM backup journal entry: %s", journal_entry_backup)
 
         except Exception as backup_error:
-            print(f"Error creating VM backup journal entry: {str(backup_error)}")
+            logger.warning("Error creating VM backup journal entry: %s", backup_error)
             if hasattr(backup_error, "response"):
-                print(f"Response content: {backup_error.response.content}")
+                logger.debug("VM backup journal error response: %s", backup_error.response.content)
 
-    except Exception as error:
-        print(f"Detailed error: {str(error)}")
-        print(f"Error type: {type(error)}")
-        if hasattr(error, "response"):
-            print(f"Response content: {error.response.content}")
+    except Exception:
+        logger.exception("Journal entry test route failed")
         raise
 
     return {
@@ -359,10 +356,7 @@ async def create_virtual_machines(
                 },
             )
 
-            print(f"Cluster: {cluster} / {cluster.id}")
-            print(f"Device: {device} / {device.id}")
-            print(f"Role: {role} / {role.id}")
-            print("\n")
+            logger.debug("VM deps cluster=%s device=%s role=%s", cluster, device, role)
 
         except Exception as error:
             raise ProxboxException(
@@ -404,8 +398,7 @@ async def create_virtual_machines(
             },
         )
 
-        print(f"Virtual Machine: {virtual_machine} / {virtual_machine.id}")
-        print("\n")
+        logger.debug("Reconciled virtual_machine=%s", virtual_machine)
 
         """
         except ProxboxException:
@@ -615,12 +608,10 @@ async def create_virtual_machines(
                 continue
             for result in cluster_result:
                 if isinstance(result, Exception):
-                    print(
-                        "python_exception: ",
+                    logger.warning(
+                        "VM sub-task failed: %s",
                         getattr(result, "python_exception", str(result)),
                     )
-                    print("str(result): ", str(result))
-                    print("")
 
         # Flatten the nested results and process them
         for cluster_results in result_list:
@@ -678,11 +669,13 @@ async def create_virtual_machines(
                 )
 
                 if not journal_entry:
-                    print("Warning: Journal entry creation returned None")
+                    logger.warning("Journal entry creation returned None")
             else:
-                print("Warning: Cannot create journal entry - sync_process is None or has no id")
+                logger.warning(
+                    "Cannot create journal entry - sync_process is None or has no id",
+                )
         except Exception as journal_error:
-            print(f"Warning: Failed to create journal entry: {str(journal_error)}")
+            logger.warning("Failed to create journal entry: %s", journal_error)
 
     return flattened_results
 
