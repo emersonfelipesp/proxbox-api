@@ -117,7 +117,9 @@ async def netbox_proxbox_plugin_available(netbox_demo_session: "Api") -> bool:
     """True if ``/api/plugins/proxbox/`` is reachable (not installed on demo.netbox.dev)."""
 
     try:
-        await rest_list_async(netbox_demo_session, "/api/plugins/proxbox/backups/", query={"limit": 1})
+        await rest_list_async(
+            netbox_demo_session, "/api/plugins/proxbox/backups/", query={"limit": 1}
+        )
     except ProxboxException as exc:
         combined = f"{exc.message} {exc.detail or ''}".lower()
         if "404" in combined or "not found" in combined:
