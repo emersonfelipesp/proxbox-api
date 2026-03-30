@@ -1,4 +1,4 @@
-"""Legacy utility helpers for sync status rendering."""
+"""HTML snippets for sync status display in responses and WebSocket payloads."""
 
 
 def return_status_html(status: str, use_css: bool):

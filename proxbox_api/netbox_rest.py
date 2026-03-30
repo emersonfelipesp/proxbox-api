@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 from urllib.parse import urlsplit
@@ -65,7 +66,12 @@ def _extract_payload(response: ApiResponse) -> Any:
         detail = response.text
         try:
             payload = response.json()
-        except Exception:
+        except json.JSONDecodeError:
+            logger.debug(
+                "NetBox error response body was not JSON (status=%s)",
+                response.status,
+                exc_info=True,
+            )
             payload = None
         if isinstance(payload, dict):
             detail = str(payload.get("detail") or payload.get("message") or detail)

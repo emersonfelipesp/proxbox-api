@@ -1,6 +1,5 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends
@@ -37,7 +36,6 @@ async def create_proxmox_devices(
     tag_refs = nested_tag_payload(tag)
 
     nb = netbox_session
-    start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     total_devices = 0  # Track total devices processed
     successful_devices = 0  # Track successful device creations
@@ -48,21 +46,17 @@ async def create_proxmox_devices(
     device_list: list = []
 
     try:
-
         # Count total devices to process (just for journalling)
         for cluster_status in clusters_status:
             if cluster_status and cluster_status.node_list:
                 device_count = len(cluster_status.node_list)
                 total_devices += device_count
 
-
-
         for cluster_status in clusters_status:
             if not cluster_status or not cluster_status.node_list:
                 continue
 
             logger.info(f"🔄 Processing Cluster: {cluster_status.name}")
-
 
             for node_obj in cluster_status.node_list:
                 device_name = node_obj.name
@@ -160,7 +154,6 @@ async def create_proxmox_devices(
 
                         # If node, return only the node requested.
                         if node and node == device_name:
-
                             return [netbox_device_data] if netbox_device_data else []
 
                         device_list.append(netbox_device_data)
@@ -225,7 +218,6 @@ async def create_proxmox_devices(
         # Clear cache after creating devices.
         global_cache.clear_cache()
 
-
     except ProxboxException as error:
         error_msg = f"Error during device sync: {error.message}"
         logger.error(error_msg)
@@ -238,7 +230,6 @@ async def create_proxmox_devices(
         error_msg = f"Error during device sync: {str(error)}"
         logger.error(error_msg)
         raise ProxboxException(message=error_msg, detail=str(error), python_exception=str(error))
-
 
     return device_list
 

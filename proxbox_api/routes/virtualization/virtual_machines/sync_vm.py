@@ -127,7 +127,6 @@ async def create_virtual_machines(
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
     flattened_results = []
 
-
     async def create_vm_task(cluster_name, resource):
         undefined_html = return_status_html("undefined", use_css)
 
@@ -474,16 +473,13 @@ async def create_virtual_machines(
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
     try:
-
         # Process each cluster
         for cluster in cluster_resources:
             cluster_name = list(cluster.keys())[0]
             resources = cluster[cluster_name]
             vm_count = len([r for r in resources if r.get("type") in ("qemu", "lxc")])
 
-
             total_vms += vm_count
-
 
         # Return the created virtual machines.
         result_list = await asyncio.gather(
@@ -532,7 +528,6 @@ async def create_virtual_machines(
     except Exception as error:
         error_msg = f"Error during VM sync: {str(error)}"
         raise ProxboxException(message=error_msg)
-
 
     return flattened_results
 
