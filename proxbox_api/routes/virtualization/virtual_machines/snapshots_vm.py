@@ -1,0 +1,216 @@
+"""VM snapshot sync routes."""
+
+# FastAPI Imports
+import asyncio
+from typing import Annotated
+
+from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
+
+from proxbox_api.dependencies import (
+    NetBoxSessionDep,  # NetBox Session
+    ProxboxTagDep,  # Proxbox Tag
+)
+from proxbox_api.exception import ProxboxException  # Proxbox Exception
+
+# NetBox compatibility wrappers
+from proxbox_api.routes.proxmox.cluster import (
+    ClusterResourcesDep,
+    ClusterStatusDep,
+)  # Cluster Status and Resources
+from proxbox_api.services.sync.snapshots import (
+    create_virtual_machine_snapshots as sync_snapshots,
+)
+from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+
+router = APIRouter()
+
+async def _create_all_virtual_machine_snapshots(
+    netbox_session,
+    pxs,
+    cluster_status,
+    cluster_resources,
+    tag,
+    websocket=None,
+    use_websocket=False,
+):
+    """Internal function that handles snapshot sync with optional websocket support."""
+    nb = netbox_session
+    created_count = 0
+
+    try:
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "snapshots",
+                    "status": "started",
+                    "message": "Starting snapshot synchronization.",
+                }
+            )
+
+        result = await sync_snapshots(
+            netbox_session=nb,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            tag=tag,
+            websocket=websocket,
+            use_websocket=use_websocket,
+            use_css=False,
+        )
+
+        if result:
+            created_count = result.get("created", 0)
+
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "snapshots",
+                    "status": "completed",
+                    "message": f"Snapshot synchronization finished. Created/updated: {created_count}",
+                    "count": created_count,
+                }
+            )
+
+        return result
+
+    except Exception as error:
+        error_msg = f"Error during snapshot sync: {str(error)}"
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "snapshots",
+                    "status": "failed",
+                    "message": error_msg,
+                }
+            )
+        raise ProxboxException(message=error_msg)
+
+
+@router.get("/snapshots/create")
+async def create_virtual_machine_snapshots(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    tag: ProxboxTagDep,
+    vmid: Annotated[
+        int | None,
+        Query(title="VM ID", description="The ID of the VM to retrieve snapshots for."),
+    ] = None,
+    node: Annotated[
+        str | None,
+        Query(title="Node", description="The name of the node."),
+    ] = None,
+):
+    return await sync_snapshots(
+        netbox_session=netbox_session,
+        pxs=pxs,
+        cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
+        tag=tag,
+        vmid=vmid,
+        node=node,
+    )
+
+
+@router.get("/snapshots/all/create")
+async def create_all_virtual_machine_snapshots(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    tag: ProxboxTagDep,
+):
+    return await _create_all_virtual_machine_snapshots(
+        netbox_session=netbox_session,
+        pxs=pxs,
+        cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
+        tag=tag,
+    )
+
+
+@router.get("/snapshots/all/create/stream", response_model=None)
+async def create_all_virtual_machine_snapshots_stream(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    tag: ProxboxTagDep,
+):
+    async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await _create_all_virtual_machine_snapshots(
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    cluster_resources=cluster_resources,
+                    tag=tag,
+                    websocket=bridge,
+                    use_websocket=True,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "snapshots",
+                    "status": "started",
+                    "message": "Starting snapshot synchronization.",
+                },
+            )
+            async for frame in bridge.iter_sse():
+                yield frame
+            result = await sync_task
+            yield sse_event(
+                "step",
+                {
+                    "step": "snapshots",
+                    "status": "completed",
+                    "message": "Snapshot synchronization finished.",
+                    "result": {"created": result.get("created", 0) if result else 0},
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Snapshot sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "snapshots",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Snapshot sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
