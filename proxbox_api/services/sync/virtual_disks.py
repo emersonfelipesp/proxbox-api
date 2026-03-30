@@ -23,7 +23,6 @@ async def create_virtual_disks(
     websocket=None,
     use_websocket=False,
     use_css=False,
-    sync_process=None,
 ):
     """
     Sync virtual disks for existing Virtual Machines in NetBox.

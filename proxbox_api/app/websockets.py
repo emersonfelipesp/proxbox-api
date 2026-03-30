@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from proxbox_api.app import bootstrap
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_create
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
@@ -128,22 +126,6 @@ async def websocket_sync_commands(
                 break
 
             if data in {"Full Update Sync", "Full Update"}:
-                sync_process = None
-
-                try:
-                    sync_process = rest_create(
-                        nb,
-                        "/api/plugins/proxbox/sync-processes/",
-                        {
-                            "name": f"sync-process-{datetime.now()}",
-                            "sync_type": "all",
-                            "status": "not-started",
-                            "started_at": str(datetime.now()),
-                        },
-                    )
-                except Exception as error:  # noqa: BLE001
-                    logger.warning("Could not create sync process record: %s", error)
-
                 sync_nodes = await create_proxmox_devices(
                     netbox_session=nb,
                     clusters_status=cluster_status,
@@ -164,11 +146,6 @@ async def websocket_sync_commands(
                         tag=tag,
                         use_websocket=True,
                     )
-
-                if sync_process:
-                    sync_process.status = "completed"
-                    sync_process.completed_at = str(datetime.now())
-                    sync_process.save()
 
             elif data == "Sync Nodes":
                 logger.info("WebSocket /ws: Sync Nodes command")

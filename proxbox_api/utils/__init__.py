@@ -1,38 +1,19 @@
-"""Utility package exports for decorators and status helpers."""
+"""Package utilities: re-export helpers from the legacy flat ``utils.py`` module."""
 
-from .sync_decorator import sync_process
+from __future__ import annotations
 
-__all__ = ["return_status_html", "sync_process"]
+import importlib.util
+from pathlib import Path
 
+_LEGACY_PATH = Path(__file__).resolve().parent.parent / "utils.py"
+_spec = importlib.util.spec_from_file_location(
+    "proxbox_api._legacy_utils_module",
+    _LEGACY_PATH,
+)
+_legacy = importlib.util.module_from_spec(_spec)
+assert _spec.loader
+_spec.loader.exec_module(_legacy)
 
-def return_status_html(status: str, use_css: bool) -> str:
-    """
-    Return the status of the sync in HTML format.
+return_status_html = _legacy.return_status_html
 
-    Args:
-        status (str): The status of the sync.
-        use_css (bool): Whether to use CSS classes.
-
-    Returns:
-        str: The status of the sync in HTML format.
-    """
-
-    undefined_html_raw = "undefined"
-    undefined_html_css = (
-        f"<span class='badge text-bg-grey'><strong>{undefined_html_raw}</strong></span>"
-    )
-    undefined_html = undefined_html_css if use_css else undefined_html_raw
-
-    sync_status_html_css = "<span class='text-bg-yellow badge p-1' title='Syncing VM' ><i class='mdi mdi-sync'></i></span>"
-    sync_status_html_raw = "syncing"
-    sync_status_html = sync_status_html_css if use_css else sync_status_html_raw
-
-    completed_sync_html_css = "<span class='text-bg-green badge p-1' title='Synced VM'><i class='mdi mdi-check'></i></span>"
-    completed_sync_html_raw = "completed"
-    completed_sync_html = completed_sync_html_css if use_css else completed_sync_html_raw
-
-    if status == "syncing":
-        return sync_status_html
-    elif status == "completed":
-        return completed_sync_html
-    return undefined_html
+__all__ = ["return_status_html"]

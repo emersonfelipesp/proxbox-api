@@ -141,7 +141,6 @@ async def create_virtual_machine_snapshots(
     websocket=None,
     use_websocket=False,
     use_css=False,
-    sync_process=None,
 ):
     """
     Sync snapshots for existing Virtual Machines in NetBox.

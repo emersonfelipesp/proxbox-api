@@ -16,7 +16,6 @@ from proxbox_api.app.cors import build_cors_origins
 from proxbox_api.app.exceptions import register_exception_handlers
 from proxbox_api.app.full_update import register_full_update_routes
 from proxbox_api.app.root_meta import root_meta_router
-from proxbox_api.app.sync_processes import register_sync_process_routes
 from proxbox_api.app.websockets import register_websocket_routes
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -94,7 +93,6 @@ def create_app() -> FastAPI:
 
     app.include_router(root_meta_router)
     register_cache_routes(app)
-    register_sync_process_routes(app)
     register_full_update_routes(app)
     register_websocket_routes(app)
 
