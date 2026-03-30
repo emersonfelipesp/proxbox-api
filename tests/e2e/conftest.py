@@ -51,6 +51,8 @@ from proxbox_api.e2e.session import (
     create_netbox_demo_session,
     ensure_e2e_tag,
 )
+from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_rest import rest_list_async
 
 
 @pytest.fixture(scope="session")
@@ -108,6 +110,26 @@ async def netbox_demo_session(netbox_demo_config: "Config") -> "Api":
     api = await create_netbox_demo_session(netbox_demo_config)
     print("[E2E Setup] NetBox session created")
     return api
+
+
+@pytest_asyncio.fixture(scope="session")
+async def netbox_proxbox_plugin_available(netbox_demo_session: "Api") -> bool:
+    """True if ``/api/plugins/proxbox/`` is reachable (not installed on demo.netbox.dev)."""
+
+    try:
+        await rest_list_async(netbox_demo_session, "/api/plugins/proxbox/backups/", query={"limit": 1})
+    except ProxboxException as exc:
+        combined = f"{exc.message} {exc.detail or ''}".lower()
+        if "404" in combined or "not found" in combined:
+            return False
+        raise
+    return True
+
+
+@pytest_asyncio.fixture(scope="session")
+async def require_proxbox_netbox_plugin(netbox_proxbox_plugin_available: bool) -> None:
+    if not netbox_proxbox_plugin_available:
+        pytest.skip("Proxbox NetBox plugin API not available on this instance (e.g. public demo).")
 
 
 @pytest_asyncio.fixture(scope="session")
