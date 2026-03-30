@@ -78,7 +78,7 @@ Defined in `pyproject.toml`:
 
 - `fastapi[standard]`: API framework and ASGI runtime support.
 - `proxmoxer`: Proxmox API client.
-- `pynetbox`: NetBox API client.
+
 - `netbox-sdk`: async facade and request tooling used for NetBox object operations.
 - `sqlmodel`: SQLite model and session management.
 
@@ -125,10 +125,27 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 
 ## Testing and Verification
 
-### Local checks
+### Pre-commit Checklist
 
-- Bytecode compile check: `python -m compileall proxbox_api`
-- Unit tests (if dependencies are installed): `pytest`
+Before pushing any changes, run these checks locally:
+
+```bash
+# Lint and format check
+uv run ruff check .
+uv run ruff format --check .
+
+# Bytecode compile check
+uv run python -m compileall proxbox_api scripts tests
+
+# Import smoke checks
+uv run python -c "import proxbox_api.main"
+uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+
+# Run unit tests
+uv run pytest tests
+```
+
+If any check fails, fix locally until all checks pass before pushing.
 
 ### Existing tests
 
