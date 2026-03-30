@@ -49,14 +49,42 @@ async def create_virtual_disks(
 
     logger.info("Starting virtual disks sync for existing VMs")
 
-    vms = await rest_list_async(
-        nb,
-        "/api/virtualization/virtual-machines/",
-        query={"cf_proxmox_vm_id__isnull": False},
-    )
+    try:
+        vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+        )
+    except Exception as e:
+        logger.error(f"Error fetching VMs from NetBox: {e}")
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "object": "virtual_disk",
+                    "type": "sync",
+                    "data": {
+                        "completed": True,
+                        "error": f"Error fetching VMs: {e}",
+                    },
+                }
+            )
+        return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
+
+    vms_with_proxmox_id = [vm for vm in vms if vm.get("cf_proxmox_vm_id")]
+    vms = vms_with_proxmox_id
 
     if not vms:
         logger.info("No VMs found with cf_proxmox_vm_id set")
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "object": "virtual_disk",
+                    "type": "sync",
+                    "data": {
+                        "completed": True,
+                        "message": "No VMs found with cf_proxmox_vm_id set",
+                    },
+                }
+            )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0}
 
     total_vms = len(vms)
