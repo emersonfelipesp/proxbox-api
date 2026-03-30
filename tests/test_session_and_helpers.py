@@ -947,7 +947,7 @@ def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
 
     monkeypatch.setattr(
-        "proxbox_api.session.proxmox.get_netbox_async_session",
+        "proxbox_api.session.proxmox_providers.get_netbox_async_session",
         lambda database_session: AsyncNetBoxRestFacade(
             {
                 ("GET", "/api/plugins/proxbox/endpoints/proxmox/"): (

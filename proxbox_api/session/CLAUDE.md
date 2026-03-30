@@ -14,7 +14,7 @@ Session management utilities for NetBox and Proxmox API clients.
 
 ## Key Data Flow and Dependencies
 
-- netbox.py resolves endpoint credentials from the database and returns pynetbox sessions.
+- netbox.py resolves endpoint credentials from the database and returns netbox-sdk sessions.
 - proxmox.py builds ProxmoxAPI sessions and enriches them with cluster metadata.
 
 ## Extension Guidance

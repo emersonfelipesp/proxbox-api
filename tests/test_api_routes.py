@@ -324,13 +324,19 @@ def test_sync_process_routes_use_rest_helpers(monkeypatch):
             return ApiResponse(status=200 if method == "GET" else 201, text=json.dumps(body))
 
     fake_session = SyncProxy(type("FakeApi", (), {"client": FakeClient()})())
-    monkeypatch.setattr("proxbox_api.main.get_raw_netbox_session", lambda: fake_session)
+    monkeypatch.setattr("proxbox_api.app.sync_processes.get_raw_netbox_session", lambda: fake_session)
 
     listed = asyncio.run(get_sync_processes())
     created = asyncio.run(create_sync_process())
 
-    assert listed[0]["sync_type"] == "all"
-    assert created.sync_type == "all"
+    listed_sync = listed[0]["sync_type"]
+    assert listed_sync == "all" or (
+        isinstance(listed_sync, dict) and listed_sync.get("value") == "all"
+    )
+    created_sync = created.sync_type
+    assert created_sync == "all" or (
+        isinstance(created_sync, dict) and created_sync.get("value") == "all"
+    )
     assert fake_session.client.calls[0][0:2] == ("GET", "/api/plugins/proxbox/sync-processes/")
     assert fake_session.client.calls[1][0:2] == ("POST", "/api/plugins/proxbox/sync-processes/")
 
@@ -519,11 +525,11 @@ def test_netbox_status_route_wraps_dependency_errors():
 
 def test_full_update_sync_returns_structured_payload(monkeypatch):
     monkeypatch.setattr(
-        "proxbox_api.main.create_proxmox_devices",
+        "proxbox_api.app.full_update.create_proxmox_devices",
         lambda **kwargs: asyncio.sleep(0, result=[{"id": 1, "name": "node01"}]),
     )
     monkeypatch.setattr(
-        "proxbox_api.main.create_virtual_machines",
+        "proxbox_api.app.full_update.create_virtual_machines",
         lambda **kwargs: asyncio.sleep(0, result=[{"id": 101, "name": "vm01"}]),
     )
 
@@ -549,11 +555,11 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
 
 def test_full_update_sync_handles_empty_device_result(monkeypatch):
     monkeypatch.setattr(
-        "proxbox_api.main.create_proxmox_devices",
+        "proxbox_api.app.full_update.create_proxmox_devices",
         lambda **kwargs: asyncio.sleep(0, result=[]),
     )
     monkeypatch.setattr(
-        "proxbox_api.main.create_virtual_machines",
+        "proxbox_api.app.full_update.create_virtual_machines",
         lambda **kwargs: asyncio.sleep(0, result=[]),
     )
 
@@ -578,7 +584,7 @@ def test_full_update_sync_reraises_device_phase_proxbox_exception(monkeypatch):
     async def _fail_devices(**kwargs):
         raise ProxboxException(message="Error while syncing nodes.", detail="device failed")
 
-    monkeypatch.setattr("proxbox_api.main.create_proxmox_devices", _fail_devices)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fail_devices)
 
     with pytest.raises(ProxboxException, match="Error while syncing nodes."):
         asyncio.run(
@@ -595,14 +601,14 @@ def test_full_update_sync_reraises_device_phase_proxbox_exception(monkeypatch):
 
 def test_full_update_sync_wraps_vm_phase_unexpected_errors(monkeypatch):
     monkeypatch.setattr(
-        "proxbox_api.main.create_proxmox_devices",
+        "proxbox_api.app.full_update.create_proxmox_devices",
         lambda **kwargs: asyncio.sleep(0, result=[{"id": 1}]),
     )
 
     async def _fail_vms(**kwargs):
         raise RuntimeError("vm exploded")
 
-    monkeypatch.setattr("proxbox_api.main.create_virtual_machines", _fail_vms)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fail_vms)
 
     with pytest.raises(ProxboxException, match="Error while syncing virtual machines."):
         asyncio.run(
@@ -741,9 +747,9 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):
             )
         return [{"id": 101, "name": "vm01"}]
 
-    monkeypatch.setattr("proxbox_api.main.StreamingResponse", _StreamingResponseStub)
-    monkeypatch.setattr("proxbox_api.main.create_proxmox_devices", _fake_devices)
-    monkeypatch.setattr("proxbox_api.main.create_virtual_machines", _fake_vms)
+    monkeypatch.setattr("proxbox_api.app.full_update.StreamingResponse", _StreamingResponseStub)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fake_devices)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
 
     response = asyncio.run(
         full_update_sync_stream(
@@ -774,27 +780,35 @@ async def _collect_async_frames(stream) -> list[str]:
 
 
 def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
-    class FakeVirtualMachineModel:
-        def find(self, **kwargs):
-            assert kwargs == {"cf_proxmox_vm_id": 101}
-            return {"id": 55, "name": "vm101"}
-
     class FakeClient:
         def __init__(self):
             self.calls = []
+            self._backup_volume_lookups = 0
 
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
             self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET" and path == "/api/virtualization/virtual-machines/":
+                assert query == {"cf_proxmox_vm_id": 101}
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps(
+                        {
+                            "count": 1,
+                            "results": [{"id": 55, "name": "vm101"}],
+                        }
+                    ),
+                )
             if method == "GET" and path == "/api/plugins/proxbox/backups/":
                 if query == {"volume_id": "backup-store:vm/101/2026-03-29", "limit": 2}:
+                    self._backup_volume_lookups += 1
                     return ApiResponse(
                         status=200,
                         text=json.dumps(
                             {
-                                "count": 0 if len(self.calls) == 1 else 1,
+                                "count": 0 if self._backup_volume_lookups == 1 else 1,
                                 "results": (
                                     []
-                                    if len(self.calls) == 1
+                                    if self._backup_volume_lookups == 1
                                     else [
                                         {
                                             "id": 900,
@@ -847,11 +861,6 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
         },
     )()
 
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.VirtualMachine",
-        FakeVirtualMachineModel,
-    )
-
     backup = asyncio.run(
         create_netbox_backups(
             {
@@ -869,6 +878,13 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
 
     assert backup.id == 900
     assert fake_netbox.client.calls[:3] == [
+        (
+            "GET",
+            "/api/virtualization/virtual-machines/",
+            {"cf_proxmox_vm_id": 101},
+            None,
+            True,
+        ),
         (
             "GET",
             "/api/plugins/proxbox/backups/",
@@ -894,12 +910,9 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
             },
             True,
         ),
-        (
-            "GET",
-            "/api/plugins/proxbox/backups/",
-            {"volume_id": "backup-store:vm/101/2026-03-29", "limit": 2},
-            None,
-            True,
-        ),
     ]
-    assert fake_netbox.client.calls[3][0:2] == ("POST", "/api/extras/journal-entries/")
+    assert fake_netbox.client.calls[3][0:2] == (
+        "GET",
+        "/api/plugins/proxbox/backups/",
+    )
+    assert fake_netbox.client.calls[4][0:2] == ("POST", "/api/extras/journal-entries/")

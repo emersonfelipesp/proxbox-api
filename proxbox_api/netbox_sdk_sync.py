@@ -2,33 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-import threading
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 
-
-def _run(coro: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    result: dict[str, Any] = {"value": None, "error": None}
-
-    def _runner() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except Exception as error:
-            result["error"] = error
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-    if result["error"]:
-        raise result["error"]
-    return result["value"]
+from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 
 
 def _collect_async_iter(it: AsyncIterator[Any]) -> list[Any]:
@@ -38,12 +16,12 @@ def _collect_async_iter(it: AsyncIterator[Any]) -> list[Any]:
             result.append(item)
         return result
 
-    return _run(_collect())
+    return run_coroutine_blocking(_collect())
 
 
 def _wrap(value: Any) -> Any:
     if inspect.iscoroutine(value):
-        return _wrap(_run(value))
+        return _wrap(run_coroutine_blocking(value))
     if isinstance(value, list):
         return [_wrap(item) for item in value]
     if isinstance(value, tuple):

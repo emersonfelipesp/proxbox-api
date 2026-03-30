@@ -28,7 +28,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxSiteSyncState,
     NetBoxVirtualMachineCreateBody,
 )
-from proxbox_api.services.sync.devices import _slugify
+from proxbox_api.services.sync.device_ensure import _slugify
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
 
 
