@@ -39,6 +39,7 @@ class TestBackupsSync:
 
     async def test_sync_vm_backups_with_e2e_tag(
         self,
+        require_proxbox_netbox_plugin,
         netbox_demo_session,
         e2e_tag,
         unique_prefix,
@@ -185,6 +186,7 @@ class TestBackupsSync:
 
     async def test_sync_multiple_vm_backups(
         self,
+        require_proxbox_netbox_plugin,
         netbox_demo_session,
         e2e_tag,
         unique_prefix,
