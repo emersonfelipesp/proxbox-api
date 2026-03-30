@@ -27,6 +27,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxManufacturerSyncState,
     NetBoxSiteSyncState,
     NetBoxVirtualMachineCreateBody,
+    _relation_id,
 )
 from proxbox_api.services.sync.device_ensure import _slugify
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
@@ -141,8 +142,8 @@ class TestVMSync:
         assert "proxbox-e2e-testing" in tag_slugs
 
         assert vm_data.get("custom_fields", {}).get("proxmox_vm_id") == vm.vmid
-        assert vm_data.get("cluster") == cluster_obj.id
-        assert vm_data.get("device") == device.id
+        assert _relation_id(vm_data.get("cluster")) == cluster_obj.id
+        assert _relation_id(vm_data.get("device")) == device.id
 
     async def test_sync_lxc_container_with_e2e_tag(
         self,
@@ -477,7 +478,7 @@ class TestVMSync:
         """Set up cluster dependencies (type, manufacturer, device type, role, site)."""
         await self._get_cluster_type(nb, cluster.mode, tag_refs)
 
-        await rest_reconcile_async(
+        manufacturer = await rest_reconcile_async(
             nb,
             "/api/dcim/manufacturers/",
             lookup={"slug": "proxmox"},
@@ -501,7 +502,7 @@ class TestVMSync:
             payload={
                 "model": "Proxmox Generic Device",
                 "slug": "proxmox-generic-device",
-                "manufacturer": None,
+                "manufacturer": manufacturer.id,
                 "tags": tag_refs,
             },
             schema=NetBoxDeviceTypeSyncState,

@@ -27,6 +27,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceTypeSyncState,
     NetBoxManufacturerSyncState,
     NetBoxSiteSyncState,
+    _relation_id,
 )
 
 
@@ -202,8 +203,8 @@ class TestDevicesSync:
 
         assert device is not None
         assert device.name == node_name
-        assert device.cluster == cluster_obj.id
-        assert device.site == site.id
+        assert _relation_id(device.cluster) == cluster_obj.id
+        assert _relation_id(device.site) == site.id
 
         devices = await rest_list_async(
             nb,

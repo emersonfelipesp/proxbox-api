@@ -436,6 +436,16 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     custom_fields: dict[str, Any] = Field(default_factory=dict)
     description: str | None = None
 
+    @field_validator("vcpus", "memory", "disk", mode="before")
+    @classmethod
+    def coerce_nullable_vm_ints(cls, value: Any) -> int:
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: Any) -> str:
