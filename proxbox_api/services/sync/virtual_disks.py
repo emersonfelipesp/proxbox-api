@@ -18,6 +18,7 @@ async def create_virtual_disks(
     netbox_session,
     pxs: ProxmoxSessionsDep,
     cluster_status,
+    cluster_resources=None,
     tag=None,
     websocket=None,
     use_websocket=False,
@@ -133,10 +134,26 @@ async def create_virtual_disks(
             node_name = (
                 vm.get("device", {}).get("name") if isinstance(vm.get("device"), dict) else None
             )
+
+            if not node_name and cluster_resources:
+                for cluster in cluster_resources:
+                    cluster_name_key = (
+                        list(cluster.keys())[0] if isinstance(cluster, dict) else None
+                    )
+                    if cluster_name_key:
+                        resources = cluster[cluster_name_key]
+                        for resource in resources:
+                            if resource.get("vmid") == vmid:
+                                node_name = resource.get("node")
+                                cluster_name = cluster_name_key
+                                break
+                    if node_name:
+                        break
+
             vm_type = "qemu"
 
             if not node_name:
-                logger.warning(f"No node found for VM {vm_name}, skipping disk sync")
+                logger.warning(f"No node found for VM {vm_name} (vmid: {vmid}), skipping disk sync")
                 skipped += 1
                 if use_websocket and websocket:
                     await websocket.send_json(

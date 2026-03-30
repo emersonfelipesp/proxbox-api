@@ -966,6 +966,7 @@ async def create_virtual_disks(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
     websocket=None,
     use_css: bool = False,
@@ -982,6 +983,7 @@ async def create_virtual_disks(
         netbox_session=netbox_session,
         pxs=pxs,
         cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
         tag=tag,
         websocket=websocket,
         use_websocket=use_websocket,
@@ -996,6 +998,7 @@ async def create_virtual_disks_stream(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
 ):
     async def event_stream():
@@ -1007,6 +1010,7 @@ async def create_virtual_disks_stream(
                     netbox_session=netbox_session,
                     pxs=pxs,
                     cluster_status=cluster_status,
+                    cluster_resources=cluster_resources,
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
