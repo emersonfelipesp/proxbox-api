@@ -37,7 +37,7 @@ jobs:
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Run mocked schema-driven tests
-        run: uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests
+        run: uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v7
