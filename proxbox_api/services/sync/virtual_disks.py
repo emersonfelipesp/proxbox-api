@@ -107,13 +107,36 @@ async def create_virtual_disks(
             )
             vm_type = "qemu"
 
-            vm_config = await get_vm_config(
-                pxs=pxs,
-                cluster_status=cluster_status,
-                node=node_name,
-                type=vm_type,
-                vmid=vmid,
-            )
+            if not node_name:
+                logger.warning(f"No node found for VM {vm_name}, skipping disk sync")
+                skipped += 1
+                if use_websocket and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "virtual_disk",
+                            "type": "sync",
+                            "data": {
+                                "completed": True,
+                                "rowid": f"{vm_name}-disks",
+                                "name": vm_name,
+                                "sync_status": failed_html,
+                                "disks": "No node associated",
+                            },
+                        }
+                    )
+                continue
+
+            vm_config = None
+            try:
+                vm_config = await get_vm_config(
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    node=node_name,
+                    type=vm_type,
+                    vmid=vmid,
+                )
+            except Exception as e:
+                logger.error(f"Error getting VM config for {vm_name}: {e}")
 
             if not vm_config:
                 logger.warning(f"Could not get VM config for VM {vm_name} (vmid: {vmid})")
