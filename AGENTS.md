@@ -4,15 +4,15 @@ Start with the root project guide, then open the most specific scoped guide for 
 
 ## Pre-commit Checklist
 
-Before pushing any changes, always run:
+Before pushing any changes, always run (use `rtk` for compact output):
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
+rtk ruff check .
+rtk ruff format --check .
 uv run python -m compileall proxbox_api scripts tests
 uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-uv run pytest tests
+rtk pytest tests
 ```
 
 Fix any failures locally before pushing.
