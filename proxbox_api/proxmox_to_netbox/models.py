@@ -307,6 +307,31 @@ class NetBoxBackupSyncState(BaseModel):
         return _relation_id(value)
 
 
+class NetBoxSnapshotSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    name: str
+    description: str | None = None
+    vmid: int
+    node: str
+    snaptime: str | None = None
+    parent: str | None = None
+    subtype: str | None = None
+    status: str = "active"
+
+    @field_validator("virtual_machine", mode="before")
+    @classmethod
+    def normalize_virtual_machine(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str:
+        text = str(value or "active").strip().lower()
+        return text if text in ("active", "stale") else "active"
+
+
 class NetBoxVirtualDiskSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
