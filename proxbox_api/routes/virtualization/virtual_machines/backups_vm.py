@@ -17,7 +17,6 @@ from proxbox_api.logger import logger
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_rest import (
-    rest_create,
     rest_create_async,
     rest_list,
     rest_list_async,
@@ -249,43 +248,12 @@ async def _create_all_virtual_machine_backups(
 ):
     """Internal function that handles backup sync with optional websocket support."""
     nb = netbox_session
-    start_time = datetime.now()
-    sync_process = None
     results = []
-    journal_messages = []  # Store all journal messages
     failure_count = 0
-    deleted_count = 0  # Track number of deleted backups
+    deleted_count = 0
     backup_sync_ok = False
 
     try:
-        # Create sync process
-        sync_process = rest_create(
-            nb,
-            "/api/plugins/proxbox/sync-processes/",
-            {
-                "name": f"sync-virtual-machines-backups-{start_time}",
-                "sync_type": "vm-backups",
-                "status": "not-started",
-                "started_at": str(start_time),
-                "completed_at": None,
-                "runtime": None,
-                "tags": [tag.id],
-            },
-        )
-
-        journal_messages.append("## Backup Sync Process Started")
-        journal_messages.append(f"- **Start Time**: {start_time}")
-        journal_messages.append("- **Status**: Initializing")
-
-    except Exception as error:
-        error_msg = f"Error creating sync process: {str(error)}"
-        journal_messages.append(f"### ❌ Error\n{error_msg}")
-        raise ProxboxException(message=error_msg)
-
-    try:
-        sync_process.status = "syncing"
-        sync_process.save()
-
         if use_websocket and websocket:
             await websocket.send_json(
                 {
@@ -295,13 +263,10 @@ async def _create_all_virtual_machine_backups(
                 }
             )
 
-        journal_messages.append("\n## Backup Discovery")
         all_backup_tasks = []
-        proxmox_backups = set()  # Store all Proxmox backup identifiers
+        proxmox_backups = set()
 
-        # Process each Proxmox cluster
         for proxmox, cluster in zip(pxs, cluster_status):
-            # Get all storage names that have 'backup' in the content
             storage_list = [
                 {
                     "storage": storage_dict.get("storage"),
@@ -311,13 +276,8 @@ async def _create_all_virtual_machine_backups(
                 if "backup" in storage_dict.get("content")
             ]
 
-            journal_messages.append(f"\n### Processing Cluster: {cluster.name}")
-            journal_messages.append(f"- Found {len(storage_list)} backup storages")
-
-            # Process each cluster node
             if cluster and cluster.node_list:
                 for cluster_node in cluster.node_list:
-                    # Process each storage
                     for storage in storage_list:
                         if storage.get("nodes") == "all" or cluster_node.name in storage.get(
                             "nodes", []
@@ -332,19 +292,17 @@ async def _create_all_virtual_machine_backups(
                                 )
                                 all_backup_tasks.extend(node_backup_tasks)
                                 proxmox_backups.update(node_volids)
-
-                                journal_messages.append(
-                                    f"- Node `{cluster_node.name}` in storage `{storage.get('storage')}`: Found {len(node_backup_tasks)} backups"
+                            except Exception:
+                                logger.warning(
+                                    "Backup discovery failed for node %s storage %s",
+                                    cluster_node.name,
+                                    storage.get("storage"),
+                                    exc_info=True,
                                 )
-
-                            except Exception as error:
-                                error_msg = f"Error processing backups for node {cluster_node.name} and storage {storage.get('storage')}: {str(error)}"
-                                journal_messages.append(f"  - ❌ {error_msg}")
                                 continue
 
         if not all_backup_tasks:
             error_msg = "No backups found to process"
-            journal_messages.append(f"\n### ⚠️ Warning\n{error_msg}")
             if use_websocket and websocket:
                 await websocket.send_json(
                     {
@@ -365,23 +323,12 @@ async def _create_all_virtual_machine_backups(
                 }
             )
 
-        journal_messages.append("\n## Backup Processing")
-        journal_messages.append(f"- Total backups to process: {len(all_backup_tasks)}")
-
-        # Process all backups in batches
         results, failure_count = await process_backups_batch(all_backup_tasks)
-
-        journal_messages.append(
-            f"- Reconciled {len(results)} backup record(s) in NetBox (create/update via API)"
-        )
         if failure_count:
-            journal_messages.append(f"- Tasks that raised errors: {failure_count}")
+            logger.warning("Backup batch reported %s task error(s)", failure_count)
 
-        # Handle deletion of nonexistent backups if requested
         if delete_nonexistent_backup:
-            journal_messages.append("\n## Deleting Nonexistent Backups")
             try:
-                # Get all backups from NetBox
                 netbox_backups = rest_list(nb, "/api/plugins/proxbox/backups/")
                 skipped_no_volid = 0
 
@@ -392,38 +339,47 @@ async def _create_all_virtual_machine_backups(
                         continue
                     if vid not in proxmox_backups:
                         try:
-                            # Delete the backup
                             backup.delete()
                             deleted_count += 1
-                            journal_messages.append(
-                                f"- Deleted backup for VM ID {backup.vmid} in storage {backup.storage} (volume: {backup.volume_id})"
-                            )
-                        except Exception as error:
-                            journal_messages.append(
-                                f"- ❌ Failed to delete backup for VM ID {backup.vmid}: {str(error)}"
+                        except Exception:
+                            logger.warning(
+                                "Failed to delete backup for VM %s",
+                                backup.vmid,
+                                exc_info=True,
                             )
 
                 if skipped_no_volid:
-                    journal_messages.append(
-                        f"- Skipped {skipped_no_volid} NetBox backup(s) with empty volume_id "
-                        "(cannot match Proxmox)"
+                    logger.info(
+                        "Skipped %s NetBox backup(s) with empty volume_id",
+                        skipped_no_volid,
                     )
-
-                if deleted_count > 0:
-                    journal_messages.append(f"\nTotal backups deleted: {deleted_count}")
-                else:
-                    journal_messages.append("\nNo backups needed to be deleted")
-
-            except Exception as error:
-                error_msg = f"Error during backup deletion: {str(error)}"
-                journal_messages.append(f"\n### ❌ Error\n{error_msg}")
-                # Don't raise the exception as this is not critical for the sync process
+            except Exception:
+                logger.warning("Error during backup deletion pass", exc_info=True)
 
         backup_sync_ok = True
 
+        if use_websocket and websocket and backup_sync_ok:
+            await websocket.send_json(
+                {
+                    "step": "backups",
+                    "status": "completed",
+                    "message": (
+                        f"Backup sync completed. {len(results)} reconciled, "
+                        f"{failure_count} task error(s), {deleted_count} deleted."
+                    ),
+                    "result": {
+                        "reconciled": len(results),
+                        "failed_tasks": failure_count,
+                        "deleted": deleted_count,
+                    },
+                }
+            )
+
+    except ProxboxException:
+        raise
     except Exception as error:
         error_msg = f"Error during backup sync: {str(error)}"
-        journal_messages.append(f"\n### ❌ Error\n{error_msg}")
+        logger.error(error_msg, exc_info=True)
         if use_websocket and websocket:
             await websocket.send_json(
                 {
@@ -434,60 +390,6 @@ async def _create_all_virtual_machine_backups(
                 }
             )
         raise ProxboxException(message=error_msg)
-
-    finally:
-        # Always update sync process status
-        if sync_process:
-            end_time = datetime.now()
-            sync_process.completed_at = str(end_time)
-            sync_process.runtime = float((end_time - start_time).total_seconds())
-            if backup_sync_ok:
-                sync_process.status = "completed"
-            elif sync_process.status == "syncing":
-                sync_process.status = "failed"
-            sync_process.save()
-
-            # Add final summary
-            journal_messages.append("\n## Process Summary")
-            journal_messages.append(f"- **Status**: {sync_process.status}")
-            journal_messages.append(f"- **Runtime**: {sync_process.runtime} seconds")
-            journal_messages.append(f"- **End Time**: {end_time}")
-            journal_messages.append(
-                f"- **Backup tasks OK**: {len(results)} reconciled, {failure_count} task error(s)"
-            )
-            if delete_nonexistent_backup:
-                journal_messages.append(f"- **Backups Deleted**: {deleted_count}")
-
-            journal_entry = await rest_create_async(
-                nb,
-                "/api/extras/journal-entries/",
-                {
-                    "assigned_object_type": "netbox_proxbox.syncprocess",
-                    "assigned_object_id": sync_process.id,
-                    "kind": "info",
-                    "comments": "\n".join(journal_messages),
-                },
-            )
-
-            if not journal_entry:
-                logger.warning("Journal entry creation returned None")
-
-            if use_websocket and websocket and backup_sync_ok:
-                await websocket.send_json(
-                    {
-                        "step": "backups",
-                        "status": "completed",
-                        "message": (
-                            f"Backup sync completed. {len(results)} reconciled, "
-                            f"{failure_count} task error(s), {deleted_count} deleted."
-                        ),
-                        "result": {
-                            "reconciled": len(results),
-                            "failed_tasks": failure_count,
-                            "deleted": deleted_count,
-                        },
-                    }
-                )
 
     logger.info("Syncing backups finished")
     return results

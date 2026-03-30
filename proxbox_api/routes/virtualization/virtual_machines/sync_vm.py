@@ -2,7 +2,6 @@
 
 # FastAPI Imports
 import asyncio
-from datetime import datetime
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -19,11 +18,7 @@ from proxbox_api.logger import logger  # Logger
 from proxbox_api.netbox_compat import (
     VirtualMachine,
 )
-from proxbox_api.netbox_rest import (
-    rest_create,
-    rest_create_async,
-    rest_reconcile_async,
-)
+from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxIpAddressSyncState,
@@ -56,100 +51,10 @@ from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
-from proxbox_api.utils import (
-    return_status_html,
-    sync_process,
-)  # Return Status HTML and Sync Process
+from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
-
-
-@router.get("/sync-process/journal-entry/test/create")
-async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
-    """
-    Create a Sync Process, then create a Journal Entry for it.
-    """
-
-    nb = netbox_session
-    start_time = datetime.now().isoformat()
-    journal_entry_sync = None
-    journal_entry_backup = None
-
-    try:
-        # Create sync process first
-        sync_process = rest_create(
-            nb,
-            "/api/plugins/proxbox/sync-processes/",
-            {
-                "name": f"journal-entry-test-{datetime.now().isoformat()}",
-                "sync_type": "virtual-machines",
-                "status": "not-started",
-                "started_at": start_time,
-            },
-        )
-        logger.info("Created sync process: %s", sync_process)
-
-        # Try to create journal entries using the string format
-        try:
-            journal_entry_sync = await rest_create_async(
-                nb,
-                "/api/extras/journal-entries/",
-                {
-                    "assigned_object_type": "netbox_proxbox.syncprocess",
-                    "assigned_object_id": sync_process.id,
-                    "kind": "info",
-                    "comments": "Journal Entry Test for Sync Process",
-                },
-            )
-            logger.info("Created sync process journal entry: %s", journal_entry_sync)
-
-            journal_entry_sync = await rest_create_async(
-                nb,
-                "/api/extras/journal-entries/",
-                {
-                    "assigned_object_type": "netbox_proxbox.syncprocess",
-                    "assigned_object_id": sync_process.id,
-                    "kind": "info",
-                    "comments": "2 - Journal Entry Test for Sync Process",
-                },
-            )
-            logger.info("Second sync process journal entry: %s", journal_entry_sync)
-        except Exception as sync_error:
-            logger.warning("Error creating sync process journal entry: %s", sync_error)
-            if hasattr(sync_error, "response"):
-                logger.debug("Journal error response: %s", sync_error.response.content)
-
-        try:
-            journal_entry_backup = await rest_create_async(
-                nb,
-                "/api/extras/journal-entries/",
-                {
-                    "assigned_object_type": "netbox_proxbox.vmbackup",
-                    "assigned_object_id": 1887,
-                    "kind": "info",
-                    "comments": "Journal Entry Test for VM Backup",
-                },
-            )
-            logger.info("Created VM backup journal entry: %s", journal_entry_backup)
-
-        except Exception as backup_error:
-            logger.warning("Error creating VM backup journal entry: %s", backup_error)
-            if hasattr(backup_error, "response"):
-                logger.debug("VM backup journal error response: %s", backup_error.response.content)
-
-    except Exception:
-        logger.exception("Journal entry test route failed")
-        raise
-
-    return {
-        "status": "completed",
-        "sync_process": sync_process,
-        "journal_entries": {
-            "sync_process": journal_entry_sync if "journal_entry_sync" in locals() else None,
-            "vm_backup": journal_entry_backup if "journal_entry_backup" in locals() else None,
-        },
-    }
 
 
 @router.get("/create-test")
@@ -191,7 +96,6 @@ async def create_test():
 
 
 @router.get("/create")
-@sync_process("virtual-machines")
 async def create_virtual_machines(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
@@ -202,17 +106,13 @@ async def create_virtual_machines(
     websocket=None,
     use_css: bool = False,
     use_websocket: bool = False,
-    sync_process=None,
 ):
     """
     Creates a new virtual machine in Netbox.
     """
 
-    # GET /api/plugins/proxbox/sync-processes/
     nb = netbox_session
-    start_time = datetime.now()
 
-    journal_messages = []  # Store all journal messages
     total_vms = 0  # Track total VMs processed
     successful_vms = 0  # Track successful VM creations
     failed_vms = 0  # Track failed VM creations
@@ -227,9 +127,6 @@ async def create_virtual_machines(
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
     flattened_results = []
 
-    journal_messages.append("## Virtual Machine Sync Process Started")
-    journal_messages.append(f"- **Start Time**: {start_time}")
-    journal_messages.append("- **Status**: Initializing")
 
     async def create_vm_task(cluster_name, resource):
         undefined_html = return_status_html("undefined", use_css)
@@ -577,7 +474,6 @@ async def create_virtual_machines(
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
     try:
-        journal_messages.append("\n## Virtual Machine Discovery")
 
         # Process each cluster
         for cluster in cluster_resources:
@@ -585,17 +481,9 @@ async def create_virtual_machines(
             resources = cluster[cluster_name]
             vm_count = len([r for r in resources if r.get("type") in ("qemu", "lxc")])
 
-            journal_messages += [
-                f"\n### Processing Cluster: {cluster_name}",
-                f"- Found {vm_count} virtual machines",
-            ]
 
             total_vms += vm_count
 
-        journal_messages += [
-            "\n## Virtual Machine Processing",
-            f"- Total VMs to process: {total_vms}",
-        ]
 
         # Return the created virtual machines.
         result_list = await asyncio.gather(
@@ -618,18 +506,13 @@ async def create_virtual_machines(
         for cluster_results in result_list:
             if isinstance(cluster_results, Exception):
                 failed_vms += 1
-                journal_messages.append(f"- ❌ Failed to process cluster: {str(cluster_results)}")
             else:
                 # cluster_results is a list of VM creation results
                 for vm_result in cluster_results:
                     if isinstance(vm_result, Exception):
                         failed_vms += 1
-                        journal_messages.append(f"- ❌ Failed to create VM: {str(vm_result)}")
                     else:
                         successful_vms += 1
-                        journal_messages.append(
-                            f"- ✅ Successfully created VM: {vm_result.get('name')} (ID: {vm_result.get('id')})"
-                        )
                         flattened_results.append(vm_result)
 
         # Send end message to websocket
@@ -639,44 +522,17 @@ async def create_virtual_machines(
         # Clear cache after creating virtual machines
         global_cache.clear_cache()
 
+        logger.info(
+            "VM sync summary: total=%s ok=%s failed=%s",
+            total_vms,
+            successful_vms,
+            failed_vms,
+        )
+
     except Exception as error:
         error_msg = f"Error during VM sync: {str(error)}"
-        journal_messages.append(f"\n### ❌ Error\n{error_msg}")
         raise ProxboxException(message=error_msg)
 
-    finally:
-        # Add final summary
-        journal_messages += [
-            "\n## Process Summary",
-            f"- **Status**: {getattr(sync_process, 'status', 'unknown')}",
-            f"- **Runtime**: {getattr(sync_process, 'runtime', 'unknown')} seconds",
-            f"- **End Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"- **Total VMs Processed**: {total_vms}",
-            f"- **Successfully Created**: {successful_vms}",
-            f"- **Failed**: {failed_vms}",
-        ]
-
-        try:
-            if sync_process and hasattr(sync_process, "id"):
-                journal_entry = await rest_create_async(
-                    nb,
-                    "/api/extras/journal-entries/",
-                    {
-                        "assigned_object_type": "netbox_proxbox.syncprocess",
-                        "assigned_object_id": sync_process.id,
-                        "kind": "info",
-                        "comments": "\n".join(journal_messages),
-                    },
-                )
-
-                if not journal_entry:
-                    logger.warning("Journal entry creation returned None")
-            else:
-                logger.warning(
-                    "Cannot create journal entry - sync_process is None or has no id",
-                )
-        except Exception as journal_error:
-            logger.warning("Failed to create journal entry: %s", journal_error)
 
     return flattened_results
 

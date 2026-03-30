@@ -9,7 +9,6 @@ from proxbox_api.app.factory import create_app
 from proxbox_api.app.full_update import full_update_sync, full_update_sync_stream
 from proxbox_api.app.netbox_session import get_raw_netbox_session
 from proxbox_api.app.root_meta import standalone_info
-from proxbox_api.app.sync_processes import create_sync_process, get_sync_processes
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 from proxbox_api.services.sync.devices import create_proxmox_devices
@@ -20,12 +19,10 @@ __all__ = (
     "StreamingResponse",
     "app",
     "create_proxmox_devices",
-    "create_sync_process",
     "create_virtual_machines",
     "full_update_sync",
     "full_update_sync_stream",
     "get_raw_netbox_session",
-    "get_sync_processes",
     "register_generated_proxmox_routes",
     "standalone_info",
 )

@@ -13,13 +13,10 @@ from netbox_sdk.client import ApiResponse
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.main import (
-    create_sync_process,
     full_update_sync,
     full_update_sync_stream,
-    get_sync_processes,
     standalone_info,
 )
-from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.routes.extras import create_custom_fields
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
@@ -64,29 +61,6 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
 
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
             self.calls.append((method, path, query, payload, expect_json))
-
-            if method == "POST" and path == "/api/plugins/proxbox/sync-processes/":
-                return ApiResponse(
-                    status=201,
-                    text=json.dumps(
-                        {
-                            "id": 1,
-                            "name": "sync-devices",
-                            "status": "not-started",
-                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
-                        }
-                    ),
-                )
-            if method == "PATCH" and path == "/api/plugins/proxbox/sync-processes/1/":
-                body = {
-                    "id": 1,
-                    "name": "sync-devices",
-                    "status": payload.get("status", "completed"),
-                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
-                }
-                return ApiResponse(status=200, text=json.dumps(body))
-            if method == "POST" and path == "/api/extras/journal-entries/":
-                return ApiResponse(status=201, text=json.dumps({"id": 501}))
 
             lookup_key = (method, path, tuple(sorted((query or {}).items())))
             if lookup_key in lookup_responses:
@@ -200,28 +174,6 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
 def test_create_proxmox_devices_surfaces_real_netbox_detail():
     class FakeClient:
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
-            if method == "POST" and path == "/api/plugins/proxbox/sync-processes/":
-                return ApiResponse(
-                    status=201,
-                    text=json.dumps(
-                        {
-                            "id": 1,
-                            "name": "sync-devices",
-                            "status": "not-started",
-                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
-                        }
-                    ),
-                )
-            if method == "PATCH" and path == "/api/plugins/proxbox/sync-processes/1/":
-                body = {
-                    "id": 1,
-                    "name": "sync-devices",
-                    "status": payload.get("status", "failed"),
-                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/1/",
-                }
-                return ApiResponse(status=200, text=json.dumps(body))
-            if method == "POST" and path == "/api/extras/journal-entries/":
-                return ApiResponse(status=201, text=json.dumps({"id": 502}))
             if method == "GET":
                 return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
             if method == "POST" and path == "/api/dcim/devices/":
@@ -285,62 +237,6 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session():
     )
     assert first_post["object_types"] == ["virtualization.virtualmachine"]
     assert first_post["ui_editable"] == "hidden"
-
-
-def test_sync_process_routes_use_rest_helpers(monkeypatch):
-    class FakeClient:
-        def __init__(self):
-            self.calls = []
-
-        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
-            self.calls.append((method, path, query, payload, expect_json))
-            if method == "GET":
-                body = {
-                    "count": 1,
-                    "results": [
-                        {
-                            "id": 5,
-                            "name": "sync-all",
-                            "sync_type": "all",
-                            "status": "completed",
-                            "started_at": "2025-03-13T15:08:09.051478Z",
-                            "completed_at": "2025-03-13T15:08:09.051478Z",
-                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/5/",
-                            "display": "sync-all (all)",
-                        }
-                    ],
-                }
-            else:
-                body = {
-                    "id": 6,
-                    "name": "sync-all",
-                    "sync_type": "all",
-                    "status": "not-started",
-                    "started_at": "2025-03-13T15:08:09.051478Z",
-                    "completed_at": "2025-03-13T15:08:09.051478Z",
-                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/6/",
-                    "display": "sync-all (all)",
-                }
-            return ApiResponse(status=200 if method == "GET" else 201, text=json.dumps(body))
-
-    fake_session = SyncProxy(type("FakeApi", (), {"client": FakeClient()})())
-    monkeypatch.setattr(
-        "proxbox_api.app.sync_processes.get_raw_netbox_session", lambda: fake_session
-    )
-
-    listed = asyncio.run(get_sync_processes())
-    created = asyncio.run(create_sync_process())
-
-    listed_sync = listed[0]["sync_type"]
-    assert listed_sync == "all" or (
-        isinstance(listed_sync, dict) and listed_sync.get("value") == "all"
-    )
-    created_sync = created.sync_type
-    assert created_sync == "all" or (
-        isinstance(created_sync, dict) and created_sync.get("value") == "all"
-    )
-    assert fake_session.client.calls[0][0:2] == ("GET", "/api/plugins/proxbox/sync-processes/")
-    assert fake_session.client.calls[1][0:2] == ("POST", "/api/plugins/proxbox/sync-processes/")
 
 
 def test_proxmox_endpoint_crud_lifecycle(db_session):
@@ -625,65 +521,17 @@ def test_full_update_sync_wraps_vm_phase_unexpected_errors(monkeypatch):
         )
 
 
-def test_create_virtual_machines_handles_empty_clusters_and_journal_failures():
-    class FakeSyncProcess:
-        id = 101
-        status = "not-started"
-        runtime = None
-
-        def save(self):
-            return None
-
+def test_create_virtual_machines_handles_empty_clusters():
     class FakeClient:
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
-            if method == "POST" and path == "/api/plugins/proxbox/sync-processes/":
-                return ApiResponse(
-                    status=201,
-                    text=json.dumps(
-                        {
-                            "id": 101,
-                            "name": "sync-vms",
-                            "sync_type": "virtual-machines",
-                            "status": "not-started",
-                            "started_at": "2025-03-13T15:08:09.051478Z",
-                            "completed_at": None,
-                            "runtime": None,
-                            "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
-                            "display": "sync-vms (virtual-machines)",
-                        }
-                    ),
-                )
-            if method == "PATCH" and path == "/api/plugins/proxbox/sync-processes/101/":
-                body = {
-                    "id": 101,
-                    "name": "sync-vms",
-                    "sync_type": "virtual-machines",
-                    "status": payload.get("status", "completed"),
-                    "started_at": "2025-03-13T15:08:09.051478Z",
-                    "completed_at": payload.get("completed_at"),
-                    "runtime": payload.get("runtime"),
-                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
-                    "display": "sync-vms (virtual-machines)",
-                }
-                return ApiResponse(status=200, text=json.dumps(body))
-            if method == "POST" and path == "/api/extras/journal-entries/":
-                return ApiResponse(status=201, text=json.dumps({"id": 503}))
             raise AssertionError((method, path, query, payload, expect_json))
-
-    class FakeJournalEntriesEndpoint:
-        def create(self, payload):
-            raise RuntimeError("journal create failed")
 
     fake_netbox = type(
         "FakeNetBoxSession",
         (),
         {
             "client": FakeClient(),
-            "extras": type(
-                "Extras",
-                (),
-                {"journal_entries": FakeJournalEntriesEndpoint()},
-            )(),
+            "extras": type("Extras", (), {"journal_entries": object()})(),
         },
     )()
 
