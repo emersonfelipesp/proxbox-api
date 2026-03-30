@@ -9,7 +9,7 @@ It handles:
 
 Usage:
     pytest tests/e2e/ -v
-    pytest tests/e2e/ -v -n auto  # with pytest-xdist
+    # Avoid pytest-xdist against demo.netbox.dev (rate limits / object quotas).
 
 Environment variables:
     PROXBOX_E2E_USERNAME: Demo username (default: auto-generated)
@@ -158,6 +158,34 @@ async def e2e_tag_refs(e2e_tag: dict[str, Any]) -> list[dict[str, Any]]:
         List containing the e2e tag ref dict.
     """
     return build_e2e_tag_refs(e2e_tag)
+
+
+@pytest_asyncio.fixture(scope="session")
+async def e2e_shared_proxmox_site(netbox_demo_session: "Api", e2e_tag: dict[str, Any]) -> Any:
+    """Single DCIM site reused by VM e2e tests to avoid demo per-run site limits."""
+
+    from proxbox_api.netbox_rest import nested_tag_payload, rest_reconcile_async
+    from proxbox_api.proxmox_to_netbox.models import NetBoxSiteSyncState
+
+    tag_refs = nested_tag_payload(e2e_tag)
+    return await rest_reconcile_async(
+        netbox_demo_session,
+        "/api/dcim/sites/",
+        lookup={"slug": "proxbox-api-e2e-shared-site"},
+        payload={
+            "name": "Proxbox API E2E Shared Site",
+            "slug": "proxbox-api-e2e-shared-site",
+            "status": "active",
+            "tags": tag_refs,
+        },
+        schema=NetBoxSiteSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "status": record.get("status"),
+            "tags": record.get("tags"),
+        },
+    )
 
 
 @pytest.fixture

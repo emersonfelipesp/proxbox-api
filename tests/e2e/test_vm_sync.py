@@ -41,6 +41,7 @@ class TestVMSync:
         self,
         netbox_demo_session,
         e2e_tag,
+        e2e_shared_proxmox_site,
         unique_prefix,
     ):
         """Test syncing a QEMU VM with e2e tag.
@@ -79,7 +80,14 @@ class TestVMSync:
             },
         )
 
-        device = await self._get_or_create_device(nb, cluster, cluster_obj, node.name, tag_refs)
+        device = await self._get_or_create_device(
+            nb,
+            cluster,
+            cluster_obj,
+            node.name,
+            tag_refs,
+            shared_site=e2e_shared_proxmox_site,
+        )
 
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=vm.to_resource(),
@@ -151,6 +159,7 @@ class TestVMSync:
         self,
         netbox_demo_session,
         e2e_tag,
+        e2e_shared_proxmox_site,
         unique_prefix,
     ):
         """Test syncing an LXC container with e2e tag.
@@ -195,7 +204,14 @@ class TestVMSync:
             },
         )
 
-        device = await self._get_or_create_device(nb, cluster, cluster_obj, node.name, tag_refs)
+        device = await self._get_or_create_device(
+            nb,
+            cluster,
+            cluster_obj,
+            node.name,
+            tag_refs,
+            shared_site=e2e_shared_proxmox_site,
+        )
 
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=lxc_vm.to_resource(),
@@ -265,6 +281,7 @@ class TestVMSync:
         self,
         netbox_demo_session,
         e2e_tag,
+        e2e_shared_proxmox_site,
         unique_prefix,
     ):
         """Test that VM custom fields are correctly set.
@@ -302,7 +319,12 @@ class TestVMSync:
         )
 
         device = await self._get_or_create_device(
-            nb, cluster, cluster_obj, cluster.nodes[0].name, tag_refs
+            nb,
+            cluster,
+            cluster_obj,
+            cluster.nodes[0].name,
+            tag_refs,
+            shared_site=e2e_shared_proxmox_site,
         )
 
         netbox_vm_payload = build_netbox_virtual_machine_payload(
@@ -378,6 +400,7 @@ class TestVMSync:
         self,
         netbox_demo_session,
         e2e_tag,
+        e2e_shared_proxmox_site,
         unique_prefix,
     ):
         """Test syncing multiple VMs in parallel.
@@ -412,7 +435,12 @@ class TestVMSync:
         )
 
         device = await self._get_or_create_device(
-            nb, cluster, cluster_obj, cluster.nodes[0].name, tag_refs
+            nb,
+            cluster,
+            cluster_obj,
+            cluster.nodes[0].name,
+            tag_refs,
+            shared_site=e2e_shared_proxmox_site,
         )
 
         async def _create_vm(vm: MockProxmoxCluster) -> Any:
@@ -590,11 +618,10 @@ class TestVMSync:
         cluster_obj,
         node_name: str,
         tag_refs: list[dict[str, Any]],
+        *,
+        shared_site: Any | None = None,
     ):
         """Get or create a device for the node."""
-        site_name = f"Proxmox Default Site - {cluster.name}"
-        site_slug = f"proxmox-default-site-{_slugify(cluster.name)}"
-
         manufacturer = await rest_reconcile_async(
             nb,
             "/api/dcim/manufacturers/",
@@ -650,24 +677,29 @@ class TestVMSync:
             },
         )
 
-        site = await rest_reconcile_async(
-            nb,
-            "/api/dcim/sites/",
-            lookup={"slug": site_slug},
-            payload={
-                "name": site_name,
-                "slug": site_slug,
-                "status": "active",
-                "tags": tag_refs,
-            },
-            schema=NetBoxSiteSyncState,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "slug": record.get("slug"),
-                "status": record.get("status"),
-                "tags": record.get("tags"),
-            },
-        )
+        if shared_site is not None:
+            site = shared_site
+        else:
+            site_name = f"Proxmox Default Site - {cluster.name}"
+            site_slug = f"proxmox-default-site-{_slugify(cluster.name)}"
+            site = await rest_reconcile_async(
+                nb,
+                "/api/dcim/sites/",
+                lookup={"slug": site_slug},
+                payload={
+                    "name": site_name,
+                    "slug": site_slug,
+                    "status": "active",
+                    "tags": tag_refs,
+                },
+                schema=NetBoxSiteSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "status": record.get("status"),
+                    "tags": record.get("tags"),
+                },
+            )
 
         return await rest_reconcile_async(
             nb,
