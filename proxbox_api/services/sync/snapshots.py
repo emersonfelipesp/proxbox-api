@@ -134,6 +134,7 @@ async def create_virtual_machine_snapshots(
     netbox_session,
     pxs: ProxmoxSessionsDep,
     cluster_status,
+    cluster_resources=None,
     tag=None,
     vmid: int | None = None,
     node: str | None = None,
@@ -145,11 +146,13 @@ async def create_virtual_machine_snapshots(
     """
     Sync snapshots for existing Virtual Machines in NetBox.
 
-    Queries NetBox for VMs with cf_proxmox_vm_id set, fetches their
+    Queries NetBox for VMs that have cf_proxmox_vm_id set, fetches their
     snapshots from Proxmox, and creates/updates VMSnapshot objects.
     """
     nb = netbox_session
     undefined_html = return_status_html("undefined", use_css)
+    completed_html = return_status_html("completed", use_css)
+    failed_html = return_status_html("failed", use_css)
 
     tag_refs = []
     if tag:
@@ -165,17 +168,10 @@ async def create_virtual_machine_snapshots(
     logger.info("Starting virtual machine snapshots sync")
 
     try:
-        if vmid:
-            vms = await rest_list_async(
-                nb,
-                "/api/virtualization/virtual-machines/",
-                query={"cf_proxmox_vm_id": int(vmid)},
-            )
-        else:
-            vms = await rest_list_async(
-                nb,
-                "/api/virtualization/virtual-machines/",
-            )
+        vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+        )
     except Exception as e:
         logger.error(f"Error fetching VMs from NetBox: {e}")
         if use_websocket and websocket:
@@ -217,8 +213,12 @@ async def create_virtual_machine_snapshots(
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
 
     for vm in vms:
-        vm_id = vm.get("cf_proxmox_vm_id")
+        vmid = vm.get("cf_proxmox_vm_id")
         vm_name = vm.get("name", "unknown")
+
+        if not vmid:
+            skipped += 1
+            continue
 
         if use_websocket and websocket:
             await websocket.send_json(
@@ -239,46 +239,68 @@ async def create_virtual_machine_snapshots(
             if proxmox_type not in ("qemu", "lxc"):
                 proxmox_type = "qemu"
 
-            cluster_resources = getattr(cluster_status, "__iter__", lambda: [])()
-            target_nodes = [node] if node else []
-            if not target_nodes:
-                target_nodes = [
-                    node_info.get("node")
-                    for node_info in cluster_resources
-                    if isinstance(node_info, dict)
-                ]
-            if not target_nodes:
-                target_nodes = [vm.get("node")]
+            node_name = node
+
+            if not node_name and cluster_resources:
+                for cluster_key, resources in cluster_resources.items():
+                    for resource in resources:
+                        if resource.get("vmid") == vmid:
+                            node_name = resource.get("node")
+                            break
+                    if node_name:
+                        break
+
+            if not node_name:
+                for cs in cluster_status:
+                    if hasattr(cs, "node_list") and cs.node_list:
+                        node_name = cs.node_list[0].name
+                        break
+
+            if not node_name:
+                logger.warning(
+                    f"No node found for VM {vm_name} (vmid: {vmid}), skipping snapshot sync"
+                )
+                skipped += 1
+                if use_websocket and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "snapshot",
+                            "type": "sync",
+                            "data": {
+                                "completed": True,
+                                "name": vm_name,
+                                "sync_status": failed_html,
+                                "error": "No node associated",
+                            },
+                        }
+                    )
+                continue
 
             snapshot_tasks = []
             proxmox_snapshot_names = set()
 
-            for target_node in target_nodes:
-                if not target_node:
+            for proxmox in pxs:
+                try:
+                    snapshots = get_vm_snapshots(
+                        session=proxmox.session,
+                        node=node_name,
+                        vm_type=proxmox_type,
+                        vmid=int(vmid),
+                    )
+
+                    for snapshot in snapshots:
+                        snap_name = snapshot.get("name")
+                        if snap_name:
+                            proxmox_snapshot_names.add(snap_name)
+                            snapshot_tasks.append(
+                                create_netbox_snapshots(snapshot, nb, vmid, node_name)
+                            )
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error getting snapshots for VM {vmid} on node {node_name}: {e}"
+                    )
                     continue
-
-                for proxmox in pxs:
-                    try:
-                        snapshots = get_vm_snapshots(
-                            session=proxmox.session,
-                            node=target_node,
-                            vm_type=proxmox_type,
-                            vmid=int(vm_id),
-                        )
-
-                        for snapshot in snapshots:
-                            snap_name = snapshot.get("name")
-                            if snap_name:
-                                proxmox_snapshot_names.add(snap_name)
-                                snapshot_tasks.append(
-                                    create_netbox_snapshots(snapshot, nb, vm_id, target_node)
-                                )
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Error getting snapshots for VM {vm_id} on node {target_node}: {e}"
-                        )
-                        continue
 
             if snapshot_tasks:
                 results, failures = await process_snapshots_batch(snapshot_tasks)
@@ -298,12 +320,13 @@ async def create_virtual_machine_snapshots(
                             "name": vm_name,
                             "netbox_id": vm.get("id"),
                             "snapshots_found": len(proxmox_snapshot_names),
+                            "sync_status": completed_html,
                         },
                     }
                 )
 
         except Exception as e:
-            logger.error(f"Error syncing snapshots for VM {vm_name} ({vm_id}): {e}")
+            logger.error(f"Error syncing snapshots for VM {vm_name} ({vmid}): {e}")
             skipped += 1
             if use_websocket and websocket:
                 await websocket.send_json(
@@ -314,6 +337,7 @@ async def create_virtual_machine_snapshots(
                             "completed": True,
                             "error": str(e),
                             "name": vm_name,
+                            "sync_status": failed_html,
                         },
                     }
                 )
