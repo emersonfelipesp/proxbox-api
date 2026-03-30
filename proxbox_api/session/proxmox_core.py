@@ -1,5 +1,6 @@
 """Proxmox API session wrapper (single cluster / node)."""
 
+import json
 import re
 from typing import Any
 
@@ -26,22 +27,20 @@ class ProxmoxSession:
             logger.info("INPUT is Pydantic Model ProxmoxSessionSchema")
             cluster_config = cluster_config.model_dump(mode="python")
 
-        # FIXME: This is not working
         elif isinstance(cluster_config, str):
             logger.info("INPUT is string")
-            import json
-
-            cluster_config = json.loads(cluster_config)
-            logger.info(f"json_loads: {cluster_config} - type: {type(cluster_config)}}}")
-
-            """
-            except Exception as error:
+            try:
+                cluster_config = json.loads(cluster_config)
+            except json.JSONDecodeError as error:
                 raise ProxboxException(
-                    message = f"Could not proccess the input provided, check if it is correct. Input type provided: {type(cluster_config)}",
-                    detail = "ProxmoxSession class tried to convert INPUT to dict, but failed.",
-                    python_exception = f"{error}",
-                )
-            """
+                    message=(
+                        "Could not process the input provided; expected JSON object string. "
+                        f"Input type: {type(cluster_config)}"
+                    ),
+                    detail="ProxmoxSession failed to parse string input as JSON.",
+                    python_exception=str(error),
+                ) from error
+            logger.info("json.loads: %s — type: %s", cluster_config, type(cluster_config))
         elif isinstance(cluster_config, dict):
             logger.info("INPUT is dict")
             pass

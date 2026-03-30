@@ -6,7 +6,8 @@ Utility helpers shared across synchronization workflows (SSE streaming, status H
 
 ## Modules and Responsibilities
 
-- `__init__.py`: Re-exports `return_status_html` from the sibling flat module `proxbox_api/utils.py` (legacy layout).
+- `__init__.py`: Re-exports `return_status_html` from `status_html.py`.
+- `status_html.py`: `return_status_html(status, use_css)` for sync status badges/text in HTML responses.
 - `streaming.py`: Server-Sent Event (SSE) helpers for streaming sync progress to HTTP clients.
   - `sse_event(event, data)`: serializes one SSE frame as `event: <name>\ndata: <json>\n\n`.
   - `WebSocketSSEBridge`: compatibility bridge that accepts websocket-style `send_json(payload)` calls from sync services and converts them into SSE frames via an internal `asyncio.Queue`. Key methods:
@@ -19,7 +20,7 @@ Utility helpers shared across synchronization workflows (SSE streaming, status H
 ## Key Data Flow and Dependencies
 
 - `streaming.py` is consumed by route handlers in `app/full_update.py`, `routes/dcim/`, and `routes/virtualization/virtual_machines/` to produce SSE streaming responses.
-- Status HTML helpers live in `proxbox_api/utils.py` and are imported via this package.
+- `return_status_html` is used by virtualization sync routes and services.
 
 ## Extension Guidance
 
