@@ -44,7 +44,9 @@ async def full_update_sync(
         raise
     except Exception as error:  # noqa: BLE001
         logger.exception("Error while syncing nodes during full-update")
-        raise ProxboxException(message="Error while syncing nodes.", python_exception=str(error)) from error
+        raise ProxboxException(
+            message="Error while syncing nodes.", python_exception=str(error)
+        ) from error
 
     try:
         sync_vms = await create_virtual_machines(

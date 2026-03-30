@@ -64,6 +64,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 
+
 @router.get("/sync-process/journal-entry/test/create")
 async def create_sync_process_journal_entry(netbox_session: NetBoxSessionDep):
     """
@@ -765,4 +766,3 @@ async def create_virtual_machines_stream(
             "X-Accel-Buffering": "no",
         },
     )
-

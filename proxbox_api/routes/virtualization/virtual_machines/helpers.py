@@ -12,4 +12,3 @@ def resolve_vm_sync_concurrency() -> int:
     except ValueError:
         return 4
     return max(1, value)
-

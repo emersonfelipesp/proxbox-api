@@ -53,7 +53,9 @@ async def get_sync_processes() -> list[dict]:
             process.serialize() for process in rest_list(nb, "/api/plugins/proxbox/sync-processes/")
         ]
     except Exception as error:  # noqa: BLE001
-        raise ProxboxException(message="Error fetching sync processes", python_exception=str(error)) from error
+        raise ProxboxException(
+            message="Error fetching sync processes", python_exception=str(error)
+        ) from error
 
 
 @sync_process_router.post("/sync-processes", response_model=SyncProcess)
@@ -78,7 +80,9 @@ async def create_sync_process() -> dict:
             },
         )
     except Exception as error:  # noqa: BLE001
-        raise ProxboxException(message="Error creating sync process", python_exception=str(error)) from error
+        raise ProxboxException(
+            message="Error creating sync process", python_exception=str(error)
+        ) from error
 
 
 def register_sync_process_routes(app) -> None:

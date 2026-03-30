@@ -324,7 +324,9 @@ def test_sync_process_routes_use_rest_helpers(monkeypatch):
             return ApiResponse(status=200 if method == "GET" else 201, text=json.dumps(body))
 
     fake_session = SyncProxy(type("FakeApi", (), {"client": FakeClient()})())
-    monkeypatch.setattr("proxbox_api.app.sync_processes.get_raw_netbox_session", lambda: fake_session)
+    monkeypatch.setattr(
+        "proxbox_api.app.sync_processes.get_raw_netbox_session", lambda: fake_session
+    )
 
     listed = asyncio.run(get_sync_processes())
     created = asyncio.run(create_sync_process())
