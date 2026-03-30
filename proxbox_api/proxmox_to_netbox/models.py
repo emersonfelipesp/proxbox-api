@@ -300,11 +300,17 @@ class NetBoxBackupSyncState(BaseModel):
     notes: str | None = None
     vmid: str | int | None = None
     format: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
 
     @field_validator("virtual_machine", mode="before")
     @classmethod
     def normalize_virtual_machine(cls, value: Any) -> Any:
         return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return _normalized_tag_list(value)
 
 
 class NetBoxSnapshotSyncState(BaseModel):

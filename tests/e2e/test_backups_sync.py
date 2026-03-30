@@ -27,6 +27,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxManufacturerSyncState,
     NetBoxSiteSyncState,
     NetBoxVirtualMachineCreateBody,
+    _relation_id,
 )
 from proxbox_api.services.sync.device_ensure import _slugify
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
@@ -115,7 +116,7 @@ class TestBackupsSync:
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            lookup={"cf_proxmox_vm_id": vm.vmid},
+            lookup={"name": vm.name},
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             current_normalizer=lambda record: {
@@ -180,7 +181,7 @@ class TestBackupsSync:
             backup_data = backup.serialize()
             tag_slugs = [t.get("slug") for t in backup_data.get("tags", [])]
             assert "proxbox-e2e-testing" in tag_slugs, f"Backup {backup.id} missing e2e tag"
-            assert backup_data.get("virtual_machine") == virtual_machine.id
+            assert _relation_id(backup_data.get("virtual_machine")) == virtual_machine.id
 
     async def test_sync_multiple_vm_backups(
         self,
@@ -261,7 +262,7 @@ class TestBackupsSync:
             virtual_machine = await rest_reconcile_async(
                 nb,
                 "/api/virtualization/virtual-machines/",
-                lookup={"cf_proxmox_vm_id": vm.vmid},
+                lookup={"name": vm.name},
                 payload=payload,
                 schema=NetBoxVirtualMachineCreateBody,
                 current_normalizer=lambda record: {
