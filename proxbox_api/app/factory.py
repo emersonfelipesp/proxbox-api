@@ -19,6 +19,7 @@ from proxbox_api.app.root_meta import root_meta_router
 from proxbox_api.app.sync_processes import register_sync_process_routes
 from proxbox_api.app.websockets import register_websocket_routes
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.openapi_custom import custom_openapi_builder
 from proxbox_api.routes.admin import router as admin_router
 from proxbox_api.routes.dcim import router as dcim_router
@@ -46,8 +47,15 @@ PROXBOX_PLUGIN_NAME: str = "netbox_proxbox"
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         register_generated_proxmox_routes(app)
-    except ProxboxException:
-        pass
+    except ProxboxException as error:
+        logger.warning(
+            "Generated Proxmox proxy routes were not mounted: %s",
+            error.message,
+            extra={"detail": error.detail},
+        )
+        strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in ("1", "true", "yes")
+        if strict:
+            raise
     yield
 
 
@@ -72,7 +80,7 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     origins = build_cors_origins(bootstrap.netbox_endpoints)
-    print(origins)
+    logger.info("CORS allow_origins configured (%d entries)", len(origins))
 
     app.add_middleware(
         CORSMiddleware,

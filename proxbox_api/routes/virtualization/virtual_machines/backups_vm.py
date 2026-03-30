@@ -13,6 +13,7 @@ from proxbox_api.dependencies import (
     ProxboxTagDep,  # Proxbox Tag
 )
 from proxbox_api.exception import ProxboxException  # Proxbox Exception
+from proxbox_api.logger import logger
 
 # NetBox compatibility wrappers
 from proxbox_api.netbox_rest import (
@@ -136,7 +137,7 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
         return netbox_backup
 
     except Exception as error:
-        print(f"Error creating NetBox backup for VM {vmid_log}: {error}")
+        logger.warning("Error creating NetBox backup for VM %s: %s", vmid_log, error)
         return None
 
 
@@ -197,7 +198,7 @@ async def get_node_backups(
                         ]
                         return tasks, volids
                     except Exception as error:
-                        print(f"Error getting backups for node {node}: {error}")
+                        logger.warning("Error getting backups for node %s: %s", node, error)
                         continue
     return [], set()
 
@@ -468,7 +469,7 @@ async def _create_all_virtual_machine_backups(
             )
 
             if not journal_entry:
-                print("Warning: Journal entry creation returned None")
+                logger.warning("Journal entry creation returned None")
 
             if use_websocket and websocket and backup_sync_ok:
                 await websocket.send_json(
@@ -487,7 +488,7 @@ async def _create_all_virtual_machine_backups(
                     }
                 )
 
-    print("Syncing Backups Finished.")
+    logger.info("Syncing backups finished")
     return results
 
 

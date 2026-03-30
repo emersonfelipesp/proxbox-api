@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from proxbox_api.app.netbox_session import get_raw_netbox_session
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_create, rest_list
 
 sync_process_router = APIRouter()
@@ -58,7 +59,7 @@ async def get_sync_processes() -> list[dict]:
 @sync_process_router.post("/sync-processes", response_model=SyncProcess)
 async def create_sync_process() -> dict:
     """Create a new sync process record in NetBox."""
-    print(datetime.now())
+    logger.debug("create_sync_process at %s", datetime.now())
 
     nb = get_raw_netbox_session()
     if nb is None:

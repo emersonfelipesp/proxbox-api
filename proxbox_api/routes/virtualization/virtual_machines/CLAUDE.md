@@ -6,6 +6,9 @@ Main synchronization endpoints for virtual machines and backups.
 
 ## Modules and Responsibilities
 
+- `read_vm.py` (included from `__init__.py`): Read and stub routes for a single VM by NetBox id.
+  - `GET /{id}`: Returns the VM from NetBox; **404** when missing, **502** on NetBox/API errors (not an empty object).
+  - `GET /{id}/summary`, interface-related stubs: **501 Not Implemented** with explicit `detail` until implemented.
 - `__init__.py`: Virtual machine sync routes and backup workflows.
   - `GET /create`: creates NetBox virtual machines from Proxmox resources (returns JSON when complete). Supports `websocket` and `use_websocket` parameters for live progress.
   - `GET /create/stream`: SSE streaming variant. Emits per-VM `step` events via `WebSocketSSEBridge` while `create_virtual_machines(...)` runs with `use_websocket=True`.

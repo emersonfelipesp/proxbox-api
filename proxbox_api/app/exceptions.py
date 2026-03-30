@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
+
+
+def _expose_internal_errors(app: FastAPI) -> bool:
+    if getattr(app, "debug", False):
+        return True
+    flag = os.environ.get("PROXBOX_EXPOSE_INTERNAL_ERRORS", "").lower()
+    return flag in ("1", "true", "yes")
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -24,11 +34,21 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        if _expose_internal_errors(request.app):
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "message": "Internal server error",
+                    "detail": str(exc),
+                    "python_exception": str(exc),
+                },
+            )
         return JSONResponse(
             status_code=500,
             content={
                 "message": "Internal server error",
-                "detail": str(exc),
-                "python_exception": str(exc),
+                "detail": "An unexpected error occurred.",
+                "python_exception": None,
             },
         )

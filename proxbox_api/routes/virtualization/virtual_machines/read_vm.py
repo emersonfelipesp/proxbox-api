@@ -1,10 +1,8 @@
 """Virtual machine read/query routes."""
 
-# FastAPI Imports
+from fastapi import APIRouter, HTTPException
 
-from fastapi import APIRouter
-
-# NetBox compatibility wrappers
+from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import (
     VirtualMachine,
 )
@@ -19,6 +17,7 @@ from proxbox_api.schemas.virtualization import (  # Schemas
 )
 
 router = APIRouter()
+
 
 @router.get(
     "/",
@@ -42,11 +41,15 @@ async def get_virtual_machine(id: int):
         virtual_machine = VirtualMachine().find(id=id)
         if virtual_machine:
             return virtual_machine
-        else:
-            return {}
+        raise HTTPException(status_code=404, detail="Virtual machine not found")
+    except HTTPException:
+        raise
     except Exception as error:
-        print(f"Error getting virtual machine: {error}")
-        return {}
+        logger.exception("Error getting virtual machine id=%s", id)
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to load virtual machine from NetBox",
+        ) from error
 
 
 @router.get(
@@ -158,20 +161,25 @@ async def get_virtual_machine_summary_example():
     return vm_summary
 
 
-@router.get(
-    "/{id}/summary",
-)
+@router.get("/{id}/summary")
 async def get_virtual_machine_summary(id: int):
-    pass
+    raise HTTPException(
+        status_code=501,
+        detail="Virtual machine summary by id is not implemented yet.",
+    )
 
 
 @router.get("/interfaces/create")
 async def create_virtual_machines_interfaces():
-    # TODO
-    pass
+    raise HTTPException(
+        status_code=501,
+        detail="Virtual machine interface creation is not implemented yet.",
+    )
 
 
 @router.get("/interfaces/ip-address/create")
 async def create_virtual_machines_interfaces_ip_address():
-    # TODO
-    pass
+    raise HTTPException(
+        status_code=501,
+        detail="Virtual machine interface IP creation is not implemented yet.",
+    )

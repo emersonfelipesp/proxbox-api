@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
@@ -42,7 +43,7 @@ async def full_update_sync(
     except ProxboxException:
         raise
     except Exception as error:  # noqa: BLE001
-        print(error)
+        logger.exception("Error while syncing nodes during full-update")
         raise ProxboxException(message="Error while syncing nodes.", python_exception=str(error)) from error
 
     try:
@@ -58,7 +59,7 @@ async def full_update_sync(
     except ProxboxException:
         raise
     except Exception as error:  # noqa: BLE001
-        print(error)
+        logger.exception("Error while syncing virtual machines during full-update")
         raise ProxboxException(
             message="Error while syncing virtual machines.",
             python_exception=str(error),

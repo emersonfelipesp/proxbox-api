@@ -11,6 +11,7 @@ from netbox_sdk.client import ApiResponse
 from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
@@ -304,6 +305,10 @@ async def rest_reconcile_async(
             try:
                 current_model = schema.model_validate(current_normalizer(record.serialize()))
             except Exception:
+                logger.debug(
+                    "Skipping NetBox record during reconcile scan (validation failed)",
+                    exc_info=True,
+                )
                 continue
             current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
             for candidate in candidates:
