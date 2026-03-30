@@ -27,15 +27,15 @@ async def create_netbox_demo_session(config: "Config") -> "Api":
     Returns:
         Async NetBox API instance ready for requests.
     """
-    from netbox_sdk.config import authorization_header_value
+    from netbox_sdk.client import NetBoxApiClient
+    from netbox_sdk.config import resolved_token
     from netbox_sdk.facade import Api
 
-    auth_header = authorization_header_value(config)
-    if not auth_header:
+    if not resolved_token(config):
         raise ValueError("Config must have valid token for demo session")
 
-    api = Api(base_url=config.base_url, token=auth_header, timeout=config.timeout)
-    return api
+    client = NetBoxApiClient(config)
+    return Api(client=client)
 
 
 async def ensure_e2e_tag(nb: "Api") -> dict[str, Any]:
