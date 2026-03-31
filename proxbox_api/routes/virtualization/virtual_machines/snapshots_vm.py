@@ -33,6 +33,7 @@ async def _create_all_virtual_machine_snapshots(
     cluster_status,
     cluster_resources,
     tag,
+    fetch_max_concurrency: int | None = None,
     websocket=None,
     use_websocket=False,
 ):
@@ -59,6 +60,7 @@ async def _create_all_virtual_machine_snapshots(
             websocket=websocket,
             use_websocket=use_websocket,
             use_css=False,
+            fetch_max_concurrency=fetch_max_concurrency,
         )
 
         if result:
@@ -104,6 +106,14 @@ async def create_virtual_machine_snapshots(
         str | None,
         Query(title="Node", description="The name of the node."),
     ] = None,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            title="Fetch max concurrency",
+            description="Maximum parallel Proxmox fetch operations for snapshot discovery.",
+            ge=1,
+        ),
+    ] = None,
 ):
     return await sync_snapshots(
         netbox_session=netbox_session,
@@ -113,6 +123,7 @@ async def create_virtual_machine_snapshots(
         tag=tag,
         vmid=vmid,
         node=node,
+        fetch_max_concurrency=fetch_max_concurrency,
     )
 
 
@@ -123,6 +134,14 @@ async def create_all_virtual_machine_snapshots(
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            title="Fetch max concurrency",
+            description="Maximum parallel Proxmox fetch operations for snapshot discovery.",
+            ge=1,
+        ),
+    ] = None,
 ):
     return await _create_all_virtual_machine_snapshots(
         netbox_session=netbox_session,
@@ -130,6 +149,7 @@ async def create_all_virtual_machine_snapshots(
         cluster_status=cluster_status,
         cluster_resources=cluster_resources,
         tag=tag,
+        fetch_max_concurrency=fetch_max_concurrency,
     )
 
 
@@ -140,6 +160,14 @@ async def create_all_virtual_machine_snapshots_stream(
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            title="Fetch max concurrency",
+            description="Maximum parallel Proxmox fetch operations for snapshot discovery.",
+            ge=1,
+        ),
+    ] = None,
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -152,6 +180,7 @@ async def create_all_virtual_machine_snapshots_stream(
                     cluster_status=cluster_status,
                     cluster_resources=cluster_resources,
                     tag=tag,
+                    fetch_max_concurrency=fetch_max_concurrency,
                     websocket=bridge,
                     use_websocket=True,
                 )

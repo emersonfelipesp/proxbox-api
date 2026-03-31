@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from proxbox_api.proxmox_to_netbox.errors import ProxmoxToNetBoxError
@@ -34,6 +35,7 @@ def build_virtual_machine_transform(
     device_id: int | None,
     role_id: int | None,
     tag_ids: list[int],
+    last_updated: datetime | None = None,
 ) -> NetBoxVirtualMachineCreateBody:
     """Build validated NetBox VM create payload from Proxmox raw payload and config."""
 
@@ -53,6 +55,7 @@ def build_virtual_machine_transform(
         device_id=device_id,
         role_id=role_id,
         tag_ids=tag_ids,
+        last_updated=last_updated,
     )
 
     body = transform.as_netbox_create_body()

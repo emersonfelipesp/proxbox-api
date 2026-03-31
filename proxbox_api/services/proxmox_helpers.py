@@ -72,6 +72,64 @@ def get_vm_config(
     return _wrap_backend_call("Error fetching Proxmox VM config", _fetch_config)
 
 
+def _normalize_guest_agent_interfaces(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        raw_interfaces = payload.get("result") or payload.get("interfaces") or []
+    elif isinstance(payload, list):
+        raw_interfaces = payload
+    else:
+        raw_interfaces = []
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_interfaces:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name:
+            continue
+        addresses: list[dict[str, Any]] = []
+        for addr in item.get("ip-addresses") or item.get("ip_addresses") or []:
+            if not isinstance(addr, dict):
+                continue
+            ip_address = addr.get("ip-address") or addr.get("ip_address")
+            if not ip_address:
+                continue
+            addresses.append(
+                {
+                    "ip_address": str(ip_address),
+                    "prefix": addr.get("prefix"),
+                    "ip_address_type": addr.get("ip-address-type") or addr.get("ip_address_type"),
+                }
+            )
+        normalized.append(
+            {
+                "name": str(name),
+                "mac_address": item.get("hardware-address") or item.get("hardware_address"),
+                "ip_addresses": addresses,
+            }
+        )
+    return normalized
+
+
+def get_qemu_guest_agent_network_interfaces(
+    session: ProxmoxSession,
+    node: str,
+    vmid: int,
+) -> list[dict[str, Any]]:
+    """Return normalized guest-agent interfaces or [] when unavailable."""
+
+    try:
+        try:
+            payload = session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+        except Exception:
+            payload = (
+                session.session.nodes(node).qemu(vmid).agent.get(command="network-get-interfaces")
+            )
+        return _normalize_guest_agent_interfaces(payload)
+    except Exception:
+        return []
+
+
 def get_storage_list(
     session: ProxmoxSession,
 ) -> list[generated_models.GetStorageResponseItem]:

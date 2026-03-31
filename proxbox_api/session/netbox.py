@@ -43,6 +43,7 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
         token_key=key,
         token_secret=endpoint.token,
         timeout=_resolve_netbox_timeout(),
+        ssl_verify=endpoint.verify_ssl,
     )
 
 

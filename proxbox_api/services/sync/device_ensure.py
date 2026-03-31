@@ -1,6 +1,7 @@
 """NetBox prerequisite records (sites, clusters, device shells) for Proxmox node sync."""
 
 import re
+from datetime import datetime, timezone
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import rest_reconcile_async
@@ -21,6 +22,10 @@ def _slugify(value: str) -> str:
     return text.strip("-") or "cluster"
 
 
+def _last_updated_cf() -> dict[str, str]:
+    return {"proxmox_last_updated": datetime.now(timezone.utc).isoformat()}
+
+
 async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object:
     return await rest_reconcile_async(
         nb,
@@ -31,6 +36,7 @@ async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object
             "slug": mode,
             "description": f"Proxmox {mode} mode",
             "tags": tag_refs,
+            "custom_fields": _last_updated_cf(),
         },
         schema=NetBoxClusterTypeSyncState,
         current_normalizer=lambda record: {
@@ -38,6 +44,7 @@ async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object
             "slug": record.get("slug"),
             "description": record.get("description"),
             "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -54,6 +61,7 @@ async def _ensure_cluster(
             "type": cluster_type_id,
             "description": f"Proxmox {mode} cluster.",
             "tags": tag_refs,
+            "custom_fields": _last_updated_cf(),
         },
         schema=NetBoxClusterSyncState,
         current_normalizer=lambda record: {
@@ -61,6 +69,7 @@ async def _ensure_cluster(
             "type": record.get("type"),
             "description": record.get("description"),
             "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -74,12 +83,14 @@ async def _ensure_manufacturer(nb, *, tag_refs: list[dict]) -> object:
             "name": "Proxmox",
             "slug": "proxmox",
             "tags": tag_refs,
+            "custom_fields": _last_updated_cf(),
         },
         schema=NetBoxManufacturerSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "slug": record.get("slug"),
             "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -94,6 +105,7 @@ async def _ensure_device_type(nb, *, manufacturer_id: int | None, tag_refs: list
             "slug": "proxmox-generic-device",
             "manufacturer": manufacturer_id,
             "tags": tag_refs,
+            "custom_fields": _last_updated_cf(),
         },
         schema=NetBoxDeviceTypeSyncState,
         current_normalizer=lambda record: {
@@ -101,6 +113,7 @@ async def _ensure_device_type(nb, *, manufacturer_id: int | None, tag_refs: list
             "slug": record.get("slug"),
             "manufacturer": record.get("manufacturer"),
             "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -115,6 +128,7 @@ async def _ensure_device_role(nb, *, tag_refs: list[dict]) -> object:
             "slug": "proxmox-node",
             "color": "00bcd4",
             "tags": tag_refs,
+            "custom_fields": _last_updated_cf(),
         },
         schema=NetBoxDeviceRoleSyncState,
         current_normalizer=lambda record: {
@@ -122,6 +136,7 @@ async def _ensure_device_role(nb, *, tag_refs: list[dict]) -> object:
             "slug": record.get("slug"),
             "color": record.get("color"),
             "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -138,6 +153,7 @@ async def _ensure_site(nb, *, cluster_name: str, tag_refs: list[dict]) -> object
             "slug": site_slug,
             "status": "active",
             "tags": tag_refs,
+            "custom_fields": _last_updated_cf(),
         },
         schema=NetBoxSiteSyncState,
         current_normalizer=lambda record: {
@@ -145,6 +161,7 @@ async def _ensure_site(nb, *, cluster_name: str, tag_refs: list[dict]) -> object
             "slug": record.get("slug"),
             "status": record.get("status"),
             "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -168,6 +185,7 @@ async def _ensure_device(
         "device_type": device_type_id,
         "role": role_id,
         "site": site_id,
+        "custom_fields": _last_updated_cf(),
     }
     return await rest_reconcile_async(
         nb,
@@ -184,6 +202,7 @@ async def _ensure_device(
             "site": record.get("site"),
             "description": record.get("description"),
             "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
         },
     )
 

@@ -733,6 +733,7 @@ def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
                 "slug": "proxmox-default-site-lab",
                 "status": "active",
                 "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                "custom_fields": {},
             },
             True,
         ),
