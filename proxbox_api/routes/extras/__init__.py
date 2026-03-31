@@ -87,6 +87,31 @@ async def create_custom_fields(
             "search_weight": 1000,
             "group_name": "Proxmox",
         },
+        {
+            "object_types": [
+                "virtualization.virtualmachine",
+                "dcim.device",
+                "virtualization.cluster",
+                "virtualization.cluster-type",
+                "dcim.device-type",
+                "dcim.device-role",
+                "dcim.manufacturer",
+                "dcim.site",
+                "virtualization.vminterface",
+                "ipam.ip-address",
+                "virtualization.virtual-disk",
+            ],
+            "type": "datetime",
+            "name": "proxmox_last_updated",
+            "label": "Last Updated",
+            "description": "Proxmox Plugin last modified this object",
+            "ui_visible": "always",
+            "ui_editable": "hidden",
+            "weight": 200,
+            "filter_logic": "loose",
+            "search_weight": 1000,
+            "group_name": "Proxmox",
+        },
     ]
     fields = []
 

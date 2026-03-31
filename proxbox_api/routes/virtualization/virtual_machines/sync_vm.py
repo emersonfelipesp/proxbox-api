@@ -2,6 +2,7 @@
 
 # FastAPI Imports
 import asyncio
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -129,10 +130,9 @@ def _filter_cluster_resources_for_vm(
                 if resource.get("type") not in ("qemu", "lxc"):
                     continue
                 same_name = str(resource.get("name", "")).strip() == vm_name
-                same_vmid = (
-                    proxmox_vm_id is not None
-                    and str(resource.get("vmid", "")).strip() == str(proxmox_vm_id)
-                )
+                same_vmid = proxmox_vm_id is not None and str(
+                    resource.get("vmid", "")
+                ).strip() == str(proxmox_vm_id)
                 if not (same_name or same_vmid):
                     continue
                 if cluster_id is not None:
@@ -413,6 +413,7 @@ async def create_virtual_machines(
             )
 
         # try:
+        now = datetime.now(timezone.utc)
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
@@ -420,6 +421,7 @@ async def create_virtual_machines(
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            last_updated=now,
         )
 
         virtual_machine = await rest_reconcile_async(
@@ -496,6 +498,7 @@ async def create_virtual_machines(
                                     "type": "bridge",
                                     "description": f"Bridge interface of Device {resource.get('node')}.",
                                     "tags": tag_refs,
+                                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
                                 },
                                 schema=NetBoxVirtualMachineInterfaceSyncState,
                                 current_normalizer=lambda record: {
@@ -507,6 +510,7 @@ async def create_virtual_machines(
                                     "enabled": record.get("enabled"),
                                     "mac_address": record.get("mac_address"),
                                     "tags": record.get("tags"),
+                                    "custom_fields": record.get("custom_fields"),
                                 },
                             )
 
@@ -527,6 +531,7 @@ async def create_virtual_machines(
                                 "bridge": bridge.get("id", None),
                                 "mac_address": value.get("virtio", value.get("hwaddr", None)),
                                 "tags": tag_refs,
+                                "custom_fields": {"proxmox_last_updated": now.isoformat()},
                             },
                             schema=NetBoxVirtualMachineInterfaceSyncState,
                             current_normalizer=lambda record: {
@@ -538,6 +543,7 @@ async def create_virtual_machines(
                                 "type": record.get("type"),
                                 "description": record.get("description"),
                                 "tags": record.get("tags"),
+                                "custom_fields": record.get("custom_fields"),
                             },
                         )
 
@@ -558,6 +564,7 @@ async def create_virtual_machines(
                                     "assigned_object_id": vm_interface.get("id"),
                                     "status": "active",
                                     "tags": tag_refs,
+                                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
                                 },
                                 schema=NetBoxIpAddressSyncState,
                                 current_normalizer=lambda record: {
@@ -566,6 +573,7 @@ async def create_virtual_machines(
                                     "assigned_object_id": record.get("assigned_object_id"),
                                     "status": record.get("status"),
                                     "tags": record.get("tags"),
+                                    "custom_fields": record.get("custom_fields"),
                                 },
                             )
 
@@ -584,6 +592,7 @@ async def create_virtual_machines(
                                     "size": disk_entry.size,
                                     "description": disk_entry.description,
                                     "tags": tag_refs,
+                                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
                                 },
                                 schema=NetBoxVirtualDiskSyncState,
                                 current_normalizer=lambda record: {
@@ -592,6 +601,7 @@ async def create_virtual_machines(
                                     "size": record.get("size"),
                                     "description": record.get("description"),
                                     "tags": record.get("tags"),
+                                    "custom_fields": record.get("custom_fields"),
                                 },
                             )
 
