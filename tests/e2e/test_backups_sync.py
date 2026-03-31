@@ -59,7 +59,6 @@ class TestBackupsSync:
         vm = cluster.vms[0]
 
         await self._setup_cluster_dependencies(nb, cluster, tag_refs)
-        storage_lookup = await self._setup_cluster_storages(nb, cluster, tag_refs)
 
         cluster_obj = await rest_reconcile_async(
             nb,
@@ -79,6 +78,9 @@ class TestBackupsSync:
                 "tags": record.get("tags"),
             },
         )
+
+        # Create storages after cluster exists (storages need cluster_id FK)
+        storage_lookup = await self._setup_cluster_storages(nb, cluster, cluster_obj, tag_refs)
 
         device = await self._get_or_create_device(
             nb, cluster, cluster_obj, cluster.nodes[0].name, tag_refs
@@ -205,7 +207,6 @@ class TestBackupsSync:
         cluster, all_backups = create_cluster_with_backups(prefix=unique_prefix)
 
         await self._setup_cluster_dependencies(nb, cluster, tag_refs)
-        storage_lookup = await self._setup_cluster_storages(nb, cluster, tag_refs)
 
         cluster_obj = await rest_reconcile_async(
             nb,
@@ -225,6 +226,9 @@ class TestBackupsSync:
                 "tags": record.get("tags"),
             },
         )
+
+        # Create storages after cluster exists (storages need cluster_id FK)
+        storage_lookup = await self._setup_cluster_storages(nb, cluster, cluster_obj, tag_refs)
 
         device = await self._get_or_create_device(
             nb, cluster, cluster_obj, cluster.nodes[0].name, tag_refs
@@ -422,9 +426,12 @@ class TestBackupsSync:
             },
         )
 
-    async def _setup_cluster_storages(self, nb, cluster, tag_refs: list[dict[str, Any]]):
+    async def _setup_cluster_storages(
+        self, nb, cluster, cluster_obj, tag_refs: list[dict[str, Any]]
+    ):
         """Create NetBox storage records for the cluster's backup stores."""
         storage_lookup = {}
+        cluster_id = getattr(cluster_obj, "id", None) or cluster_obj.get("id")
         for storage in cluster.storage:
             storage_name = storage.get("storage")
             if not storage_name:
@@ -432,9 +439,9 @@ class TestBackupsSync:
             storage_record = await rest_reconcile_async(
                 nb,
                 "/api/plugins/proxbox/storage/",
-                lookup={"cluster": cluster.name, "name": storage_name},
+                lookup={"cluster": cluster_id, "name": storage_name},
                 payload={
-                    "cluster": cluster.name,
+                    "cluster": cluster_id,
                     "name": storage_name,
                     "storage_type": storage.get("type"),
                     "content": storage.get("content"),
@@ -446,7 +453,9 @@ class TestBackupsSync:
                 },
                 schema=NetBoxStorageSyncState,
                 current_normalizer=lambda record: {
-                    "cluster": record.get("cluster"),
+                    "cluster": record.get("cluster", {}).get("id")
+                    if isinstance(record.get("cluster"), dict)
+                    else record.get("cluster"),
                     "name": record.get("name"),
                     "storage_type": record.get("storage_type"),
                     "content": record.get("content"),
