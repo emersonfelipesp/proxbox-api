@@ -59,7 +59,11 @@ def find_storage_record(
         if record is not None:
             return record
 
-    candidates = [record for (stored_cluster, stored_name), record in storage_index.items() if stored_name == name]
+    candidates = [
+        record
+        for (stored_cluster, stored_name), record in storage_index.items()
+        if stored_name == name
+    ]
     if len(candidates) == 1:
         return candidates[0]
     return None
@@ -71,4 +75,3 @@ def storage_name_from_volume_id(volume_id: Any) -> str | None:
     if not text:
         return None
     return _normalize_text(text.split(":", 1)[0])
-

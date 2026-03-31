@@ -6,7 +6,8 @@ return consistent 501 responses until implemented.
 """
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
+
 from proxbox_api.main import app
 
 
@@ -14,7 +15,7 @@ class TestVirtualizationStubRoutes:
     """Test stub routes under /virtualization that return 501."""
 
     @pytest.mark.asyncio
-    async def test_cluster_types_create_returns_501(self):
+    async def test_cluster_types_create_returns_501(self, client_with_fake_netbox):
         """GET /virtualization/cluster-types/create should return 501."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -27,7 +28,7 @@ class TestVirtualizationStubRoutes:
             assert "not implemented" in data["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_clusters_create_returns_501(self):
+    async def test_clusters_create_returns_501(self, client_with_fake_netbox):
         """GET /virtualization/clusters/create should return 501."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -44,7 +45,7 @@ class TestVirtualMachineStubRoutes:
     """Test stub routes for VM read operations that return 501."""
 
     @pytest.mark.asyncio
-    async def test_vm_summary_by_id_returns_501(self):
+    async def test_vm_summary_by_id_returns_501(self, client_with_fake_netbox):
         """GET /virtualization/virtual-machines/{id}/summary should return 501."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -57,7 +58,7 @@ class TestVirtualMachineStubRoutes:
             assert "not implemented" in data["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_vm_interfaces_create_returns_501(self):
+    async def test_vm_interfaces_create_returns_501(self, client_with_fake_netbox):
         """GET /virtualization/virtual-machines/interfaces/create should return 501."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -70,7 +71,7 @@ class TestVirtualMachineStubRoutes:
             assert "not implemented" in data["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_vm_interfaces_ip_address_create_returns_501(self):
+    async def test_vm_interfaces_ip_address_create_returns_501(self, client_with_fake_netbox):
         """GET /virtualization/virtual-machines/interfaces/ip-address/create should return 501."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -87,7 +88,7 @@ class TestVirtualMachineReadRoutes:
     """Test routes that are implemented (not501)."""
 
     @pytest.mark.asyncio
-    async def test_vm_list_is_implemented(self):
+    async def test_vm_list_is_implemented(self, client_with_fake_netbox):
         """GET /virtualization/virtual-machines/ should be implemented."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -99,7 +100,7 @@ class TestVirtualMachineReadRoutes:
             assert isinstance(data, list)
 
     @pytest.mark.asyncio
-    async def test_vm_get_by_id_is_implemented(self):
+    async def test_vm_get_by_id_is_implemented(self, client_with_fake_netbox):
         """GET /virtualization/virtual-machines/{id} should be implemented."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -109,7 +110,7 @@ class TestVirtualMachineReadRoutes:
             assert resp.status_code in (200, 404), f"Expected 200 or 404, got {resp.status_code}"
 
     @pytest.mark.asyncio
-    async def test_vm_summary_example_is_implemented(self):
+    async def test_vm_summary_example_is_implemented(self, client_with_fake_netbox):
         """GET /virtualization/virtual-machines/summary/example should return example data."""
         async with AsyncClient(
             transport=ASGITransport(app=app),

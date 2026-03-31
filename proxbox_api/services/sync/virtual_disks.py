@@ -250,7 +250,9 @@ async def create_virtual_disks(
             disks_updated = 0
 
             for disk_entry in disk_entries:
-                storage_name = disk_entry.storage_name or storage_name_from_volume_id(disk_entry.storage)
+                storage_name = disk_entry.storage_name or storage_name_from_volume_id(
+                    disk_entry.storage
+                )
                 storage_record = find_storage_record(
                     storage_index,
                     cluster_name=cluster_name,

@@ -129,7 +129,9 @@ def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
         calls.append((lookup, payload))
         return _Record(payload)
 
-    monkeypatch.setattr("proxbox_api.services.sync.storages.get_storage_list", _fake_get_storage_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.storages.get_storage_list", _fake_get_storage_list
+    )
     monkeypatch.setattr("proxbox_api.services.sync.storages.dump_models", lambda items: items)
     monkeypatch.setattr("proxbox_api.services.sync.storages.rest_reconcile_async", _fake_reconcile)
 

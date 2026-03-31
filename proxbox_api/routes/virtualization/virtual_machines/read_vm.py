@@ -2,10 +2,9 @@
 
 from fastapi import APIRouter, HTTPException
 
+from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
-from proxbox_api.netbox_compat import (
-    VirtualMachine,
-)
+from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.schemas.virtualization import (  # Schemas
     CPU,
     Backup,
@@ -25,31 +24,11 @@ router = APIRouter()
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
-async def get_virtual_machines():
-    virtual_machine = VirtualMachine()
-    return virtual_machine.all()
-
-
-@router.get(
-    "/{id}",
-    response_model=dict,
-    response_model_exclude_none=True,
-    response_model_exclude_unset=True,
-)
-async def get_virtual_machine(id: int):
-    try:
-        virtual_machine = VirtualMachine().find(id=id)
-        if virtual_machine:
-            return virtual_machine
-        raise HTTPException(status_code=404, detail="Virtual machine not found")
-    except HTTPException:
-        raise
-    except Exception as error:
-        logger.exception("Error getting virtual machine id=%s", id)
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to load virtual machine from NetBox",
-        ) from error
+async def get_virtual_machines(netbox_session: NetBoxSessionDep):
+    results = []
+    async for item in netbox_session.virtualization.virtual_machines.all():
+        results.append(to_dict(item))
+    return results
 
 
 @router.get(
@@ -161,14 +140,6 @@ async def get_virtual_machine_summary_example():
     return vm_summary
 
 
-@router.get("/{id}/summary")
-async def get_virtual_machine_summary(id: int):
-    raise HTTPException(
-        status_code=501,
-        detail="Virtual machine summary by id is not implemented yet.",
-    )
-
-
 @router.get("/interfaces/create")
 async def create_virtual_machines_interfaces():
     raise HTTPException(
@@ -182,4 +153,34 @@ async def create_virtual_machines_interfaces_ip_address():
     raise HTTPException(
         status_code=501,
         detail="Virtual machine interface IP creation is not implemented yet.",
+    )
+
+
+@router.get(
+    "/{id}",
+    response_model=dict,
+    response_model_exclude_none=True,
+    response_model_exclude_unset=True,
+)
+async def get_virtual_machine(id: int, netbox_session: NetBoxSessionDep):
+    try:
+        result = await netbox_session.virtualization.virtual_machines.get(id)
+        if result:
+            return to_dict(result)
+        raise HTTPException(status_code=404, detail="Virtual machine not found")
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("Error getting virtual machine id=%s", id)
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to load virtual machine from NetBox",
+        ) from error
+
+
+@router.get("/{id}/summary")
+async def get_virtual_machine_summary(id: int):
+    raise HTTPException(
+        status_code=501,
+        detail="Virtual machine summary by id is not implemented yet.",
     )

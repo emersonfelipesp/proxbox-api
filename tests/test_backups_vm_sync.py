@@ -28,7 +28,10 @@ def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
         journal_entries.append(payload)
         return payload
 
-    monkeypatch.setattr("proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_list_async", _fake_rest_list_async)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_list_async",
+        _fake_rest_list_async,
+    )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_reconcile_async",
         _fake_reconcile_async,

@@ -379,5 +379,6 @@ def test_vm_sync_marks_missing_primary_ip_as_warning(monkeypatch):
     ]
     assert warning_payloads
     assert warning_payloads[0]["data"]["completed"] is True
+    assert warning_payloads[0]["data"]["status"] == "warning"
     assert "No IP address found; primary IP not set." in warning_payloads[0]["data"]["warning"]
     assert not ip_payloads
