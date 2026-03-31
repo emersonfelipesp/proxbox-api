@@ -40,6 +40,10 @@ from proxbox_api.routes.virtualization.virtual_machines import (
     create_netbox_backups,
     create_virtual_machines,
 )
+from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
+    create_virtual_machine_by_netbox_id,
+    create_virtual_machine_by_netbox_id_stream,
+)
 from proxbox_api.services.sync.devices import create_proxmox_devices
 
 
@@ -547,6 +551,140 @@ def test_create_virtual_machines_handles_empty_clusters():
     )
 
     assert result == []
+
+
+def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_create_virtual_machines(**kwargs):
+        captured["cluster_resources"] = kwargs["cluster_resources"]
+        return [{"id": 248, "name": "vm-248"}]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.create_virtual_machines",
+        _fake_create_virtual_machines,
+    )
+
+    vm_record = SimpleNamespace(
+        serialize=lambda: {
+            "id": 248,
+            "name": "vm-248",
+            "cluster": {"id": 10, "name": "cluster-a"},
+            "custom_fields": {"proxmox_vm_id": 9248},
+        }
+    )
+    fake_nb = SimpleNamespace(
+        virtualization=SimpleNamespace(
+            virtual_machines=SimpleNamespace(get=lambda id: vm_record if id == 248 else None)
+        )
+    )
+    cluster_resources = [
+        {"cluster-a": [{"type": "qemu", "name": "vm-248", "vmid": 9248}]},
+        {"cluster-a": [{"type": "qemu", "name": "vm-999", "vmid": 9999}]},
+        {"cluster-b": [{"type": "qemu", "name": "vm-248", "vmid": 9248}]},
+    ]
+
+    result = asyncio.run(
+        create_virtual_machine_by_netbox_id(
+            netbox_vm_id=248,
+            netbox_session=fake_nb,
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=cluster_resources,
+            custom_fields=[],
+            tag=SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722"),
+        )
+    )
+
+    assert result == [{"id": 248, "name": "vm-248"}]
+    assert captured["cluster_resources"] == [
+        {"cluster-a": [{"type": "qemu", "name": "vm-248", "vmid": 9248}]}
+    ]
+
+
+def test_create_virtual_machine_by_netbox_id_raises_404_when_missing():
+    fake_nb = SimpleNamespace(
+        virtualization=SimpleNamespace(
+            virtual_machines=SimpleNamespace(get=lambda id: None)
+        )
+    )
+    with pytest.raises(HTTPException, match="was not found in NetBox") as excinfo:
+        asyncio.run(
+            create_virtual_machine_by_netbox_id(
+                netbox_vm_id=248,
+                netbox_session=fake_nb,
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[],
+                custom_fields=[],
+                tag=SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722"),
+            )
+        )
+    assert excinfo.value.status_code == 404
+
+
+def test_create_virtual_machine_by_netbox_id_raises_404_when_not_in_proxmox():
+    vm_record = SimpleNamespace(
+        serialize=lambda: {
+            "id": 248,
+            "name": "vm-248",
+            "cluster": {"id": 10, "name": "cluster-a"},
+            "custom_fields": {"proxmox_vm_id": 9248},
+        }
+    )
+    fake_nb = SimpleNamespace(
+        virtualization=SimpleNamespace(
+            virtual_machines=SimpleNamespace(get=lambda id: vm_record)
+        )
+    )
+    with pytest.raises(HTTPException, match="No matching Proxmox VM") as excinfo:
+        asyncio.run(
+            create_virtual_machine_by_netbox_id(
+                netbox_vm_id=248,
+                netbox_session=fake_nb,
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[{"cluster-a": [{"type": "qemu", "name": "other", "vmid": 1}]}],
+                custom_fields=[],
+                tag=SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722"),
+            )
+        )
+    assert excinfo.value.status_code == 404
+
+
+def test_create_virtual_machine_by_netbox_id_stream_emits_complete(monkeypatch):
+    async def _fake_create_single_vm(**kwargs):
+        return [{"id": 248, "name": "vm-248"}]
+
+    class _StreamingResponseStub:
+        def __init__(self, content, media_type=None, headers=None):
+            self.content = content
+            self.media_type = media_type
+            self.headers = headers or {}
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.StreamingResponse",
+        _StreamingResponseStub,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._create_virtual_machine_by_netbox_id",
+        _fake_create_single_vm,
+    )
+
+    response = asyncio.run(
+        create_virtual_machine_by_netbox_id_stream(
+            netbox_vm_id=248,
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=SimpleNamespace(id=1),
+        )
+    )
+    payload = "".join(asyncio.run(_collect_async_frames(response.content)))
+    assert "event: complete" in payload
+    assert "Virtual machine sync completed." in payload
 
 
 def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):
