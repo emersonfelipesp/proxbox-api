@@ -43,6 +43,11 @@ async def create_storages(
         return_exceptions=True,
     )
 
+    # Some deployments expose the same cluster via multiple endpoints and/or repeated
+    # storage rows in the same API response. Reconcile each (cluster, storage) once per run
+    # to avoid duplicate create attempts against the unique DB constraint.
+    unique_payloads: dict[tuple[str, str], dict] = {}
+
     for cluster_data in cluster_storage_sets:
         if isinstance(cluster_data, Exception):
             continue
@@ -63,7 +68,10 @@ async def create_storages(
                 "enabled": not bool(storage.get("disable")),
                 "tags": tag_refs,
             }
-            record = await rest_reconcile_async(
+            unique_payloads.setdefault((cluster_name, storage_name), payload)
+
+    for (cluster_name, storage_name), payload in unique_payloads.items():
+        record = await rest_reconcile_async(
                 nb,
                 "/api/plugins/proxbox/storage/",
                 lookup={"cluster": cluster_name, "name": storage_name},
@@ -80,17 +88,17 @@ async def create_storages(
                     "enabled": item.get("enabled"),
                     "tags": item.get("tags"),
                 },
+        )
+        data = record.serialize()
+        synced.append(data)
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "storage",
+                    "status": "synced",
+                    "message": f"Synced storage {cluster_name}/{storage_name}",
+                    "result": {"id": data.get("id"), "name": storage_name},
+                }
             )
-            data = record.serialize()
-            synced.append(data)
-            if use_websocket and websocket:
-                await websocket.send_json(
-                    {
-                        "step": "storage",
-                        "status": "synced",
-                        "message": f"Synced storage {cluster_name}/{storage_name}",
-                        "result": {"id": data.get("id"), "name": storage_name},
-                    }
-                )
 
     return synced
