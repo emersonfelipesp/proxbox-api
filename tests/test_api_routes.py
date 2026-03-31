@@ -232,8 +232,11 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session():
 
     result = asyncio.run(create_custom_fields(netbox_session=session))
 
-    assert len(result) == 5
+    assert len(result) >= 6
     assert all(field["group_name"] == "Proxmox" for field in result)
+    field_names = {field["name"] for field in result}
+    assert "proxmox_vm_id" in field_names
+    assert "proxmox_vm_type" in field_names
     first_post = next(
         payload
         for method, path, _query, payload, _expect_json in session.client.calls
@@ -604,9 +607,7 @@ def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypat
 
 def test_create_virtual_machine_by_netbox_id_raises_404_when_missing():
     fake_nb = SimpleNamespace(
-        virtualization=SimpleNamespace(
-            virtual_machines=SimpleNamespace(get=lambda id: None)
-        )
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=lambda id: None))
     )
     with pytest.raises(HTTPException, match="was not found in NetBox") as excinfo:
         asyncio.run(
@@ -633,9 +634,7 @@ def test_create_virtual_machine_by_netbox_id_raises_404_when_not_in_proxmox():
         }
     )
     fake_nb = SimpleNamespace(
-        virtualization=SimpleNamespace(
-            virtual_machines=SimpleNamespace(get=lambda id: vm_record)
-        )
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=lambda id: vm_record))
     )
     with pytest.raises(HTTPException, match="No matching Proxmox VM") as excinfo:
         asyncio.run(
