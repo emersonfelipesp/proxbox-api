@@ -7,8 +7,13 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import ProxboxTagDep
-from proxbox_api.netbox_rest import nested_tag_payload, rest_reconcile_async
-from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState, NetBoxIpAddressSyncState
+from proxbox_api.logger import logger
+from proxbox_api.netbox_rest import nested_tag_payload, rest_patch_async, rest_reconcile_async
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxInterfaceSyncState,
+    NetBoxIpAddressSyncState,
+    NetBoxVlanSyncState,
+)
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 
 # Proxmox Deps
@@ -127,8 +132,46 @@ async def create_interface_and_ip(
     }
 
     node_cidr = getattr(node_interface, "cidr", None)
-
     node_data = node if isinstance(node, dict) else {}
+
+    # Resolve VLAN for node interfaces with type=vlan and a vlan_id
+    vlan_nb_id: int | None = None
+    iface_type = getattr(node_interface, "type", None)
+    vlan_id_raw = getattr(node_interface, "vlan_id", None)
+    if iface_type == "vlan" and vlan_id_raw is not None:
+        try:
+            vlan_vid = int(vlan_id_raw)
+            vlan_record = await rest_reconcile_async(
+                netbox_session,
+                "/api/ipam/vlans/",
+                lookup={"vid": vlan_vid},
+                payload={
+                    "vid": vlan_vid,
+                    "name": f"VLAN {vlan_vid}",
+                    "status": "active",
+                    "tags": nested_tag_payload(tag),
+                },
+                schema=NetBoxVlanSyncState,
+                current_normalizer=lambda record: {
+                    "vid": record.get("vid"),
+                    "name": record.get("name"),
+                    "status": record.get("status"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            )
+            vlan_nb_id = (
+                vlan_record.get("id")
+                if isinstance(vlan_record, dict)
+                else getattr(vlan_record, "id", None)
+            )
+        except Exception as vlan_exc:
+            logger.warning(
+                "Failed to create/sync VLAN vid=%s for node interface %s: %s",
+                vlan_id_raw,
+                getattr(node_interface, "iface", "?"),
+                vlan_exc,
+            )
 
     interface = await rest_reconcile_async(
         netbox_session,
@@ -142,6 +185,8 @@ async def create_interface_and_ip(
             "name": str(node_interface.iface),
             "status": "active",
             "type": interface_type_mapping.get(node_interface.type, "other"),
+            "untagged_vlan": vlan_nb_id,
+            "mode": "access" if vlan_nb_id is not None else None,
             "tags": nested_tag_payload(tag),
         },
         schema=NetBoxInterfaceSyncState,
@@ -150,13 +195,16 @@ async def create_interface_and_ip(
             "name": record.get("name"),
             "status": record.get("status"),
             "type": record.get("type"),
+            "untagged_vlan": record.get("untagged_vlan"),
+            "mode": record.get("mode"),
             "tags": record.get("tags"),
         },
     )
     interface_id = getattr(interface, "id", None) or interface.get("id", None)
 
+    ip_record = None
     if node_cidr and interface_id is not None:
-        await rest_reconcile_async(
+        ip_record = await rest_reconcile_async(
             netbox_session,
             "/api/ipam/ip-addresses/",
             lookup={"address": node_cidr},
@@ -177,7 +225,7 @@ async def create_interface_and_ip(
             },
         )
 
-    return interface
+    return interface, ip_record
 
 
 @router.get(
@@ -198,15 +246,39 @@ async def create_proxmox_device_interfaces(
         node = device
         break
 
-    interfaces = await asyncio.gather(
+    results = await asyncio.gather(
         *[
             create_interface_and_ip(netbox_session, tag, node_interface, node)
             for node_interface in node_interfaces
         ]
     )
-    return [
-        interface.dict() if hasattr(interface, "dict") else interface for interface in interfaces
-    ]
+
+    # Set primary IP on the device when not already set (user choice is preserved)
+    node_data = node if isinstance(node, dict) else {}
+    if node_data.get("primary_ip4") is None:
+        device_id = node_data.get("id")
+        first_ip_id = next(
+            (
+                (ip.get("id") if isinstance(ip, dict) else getattr(ip, "id", None))
+                for _, ip in results
+                if ip is not None
+            ),
+            None,
+        )
+        if device_id is not None and first_ip_id is not None:
+            try:
+                await rest_patch_async(
+                    netbox_session,
+                    "/api/dcim/devices/",
+                    device_id,
+                    {"primary_ip4": first_ip_id},
+                )
+            except Exception as exc:
+                logger.warning("Failed to set primary_ip4 for device id=%s: %s", device_id, exc)
+        elif device_id is not None:
+            logger.info("No IP found for device id=%s, skipping primary_ip4 assignment.", device_id)
+
+    return [iface.dict() if hasattr(iface, "dict") else iface for iface, _ in results]
 
 
 ProxmoxCreateDeviceInterfacesDep = Annotated[list[dict], Depends(create_proxmox_device_interfaces)]

@@ -1,6 +1,7 @@
 """Virtual machine snapshots synchronization service from Proxmox to NetBox."""
 
 import asyncio
+import os
 from datetime import datetime
 
 from proxbox_api.logger import logger
@@ -15,6 +16,8 @@ from proxbox_api.proxmox_to_netbox.models import (
 from proxbox_api.services.proxmox_helpers import get_vm_snapshots
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
+
+_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
 
 
 async def create_netbox_snapshots(snapshot, netbox_session, vmid, node):
@@ -141,6 +144,7 @@ async def create_virtual_machine_snapshots(
     websocket=None,
     use_websocket=False,
     use_css=False,
+    fetch_max_concurrency: int | None = None,
 ):
     """
     Sync snapshots for existing Virtual Machines in NetBox.
@@ -210,6 +214,7 @@ async def create_virtual_machine_snapshots(
     skipped = 0
 
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
+    fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
 
     for vm in vms:
         vmid = vm.get("cf_proxmox_vm_id")
@@ -278,28 +283,37 @@ async def create_virtual_machine_snapshots(
             snapshot_tasks = []
             proxmox_snapshot_names = set()
 
-            for proxmox in pxs:
-                try:
-                    snapshots = get_vm_snapshots(
-                        session=proxmox.session,
-                        node=node_name,
-                        vm_type=proxmox_type,
-                        vmid=int(vmid),
+            async def _fetch_snapshots_for_endpoint(proxmox):
+                async with fetch_semaphore:
+                    return await asyncio.to_thread(
+                        lambda: get_vm_snapshots(
+                            session=proxmox.session,
+                            node=node_name,
+                            vm_type=proxmox_type,
+                            vmid=int(vmid),
+                        )
                     )
 
-                    for snapshot in snapshots:
-                        snap_name = snapshot.get("name")
-                        if snap_name:
-                            proxmox_snapshot_names.add(snap_name)
-                            snapshot_tasks.append(
-                                create_netbox_snapshots(snapshot, nb, vmid, node_name)
-                            )
-
-                except Exception as e:
+            snapshot_results = await asyncio.gather(
+                *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],
+                return_exceptions=True,
+            )
+            for result in snapshot_results:
+                if isinstance(result, Exception):
                     logger.warning(
-                        f"Error getting snapshots for VM {vmid} on node {node_name}: {e}"
+                        "Error getting snapshots for VM %s on node %s: %s",
+                        vmid,
+                        node_name,
+                        result,
                     )
                     continue
+                for snapshot in result:
+                    snap_name = snapshot.get("name")
+                    if snap_name:
+                        proxmox_snapshot_names.add(snap_name)
+                        snapshot_tasks.append(
+                            create_netbox_snapshots(snapshot, nb, vmid, node_name)
+                        )
 
             if snapshot_tasks:
                 results, failures = await process_snapshots_batch(snapshot_tasks)
