@@ -138,32 +138,96 @@ Or with uvicorn:
 uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
 ```
 
-## Using mkcert
+## HTTPS without Docker
 
-Install the local CA in the system trust store.
+### Local development: mkcert
+
+Install the local CA in your system trust store, generate a cert, then point uvicorn at the PEM files:
 
 ```
 mkcert -install
 mkcert proxbox.backend.local localhost 127.0.0.1 ::1
 ```
 
-With the keyfile and certfile generated, pass it on uvicorn command to start up FastAPI
-
-### NGINX
+From the repository root (adjust paths to the files mkcert printed):
 
 ```
-sudo cp nginx.conf /etc/nginx/sites-available/proxbox
-sudo ln -s -f /etc/nginx/sites-available/proxbox /etc/nginx/sites-enabled/proxbox
-sudo systemctl restart nginx
+uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
+  --ssl-keyfile=./proxbox.backend.local+3-key.pem \
+  --ssl-certfile=./proxbox.backend.local+3.pem
 ```
 
-```
-/opt/netbox/venv/bin/uvicorn netbox-proxbox.proxbox_api.proxbox_api.main:app --host 0.0.0.0 --port 8000 --app-dir /opt/netbox/netbox --ssl-keyfile=localhost+2-key.pem --ssl-certfile=localhost+2.pem
-```
-
-Or 
+**NetBox plugin layout** (paths differ): example with `--app-dir` and module path as in your install:
 
 ```
-cd /opt/netbox/netbox/netbox-proxbox/proxbox_api
-uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload --ssl-keyfile=./proxbox_api/proxbox.backend.local+3-key.pem --ssl-certfile=./proxbox_api/proxbox.backend.local+3.pem
+/opt/netbox/venv/bin/uvicorn netbox-proxbox.proxbox_api.proxbox_api.main:app \
+  --host 127.0.0.1 --port 8000 --app-dir /opt/netbox/netbox \
+  --ssl-keyfile=/path/to/localhost+2-key.pem \
+  --ssl-certfile=/path/to/localhost+2.pem
 ```
+
+Optional **nginx** in front of that uvicorn: copy or adapt a site config that `proxy_pass`es to `http://127.0.0.1:8000` and terminates TLS on 443 (same idea as [TLS with a real certificate](#tls-with-a-real-certificate-no-docker) below).
+
+### TLS with a real certificate (no Docker)
+
+Use **Let’s Encrypt**, a **corporate CA**, or any PEM **full chain + private key**. Prefer terminating TLS in **nginx or Caddy** and keeping the app on plain HTTP on localhost; uvicorn TLS is fine for small setups if you accept Python as the TLS endpoint.
+
+**1. Certificate files**
+
+- **Let’s Encrypt (Certbot):** typically `/etc/letsencrypt/live/<your-domain>/fullchain.pem` and `privkey.pem`. Renew with `certbot renew`; reload nginx (or your proxy) after renewal.
+- **Corporate / manual:** use the PEM the CA gave you: **certificate file** must include the **full chain** (leaf + intermediates) in one file, plus the **unencrypted private key** (or use `--ssl-keyfile-password` with uvicorn if the key is encrypted).
+
+**2. Recommended: reverse proxy on the same host**
+
+Run the API on HTTP bound to loopback only, proxy from 443:
+
+```
+uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000
+```
+
+Example **nginx** `server` block (replace domain and paths):
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        proxy_buffering off;
+    }
+}
+```
+
+For `Connection $connection_upgrade`, add at `http` level:
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+```
+
+Reload nginx after editing. Point NetBox’s FastAPI endpoint at `https://api.example.com` (and port **443** or your chosen HTTPS port).
+
+**3. Alternative: uvicorn serves TLS directly**
+
+```
+uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
+  --ssl-certfile=/etc/letsencrypt/live/api.example.com/fullchain.pem \
+  --ssl-keyfile=/etc/letsencrypt/live/api.example.com/privkey.pem
+```
+
+Ensure the user running uvicorn can read the key (often `root` owns `/etc/letsencrypt`; use `group` ACLs, a deploy user + copied certs, or **hitch**/proxy instead). Use **`fullchain.pem`** for `--ssl-certfile` so clients receive the full chain.
