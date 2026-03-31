@@ -11,8 +11,6 @@ on:
         type: string
         required: false
         default: ""
-  pull_request:
-    branches: [main, testing]
   workflow_dispatch:
     inputs:
       git_ref:
