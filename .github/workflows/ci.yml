@@ -47,11 +47,11 @@ jobs:
           name: proxbox-api-coverage
           path: coverage.xml
 
-  # Build and test Docker images. On PR, push with PR ref tag for E2E testing.
+  # Publish Docker images only from main branch pushes.
   docker-images:
     name: Publish Docker images (Hub)
     needs: [test]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/testing') || github.event_name == 'pull_request'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/docker-hub-publish.yml
     secrets: inherit
 
