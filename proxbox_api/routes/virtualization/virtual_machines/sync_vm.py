@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 from ipaddress import ip_address
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
@@ -198,6 +198,7 @@ async def _create_virtual_machine_by_netbox_id(
     tag: ProxboxTagDep,
     websocket=None,
     use_websocket: bool = False,
+    use_guest_agent_interface_name: bool = True,
 ):
     vm_record = netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
     if vm_record is None:
@@ -247,6 +248,7 @@ async def _create_virtual_machine_by_netbox_id(
         tag=tag,
         websocket=websocket,
         use_websocket=use_websocket,
+        use_guest_agent_interface_name=use_guest_agent_interface_name,
     )
 
 
@@ -299,6 +301,14 @@ async def create_virtual_machines(
     websocket=None,
     use_css: bool = False,
     use_websocket: bool = False,
+    use_guest_agent_interface_name: bool = Query(
+        default=True,
+        title="Use Guest Agent Interface Name",
+        description=(
+            "When true and QEMU guest-agent data is available, VM interface names "
+            "are created from guest-agent interface names instead of netX/nicX labels."
+        ),
+    ),
 ):
     """
     Creates a new virtual machine in Netbox.
@@ -558,6 +568,20 @@ async def create_virtual_machines(
             if vm_networks:
                 for network in vm_networks:
                     for interface_name, value in network.items():
+                        config_interface_name = (
+                            str(value.get("name", interface_name)).strip() or interface_name
+                        )
+                        interface_mac = value.get("virtio", value.get("hwaddr", None))
+                        guest_iface = None
+                        if interface_mac:
+                            guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                        if guest_iface is None:
+                            guest_iface = guest_by_name.get(config_interface_name.lower())
+                        resolved_interface_name = config_interface_name
+                        if use_guest_agent_interface_name and guest_iface:
+                            guest_name = str(guest_iface.get("name") or "").strip()
+                            if guest_name:
+                                resolved_interface_name = guest_name
                         bridge_name = value.get("bridge", None)
                         bridge = {}
                         if bridge_name:
@@ -598,11 +622,11 @@ async def create_virtual_machines(
                             "/api/virtualization/interfaces/",
                             lookup={
                                 "virtual_machine_id": virtual_machine.get("id"),
-                                "name": value.get("name", interface_name),
+                                "name": resolved_interface_name,
                             },
                             payload={
                                 "virtual_machine": virtual_machine.get("id"),
-                                "name": value.get("name", interface_name),
+                                "name": resolved_interface_name,
                                 "enabled": True,
                                 "bridge": bridge.get("id", None),
                                 "mac_address": value.get("virtio", value.get("hwaddr", None)),
@@ -627,15 +651,6 @@ async def create_virtual_machines(
                             vm_interface = vm_interface.dict()
 
                         netbox_vm_interfaces.append(vm_interface)
-
-                        interface_mac = value.get("virtio", value.get("hwaddr", None))
-                        guest_iface = None
-                        if interface_mac:
-                            guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
-                        if guest_iface is None:
-                            guest_iface = guest_by_name.get(
-                                str(value.get("name", interface_name)).strip().lower()
-                            )
 
                         interface_ip = _best_guest_agent_ip(guest_iface) or value.get("ip", None)
                         if interface_ip and interface_ip != "dhcp":
@@ -786,6 +801,14 @@ async def create_virtual_machine_by_netbox_id(
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    use_guest_agent_interface_name: bool = Query(
+        default=True,
+        title="Use Guest Agent Interface Name",
+        description=(
+            "When true and QEMU guest-agent data is available, VM interface names "
+            "are created from guest-agent interface names instead of netX/nicX labels."
+        ),
+    ),
 ):
     return await _create_virtual_machine_by_netbox_id(
         netbox_vm_id=netbox_vm_id,
@@ -795,6 +818,7 @@ async def create_virtual_machine_by_netbox_id(
         cluster_resources=cluster_resources,
         custom_fields=custom_fields,
         tag=tag,
+        use_guest_agent_interface_name=use_guest_agent_interface_name,
     )
 
 
@@ -806,6 +830,14 @@ async def create_virtual_machines_stream(
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    use_guest_agent_interface_name: bool = Query(
+        default=True,
+        title="Use Guest Agent Interface Name",
+        description=(
+            "When true and QEMU guest-agent data is available, VM interface names "
+            "are created from guest-agent interface names instead of netX/nicX labels."
+        ),
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -821,6 +853,7 @@ async def create_virtual_machines_stream(
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
+                    use_guest_agent_interface_name=use_guest_agent_interface_name,
                 )
             finally:
                 await bridge.close()
@@ -894,6 +927,14 @@ async def create_virtual_machine_by_netbox_id_stream(
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    use_guest_agent_interface_name: bool = Query(
+        default=True,
+        title="Use Guest Agent Interface Name",
+        description=(
+            "When true and QEMU guest-agent data is available, VM interface names "
+            "are created from guest-agent interface names instead of netX/nicX labels."
+        ),
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -910,6 +951,7 @@ async def create_virtual_machine_by_netbox_id_stream(
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
+                    use_guest_agent_interface_name=use_guest_agent_interface_name,
                 )
             finally:
                 await bridge.close()
