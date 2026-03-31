@@ -55,10 +55,9 @@ jobs:
     uses: ./.github/workflows/docker-hub-publish.yml
     secrets: inherit
 
-  # Sequential only (no matrix): NetBox demo first, then light HTTP smoke on each image.
-  # After docker-images when it runs (main/testing push) so :latest / :latest-mkcert match this commit.
-  e2e-sequential:
-    name: E2E sequential (local + Docker Hub images)
+  # Single workflow (no separate “CI Basic”): NetBox e2e, then HTTP smoke on :latest and :latest-mkcert (serial).
+  # After docker-images when it runs (main/testing push) so Hub tags match this commit.
+  e2e-tests:
     runs-on: ubuntu-latest
     needs: [test, docker-images]
     if: |
