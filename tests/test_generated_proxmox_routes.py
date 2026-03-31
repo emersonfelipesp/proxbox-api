@@ -406,6 +406,22 @@ def _build_generated_route_cases() -> list[Any]:
 GENERATED_ROUTE_CASES = _build_generated_route_cases()
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_runtime_generated_route_cache(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Use a worker-local cache file so pytest-xdist does not fight over the repo default."""
+    cache_dir = tmp_path_factory.mktemp("runtime_generated_routes_cache")
+    cache_file = cache_dir / "runtime_generated_routes_cache.json"
+    mp = pytest.MonkeyPatch()
+    mp.setattr(
+        "proxbox_api.routes.proxmox.runtime_generated.proxmox_generated_route_cache_path",
+        lambda: cache_file,
+    )
+    yield
+    mp.undo()
+
+
 class SchemaDrivenFakeResource:
     def __init__(self, session, path):
         self.session = session
