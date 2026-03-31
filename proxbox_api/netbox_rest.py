@@ -341,9 +341,11 @@ async def rest_reconcile_async(
     if existing is None:
         try:
             return await rest_create_async(nb, path, desired_payload)
-        except ProxboxException as error:
+        except ProxboxException:
+            # Re-fetch and scan: list filters can miss rows (API quirks); duplicate errors
+            # are not always phrased with "already exists" / "must be unique".
             existing = await _find_existing()
-            if existing is None and _is_duplicate_error(error.detail):
+            if existing is None:
                 existing = await _scan_existing()
             if existing is not None:
                 return await _reconcile(existing)
