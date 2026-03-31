@@ -56,9 +56,53 @@ jobs:
     uses: ./.github/workflows/docker-hub-publish.yml
     secrets: inherit
 
-  # Single workflow (no separate “CI Basic”): NetBox e2e, then HTTP smoke on :latest and :latest-mkcert (serial).
-  # After docker-images when it runs (main/testing push) so Hub tags match this commit.
-  e2e-tests:
+  # Three parallel E2E test jobs: local NetBox demo, HTTP Docker image, HTTPS Docker image.
+  # Each uses different mock data to avoid conflicts.
+  e2e-demo:
+    runs-on: ubuntu-latest
+    needs: [test, docker-images]
+    if: |
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      (needs.docker-images.result == 'success' || needs.docker-images.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra e2e --group dev
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: "E2E — local workspace vs NetBox demo"
+        run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v
+
+      - name: Upload Playwright Report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-demo
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+      - name: Upload Playwright Trace
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-trace-demo
+          path: .playwright/trace/
+          retention-days: 7
+
+  e2e-http:
     runs-on: ubuntu-latest
     needs: [test, docker-images]
     if: |
@@ -81,13 +125,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra e2e --group dev
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
-
-      - name: "E2E (1/3) — local workspace vs NetBox demo"
-        run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v
-
-      - name: "E2E (2/3) — published image latest (nginx + uvicorn, HTTP)"
+      - name: "E2E — published image latest (nginx + uvicorn, HTTP)"
         run: |
           set -eux
           docker pull "${IMAGE_NS}:latest"
@@ -105,7 +143,30 @@ jobs:
           uv run pytest tests/e2e/ -m image_http --tb=short -v
           docker rm -f proxbox-e2e-http
 
-      - name: "E2E (3/3) — published image latest-mkcert (nginx + HTTPS + uvicorn)"
+  e2e-https:
+    runs-on: ubuntu-latest
+    needs: [test, docker-images]
+    if: |
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      (needs.docker-images.result == 'success' || needs.docker-images.result == 'skipped')
+    env:
+      IMAGE_NS: emersonfelipesp/proxbox-api
+      PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra e2e --group dev
+
+      - name: "E2E — published image latest-mkcert (nginx + HTTPS + uvicorn)"
         run: |
           set -eux
           docker pull "${IMAGE_NS}:latest-mkcert"
@@ -123,21 +184,3 @@ jobs:
           export PROXBOX_IMAGE_E2E_TLS_INSECURE=1
           uv run pytest tests/e2e/ -m image_http --tb=short -v
           docker rm -f proxbox-e2e-https
-
-      - name: Upload Playwright Report
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report
-          path: |
-            playwright-report/
-            test-results/
-          retention-days: 7
-
-      - name: Upload Playwright Trace
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-trace
-          path: .playwright/trace/
-          retention-days: 7
