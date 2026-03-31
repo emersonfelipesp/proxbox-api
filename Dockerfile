@@ -12,7 +12,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
 COPY proxbox_api ./proxbox_api/
 
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra playwright
 
 # Application tree + venv only (shared by HTTP and HTTPS images).
 FROM python:3.13-slim-bookworm AS runtime-base
