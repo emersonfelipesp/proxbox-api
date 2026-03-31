@@ -28,6 +28,9 @@ from proxbox_api.routes.virtualization.virtual_machines.storages_vm import (
     create_storages,
 )
 from proxbox_api.services.sync.devices import create_proxmox_devices
+from proxbox_api.services.sync.task_history import (
+    sync_all_virtual_machine_task_histories,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
@@ -61,8 +64,18 @@ async def full_update_sync(
     sync_storage: list = []
     sync_vms: list = []
     sync_disks: dict = {}
+    sync_task_history: dict = {}
     sync_backups: list = []
     sync_snapshots: dict = {}
+
+    tag_refs = [
+        {
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+        }
+    ]
+    tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
 
     try:
         sync_nodes = await create_proxmox_devices(
@@ -113,6 +126,22 @@ async def full_update_sync(
         logger.exception("Error while syncing virtual machines during full-update")
         raise ProxboxException(
             message="Error while syncing virtual machines.",
+            python_exception=str(error),
+        ) from error
+
+    try:
+        sync_task_history = await sync_all_virtual_machine_task_histories(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            tag_refs=tag_refs,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing task history during full-update")
+        raise ProxboxException(
+            message="Error while syncing task history.",
             python_exception=str(error),
         ) from error
 
@@ -177,12 +206,14 @@ async def full_update_sync(
         "storage": sync_storage,
         "virtual_machines": sync_vms,
         "virtual_disks": sync_disks,
+        "task_history": sync_task_history,
         "backups": sync_backups,
         "snapshots": sync_snapshots,
         "devices_count": len(sync_nodes),
         "storage_count": len(sync_storage),
         "virtual_machines_count": len(sync_vms),
         "virtual_disks_count": _result_count(sync_disks),
+        "task_history_count": _result_count(sync_task_history),
         "backups_count": len(sync_backups),
         "snapshots_count": _result_count(sync_snapshots),
     }
@@ -203,14 +234,26 @@ async def full_update_sync_stream(
         sync_storage: list = []
         sync_vms: list = []
         sync_disks: dict = {}
+        sync_task_history: dict = {}
         sync_backups: list = []
         sync_snapshots: dict = {}
         devices_bridge = WebSocketSSEBridge()
         storage_bridge = WebSocketSSEBridge()
         vm_bridge = WebSocketSSEBridge()
         disks_bridge = WebSocketSSEBridge()
+        task_history_bridge = WebSocketSSEBridge()
         backups_bridge = WebSocketSSEBridge()
         snapshots_bridge = WebSocketSSEBridge()
+
+        tag_refs = [
+            {
+                "name": getattr(tag, "name", None),
+                "slug": getattr(tag, "slug", None),
+                "color": getattr(tag, "color", None),
+            }
+        ]
+        tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+
         try:
             yield sse_event(
                 "step",
@@ -375,6 +418,44 @@ async def full_update_sync_stream(
             yield sse_event(
                 "step",
                 {
+                    "step": "task-history",
+                    "status": "started",
+                    "message": "Starting task history synchronization.",
+                },
+            )
+
+            async def _run_task_history_sync():
+                try:
+                    return await sync_all_virtual_machine_task_histories(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        tag_refs=tag_refs,
+                        websocket=task_history_bridge,
+                        use_websocket=True,
+                        fetch_max_concurrency=fetch_max_concurrency,
+                    )
+                finally:
+                    await task_history_bridge.close()
+
+            task_history_task = asyncio.create_task(_run_task_history_sync())
+            async for frame in task_history_bridge.iter_sse():
+                yield frame
+            sync_task_history = await task_history_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "task-history",
+                    "status": "completed",
+                    "message": "Task history synchronization finished.",
+                    "result": {"count": _result_count(sync_task_history)},
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
                     "step": "backups",
                     "status": "started",
                     "message": "Starting backup synchronization.",
@@ -460,12 +541,14 @@ async def full_update_sync_stream(
                         "storage": sync_storage,
                         "virtual_machines": sync_vms,
                         "virtual_disks": sync_disks,
+                        "task_history": sync_task_history,
                         "backups": sync_backups,
                         "snapshots": sync_snapshots,
                         "devices_count": len(sync_nodes),
                         "storage_count": len(sync_storage),
                         "virtual_machines_count": len(sync_vms),
                         "virtual_disks_count": _result_count(sync_disks),
+                        "task_history_count": _result_count(sync_task_history),
                         "backups_count": len(sync_backups),
                         "snapshots_count": _result_count(sync_snapshots),
                     },
