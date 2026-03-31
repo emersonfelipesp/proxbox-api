@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,7 @@ class FakeNetBoxSession:
 
 
 @pytest.fixture(autouse=True)
-def reset_fastapi_state() -> None:
+def reset_fastapi_state():
     app.dependency_overrides.clear()
     clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)
@@ -94,3 +95,89 @@ def client_with_fake_netbox(db_engine):
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_netbox_session] = lambda: fake_session
     yield fake_session
+
+
+# Mock fixtures for proxmox and netbox sessions
+
+
+@pytest.fixture
+def mock_proxmox_cluster_status():
+    """Mock Proxmox cluster status response."""
+    from unittest.mock import MagicMock
+
+    mock = MagicMock()
+    mock.cluster_status = {
+        "type": "cluster",
+        "nodes": [{"name": "pve01", "status": "online"}],
+    }
+    app.dependency_overrides[
+        __import__(
+            "proxbox_api.session.proxmox_providers", fromlist=["ClusterStatusDep"]
+        ).ClusterStatusDep
+    ] = lambda: mock
+    yield mock
+    app.dependency_overrides.pop(
+        __import__(
+            "proxbox_api.session.proxmox_providers", fromlist=["ClusterStatusDep"]
+        ).ClusterStatusDep,
+        None,
+    )
+
+
+@pytest.fixture
+def mock_netbox_devices():
+    """Mock NetBox device creation responses."""
+    return []
+
+
+@pytest.fixture
+def mock_netbox_vms():
+    """Mock NetBox VM creation responses."""
+    return []
+
+
+@pytest.fixture
+def mock_proxmox_vms():
+    """Mock Proxmox VM resource responses."""
+    return []
+
+
+@pytest.fixture
+def mock_proxmox_backups():
+    """Mock Proxmox backup responses."""
+    return []
+
+
+@pytest.fixture
+def mock_netbox_vm_list():
+    """Mock NetBox VM list response."""
+    return []
+
+
+@pytest.fixture
+def mock_netbox_vm_get():
+    """Mock NetBox VM get response."""
+    return {}
+
+
+@pytest.fixture
+def mock_netbox_status():
+    """Mock NetBox status response."""
+    return {"status": "ok", "netbox_version": "4.2"}
+
+
+@pytest.fixture
+def mock_proxmox_from_netbox_plugin():
+    """Mock Proxmox endpoint fetched from NetBox plugin API."""
+    return []
+
+
+@pytest.fixture
+def mock_proxmox_connection_error():
+    """Mock Proxmox connection error for testing error handling."""
+    from proxbox_api.exception import ProxboxException
+
+    raise ProxboxException(
+        message="Connection refused",
+        detail="Could not connect to Proxmox. Check if the endpoint is reachable.",
+    )

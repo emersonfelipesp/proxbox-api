@@ -54,6 +54,8 @@ proxbox-proxmox-codegen = "proxbox_api.proxmox_codegen.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "image_http: smoke tests against PROXBOX_IMAGE_E2E_BASE_URL (published Docker images)",
 ]

@@ -1,0 +1,172 @@
+# proxbox-api (LLM context file)
+
+This file is for AI/code assistants. It summarizes the project structure, runtime behavior, API surfaces, and safe edit workflow.
+
+## 1) Project identity
+
+- Name: `proxbox-api`
+- Type: FastAPI backend
+- Purpose: synchronize and expose infrastructure data between Proxmox and NetBox (devices, VMs, disks, backups, snapshots, cluster data)
+- Primary entrypoint: `proxbox_api/main.py` (`app = create_app()`)
+- App factory: `proxbox_api/app/factory.py`
+- Docs site config: `mkdocs.yml`
+- Main human docs: `README.md`, `CLAUDE.md`, `docs/`
+
+## 2) Runtime architecture (high level)
+
+- API layer: `proxbox_api/app/*`, `proxbox_api/routes/*`
+- Session/dependency layer: `proxbox_api/session/*`, `proxbox_api/dependencies.py`
+- Sync services: `proxbox_api/services/sync/*`
+- Schemas/enums: `proxbox_api/schemas/*`, `proxbox_api/enum/*`
+- Persistence: `proxbox_api/database.py` (SQLite)
+- Helpers/utilities: `proxbox_api/utils/*`, `proxbox_api/logger.py`, `proxbox_api/exception.py`, `proxbox_api/cache.py`
+- Proxmox codegen: `proxbox_api/proxmox_codegen/*`
+- Generated contracts/models: `proxbox_api/generated/proxmox/*`, `proxbox_api/generated/netbox/*`
+- Proxmox -> NetBox normalization: `proxbox_api/proxmox_to_netbox/*`
+
+## 3) Startup flow
+
+1. `create_app()` calls `init_database_and_netbox()` from `proxbox_api/app/bootstrap.py`.
+2. DB tables are created/opened and NetBox bootstrap client is initialized unless skipped by env var.
+3. FastAPI app is created with lifespan hook.
+4. Lifespan registers generated Proxmox proxy routes via `register_generated_proxmox_routes`.
+5. CORS, exception handlers, root/meta/cache/full-update/websocket routes, and domain routers are mounted.
+
+## 4) Core environment variables
+
+- `PROXBOX_NETBOX_TIMEOUT` (default `120`): NetBox client timeout (seconds)
+- `PROXBOX_VM_SYNC_MAX_CONCURRENCY` (default `4`): VM sync create concurrency
+- `PROXBOX_FETCH_MAX_CONCURRENCY` (default `8`): fetch concurrency for storage/backup/snapshot flows
+- `PROXBOX_CORS_EXTRA_ORIGINS` (default empty): extra CORS origins, comma-separated
+- `PROXBOX_EXPOSE_INTERNAL_ERRORS` (default unset): expose exception details in HTTP 500 responses
+- `PROXBOX_STRICT_STARTUP` (default unset): fail startup if generated Proxmox routes cannot mount
+- `PROXBOX_SKIP_NETBOX_BOOTSTRAP` (default unset): skip default NetBox client bootstrap on startup
+
+## 5) API surfaces to know
+
+### Utility/root
+
+- `GET /`
+- `GET /cache`
+- `GET /clear-cache`
+- `GET /sync-processes`
+- `POST /sync-processes`
+- `GET /full-update`
+- `GET /full-update/stream` (SSE)
+
+### NetBox (`/netbox`)
+
+- Endpoint CRUD (`/netbox/endpoint*`) with singleton behavior
+- `GET /netbox/status`
+- `GET /netbox/openapi`
+
+### Proxmox (`/proxmox`)
+
+- Endpoint CRUD (`/proxmox/endpoints*`)
+- Discovery/session/status endpoints
+- Viewer/codegen endpoints (`/proxmox/viewer/*`)
+- Runtime-generated live proxy routes:
+  - `/proxmox/api2/{version_tag}/*`
+  - `/proxmox/api2/*` alias for `latest`
+
+### DCIM (`/dcim`)
+
+- `GET /dcim/devices`
+- `GET /dcim/devices/create`
+- `GET /dcim/devices/create/stream` (SSE)
+- interface creation endpoints
+
+### Virtualization (`/virtualization`)
+
+- Placeholder cluster routes: `/cluster-types/create`, `/clusters/create` (501)
+- VM sync/read routes under `/virtualization/virtual-machines/*`
+- Important VM-related sync endpoints:
+  - `/create`
+  - `/create/stream` (SSE)
+  - `/backups/create`
+  - `/backups/all/create`
+  - `/backups/all/create/stream` (SSE)
+  - `/snapshots/create`
+  - `/snapshots/all/create`
+  - `/snapshots/all/create/stream` (SSE)
+  - `/storage/create`
+  - `/storage/create/stream` (SSE)
+
+### WebSockets
+
+- `ws://<host>:<port>/` (counter stream)
+- `ws://<host>:<port>/ws/virtual-machines`
+- `ws://<host>:<port>/ws` with commands:
+  - `Full Update Sync`
+  - `Sync Nodes`
+  - `Sync Virtual Machines`
+
+## 6) Sync workflow order (full update)
+
+Current full-update pipeline in `proxbox_api/app/full_update.py`:
+
+1. devices
+2. storage
+3. virtual machines
+4. virtual disks
+5. backups
+6. snapshots
+
+SSE endpoints use `WebSocketSSEBridge` to convert websocket-style progress payloads into SSE `step/error/complete` frames.
+
+## 7) Generated artifacts and safety
+
+- Generated Proxmox artifacts live under `proxbox_api/generated/proxmox/`.
+- Runtime cache manifest: `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
+- Prefer editing codegen sources (`proxbox_api/proxmox_codegen/*`) instead of manual edits to generated outputs.
+- Keep route/path parameter normalization behavior consistent with generated OpenAPI contracts.
+
+## 8) Repository navigation for edits
+
+- Root guide: `CLAUDE.md`
+- Scoped guides: `**/CLAUDE.md` (use nearest guide for the directory being edited)
+- User docs (English): `docs/*`
+- User docs (pt-BR): `docs/pt-BR/*`
+
+## 9) Development commands
+
+Install:
+
+```bash
+uv sync
+uv sync --extra test --group dev
+uv sync --extra docs --group dev
+```
+
+Common checks:
+
+```bash
+rtk ruff check .
+rtk ruff format --check .
+uv run python -m compileall proxbox_api scripts tests
+uv run python -c "import proxbox_api.main"
+uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+rtk pytest tests
+uv run mkdocs build --strict
+```
+
+## 10) Edit guidelines for LLMs
+
+- Keep route handlers orchestration-focused; move reusable logic to services/helpers.
+- Raise `ProxboxException` for predictable domain errors.
+- Preserve existing response semantics (notably VM read route 404/502 behavior and 501 stubs).
+- Prefer `logger` over `print`.
+- Keep normalization/parsing in Pydantic schema layer when adding new transforms.
+- Update both EN and pt-BR docs when changing user-facing behavior.
+- Do not silently swallow exceptions with broad fallback logic.
+
+## 11) Quick factual references
+
+- Python target: `>=3.10`
+- API framework: FastAPI
+- Proxmox client: `proxmoxer`
+- NetBox client facade: `netbox-sdk`
+- ORM: SQLModel
+- Local DB default file: `database.db`
+
+End of llms context file.
