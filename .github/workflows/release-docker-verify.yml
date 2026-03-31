@@ -10,6 +10,9 @@ jobs:
     name: verify Docker image on release
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
       - name: Create Docker test script
         run: |
           cat <<'EOF' > /tmp/docker-tests.sh
@@ -27,16 +30,27 @@ jobs:
 
       - name: Pull release and latest images
         run: |
-          RELEASE_TAG=${{ github.event.release.tag_name }}
-          docker pull emersonfelipesp/proxbox-api:$RELEASE_TAG
+          REL="${{ github.event.release.tag_name }}"
+          TAG="${REL#v}"
+          docker pull emersonfelipesp/proxbox-api:"$TAG"
           docker pull emersonfelipesp/proxbox-api:latest
+          docker pull emersonfelipesp/proxbox-api:"${TAG}-mkcert"
+          docker pull emersonfelipesp/proxbox-api:latest-mkcert
 
       - name: Run tests on release tag
         run: |
-          RELEASE_TAG=${{ github.event.release.tag_name }}
-          for TAG in "$RELEASE_TAG" latest; do
-            docker run --rm \
-              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-              emersonfelipesp/proxbox-api:"$TAG" \
-              /tmp/docker-tests.sh
+          REL="${{ github.event.release.tag_name }}"
+          TAG="${REL#v}"
+          for SUFFIX in "" -mkcert; do
+            case "$SUFFIX" in
+              "") T1="$TAG" T2=latest ;;
+              *) T1="${TAG}-mkcert" T2=latest-mkcert ;;
+            esac
+            for IMG_TAG in "$T1" "$T2"; do
+              docker run --rm \
+                -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+                -v "${{ github.workspace }}/tests:/app/tests:ro" \
+                emersonfelipesp/proxbox-api:"$IMG_TAG" \
+                /tmp/docker-tests.sh
+            done
           done

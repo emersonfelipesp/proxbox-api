@@ -45,6 +45,14 @@ jobs:
           name: proxbox-api-coverage
           path: coverage.xml
 
+  # Pushes runtime (nginx→uvicorn) and mkcert (HTTPS nginx→uvicorn) to Docker Hub.
+  docker-images:
+    name: Publish Docker images (Hub)
+    needs: [test]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/testing')
+    uses: ./.github/workflows/docker-hub-publish.yml
+    secrets: inherit
+
   e2e-tests:
     runs-on: ubuntu-latest
     needs: [test]
