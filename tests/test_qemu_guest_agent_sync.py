@@ -44,7 +44,13 @@ def _vm_sync_inputs(vm_config: dict):
     }
 
 
-def _install_common_sync_patches(monkeypatch, *, vm_config: dict, ip_payloads: list[dict]):
+def _install_common_sync_patches(
+    monkeypatch,
+    *,
+    vm_config: dict,
+    ip_payloads: list[dict],
+    interface_payloads: list[dict] | None = None,
+):
     async def _fake_get_vm_config(**kwargs):
         return vm_config
 
@@ -55,6 +61,8 @@ def _install_common_sync_patches(monkeypatch, *, vm_config: dict, ip_payloads: l
         if path == "/api/virtualization/virtual-machines/":
             return {"id": 55, "name": "vm01"}
         if path == "/api/virtualization/interfaces/":
+            if interface_payloads is not None and payload.get("type") != "bridge":
+                interface_payloads.append(payload)
             return {"id": 66, "name": payload.get("name")}
         if path == "/api/ipam/ip-addresses/":
             ip_payloads.append(payload)
@@ -141,6 +149,46 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
     assert ip_payloads and ip_payloads[0]["address"] == "10.0.0.50/24"
 
 
+def test_vm_sync_uses_guest_agent_interface_name_by_default(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 1,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    ip_payloads: list[dict] = []
+    interface_payloads: list[dict] = []
+    _install_common_sync_patches(
+        monkeypatch,
+        vm_config=data["vm_config"],
+        ip_payloads=ip_payloads,
+        interface_payloads=interface_payloads,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        lambda *args, **kwargs: [
+            {
+                "name": "ens18",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "ip_addresses": [],
+            }
+        ],
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+    assert len(result) == 1
+    assert interface_payloads and interface_payloads[0]["name"] == "ens18"
+
+
 def test_vm_sync_falls_back_to_config_when_guest_agent_unavailable(monkeypatch):
     data = _vm_sync_inputs(
         {
@@ -174,6 +222,47 @@ def test_vm_sync_falls_back_to_config_when_guest_agent_unavailable(monkeypatch):
     assert len(result) == 1
     assert helper_calls["count"] == 1
     assert ip_payloads and ip_payloads[0]["address"] == "10.0.0.21/24"
+
+
+def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 1,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    ip_payloads: list[dict] = []
+    interface_payloads: list[dict] = []
+    _install_common_sync_patches(
+        monkeypatch,
+        vm_config=data["vm_config"],
+        ip_payloads=ip_payloads,
+        interface_payloads=interface_payloads,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        lambda *args, **kwargs: [
+            {
+                "name": "ens18",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "ip_addresses": [],
+            }
+        ],
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            use_guest_agent_interface_name=False,
+        )
+    )
+    assert len(result) == 1
+    assert interface_payloads and interface_payloads[0]["name"] == "net0"
 
 
 def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
