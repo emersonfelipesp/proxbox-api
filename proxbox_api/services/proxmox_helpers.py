@@ -158,6 +158,51 @@ def get_node_storage_content(
     )
 
 
+def get_node_tasks(
+    session: ProxmoxSession,
+    node: str,
+    *,
+    vmid: int | None = None,
+    source: str | None = "archive",
+    statusfilter: str | None = None,
+    typefilter: str | None = None,
+    until: int | None = None,
+    userfilter: str | None = None,
+) -> list[generated_models.GetNodesNodeTasksResponseItem]:
+    params = {
+        "vmid": vmid,
+        "source": source,
+        "statusfilter": statusfilter,
+        "typefilter": typefilter,
+        "until": until,
+        "userfilter": userfilter,
+    }
+    filtered = {key: value for key, value in params.items() if value is not None}
+    return _wrap_backend_call(
+        "Error fetching Proxmox node tasks",
+        lambda: (
+            generated_models.GetNodesNodeTasksResponse.model_validate(
+                session.session.nodes(node).tasks.get(**filtered)
+            ).root
+        ),
+    )
+
+
+def get_node_task_status(
+    session: ProxmoxSession,
+    node: str,
+    upid: str,
+) -> generated_models.GetNodesNodeTasksUpidStatusResponse:
+    return _wrap_backend_call(
+        "Error fetching Proxmox task status",
+        lambda: (
+            generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(
+                session.session.nodes(node).tasks(upid).status.get()
+            )
+        ),
+    )
+
+
 def dump_models(items: list[Any]) -> list[dict[str, Any]]:
     return [_model_dump(item) for item in items]
 

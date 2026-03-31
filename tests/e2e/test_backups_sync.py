@@ -26,6 +26,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceTypeSyncState,
     NetBoxManufacturerSyncState,
     NetBoxSiteSyncState,
+    NetBoxStorageSyncState,
     NetBoxVirtualMachineCreateBody,
     _relation_id,
 )
@@ -58,6 +59,7 @@ class TestBackupsSync:
         vm = cluster.vms[0]
 
         await self._setup_cluster_dependencies(nb, cluster, tag_refs)
+        storage_lookup = await self._setup_cluster_storages(nb, cluster, tag_refs)
 
         cluster_obj = await rest_reconcile_async(
             nb,
@@ -140,12 +142,13 @@ class TestBackupsSync:
 
         created_backups = []
         for backup in vm_backups:
+            storage = storage_lookup[backup.storage]
             netbox_backup = await rest_reconcile_async(
                 nb,
                 "/api/plugins/proxbox/backups/",
                 lookup={"volume_id": backup.volid},
                 payload={
-                    "storage": backup.storage,
+                    "storage": storage.id,
                     "virtual_machine": virtual_machine.id,
                     "subtype": backup.subtype,
                     "creation_time": None,
@@ -160,7 +163,7 @@ class TestBackupsSync:
                 },
                 schema=NetBoxBackupSyncState,
                 current_normalizer=lambda record: {
-                    "storage": record.get("storage"),
+                    "storage": _relation_id(record.get("storage")),
                     "virtual_machine": record.get("virtual_machine"),
                     "subtype": record.get("subtype"),
                     "creation_time": record.get("creation_time"),
@@ -202,6 +205,7 @@ class TestBackupsSync:
         cluster, all_backups = create_cluster_with_backups(prefix=unique_prefix)
 
         await self._setup_cluster_dependencies(nb, cluster, tag_refs)
+        storage_lookup = await self._setup_cluster_storages(nb, cluster, tag_refs)
 
         cluster_obj = await rest_reconcile_async(
             nb,
@@ -286,12 +290,13 @@ class TestBackupsSync:
             created_backups = []
 
             for backup in vm_backups:
+                storage = storage_lookup[backup.storage]
                 netbox_backup = await rest_reconcile_async(
                     nb,
                     "/api/plugins/proxbox/backups/",
                     lookup={"volume_id": backup.volid},
                     payload={
-                        "storage": backup.storage,
+                        "storage": storage.id,
                         "virtual_machine": virtual_machine.id,
                         "subtype": backup.subtype,
                         "creation_time": None,
@@ -306,7 +311,7 @@ class TestBackupsSync:
                     },
                     schema=NetBoxBackupSyncState,
                     current_normalizer=lambda record: {
-                        "storage": record.get("storage"),
+                        "storage": _relation_id(record.get("storage")),
                         "virtual_machine": record.get("virtual_machine"),
                         "subtype": record.get("subtype"),
                         "creation_time": record.get("creation_time"),
@@ -416,6 +421,45 @@ class TestBackupsSync:
                 "tags": record.get("tags"),
             },
         )
+
+    async def _setup_cluster_storages(self, nb, cluster, tag_refs: list[dict[str, Any]]):
+        """Create NetBox storage records for the cluster's backup stores."""
+        storage_lookup = {}
+        for storage in cluster.storage:
+            storage_name = storage.get("storage")
+            if not storage_name:
+                continue
+            storage_record = await rest_reconcile_async(
+                nb,
+                "/api/plugins/proxbox/storage/",
+                lookup={"cluster": cluster.name, "name": storage_name},
+                payload={
+                    "cluster": cluster.name,
+                    "name": storage_name,
+                    "storage_type": storage.get("type"),
+                    "content": storage.get("content"),
+                    "path": storage.get("path"),
+                    "nodes": storage.get("nodes"),
+                    "shared": bool(storage.get("shared")),
+                    "enabled": not bool(storage.get("disable")),
+                    "tags": tag_refs,
+                },
+                schema=NetBoxStorageSyncState,
+                current_normalizer=lambda record: {
+                    "cluster": record.get("cluster"),
+                    "name": record.get("name"),
+                    "storage_type": record.get("storage_type"),
+                    "content": record.get("content"),
+                    "path": record.get("path"),
+                    "nodes": record.get("nodes"),
+                    "shared": record.get("shared"),
+                    "enabled": record.get("enabled"),
+                    "backups": record.get("backups"),
+                    "tags": record.get("tags"),
+                },
+            )
+            storage_lookup[storage_name] = storage_record
+        return storage_lookup
 
     async def _get_cluster_type(self, nb, mode: str, tag_refs: list[dict[str, Any]]):
         """Get or create cluster type."""
