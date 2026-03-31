@@ -9,6 +9,7 @@ from proxbox_api.routes.virtualization.virtual_machines import (
     disks_vm,
     read_vm,
     snapshots_vm,
+    storages_vm,
     sync_vm,
 )
 from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
@@ -24,6 +25,7 @@ router = APIRouter()
 router.include_router(sync_vm.router)
 router.include_router(read_vm.router)
 router.include_router(disks_vm.router)
+router.include_router(storages_vm.router)
 router.include_router(backups_vm.router)
 router.include_router(snapshots_vm.router)
 

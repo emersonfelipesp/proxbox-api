@@ -41,6 +41,7 @@ def test_map_proxmox_vm_to_netbox_vm_body_uses_schema_driven_normalization(monke
     assert body["disk"] > 0
     assert body["tags"] == [7]
     assert body["custom_fields"]["proxmox_vm_id"] == 101
+    assert body["custom_fields"]["proxmox_vm_type"] == "qemu"
 
 
 def test_build_netbox_virtual_machine_payload_matches_mapper(monkeypatch):
@@ -59,6 +60,26 @@ def test_build_netbox_virtual_machine_payload_matches_mapper(monkeypatch):
     )
     assert payload["description"] == "Synced from Proxmox node pve01"
     assert payload["custom_fields"]["proxmox_qemu_agent"] is True
+
+
+def test_build_netbox_virtual_machine_payload_sets_lxc_vm_type(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.normalize.resolve_netbox_schema_contract",
+        lambda: {"source": "cache", "openapi": {"paths": {}}},
+    )
+
+    lxc_resource = dict(PROXMOX_VM_RESOURCE)
+    lxc_resource["type"] = "lxc"
+
+    payload = build_netbox_virtual_machine_payload(
+        proxmox_resource=lxc_resource,
+        proxmox_config=PROXMOX_VM_CONFIG,
+        cluster_id=11,
+        device_id=None,
+        role_id=None,
+        tag_ids=[7],
+    )
+    assert payload["custom_fields"]["proxmox_vm_type"] == "lxc"
 
 
 def test_build_virtual_machine_transform_requires_cluster_id(monkeypatch):
