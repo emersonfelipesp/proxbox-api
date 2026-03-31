@@ -17,6 +17,8 @@ Environment variables:
     PROXBOX_E2E_DEMO_URL: NetBox demo URL (default: https://demo.netbox.dev)
     PROXBOX_E2E_TIMEOUT: Browser timeout in seconds (default: 60)
     PROXBOX_E2E_HEADLESS: Run browser headless (default: true)
+    PROXBOX_IMAGE_E2E_BASE_URL: For ``image_http`` tests only — running container root URL
+    PROXBOX_IMAGE_E2E_TLS_INSECURE: Set to 1/true for mkcert HTTPS smoke (insecure TLS)
 """
 
 from __future__ import annotations
