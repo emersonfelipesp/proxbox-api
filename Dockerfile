@@ -19,6 +19,9 @@ FROM python:3.13-slim-bookworm
 
 WORKDIR /app
 
+# uv is not in the venv; include the binary so release CI can `uv sync` dev tools in-container.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PORT=8000 \
     PYTHONUNBUFFERED=1
