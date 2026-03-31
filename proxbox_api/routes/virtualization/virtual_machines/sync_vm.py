@@ -797,7 +797,8 @@ async def create_virtual_machines(
                         {
                             "object": "virtual_machine",
                             "data": {
-                                "error": "No IP address found; primary IP not set.",
+                                "completed": True,
+                                "warning": "No IP address found; primary IP not set.",
                                 "rowid": virtual_machine.get("name"),
                             },
                         }
