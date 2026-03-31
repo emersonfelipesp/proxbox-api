@@ -65,3 +65,11 @@ uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
 ```
 
 Garanta permissoes de leitura para o usuario do processo e renove/recarregue apos atualizar o certificado.
+
+## Verificar instalacao
+
+Abra:
+
+- Root: <http://127.0.0.1:8000/>
+- Swagger: <http://127.0.0.1:8000/docs>
+- ReDoc: <http://127.0.0.1:8000/redoc>
