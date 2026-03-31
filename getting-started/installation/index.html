@@ -1077,38 +1077,38 @@
 </ul>
 <h2 id="option-1-docker-recommended-for-quick-start">Option 1: Docker (recommended for quick start)<a class="headerlink" href="#option-1-docker-recommended-for-quick-start" title="Permanent link">&para;</a></h2>
 <p>Pull image:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>emersonfelipesp/proxbox-api:latest
-</code></pre></div>
+<p><code>bash
+docker pull emersonfelipesp/proxbox-api:latest</code></p>
 <p>Run container:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api<span class="w"> </span>emersonfelipesp/proxbox-api:latest
-</code></pre></div>
+<p><code>bash
+docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest</code></p>
 <p>Service URL:</p>
 <ul>
 <li><a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a></li>
 </ul>
 <h2 id="option-2-local-development-from-source">Option 2: Local development from source<a class="headerlink" href="#option-2-local-development-from-source" title="Permanent link">&para;</a></h2>
 <p>Clone repository:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
-</code></pre></div>
+<p><code>bash
+git clone https://github.com/emersonfelipesp/proxbox-api.git
+cd proxbox-api</code></p>
 <p>Install runtime dependencies:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
-</code></pre></div>
+<p><code>bash
+pip install -e .</code></p>
 <p>Or use <code>uv</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>uv<span class="w"> </span>sync
-</code></pre></div>
+<p><code>bash
+uv sync</code></p>
 <p>Run API:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
-</code></pre></div>
+<p><code>bash
+uv run fastapi run --host 0.0.0.0 --port 8000</code></p>
 <p>Alternative with uvicorn:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
-</code></pre></div>
+<p><code>bash
+uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload</code></p>
 <h2 id="tls-with-local-certificates">TLS with local certificates<a class="headerlink" href="#tls-with-local-certificates" title="Permanent link">&para;</a></h2>
 <p>If you need HTTPS locally, generate a certificate with <code>mkcert</code> and pass it to uvicorn:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>mkcert<span class="w"> </span>-install
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>mkcert<span class="w"> </span>proxbox.backend.local<span class="w"> </span>localhost<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>::1
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--ssl-keyfile<span class="o">=</span>./localhost+2-key.pem<span class="w"> </span>--ssl-certfile<span class="o">=</span>./localhost+2.pem
-</code></pre></div>
+<p><code>bash
+mkcert -install
+mkcert proxbox.backend.local localhost 127.0.0.1 ::1
+uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --ssl-keyfile=./localhost+2-key.pem --ssl-certfile=./localhost+2.pem</code></p>
 <h2 id="verify-installation">Verify installation<a class="headerlink" href="#verify-installation" title="Permanent link">&para;</a></h2>
 <p>Open:</p>
 <ul>

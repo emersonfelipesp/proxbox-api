@@ -1334,10 +1334,10 @@
 </ul>
 <h3 id="regra-singleton-do-netbox">Regra singleton do NetBox<a class="headerlink" href="#regra-singleton-do-netbox" title="Permanent link">&para;</a></h3>
 <p>Tentar criar um segundo endpoint retorna HTTP 400 com:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Only one NetBox endpoint is allowed&quot;</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
-</code></pre></div>
+<p><code>json
+{
+  "detail": "Only one NetBox endpoint is allowed"
+}</code></p>
 <h2 id="rotas-proxmox-proxmox">Rotas Proxmox (<code>/proxmox</code>)<a class="headerlink" href="#rotas-proxmox-proxmox" title="Permanent link">&para;</a></h2>
 <h3 id="crud-de-configuracao-de-endpoints">CRUD de configuracao de endpoints<a class="headerlink" href="#crud-de-configuracao-de-endpoints" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1458,9 +1458,8 @@
 </tbody>
 </table>
 <p>Exemplo de evento <code>step</code> para um dispositivo:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>event: step
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>data: {&quot;step&quot;:&quot;device&quot;,&quot;status&quot;:&quot;progress&quot;,&quot;message&quot;:&quot;Processing device pve01&quot;,&quot;rowid&quot;:&quot;pve01&quot;,&quot;payload&quot;:{&quot;object&quot;:&quot;device&quot;,&quot;type&quot;:&quot;create&quot;,&quot;data&quot;:{&quot;rowid&quot;:&quot;pve01&quot;,&quot;completed&quot;:false}}}
-</code></pre></div>
+<p><code>event: step
+data: {"step":"device","status":"progress","message":"Processing device pve01","rowid":"pve01","payload":{"object":"device","type":"create","data":{"rowid":"pve01","completed":false}}}</code></p>
 <p>Headers:</p>
 <ul>
 <li><code>Cache-Control: no-cache</code></li>
