@@ -305,21 +305,35 @@ async def rest_reconcile_async(
         return None
 
     async def _scan_existing() -> RestRecord | None:
-        records = await rest_list_async(nb, path, query={"limit": 200})
+        """Walk paginated list results — demo NetBox can have >>200 rows so the first page may miss a match."""
         candidates = _candidate_reuse_lookups(lookup, desired_payload)
-        for record in records:
-            try:
-                current_model = schema.model_validate(current_normalizer(record.serialize()))
-            except Exception:
-                logger.debug(
-                    "Skipping NetBox record during reconcile scan (validation failed)",
-                    exc_info=True,
-                )
-                continue
-            current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
-            for candidate in candidates:
-                if all(current_payload.get(key) == value for key, value in candidate.items()):
-                    return record
+        page_size = 200
+        max_offset = 10_000
+        offset = 0
+        while offset <= max_offset:
+            records = await rest_list_async(
+                nb,
+                path,
+                query={"limit": page_size, "offset": offset},
+            )
+            if not records:
+                return None
+            for record in records:
+                try:
+                    current_model = schema.model_validate(current_normalizer(record.serialize()))
+                except Exception:
+                    logger.debug(
+                        "Skipping NetBox record during reconcile scan (validation failed)",
+                        exc_info=True,
+                    )
+                    continue
+                current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+                for candidate in candidates:
+                    if all(current_payload.get(key) == value for key, value in candidate.items()):
+                        return record
+            if len(records) < page_size:
+                return None
+            offset += page_size
         return None
 
     async def _reconcile(existing_record: RestRecord) -> RestRecord:
@@ -341,9 +355,11 @@ async def rest_reconcile_async(
     if existing is None:
         try:
             return await rest_create_async(nb, path, desired_payload)
-        except ProxboxException as error:
+        except ProxboxException:
+            # Re-fetch and scan: list filters can miss rows (API quirks); duplicate errors
+            # are not always phrased with "already exists" / "must be unique".
             existing = await _find_existing()
-            if existing is None and _is_duplicate_error(error.detail):
+            if existing is None:
                 existing = await _scan_existing()
             if existing is not None:
                 return await _reconcile(existing)

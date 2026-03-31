@@ -13,7 +13,6 @@ from proxbox_api.proxmox_codegen.apidoc_parser import (
     flatten_api_schema,
     parse_api_schema,
 )
-from proxbox_api.proxmox_codegen.crawler import crawl_proxmox_api_viewer_async
 from proxbox_api.proxmox_codegen.models import GenerationBundle
 from proxbox_api.proxmox_codegen.normalize import normalize_captured_endpoints
 from proxbox_api.proxmox_codegen.openapi_generator import generate_openapi_schema
@@ -23,6 +22,21 @@ from proxbox_api.proxmox_codegen.pydantic_generator import (
 from proxbox_api.proxmox_codegen.utils import dump_json, ensure_parent, utc_now_iso
 
 LATEST_VERSION_TAG = "latest"
+
+_playwright_available: bool | None = None
+
+
+def _check_playwright_available() -> bool:
+    """Check if playwright is available for import."""
+    global _playwright_available
+    if _playwright_available is None:
+        try:
+            import playwright  # noqa: F401
+
+            _playwright_available = True
+        except ImportError:
+            _playwright_available = False
+    return _playwright_available
 
 
 def _normalized_viewer_url(url: str) -> str:
@@ -178,18 +192,29 @@ async def generate_proxmox_codegen_bundle_async(
         raise ValueError("version_tag cannot be empty.")
     _validate_source_for_version_tag(source_url=source_url, version_tag=cleaned_version_tag)
 
-    viewer_capture = await crawl_proxmox_api_viewer_async(
-        url=source_url,
-        worker_count=worker_count,
-        retry_count=retry_count,
-        retry_backoff_seconds=retry_backoff_seconds,
-        checkpoint_path=(
-            str(Path(output_dir) / cleaned_version_tag / "crawl_checkpoint.json")
-            if output_dir is not None
-            else None
-        ),
-        checkpoint_every=checkpoint_every,
-    )
+    if _check_playwright_available():
+        from proxbox_api.proxmox_codegen.crawler import crawl_proxmox_api_viewer_async
+
+        viewer_capture = await crawl_proxmox_api_viewer_async(
+            url=source_url,
+            worker_count=worker_count,
+            retry_count=retry_count,
+            retry_backoff_seconds=retry_backoff_seconds,
+            checkpoint_path=(
+                str(Path(output_dir) / cleaned_version_tag / "crawl_checkpoint.json")
+                if output_dir is not None
+                else None
+            ),
+            checkpoint_every=checkpoint_every,
+        )
+    else:
+        viewer_capture = {
+            "endpoints": {},
+            "discovered_navigation_items": 0,
+            "method_count": 0,
+            "failed_endpoint_count": 0,
+            "duration_seconds": 0.0,
+        }
 
     apidoc_source = fetch_apidoc_js(url=_viewer_apidoc_js_url(source_url))
     apidoc_tree = parse_api_schema(apidoc_source)

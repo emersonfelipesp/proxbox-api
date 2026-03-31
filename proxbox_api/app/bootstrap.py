@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.exc import OperationalError
@@ -37,9 +38,23 @@ def init_database_and_netbox() -> None:
     try:
         create_db_and_tables()
         database_session = next(get_session())
-        netbox_session = get_netbox_session(database_session=database_session)
-        NetBoxBase.nb = netbox_session
-        init_ok = True
+        skip_netbox = os.environ.get("PROXBOX_SKIP_NETBOX_BOOTSTRAP", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if skip_netbox:
+            netbox_session = None
+            NetBoxBase.nb = None
+            init_ok = True
+            logger.info(
+                "Skipping NetBox API bootstrap (PROXBOX_SKIP_NETBOX_BOOTSTRAP); "
+                "no default NetBox client until an endpoint is configured"
+            )
+        else:
+            netbox_session = get_netbox_session(database_session=database_session)
+            NetBoxBase.nb = netbox_session
+            init_ok = True
     except Exception as error:  # noqa: BLE001
         last_init_error = str(error)
         logger.exception("Database or NetBox client bootstrap failed")

@@ -1399,10 +1399,14 @@ docs = [
     { name = "mkdocs-static-i18n" },
 ]
 e2e = [
+    { name = "httpx" },
     { name = "playwright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-xdist" },
+]
+playwright = [
+    { name = "playwright" },
 ]
 test = [
     { name = "httpx" },
@@ -1421,12 +1425,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.135.2" },
+    { name = "httpx", marker = "extra == 'e2e'", specifier = ">=0.28.1" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7.6" },
     { name = "mkdocs-static-i18n", marker = "extra == 'docs'", specifier = ">=1.3.1" },
     { name = "netbox-sdk", specifier = ">=0.0.6" },
     { name = "playwright", marker = "extra == 'e2e'", specifier = ">=1.58.0" },
+    { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
     { name = "proxmoxer", specifier = ">=2.3.0" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.2" },
@@ -1438,7 +1444,7 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.6.1" },
     { name = "sqlmodel", specifier = ">=0.0.37" },
 ]
-provides-extras = ["test", "e2e", "docs"]
+provides-extras = ["test", "e2e", "playwright", "docs"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.15.8" }]

@@ -11,6 +11,8 @@ on:
         type: string
         required: false
         default: ""
+  pull_request:
+    branches: [main, testing]
   workflow_dispatch:
     inputs:
       git_ref:
@@ -81,6 +83,7 @@ jobs:
           # tests/ is bind-mounted read-only; keep bytecode out of the tree
           export PYTHONPYCACHEPREFIX=/tmp/pycache
           mkdir -p "$PYTHONPYCACHEPREFIX"
+          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
@@ -137,7 +140,7 @@ jobs:
             /tmp/docker-tests.sh
 
   docker-runtime:
-    if: github.event_name == 'workflow_call' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
+    if: github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
     name: Docker Hub — runtime (nginx + uvicorn)
     runs-on: ubuntu-latest
     steps:
@@ -194,6 +197,7 @@ jobs:
           # tests/ is bind-mounted read-only; keep bytecode out of the tree
           export PYTHONPYCACHEPREFIX=/tmp/pycache
           mkdir -p "$PYTHONPYCACHEPREFIX"
+          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
@@ -232,6 +236,8 @@ jobs:
           tags: |
             type=raw,value=${{ steps.version.outputs.tag }}
             type=raw,value=latest
+            type=ref,event=pr
+            type=sha
 
       - name: Build and push Docker image (runtime)
         uses: docker/build-push-action@v6
@@ -258,7 +264,7 @@ jobs:
           done
 
   docker-mkcert:
-    if: github.event_name == 'workflow_call' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
+    if: github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
     name: Docker Hub — mkcert (nginx + HTTPS + uvicorn)
     runs-on: ubuntu-latest
     steps:
@@ -315,6 +321,7 @@ jobs:
           # tests/ is bind-mounted read-only; keep bytecode out of the tree
           export PYTHONPYCACHEPREFIX=/tmp/pycache
           mkdir -p "$PYTHONPYCACHEPREFIX"
+          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
