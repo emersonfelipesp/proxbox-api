@@ -86,6 +86,7 @@ async def create_storages(
                     "nodes": item.get("nodes"),
                     "shared": item.get("shared"),
                     "enabled": item.get("enabled"),
+                    "backups": item.get("backups"),
                     "tags": item.get("tags"),
                 },
         )

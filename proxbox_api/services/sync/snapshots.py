@@ -14,13 +14,108 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxSnapshotSyncState,
 )
 from proxbox_api.services.proxmox_helpers import get_vm_snapshots
+from proxbox_api.services.sync.storage_links import (
+    build_storage_index,
+    find_storage_record,
+    storage_name_from_volume_id,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
 
 
-async def create_netbox_snapshots(snapshot, netbox_session, vmid, node):
+def _normalize_vmid(vmid):
+    """Normalize VMID values for safe cross-system comparisons."""
+    if vmid is None:
+        return None
+    vmid_str = str(vmid).strip()
+    return vmid_str or None
+
+
+def _extract_proxmox_vmid(vm: dict) -> str | None:
+    """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
+    top_level_keys = (
+        "cf_proxmox_vm_id",
+        "proxmox_vm_id",
+        "cf_proxmox_vmid",
+        "proxmox_vmid",
+    )
+    for key in top_level_keys:
+        normalized = _normalize_vmid(vm.get(key))
+        if normalized:
+            return normalized
+
+    custom_fields = vm.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        custom_field_keys = (
+            "proxmox_vm_id",
+            "cf_proxmox_vm_id",
+            "proxmox_vmid",
+            "cf_proxmox_vmid",
+        )
+        for key in custom_field_keys:
+            normalized = _normalize_vmid(custom_fields.get(key))
+            if normalized:
+                return normalized
+    return None
+
+
+async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
+    nb = netbox_session
+    try:
+        storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
+    except Exception as error:
+        logger.warning("Error loading storage records for snapshot sync: %s", error)
+        return {}
+    return build_storage_index(storage_records)
+
+
+async def _resolve_snapshot_storage_record(
+    netbox_session,
+    *,
+    vm_id: int,
+    cluster_name: str | None,
+    storage_index: dict[tuple[str, str], dict],
+) -> dict | None:
+    nb = netbox_session
+    try:
+        virtual_disks = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-disks/",
+            query={"virtual_machine_id": int(vm_id), "ordering": "name"},
+        )
+    except Exception as error:
+        logger.warning(
+            "Error loading virtual disks for snapshot storage resolution (vmid=%s): %s",
+            vm_id,
+            error,
+        )
+        return None
+
+    for disk in virtual_disks or []:
+        disk_name = disk.get("name")
+        storage_name = storage_name_from_volume_id(disk_name)
+        if not storage_name:
+            continue
+        storage_record = find_storage_record(
+            storage_index,
+            cluster_name=cluster_name,
+            storage_name=storage_name,
+        )
+        if storage_record:
+            return storage_record
+
+    return None
+
+
+async def create_netbox_snapshots(
+    snapshot,
+    netbox_session,
+    vmid,
+    node,
+    storage_record: dict | None = None,
+):
     """
     Create or update a snapshot in NetBox.
 
@@ -65,6 +160,7 @@ async def create_netbox_snapshots(snapshot, netbox_session, vmid, node):
 
         snapshot_payload = {
             "virtual_machine": virtual_machine.get("id"),
+            "storage": storage_record.get("id") if storage_record else None,
             "name": snapshot_name,
             "description": snapshot.get("description", ""),
             "vmid": int(vmid),
@@ -83,6 +179,7 @@ async def create_netbox_snapshots(snapshot, netbox_session, vmid, node):
             schema=NetBoxSnapshotSyncState,
             current_normalizer=lambda record: {
                 "virtual_machine": record.get("virtual_machine"),
+                "storage": record.get("storage"),
                 "name": record.get("name"),
                 "description": record.get("description"),
                 "vmid": record.get("vmid"),
@@ -190,7 +287,7 @@ async def create_virtual_machine_snapshots(
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
-    vms_with_proxmox_id = [vm for vm in vms if vm.get("cf_proxmox_vm_id")]
+    vms_with_proxmox_id = [vm for vm in vms if _extract_proxmox_vmid(vm)]
     vms = vms_with_proxmox_id
 
     if not vms:
@@ -212,12 +309,13 @@ async def create_virtual_machine_snapshots(
     created = 0
     updated = 0
     skipped = 0
+    storage_index = await _load_storage_index(nb)
 
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
 
     for vm in vms:
-        vmid = vm.get("cf_proxmox_vm_id")
+        vmid = _extract_proxmox_vmid(vm)
         vm_name = vm.get("name", "unknown")
 
         if not vmid:
@@ -244,12 +342,22 @@ async def create_virtual_machine_snapshots(
                 proxmox_type = "qemu"
 
             node_name = node
+            cluster_name = None
 
             if not node_name and cluster_resources:
-                for cluster_key, resources in cluster_resources.items():
+                for cluster in cluster_resources:
+                    if not isinstance(cluster, dict):
+                        continue
+                    cluster_items = list(cluster.items())
+                    if not cluster_items:
+                        continue
+                    cluster_key, resources = cluster_items[0]
+                    if not isinstance(resources, list):
+                        continue
                     for resource in resources:
-                        if resource.get("vmid") == vmid:
+                        if _normalize_vmid(resource.get("vmid")) == vmid:
                             node_name = resource.get("node")
+                            cluster_name = cluster_key
                             break
                     if node_name:
                         break
@@ -258,6 +366,7 @@ async def create_virtual_machine_snapshots(
                 for cs in cluster_status:
                     if hasattr(cs, "node_list") and cs.node_list:
                         node_name = cs.node_list[0].name
+                        cluster_name = getattr(cs, "name", None)
                         break
 
             if not node_name:
@@ -279,6 +388,20 @@ async def create_virtual_machine_snapshots(
                         }
                     )
                 continue
+
+            if not cluster_name:
+                for cs in cluster_status:
+                    if getattr(cs, "node_list", None):
+                        if any(node_item.name == node_name for node_item in cs.node_list):
+                            cluster_name = getattr(cs, "name", None)
+                            break
+
+            storage_record = await _resolve_snapshot_storage_record(
+                nb,
+                vm_id=int(vmid),
+                cluster_name=cluster_name,
+                storage_index=storage_index,
+            )
 
             snapshot_tasks = []
             proxmox_snapshot_names = set()
@@ -312,7 +435,13 @@ async def create_virtual_machine_snapshots(
                     if snap_name:
                         proxmox_snapshot_names.add(snap_name)
                         snapshot_tasks.append(
-                            create_netbox_snapshots(snapshot, nb, vmid, node_name)
+                            create_netbox_snapshots(
+                                snapshot,
+                                nb,
+                                vmid,
+                                node_name,
+                                storage_record=storage_record,
+                            )
                         )
 
             if snapshot_tasks:
