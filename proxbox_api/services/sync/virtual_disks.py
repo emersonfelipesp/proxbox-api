@@ -1,17 +1,52 @@
 """Virtual disks synchronization service from Proxmox to NetBox."""
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import (
-    rest_list_async,
-    rest_reconcile_async,
-)
-from proxbox_api.proxmox_to_netbox.models import (
-    NetBoxVirtualDiskSyncState,
-    ProxmoxVmConfigInput,
-)
+from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
 from proxbox_api.routes.proxmox import get_vm_config
+from proxbox_api.services.sync.storage_links import (
+    build_storage_index,
+    find_storage_record,
+    storage_name_from_volume_id,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
+
+
+def _normalize_vmid(vmid):
+    """Normalize VMID values for safe cross-system comparisons."""
+    if vmid is None:
+        return None
+    vmid_str = str(vmid).strip()
+    return vmid_str or None
+
+
+def _extract_proxmox_vmid(vm: dict) -> str | None:
+    """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
+    top_level_keys = (
+        "cf_proxmox_vm_id",
+        "proxmox_vm_id",
+        "cf_proxmox_vmid",
+        "proxmox_vmid",
+    )
+    for key in top_level_keys:
+        normalized = _normalize_vmid(vm.get(key))
+        if normalized:
+            return normalized
+
+    custom_fields = vm.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        custom_field_keys = (
+            "proxmox_vm_id",
+            "cf_proxmox_vm_id",
+            "proxmox_vmid",
+            "cf_proxmox_vmid",
+        )
+        for key in custom_field_keys:
+            normalized = _normalize_vmid(custom_fields.get(key))
+            if normalized:
+                return normalized
+    return None
 
 
 async def create_virtual_disks(
@@ -69,8 +104,15 @@ async def create_virtual_disks(
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
-    vms_with_proxmox_id = [vm for vm in vms if vm.get("cf_proxmox_vm_id")]
+    vms_with_proxmox_id = [vm for vm in vms if _extract_proxmox_vmid(vm)]
     vms = vms_with_proxmox_id
+
+    storage_index: dict[tuple[str, str], dict] = {}
+    try:
+        storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
+        storage_index = build_storage_index(storage_records)
+    except Exception as error:
+        logger.warning("Error loading storage records for virtual disk sync: %s", error)
 
     if not vms:
         logger.info("No VMs found with cf_proxmox_vm_id set")
@@ -95,7 +137,7 @@ async def create_virtual_disks(
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
 
     for vm in vms:
-        vmid = vm.get("cf_proxmox_vm_id")
+        vmid = _extract_proxmox_vmid(vm)
         vm_name = vm.get("name", "unknown")
         vm_id = vm.get("id")
 
@@ -142,7 +184,7 @@ async def create_virtual_disks(
                     if cluster_name_key:
                         resources = cluster[cluster_name_key]
                         for resource in resources:
-                            if resource.get("vmid") == vmid:
+                            if _normalize_vmid(resource.get("vmid")) == vmid:
                                 node_name = resource.get("node")
                                 cluster_name = cluster_name_key
                                 break
@@ -208,6 +250,12 @@ async def create_virtual_disks(
             disks_updated = 0
 
             for disk_entry in disk_entries:
+                storage_name = disk_entry.storage_name or storage_name_from_volume_id(disk_entry.storage)
+                storage_record = find_storage_record(
+                    storage_index,
+                    cluster_name=cluster_name,
+                    storage_name=storage_name,
+                )
                 result = await rest_reconcile_async(
                     nb,
                     "/api/virtualization/virtual-disks/",
@@ -219,6 +267,7 @@ async def create_virtual_disks(
                         "virtual_machine": vm_id,
                         "name": disk_entry.name,
                         "size": disk_entry.size,
+                        "storage": storage_record.get("id") if storage_record else None,
                         "description": disk_entry.description,
                         "tags": tag_refs,
                     },
@@ -227,6 +276,7 @@ async def create_virtual_disks(
                         "virtual_machine": record.get("virtual_machine"),
                         "name": record.get("name"),
                         "size": record.get("size"),
+                        "storage": record.get("storage"),
                         "description": record.get("description"),
                         "tags": record.get("tags"),
                     },

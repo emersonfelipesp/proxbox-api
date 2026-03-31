@@ -8,31 +8,24 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from proxbox_api.dependencies import (
-    NetBoxSessionDep,  # NetBox Session
-    ProxboxTagDep,  # Proxbox Tag
-)
-from proxbox_api.exception import ProxboxException  # Proxbox Exception
+from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-
-# NetBox compatibility wrappers
 from proxbox_api.netbox_rest import (
     rest_create_async,
     rest_list,
     rest_list_async,
     rest_reconcile_async,
 )
-from proxbox_api.proxmox_to_netbox.models import (
-    NetBoxBackupSyncState,
+from proxbox_api.proxmox_to_netbox.models import NetBoxBackupSyncState
+from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.services.proxmox_helpers import dump_models, get_node_storage_content
+from proxbox_api.services.sync.storage_links import (
+    build_storage_index,
+    find_storage_record,
+    storage_name_from_volume_id,
 )
-from proxbox_api.routes.proxmox.cluster import (
-    ClusterStatusDep,
-)  # Cluster Status and Resources
-from proxbox_api.services.proxmox_helpers import (
-    dump_models,
-    get_node_storage_content,
-)
-from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
+from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
@@ -51,7 +44,32 @@ def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
     return out
 
 
-async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
+def _relation_id_or_none(value):
+    if isinstance(value, dict):
+        value = value.get("id")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
+    nb = netbox_session
+    try:
+        storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
+    except Exception as error:
+        logger.warning("Error loading storage records for backup sync: %s", error)
+        return {}
+    return build_storage_index(storage_records)
+
+
+async def create_netbox_backups(
+    backup,
+    netbox_session: NetBoxSessionDep,
+    *,
+    cluster_name: str | None = None,
+    storage_index: dict[tuple[str, str], dict] | None = None,
+):
     nb = netbox_session
     vmid_log: str | int | None = None
     try:
@@ -81,7 +99,12 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
 
         # Process storage and volume data
         volume_id = backup.get("volid", None)
-        storage_name = volume_id.split(":")[0] if volume_id else None
+        storage_name = storage_name_from_volume_id(volume_id)
+        storage_record = find_storage_record(
+            storage_index or {},
+            cluster_name=cluster_name,
+            storage_name=storage_name,
+        )
 
         # Process creation time
         creation_time = None
@@ -90,7 +113,7 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
             creation_time = datetime.fromtimestamp(ctime).isoformat()
 
         backup_payload = {
-            "storage": storage_name,
+            "storage": storage_record.get("id") if storage_record else None,
             "virtual_machine": virtual_machine.get("id"),
             "subtype": backup.get("subtype"),
             "creation_time": creation_time,
@@ -110,7 +133,7 @@ async def create_netbox_backups(backup, netbox_session: NetBoxSessionDep):
             payload=backup_payload,
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
-                "storage": record.get("storage"),
+                "storage": _relation_id_or_none(record.get("storage")),
                 "virtual_machine": record.get("virtual_machine"),
                 "subtype": record.get("subtype"),
                 "creation_time": record.get("creation_time"),
@@ -169,6 +192,7 @@ async def get_node_backups(
     node: str,
     storage: str,
     netbox_session: NetBoxSessionDep,
+    storage_index: dict[tuple[str, str], dict] | None = None,
     vmid: str | None = None,
 ) -> tuple[list, set[str]]:
     nb = netbox_session
@@ -180,6 +204,7 @@ async def get_node_backups(
     """
     for proxmox, cluster in zip(pxs, cluster_status):
         if cluster and cluster.node_list:
+            cluster_name = getattr(cluster, "name", None)
             for cluster_node in cluster.node_list:
                 if cluster_node.name == node:
                     try:
@@ -197,7 +222,12 @@ async def get_node_backups(
 
                         volids = _volids_from_proxmox_storage_backup_items(backups)
                         tasks = [
-                            create_netbox_backups(backup, nb)
+                            create_netbox_backups(
+                                backup,
+                                nb,
+                                cluster_name=cluster_name,
+                                storage_index=storage_index,
+                            )
                             for backup in backups
                             if backup.get("content") == "backup"
                         ]
@@ -232,8 +262,15 @@ async def create_virtual_machine_backups(
         Query(title="VM ID", description="The ID of the VM to retrieve the content for."),
     ] = None,
 ):
+    storage_index = await _load_storage_index(netbox_session)
     backup_tasks, _volids = await get_node_backups(
-        pxs, cluster_status, node, storage, netbox_session=netbox_session, vmid=vmid
+        pxs,
+        cluster_status,
+        node,
+        storage,
+        netbox_session=netbox_session,
+        storage_index=storage_index,
+        vmid=vmid,
     )
     if not backup_tasks:
         raise ProxboxException(message="Node or Storage not found.")
@@ -258,6 +295,7 @@ async def _create_all_virtual_machine_backups(
     failure_count = 0
     deleted_count = 0
     backup_sync_ok = False
+    storage_index = await _load_storage_index(nb)
 
     try:
         if use_websocket and websocket:
@@ -276,6 +314,7 @@ async def _create_all_virtual_machine_backups(
 
         async def _discover_backups_for_node_storage(
             proxmox,
+            cluster_name: str,
             node_name: str,
             storage_name: str,
         ) -> tuple[list, set[str]]:
@@ -292,13 +331,19 @@ async def _create_all_virtual_machine_backups(
                 )
             volids = _volids_from_proxmox_storage_backup_items(backups)
             tasks = [
-                create_netbox_backups(backup, nb)
+                create_netbox_backups(
+                    backup,
+                    nb,
+                    cluster_name=cluster_name,
+                    storage_index=storage_index,
+                )
                 for backup in backups
                 if backup.get("content") == "backup"
             ]
             return tasks, volids
 
         for proxmox, cluster in zip(pxs, cluster_status):
+            cluster_name = getattr(cluster, "name", None) if cluster else None
             storage_list = [
                 {
                     "storage": storage_dict.get("storage"),
@@ -318,6 +363,7 @@ async def _create_all_virtual_machine_backups(
                                 asyncio.create_task(
                                     _discover_backups_for_node_storage(
                                         proxmox=proxmox,
+                                        cluster_name=cluster_name,
                                         node_name=cluster_node.name,
                                         storage_name=storage.get("storage"),
                                     )

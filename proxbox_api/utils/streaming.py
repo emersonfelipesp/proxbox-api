@@ -83,6 +83,9 @@ class WebSocketSSEBridge:
             return f"{object_name} stream completed"
         data = payload.get("data")
         if isinstance(data, dict):
+            warning = data.get("warning")
+            if warning:
+                return str(warning)
             error = data.get("error")
             if error:
                 return str(error)

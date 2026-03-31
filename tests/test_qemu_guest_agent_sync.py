@@ -71,6 +71,11 @@ def _install_common_sync_patches(
             return SimpleNamespace(id=33, name=payload.get("name"))
         return {"id": 99}
 
+    async def _fake_rest_list(_nb, path, **kwargs):
+        if path == "/api/plugins/proxbox/storage/":
+            return []
+        return []
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
         _fake_get_vm_config,
@@ -110,6 +115,10 @@ def _install_common_sync_patches(
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_reconcile_async",
         _fake_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
+        _fake_rest_list,
     )
 
 
@@ -265,6 +274,46 @@ def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
     assert interface_payloads and interface_payloads[0]["name"] == "net0"
 
 
+def test_vm_sync_populates_task_history(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 0,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    ip_payloads: list[dict] = []
+    _install_common_sync_patches(
+        monkeypatch,
+        vm_config=data["vm_config"],
+        ip_payloads=ip_payloads,
+    )
+    task_history_calls: list[dict] = []
+
+    async def _fake_task_history(**kwargs):
+        task_history_calls.append(kwargs)
+        return 2
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
+        _fake_task_history,
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert len(result) == 1
+    assert task_history_calls and task_history_calls[0]["virtual_machine_id"] == 55
+    assert task_history_calls[0]["vm_type"] == "qemu"
+
+
 def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
     data = _vm_sync_inputs(
         {
@@ -291,3 +340,44 @@ def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
     )
     assert len(result) == 1
     assert ip_payloads and ip_payloads[0]["address"] == "10.0.0.22/24"
+
+
+def test_vm_sync_marks_missing_primary_ip_as_warning(monkeypatch):
+    data = _vm_sync_inputs({"agent": 0, "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0"})
+    ip_payloads: list[dict] = []
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+
+    class _WebSocket:
+        def __init__(self):
+            self.payloads: list[dict] = []
+
+        async def send_json(self, payload: dict):
+            self.payloads.append(payload)
+
+    websocket = _WebSocket()
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            websocket=websocket,
+            use_websocket=True,
+        )
+    )
+
+    assert len(result) == 1
+    warning_payloads = [
+        payload
+        for payload in websocket.payloads
+        if payload.get("object") == "virtual_machine"
+        and isinstance(payload.get("data"), dict)
+        and payload["data"].get("warning")
+    ]
+    assert warning_payloads
+    assert warning_payloads[0]["data"]["completed"] is True
+    assert "No IP address found; primary IP not set." in warning_payloads[0]["data"]["warning"]
+    assert not ip_payloads
