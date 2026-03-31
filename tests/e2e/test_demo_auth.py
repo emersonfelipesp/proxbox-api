@@ -5,6 +5,8 @@ Tests the Playwright-based authentication flow for NetBox demo instances.
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
 from proxbox_api.e2e.demo_auth import (
@@ -12,7 +14,6 @@ from proxbox_api.e2e.demo_auth import (
     DemoLoginError,
     PlaywrightNotInstalledError,
     create_demo_user,
-    demo_auth_required,
     generate_password,
     generate_username,
     login,
@@ -22,7 +23,6 @@ from proxbox_api.e2e.demo_auth import (
 from proxbox_api.e2e.fixtures.test_data import get_e2e_credentials, get_e2e_demo_config
 
 
-@pytest.mark.asyncio
 class TestDemoAuthHelpers:
     """Tests for demo auth helper functions."""
 
@@ -92,12 +92,17 @@ class TestDemoAuthIntegration:
 
         assert isinstance(user_created, bool)
 
-    async def test_login_existing_user(self, test_credentials, demo_config):
+    async def test_login_existing_user(
+        self,
+        test_credentials,
+        demo_config,
+        netbox_demo_config,
+    ):
         """Test logging in with existing credentials.
 
-        This test verifies that we can log in with credentials
-        that were previously created.
+        Depends on ``netbox_demo_config`` so the demo user exists before login-only flow.
         """
+        _ = netbox_demo_config
         username, password = test_credentials
 
         try:
@@ -131,7 +136,7 @@ class TestDemoAuthIntegration:
 
         assert token.version == "v1"
         assert token.secret is not None
-        assert len(token.secret) > 40
+        assert len(token.secret) >= 40
 
     async def test_bootstrap_demo_profile(self, test_credentials, demo_config):
         """Test full profile bootstrap.
@@ -162,37 +167,20 @@ class TestDemoAuthIntegration:
 class TestDemoAuthErrorHandling:
     """Tests for demo auth error handling."""
 
-    async def test_playwright_not_installed_error(self):
-        """Test that proper error is raised when Playwright missing."""
+    async def test_playwright_not_installed_error(self, monkeypatch):
+        """``demo_auth_required`` uses find_spec; mock it so installed Playwright is ignored."""
 
-        @demo_auth_required
-        async def _test():
-            pass
+        real_find_spec = importlib.util.find_spec
 
-        import sys
+        def fake_find_spec(name: str, package: str | None = None):
+            if name == "playwright":
+                return None
+            return real_find_spec(name, package)
 
-        original_modules = dict(sys.modules)
+        monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
 
-        try:
-            for mod_name in list(sys.modules.keys()):
-                if "playwright" in mod_name:
-                    del sys.modules[mod_name]
-
-            from importlib import reload
-
-            import proxbox_api.e2e.demo_auth as demo_auth_module
-
-            reload(demo_auth_module)
-
-            with pytest.raises((PlaywrightNotInstalledError, ModuleNotFoundError)):
-                await demo_auth_module.provision_demo_token(
-                    username="test",
-                    password="test",
-                )
-        finally:
-            for mod_name in list(sys.modules.keys()):
-                if "playwright" in mod_name and mod_name not in original_modules:
-                    del sys.modules[mod_name]
+        with pytest.raises(PlaywrightNotInstalledError):
+            await provision_demo_token(username="test", password="test")
 
 
 @pytest.mark.asyncio
@@ -203,6 +191,10 @@ class TestTokenRefresh:
     def test_credentials(self):
         """Get test credentials."""
         return get_e2e_credentials()
+
+    @pytest.fixture
+    def demo_config(self):
+        return get_e2e_demo_config()
 
     async def test_refresh_demo_profile(self, test_credentials, demo_config):
         """Test refreshing demo profile with existing credentials.

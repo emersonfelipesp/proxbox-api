@@ -7,14 +7,13 @@ include = ["proxbox_api*"]
 
 [project]
 name = "proxbox_api"
-version = "0.0.3"
+version = "0.0.4"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.135.2",
     "proxmoxer>=2.3.0",
-    "pynetbox>=7.6.1",
     "netbox-sdk>=0.0.6",
     "sqlmodel>=0.0.37",
 ]
@@ -62,6 +61,8 @@ show_missing = true
 
 [tool.uv]
 default-groups = ["dev"]
+# Raise transitive Pygments (pytest / MkDocs stack) above Dependabot-patched floor.
+constraint-dependencies = ["pygments>=2.20.0"]
 
 [tool.ruff]
 target-version = "py311"
@@ -75,12 +76,21 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103"]
 
 [tool.ruff.lint.per-file-ignores]
-"proxbox_api/main.py" = ["E402"]
-"proxbox_api/routes/proxmox/__init__.py" = ["F403", "F405", "E402"]
-"proxbox_api/routes/proxmox/cluster.py" = ["F403", "F405"]
+"proxbox_api/**/*.py" = ["ANN201", "D103"]
+# Pytest tests: public test_* names trigger ANN201/D103; keep checks focused on package code.
+"tests/**/*.py" = ["ANN201", "D103"]
+"scripts/**/*.py" = ["D103"]
+"proxbox_api/app/**/*.py" = []
+"proxbox_api/netbox_async_bridge.py" = []
+"proxbox_api/services/sync/device_ensure.py" = []
+"proxbox_api/session/proxmox_core.py" = []
+"proxbox_api/session/proxmox_providers.py" = []
+"proxbox_api/main.py" = ["E402", "ANN201", "D103"]
+"proxbox_api/routes/proxmox/__init__.py" = ["F403", "F405", "E402", "ANN201", "D103"]
+"proxbox_api/routes/proxmox/cluster.py" = ["F403", "F405", "ANN201", "D103"]
 
 [tool.ruff.format]
 quote-style = "double"

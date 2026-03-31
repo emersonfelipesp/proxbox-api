@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Utility helpers and decorators shared across synchronization workflows.
+Utility helpers shared across synchronization workflows (SSE streaming, status HTML).
 
 ## Modules and Responsibilities
 
-- `__init__.py`: Utility package exports for decorators and status helpers.
-- `sync_decorator.py`: Decorator that tracks sync process lifecycle in NetBox. Creates sync-process records in NetBox before sync starts and finalizes them (with status and runtime) on completion or error.
+- `__init__.py`: Re-exports `return_status_html` from `status_html.py`.
+- `status_html.py`: `return_status_html(status, use_css)` for sync status badges/text in HTML responses.
 - `streaming.py`: Server-Sent Event (SSE) helpers for streaming sync progress to HTTP clients.
   - `sse_event(event, data)`: serializes one SSE frame as `event: <name>\ndata: <json>\n\n`.
   - `WebSocketSSEBridge`: compatibility bridge that accepts websocket-style `send_json(payload)` calls from sync services and converts them into SSE frames via an internal `asyncio.Queue`. Key methods:
@@ -19,12 +19,10 @@ Utility helpers and decorators shared across synchronization workflows.
 
 ## Key Data Flow and Dependencies
 
-- `sync_decorator.py` wraps sync functions to create and finalize sync process records.
-- `streaming.py` is consumed by route handlers in `main.py`, `routes/dcim/`, and `routes/virtualization/virtual_machines/` to produce SSE streaming responses.
-- `__init__.py` re-exports helper functions consumed by routes and services.
+- `streaming.py` is consumed by route handlers in `app/full_update.py`, `routes/dcim/`, and `routes/virtualization/virtual_machines/` to produce SSE streaming responses.
+- `return_status_html` is used by virtualization sync routes and services.
 
 ## Extension Guidance
 
 - Keep utility code generic and free from route-specific assumptions.
-- When adding decorators, ensure both success and failure paths update sync state.
 - When adding new SSE events, emit through `WebSocketSSEBridge` rather than raw `yield sse_event(...)` to preserve payload normalization.

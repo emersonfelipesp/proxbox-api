@@ -27,6 +27,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceTypeSyncState,
     NetBoxManufacturerSyncState,
     NetBoxSiteSyncState,
+    _relation_id,
 )
 
 
@@ -150,7 +151,7 @@ class TestDevicesSync:
             },
         )
 
-        from proxbox_api.services.sync.devices import _slugify
+        from proxbox_api.services.sync.device_ensure import _slugify
 
         site_name = f"Proxmox Default Site - {cluster_name}"
         site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
@@ -202,8 +203,8 @@ class TestDevicesSync:
 
         assert device is not None
         assert device.name == node_name
-        assert device.cluster == cluster_obj.id
-        assert device.site == site.id
+        assert _relation_id(device.cluster) == cluster_obj.id
+        assert _relation_id(device.site) == site.id
 
         devices = await rest_list_async(
             nb,
@@ -329,7 +330,7 @@ class TestDevicesSync:
             },
         )
 
-        from proxbox_api.services.sync.devices import _slugify
+        from proxbox_api.services.sync.device_ensure import _slugify
 
         site_name = f"Proxmox Default Site - {cluster.name}"
         site_slug = f"proxmox-default-site-{_slugify(cluster.name)}"
@@ -481,7 +482,7 @@ class TestDevicesSync:
                 },
             )
 
-            from proxbox_api.services.sync.devices import _slugify
+            from proxbox_api.services.sync.device_ensure import _slugify
 
             site_name = f"Proxmox Default Site - {cluster.name}"
             site_slug = f"proxmox-default-site-{_slugify(cluster.name)}"
@@ -660,7 +661,7 @@ class TestDevicesSync:
             },
         )
 
-        from proxbox_api.services.sync.devices import _slugify
+        from proxbox_api.services.sync.device_ensure import _slugify
 
         site_name = f"Proxmox Default Site - {cluster_name}"
         site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"

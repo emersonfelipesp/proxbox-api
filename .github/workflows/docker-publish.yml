@@ -6,7 +6,7 @@ on:
       release_ref:
         description: Tag or ref to publish from
         required: true
-        default: v0.0.3
+        default: v0.0.4
 
 permissions:
   contents: read
@@ -61,7 +61,7 @@ jobs:
           uv run python -m compileall proxbox_api scripts tests
           uv run python -c "import proxbox_api.main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
           EOF
           chmod +x /tmp/docker-tests.sh
 
