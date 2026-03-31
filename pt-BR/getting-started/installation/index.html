@@ -427,6 +427,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#tls-sem-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS sem Docker
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TLS sem Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#certificados-locais-mkcert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Certificados locais (mkcert)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#certificado-publico-lets-encrypt-ou-corporativo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Certificado publico (Let's Encrypt) ou corporativo
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -998,6 +1037,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#tls-sem-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS sem Docker
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TLS sem Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#certificados-locais-mkcert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Certificados locais (mkcert)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#certificado-publico-lets-encrypt-ou-corporativo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Certificado publico (Let's Encrypt) ou corporativo
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1040,10 +1118,31 @@ docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest
 git clone https://github.com/emersonfelipesp/proxbox-api.git
 cd proxbox-api
 pip install -e .
-uv run fastapi run --host 0.0.0.0 --port 8000</code></p>
+uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
 <p>Alternativa:</p>
 <p><code>bash
 uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload</code></p>
+<p>O comando <code>fastapi run</code> nao expoe opcoes de TLS; para HTTPS no proprio processo use <strong>uvicorn</strong> com <code>--ssl-certfile</code> / <code>--ssl-keyfile</code>, ou <strong>nginx/Caddy</strong> na frente (recomendado para certificados reais).</p>
+<h2 id="tls-sem-docker">TLS sem Docker<a class="headerlink" href="#tls-sem-docker" title="Permanent link">&para;</a></h2>
+<h3 id="certificados-locais-mkcert">Certificados locais (mkcert)<a class="headerlink" href="#certificados-locais-mkcert" title="Permanent link">&para;</a></h3>
+<p><code>bash
+mkcert -install
+mkcert proxbox.backend.local localhost 127.0.0.1 ::1
+uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
+  --ssl-keyfile=./proxbox.backend.local+3-key.pem \
+  --ssl-certfile=./proxbox.backend.local+3.pem</code></p>
+<p>Ajuste os nomes dos arquivos conforme a saida do <code>mkcert</code>.</p>
+<h3 id="certificado-publico-lets-encrypt-ou-corporativo">Certificado publico (Let's Encrypt) ou corporativo<a class="headerlink" href="#certificado-publico-lets-encrypt-ou-corporativo" title="Permanent link">&para;</a></h3>
+<p><strong>Recomendado:</strong> terminar TLS no <strong>nginx</strong> ou <strong>Caddy</strong> e manter a API em HTTP em <code>127.0.0.1:8000</code>:</p>
+<p><code>bash
+uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000</code></p>
+<p>Configure o proxy com <code>fullchain.pem</code> e <code>privkey.pem</code> (Let's Encrypt em <code>/etc/letsencrypt/live/&lt;dominio&gt;/</code>) e cabecalhos <code>X-Forwarded-Proto</code> (e afins). Exemplo completo de bloco <code>server</code> do nginx no <strong>README</strong> do repositorio.</p>
+<p><strong>Uvicorn com TLS direto</strong> (implantacoes menores): use a <strong>cadeia completa</strong> em <code>--ssl-certfile</code> e a chave em <code>--ssl-keyfile</code>:</p>
+<p><code>bash
+uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
+  --ssl-certfile=/etc/letsencrypt/live/api.exemplo.com/fullchain.pem \
+  --ssl-keyfile=/etc/letsencrypt/live/api.exemplo.com/privkey.pem</code></p>
+<p>Garanta permissoes de leitura para o usuario do processo e renove/recarregue apos atualizar o certificado.</p>
 
 
 

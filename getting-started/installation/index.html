@@ -428,13 +428,41 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#tls-with-local-certificates" class="md-nav__link">
+  <a href="#tls-without-docker" class="md-nav__link">
     <span class="md-ellipsis">
       
-        TLS with local certificates
+        TLS without Docker
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="TLS without Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-certificates-mkcert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local certificates (mkcert)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publicly-trusted-or-corporate-certificates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Publicly trusted or corporate certificates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1021,13 +1049,41 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#tls-with-local-certificates" class="md-nav__link">
+  <a href="#tls-without-docker" class="md-nav__link">
     <span class="md-ellipsis">
       
-        TLS with local certificates
+        TLS without Docker
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="TLS without Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-certificates-mkcert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local certificates (mkcert)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publicly-trusted-or-corporate-certificates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Publicly trusted or corporate certificates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1099,16 +1155,32 @@ pip install -e .</code></p>
 uv sync</code></p>
 <p>Run API:</p>
 <p><code>bash
-uv run fastapi run --host 0.0.0.0 --port 8000</code></p>
+uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
 <p>Alternative with uvicorn:</p>
 <p><code>bash
 uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload</code></p>
-<h2 id="tls-with-local-certificates">TLS with local certificates<a class="headerlink" href="#tls-with-local-certificates" title="Permanent link">&para;</a></h2>
-<p>If you need HTTPS locally, generate a certificate with <code>mkcert</code> and pass it to uvicorn:</p>
+<p><code>fastapi run</code> does not expose TLS flags; for HTTPS from the app process, use <strong>uvicorn</strong> with <code>--ssl-certfile</code> / <code>--ssl-keyfile</code> below, or put <strong>nginx/Caddy</strong> in front (recommended for real certificates).</p>
+<h2 id="tls-without-docker">TLS without Docker<a class="headerlink" href="#tls-without-docker" title="Permanent link">&para;</a></h2>
+<h3 id="local-certificates-mkcert">Local certificates (mkcert)<a class="headerlink" href="#local-certificates-mkcert" title="Permanent link">&para;</a></h3>
+<p>For trusted HTTPS on your own machine only:</p>
 <p><code>bash
 mkcert -install
 mkcert proxbox.backend.local localhost 127.0.0.1 ::1
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --ssl-keyfile=./localhost+2-key.pem --ssl-certfile=./localhost+2.pem</code></p>
+uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
+  --ssl-keyfile=./proxbox.backend.local+3-key.pem \
+  --ssl-certfile=./proxbox.backend.local+3.pem</code></p>
+<p>Adjust file names to match what <code>mkcert</code> created.</p>
+<h3 id="publicly-trusted-or-corporate-certificates">Publicly trusted or corporate certificates<a class="headerlink" href="#publicly-trusted-or-corporate-certificates" title="Permanent link">&para;</a></h3>
+<p><strong>Recommended:</strong> terminate TLS in <strong>nginx</strong> or <strong>Caddy</strong>, run the API on <strong>HTTP</strong> on <code>127.0.0.1:8000</code>:</p>
+<p><code>bash
+uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000</code></p>
+<p>Point the proxy at <code>http://127.0.0.1:8000</code> and set <code>ssl_certificate</code> / <code>ssl_certificate_key</code> to your PEM paths (for Let’s Encrypt: <code>fullchain.pem</code> and <code>privkey.pem</code> under <code>/etc/letsencrypt/live/&lt;domain&gt;/</code>). Set <code>X-Forwarded-Proto</code> and related headers so the app sees the original scheme. See the repository <strong>README</strong> for a complete nginx <code>server</code> example.</p>
+<p><strong>Direct uvicorn TLS</strong> (small deployments): use the <strong>full certificate chain</strong> as <code>--ssl-certfile</code> and the private key as <code>--ssl-keyfile</code>:</p>
+<p><code>bash
+uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
+  --ssl-certfile=/etc/letsencrypt/live/api.example.com/fullchain.pem \
+  --ssl-keyfile=/etc/letsencrypt/live/api.example.com/privkey.pem</code></p>
+<p>Ensure the process user can read those files, and renew/reload after certificate updates.</p>
 <h2 id="verify-installation">Verify installation<a class="headerlink" href="#verify-installation" title="Permanent link">&para;</a></h2>
 <p>Open:</p>
 <ul>
