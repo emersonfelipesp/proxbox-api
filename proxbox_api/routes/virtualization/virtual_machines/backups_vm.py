@@ -44,6 +44,15 @@ def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
     return out
 
 
+def _relation_id_or_none(value):
+    if isinstance(value, dict):
+        value = value.get("id")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
     nb = netbox_session
     try:
@@ -124,7 +133,7 @@ async def create_netbox_backups(
             payload=backup_payload,
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
-                "storage": record.get("storage"),
+                "storage": _relation_id_or_none(record.get("storage")),
                 "virtual_machine": record.get("virtual_machine"),
                 "subtype": record.get("subtype"),
                 "creation_time": record.get("creation_time"),

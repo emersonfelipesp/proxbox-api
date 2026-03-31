@@ -996,7 +996,6 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
             "/api/plugins/proxbox/backups/",
             None,
             {
-                "storage": "backup-store",
                 "virtual_machine": 55,
                 "subtype": "qemu",
                 "creation_time": datetime.fromtimestamp(1711660800).isoformat(),
