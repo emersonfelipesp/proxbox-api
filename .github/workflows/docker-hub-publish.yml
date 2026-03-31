@@ -1,8 +1,7 @@
-# Publishes two images in parallel:
-# - runtime: nginx (HTTP) → uvicorn on 127.0.0.1:8001
-# - mkcert: nginx (HTTPS) → uvicorn on 127.0.0.1:8001
-# Invoked from CI (push to main/testing) and from the release workflow.
-name: Docker Hub publish
+# Runtime + mkcert images (nginx → uvicorn). Triggers:
+# - workflow_call: CI (main/testing) and release → always build, test, push (parallel jobs).
+# - workflow_dispatch: manual — test-only (no Hub) or full publish (parallel jobs, same as call).
+name: Docker images
 
 on:
   workflow_call:
@@ -12,6 +11,23 @@ on:
         type: string
         required: false
         default: ""
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Branch, tag, or SHA to build
+        type: string
+        required: true
+        default: main
+      mode:
+        description: >-
+          build-and-test-only — amd64 build + in-container tests, no Docker Hub.
+          publish — same as CI/release (push runtime + mkcert, multi-arch).
+        type: choice
+        required: true
+        options:
+          - build-and-test-only
+          - publish
+        default: build-and-test-only
 
 permissions:
   contents: read
@@ -20,14 +36,115 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Sequential local test (manual); no registry login or push.
+  docker-manual:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'build-and-test-only'
+    name: Docker — build and test only (manual)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.git_ref }}
+
+      - name: Validate pyproject version vs tag ref
+        id: version
+        env:
+          GIT_REF: ${{ inputs.git_ref }}
+        run: |
+          python3 <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          git_ref = os.environ["GIT_REF"].strip()
+          version = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+          )["project"]["version"]
+          expected_tag = f"v{version}"
+          if git_ref.startswith("v") and git_ref != expected_tag:
+              raise SystemExit(
+                  f"git_ref/version mismatch: ref={git_ref!r}, expected {expected_tag!r}"
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"tag={version}\n")
+          PY
+
+      - name: Keep image tag in env
+        run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
+
+      - name: Create Docker test script
+        run: |
+          cat <<'EOF' > /tmp/docker-tests.sh
+          #!/bin/sh
+          set -eux
+          # tests/ is bind-mounted read-only; keep bytecode out of the tree
+          export PYTHONPYCACHEPREFIX=/tmp/pycache
+          mkdir -p "$PYTHONPYCACHEPREFIX"
+          uv sync --frozen --extra test --group dev
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run python -m compileall proxbox_api scripts tests
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
+          EOF
+          chmod +x /tmp/docker-tests.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
+      - name: Build amd64 image for in-container tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      - name: Run tests in local image
+        run: |
+          docker run --rm \
+            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
+            /tmp/docker-tests.sh
+
+      - name: Build amd64 mkcert image for in-container tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mkcert
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre
+          cache-from: type=gha,scope=mkcert
+          cache-to: type=gha,mode=max,scope=mkcert
+
+      - name: Run tests in mkcert local image
+        run: |
+          docker run --rm \
+            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
+            /tmp/docker-tests.sh
+
   docker-runtime:
+    if: github.event_name == 'workflow_call' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
     name: Docker Hub — runtime (nginx + uvicorn)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.sha) || github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -47,7 +164,7 @@ jobs:
       - name: Resolve image version from pyproject
         id: version
         env:
-          GIT_REF: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name }}
+          GIT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name) || github.ref_name }}
         run: |
           python3 <<'PY'
           import os
@@ -141,13 +258,14 @@ jobs:
           done
 
   docker-mkcert:
+    if: github.event_name == 'workflow_call' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
     name: Docker Hub — mkcert (nginx + HTTPS + uvicorn)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.sha) || github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -167,7 +285,7 @@ jobs:
       - name: Resolve image version from pyproject
         id: version
         env:
-          GIT_REF: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name }}
+          GIT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name) || github.ref_name }}
         run: |
           python3 <<'PY'
           import os
