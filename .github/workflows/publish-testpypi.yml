@@ -1,9 +1,9 @@
 name: Release validation and publish
 
+# Runs when a GitHub Release is published (tag + release), not on raw tag pushes alone.
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6
@@ -32,8 +34,8 @@ jobs:
       - name: Validate package metadata and tag
         id: meta
         env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           python - <<'PY'
           import os
@@ -43,12 +45,14 @@ jobs:
           data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
           project_name = data['project']['name']
           version = data['project']['version']
-          tag = os.getenv('GITHUB_REF_NAME', '')
           event = os.getenv('GITHUB_EVENT_NAME', '')
+          release_tag = os.getenv('RELEASE_TAG_NAME', '') or ''
           if project_name != 'proxbox_api':
               raise SystemExit(f'Expected project name proxbox_api, got {project_name!r}')
-          if event == 'push' and tag and tag != f'v{version}':
-              raise SystemExit(f'Tag/version mismatch: tag={tag!r}, version={version!r}')
+          if event == 'release' and release_tag != f'v{version}':
+              raise SystemExit(
+                  f'Release tag/version mismatch: tag={release_tag!r}, version={version!r}'
+              )
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               fh.write(f'package_name={project_name}\nversion={version}\n')
           PY
@@ -75,6 +79,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          ignore-empty-workdir: true
 
       - name: Download dist artifacts
         uses: actions/download-artifact@v8
@@ -106,6 +113,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -138,7 +147,7 @@ jobs:
 
   publish-pypi:
     name: publish to PyPI
-    if: github.event_name == 'push'
+    if: github.event_name == 'release'
     needs: [prepare-release, validate-testpypi]
     runs-on: ubuntu-latest
     steps:
@@ -149,6 +158,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          ignore-empty-workdir: true
 
       - name: Download dist artifacts
         uses: actions/download-artifact@v8
@@ -171,7 +183,7 @@ jobs:
 
   docker-publish:
     name: publish Docker image to Docker Hub
-    if: github.event_name == 'push'
+    if: github.event_name == 'release'
     needs: [prepare-release, validate-testpypi]
     runs-on: ubuntu-latest
     env:
@@ -179,6 +191,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
