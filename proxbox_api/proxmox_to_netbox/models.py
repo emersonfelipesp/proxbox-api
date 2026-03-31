@@ -13,6 +13,8 @@ from pydantic import (
     model_validator,
 )
 
+from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
+
 
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -298,11 +300,62 @@ class NetBoxBackupSyncState(BaseModel):
     notes: str | None = None
     vmid: str | int | None = None
     format: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
 
     @field_validator("virtual_machine", mode="before")
     @classmethod
     def normalize_virtual_machine(cls, value: Any) -> Any:
         return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return _normalized_tag_list(value)
+
+
+class NetBoxSnapshotSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    name: str
+    description: str | None = None
+    vmid: int
+    node: str
+    snaptime: str | None = None
+    parent: str | None = None
+    subtype: str | None = None
+    status: str = "active"
+
+    @field_validator("virtual_machine", mode="before")
+    @classmethod
+    def normalize_virtual_machine(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str:
+        text = str(value or "active").strip().lower()
+        return text if text in ("active", "stale") else "active"
+
+
+class NetBoxVirtualDiskSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    name: str
+    size: int
+    description: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("virtual_machine", mode="before")
+    @classmethod
+    def normalize_virtual_machine(cls, value: Any) -> Any:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return _normalized_tag_list(value)
 
 
 class ProxmoxVmResourceInput(BaseModel):
@@ -363,6 +416,14 @@ class ProxmoxVmConfigInput(BaseModel):
     def unprivileged_container(self) -> bool:
         return _as_bool(self.unprivileged)
 
+    @computed_field(return_type=list[ProxmoxDiskEntry])
+    @property
+    def disks(self) -> list[ProxmoxDiskEntry]:
+        """Parse disk entries from VM config into ProxmoxDiskEntry objects."""
+        from proxbox_api.proxmox_to_netbox.schemas.disks import parse_vm_config_disks
+
+        return parse_vm_config_disks(self.model_extra or {})
+
 
 class NetBoxVirtualMachineCreateBody(BaseModel):
     """Validated NetBox create body for virtualization virtual machine endpoint."""
@@ -380,6 +441,16 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     tags: list[int] = Field(default_factory=list)
     custom_fields: dict[str, Any] = Field(default_factory=dict)
     description: str | None = None
+
+    @field_validator("vcpus", "memory", "disk", mode="before")
+    @classmethod
+    def coerce_nullable_vm_ints(cls, value: Any) -> int:
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     @field_validator("status", mode="before")
     @classmethod

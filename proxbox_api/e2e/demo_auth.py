@@ -208,7 +208,7 @@ async def _create_demo_user(page: "Page", username: str, password: str, timeout:
     await page.get_by_role("button", name="Create & Sign In").click()
     await page.wait_for_load_state("domcontentloaded")
 
-    if _is_existing_demo_user_error(page, username=username):
+    if await _is_existing_demo_user_error(page, username=username):
         return False
 
     await page.wait_for_load_state("networkidle", timeout=timeout * 1000)
@@ -286,7 +286,7 @@ async def _create_token(page: "Page", token_name: str, timeout: float) -> str:
     try:
         await page.wait_for_url(f"{TOKENS_URL}**", timeout=10000)
     except Exception as exc:  # noqa: BLE001
-        error_text = _extract_page_error(page)
+        error_text = await _extract_page_error(page)
         if error_text:
             raise DemoTokenCreationError(
                 f"NetBox demo rejected token creation: {error_text}"
@@ -348,9 +348,9 @@ async def login(username: str, password: str, headless: bool = True) -> None:
             await browser.close()
 
 
-def _extract_page_error(page: "Page") -> str:
+async def _extract_page_error(page: "Page") -> str:
     """Extract error text from page content."""
-    body_text = page.locator("body").inner_text()
+    body_text = await page.locator("body").inner_text()
     if "Error" in body_text:
         lines = [line.strip() for line in body_text.splitlines() if line.strip()]
         for index, line in enumerate(lines):
@@ -359,9 +359,9 @@ def _extract_page_error(page: "Page") -> str:
     return ""
 
 
-def _is_existing_demo_user_error(page: "Page", username: str) -> bool:
+async def _is_existing_demo_user_error(page: "Page", username: str) -> bool:
     """Check if the page shows an existing user error."""
-    body_text = page.locator("body").inner_text().lower()
+    body_text = (await page.locator("body").inner_text()).lower()
     return (
         "duplicate key value violates unique constraint" in body_text
         and f"(username)=({username.lower()}) already exists" in body_text

@@ -2,6 +2,21 @@
 
 Start with the root project guide, then open the most specific scoped guide for the code you are touching.
 
+## Pre-commit Checklist
+
+Before pushing any changes, always run (use `rtk` for compact output):
+
+```bash
+rtk ruff check .
+rtk ruff format --check .
+uv run python -m compileall proxbox_api scripts tests
+uv run python -c "import proxbox_api.main"
+uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+rtk pytest tests
+```
+
+Fix any failures locally before pushing.
+
 ## Primary Guide
 
 - `CLAUDE.md`

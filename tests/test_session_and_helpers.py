@@ -439,39 +439,45 @@ def test_ensure_tag_async_uses_rest_client():
     ]
 
 
-def test_rest_create_returns_sync_record_that_can_save_and_delete():
+def test_rest_create_returns_tag_record_that_can_save_and_delete():
     api = AsyncNetBoxRestFacade(
         {
-            ("POST", "/api/plugins/proxbox/sync-processes/"): (
+            ("POST", "/api/extras/tags/"): (
                 201,
                 {
                     "id": 101,
-                    "name": "sync-devices",
-                    "status": "not-started",
-                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
+                    "name": "proxbox-test",
+                    "slug": "proxbox-test",
+                    "color": "9e9e9e",
+                    "url": "https://netbox.local/api/extras/tags/101/",
                 },
             ),
-            ("PATCH", "/api/plugins/proxbox/sync-processes/101/"): (
+            ("PATCH", "/api/extras/tags/101/"): (
                 200,
                 {
                     "id": 101,
-                    "name": "sync-devices",
-                    "status": "completed",
-                    "url": "https://netbox.local/api/plugins/proxbox/sync-processes/101/",
+                    "name": "proxbox-test",
+                    "slug": "proxbox-test",
+                    "color": "ffffff",
+                    "url": "https://netbox.local/api/extras/tags/101/",
                 },
             ),
-            ("DELETE", "/api/plugins/proxbox/sync-processes/101/"): (204, ""),
+            ("DELETE", "/api/extras/tags/101/"): (204, ""),
         }
     )
 
     record = rest_create(
         SyncProxy(api),
-        "/api/plugins/proxbox/sync-processes/",
-        {"name": "sync-devices", "status": "not-started"},
+        "/api/extras/tags/",
+        {
+            "name": "proxbox-test",
+            "slug": "proxbox-test",
+            "color": "9e9e9e",
+        },
     )
 
-    record.status = "completed"
-    assert record.save().status == "completed"
+    record.color = "ffffff"
+    assert record.save().color == "ffffff"
     assert record.delete() is True
 
 
@@ -947,7 +953,7 @@ def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
 
     monkeypatch.setattr(
-        "proxbox_api.session.proxmox.get_netbox_async_session",
+        "proxbox_api.session.proxmox_providers.get_netbox_async_session",
         lambda database_session: AsyncNetBoxRestFacade(
             {
                 ("GET", "/api/plugins/proxbox/endpoints/proxmox/"): (

@@ -9,7 +9,7 @@ It handles:
 
 Usage:
     pytest tests/e2e/ -v
-    pytest tests/e2e/ -v -n auto  # with pytest-xdist
+    # Avoid pytest-xdist against demo.netbox.dev (rate limits / object quotas).
 
 Environment variables:
     PROXBOX_E2E_USERNAME: Demo username (default: auto-generated)
@@ -51,6 +51,8 @@ from proxbox_api.e2e.session import (
     create_netbox_demo_session,
     ensure_e2e_tag,
 )
+from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_rest import rest_list_async
 
 
 @pytest.fixture(scope="session")
@@ -111,6 +113,28 @@ async def netbox_demo_session(netbox_demo_config: "Config") -> "Api":
 
 
 @pytest_asyncio.fixture(scope="session")
+async def netbox_proxbox_plugin_available(netbox_demo_session: "Api") -> bool:
+    """True if ``/api/plugins/proxbox/`` is reachable (not installed on demo.netbox.dev)."""
+
+    try:
+        await rest_list_async(
+            netbox_demo_session, "/api/plugins/proxbox/backups/", query={"limit": 1}
+        )
+    except ProxboxException as exc:
+        combined = f"{exc.message} {exc.detail or ''}".lower()
+        if "404" in combined or "not found" in combined:
+            return False
+        raise
+    return True
+
+
+@pytest_asyncio.fixture(scope="session")
+async def require_proxbox_netbox_plugin(netbox_proxbox_plugin_available: bool) -> None:
+    if not netbox_proxbox_plugin_available:
+        pytest.skip("Proxbox NetBox plugin API not available on this instance (e.g. public demo).")
+
+
+@pytest_asyncio.fixture(scope="session")
 async def e2e_tag(netbox_demo_session: "Api") -> dict[str, Any]:
     """Ensure the 'proxbox e2e testing' tag exists.
 
@@ -134,6 +158,34 @@ async def e2e_tag_refs(e2e_tag: dict[str, Any]) -> list[dict[str, Any]]:
         List containing the e2e tag ref dict.
     """
     return build_e2e_tag_refs(e2e_tag)
+
+
+@pytest_asyncio.fixture(scope="session")
+async def e2e_shared_proxmox_site(netbox_demo_session: "Api", e2e_tag: dict[str, Any]) -> Any:
+    """Single DCIM site reused by VM e2e tests to avoid demo per-run site limits."""
+
+    from proxbox_api.netbox_rest import nested_tag_payload, rest_reconcile_async
+    from proxbox_api.proxmox_to_netbox.models import NetBoxSiteSyncState
+
+    tag_refs = nested_tag_payload(e2e_tag)
+    return await rest_reconcile_async(
+        netbox_demo_session,
+        "/api/dcim/sites/",
+        lookup={"slug": "proxbox-api-e2e-shared-site"},
+        payload={
+            "name": "Proxbox API E2E Shared Site",
+            "slug": "proxbox-api-e2e-shared-site",
+            "status": "active",
+            "tags": tag_refs,
+        },
+        schema=NetBoxSiteSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "status": record.get("status"),
+            "tags": record.get("tags"),
+        },
+    )
 
 
 @pytest.fixture

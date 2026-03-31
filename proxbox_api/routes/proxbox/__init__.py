@@ -111,7 +111,10 @@ async def proxbox_settings(
     | None = False,
 ):
     """
-    TODO: Compare PLUGINS_CONFIG defined by user with default settings from ProxboxConfig.default_settings
+    Returns the resolved plugin configuration from NetBox.
+
+    A future enhancement could diff ``plugins_config`` against
+    ``ProxboxConfig.default_settings`` for drift reporting.
     """
     return plugins_config
 

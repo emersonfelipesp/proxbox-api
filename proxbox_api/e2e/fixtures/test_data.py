@@ -114,23 +114,25 @@ def generate_unique_resource_prefix() -> str:
     return f"e2e_{timestamp}_{random_suffix}"
 
 
+_e2e_credentials_cache: tuple[str, str] | None = None
+
+
 def get_e2e_credentials() -> tuple[str, str]:
     """Get or generate e2e test credentials.
 
-    Reads from environment variables or generates new credentials.
+    Reads from environment variables or generates new credentials once per process
+    so session bootstrap (conftest) and tests share the same username/password.
 
     Returns:
         Tuple of (username, password).
     """
-    username = os.getenv(
-        "PROXBOX_E2E_USERNAME",
-        f"proxbox_e2e_{secrets.token_hex(4)}",
-    )
-    password = os.getenv(
-        "PROXBOX_E2E_PASSWORD",
-        _generate_password(),
-    )
-    return username, password
+    global _e2e_credentials_cache
+    if _e2e_credentials_cache is not None:
+        return _e2e_credentials_cache
+    username = os.getenv("PROXBOX_E2E_USERNAME") or f"proxbox_e2e_{secrets.token_hex(4)}"
+    password = os.getenv("PROXBOX_E2E_PASSWORD") or _generate_password()
+    _e2e_credentials_cache = (username, password)
+    return _e2e_credentials_cache
 
 
 def _generate_password(length: int = 32) -> str:

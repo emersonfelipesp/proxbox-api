@@ -173,7 +173,7 @@ async def proxmox(pxs: ProxmoxSessionsDep):
         "proxmox_api_viewer": "https://pve.proxmox.com/pve-docs/api-viewer/",
         "github": {
             "netbox": "https://github.com/netbox-community/netbox",
-            "pynetbox": "https://github.com/netbox-community/pynetbox",
+            "netbox-sdk": "https://github.com/netbox-community/netbox-sdk",
             "proxmoxer": "https://github.com/proxmoxer/proxmoxer",
             "proxbox": "https://github.com/netdevopsbr/netbox-proxbox",
         },
