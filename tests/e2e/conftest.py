@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from netbox_sdk.facade import Api
 
 from proxbox_api.e2e.demo_auth import (
+    DemoUnavailableError,
     PlaywrightNotInstalledError,
     bootstrap_demo_profile,
 )
@@ -96,6 +97,8 @@ async def netbox_demo_config() -> "Config":
         pytest.skip(
             "Playwright not installed. Run: pip install playwright && playwright install chromium"
         )
+    except DemoUnavailableError as exc:
+        pytest.skip(str(exc))
 
 
 @pytest_asyncio.fixture(scope="session")
