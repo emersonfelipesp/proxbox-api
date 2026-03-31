@@ -3,7 +3,7 @@
 # FastAPI Imports
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
@@ -55,6 +55,157 @@ from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
+
+
+def _to_mapping(value):
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "serialize"):
+        try:
+            serialized = value.serialize()
+            if isinstance(serialized, dict):
+                return serialized
+        except Exception:
+            return {}
+    if hasattr(value, "dict"):
+        try:
+            dumped = value.dict()
+            if isinstance(dumped, dict):
+                return dumped
+        except Exception:
+            return {}
+    return {}
+
+
+def _relation_name(value) -> str | None:
+    if isinstance(value, dict):
+        for key in ("name", "display", "label", "value"):
+            candidate = value.get(key)
+            if candidate:
+                return str(candidate)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _relation_id(value) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, dict):
+        for key in ("id", "value"):
+            candidate = value.get(key)
+            if isinstance(candidate, int):
+                return candidate
+            if isinstance(candidate, str) and candidate.isdigit():
+                return int(candidate)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _filter_cluster_resources_for_vm(
+    cluster_resources: list[dict],
+    *,
+    vm_name: str,
+    proxmox_vm_id: int | None,
+    cluster_name: str | None,
+    cluster_id: int | None,
+) -> list[dict]:
+    cluster_hint = (cluster_name or "").strip().lower()
+    filtered: list[dict] = []
+    for cluster in cluster_resources:
+        if not isinstance(cluster, dict):
+            continue
+        for cluster_key, resources in cluster.items():
+            if not isinstance(resources, list):
+                continue
+            cluster_key_str = str(cluster_key)
+            if cluster_hint and cluster_key_str.strip().lower() != cluster_hint:
+                continue
+            selected = []
+            for resource in resources:
+                if not isinstance(resource, dict):
+                    continue
+                if resource.get("type") not in ("qemu", "lxc"):
+                    continue
+                same_name = str(resource.get("name", "")).strip() == vm_name
+                same_vmid = (
+                    proxmox_vm_id is not None
+                    and str(resource.get("vmid", "")).strip() == str(proxmox_vm_id)
+                )
+                if not (same_name or same_vmid):
+                    continue
+                if cluster_id is not None:
+                    resource_cluster_id = _relation_id(resource.get("cluster"))
+                    if resource_cluster_id is not None and resource_cluster_id != cluster_id:
+                        continue
+                selected.append(resource)
+            if selected:
+                filtered.append({cluster_key_str: selected})
+    return filtered
+
+
+async def _create_virtual_machine_by_netbox_id(
+    *,
+    netbox_vm_id: int,
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+    websocket=None,
+    use_websocket: bool = False,
+):
+    vm_record = netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
+    if vm_record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
+        )
+
+    vm_data = _to_mapping(vm_record)
+    vm_name = str(vm_data.get("name", "")).strip()
+    if not vm_name:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Virtual machine id={netbox_vm_id} has no name to match in Proxmox.",
+        )
+    vm_cluster_name = _relation_name(vm_data.get("cluster"))
+    vm_cluster_id = _relation_id(vm_data.get("cluster"))
+    cf = vm_data.get("custom_fields")
+    proxmox_vm_id = None
+    if isinstance(cf, dict):
+        raw_id = cf.get("proxmox_vm_id")
+        if raw_id is not None and str(raw_id).strip().isdigit():
+            proxmox_vm_id = int(str(raw_id).strip())
+
+    filtered_resources = _filter_cluster_resources_for_vm(
+        cluster_resources,
+        vm_name=vm_name,
+        proxmox_vm_id=proxmox_vm_id,
+        cluster_name=vm_cluster_name,
+        cluster_id=vm_cluster_id,
+    )
+    if not filtered_resources:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No matching Proxmox VM was found for NetBox virtual machine "
+                f"id={netbox_vm_id} (name={vm_name!r})."
+            ),
+        )
+
+    return await create_virtual_machines(
+        netbox_session=netbox_session,
+        pxs=pxs,
+        cluster_status=cluster_status,
+        cluster_resources=filtered_resources,
+        custom_fields=custom_fields,
+        tag=tag,
+        websocket=websocket,
+        use_websocket=use_websocket,
+    )
 
 
 @router.get("/create-test")
@@ -532,6 +683,27 @@ async def create_virtual_machines(
     return flattened_results
 
 
+@router.get("/{netbox_vm_id}/create")
+async def create_virtual_machine_by_netbox_id(
+    netbox_vm_id: int,
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+):
+    return await _create_virtual_machine_by_netbox_id(
+        netbox_vm_id=netbox_vm_id,
+        netbox_session=netbox_session,
+        pxs=pxs,
+        cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
+        custom_fields=custom_fields,
+        tag=tag,
+    )
+
+
 @router.get("/create/stream", response_model=None)
 async def create_virtual_machines_stream(
     netbox_session: NetBoxSessionDep,
@@ -605,6 +777,113 @@ async def create_virtual_machines_stream(
                 {
                     "ok": False,
                     "message": "Virtual machines sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/{netbox_vm_id}/create/stream", response_model=None)
+async def create_virtual_machine_by_netbox_id_stream(
+    netbox_vm_id: int,
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+):
+    async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await _create_virtual_machine_by_netbox_id(
+                    netbox_vm_id=netbox_vm_id,
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    cluster_resources=cluster_resources,
+                    custom_fields=custom_fields,
+                    tag=tag,
+                    websocket=bridge,
+                    use_websocket=True,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-machine",
+                    "status": "started",
+                    "message": f"Starting virtual machine synchronization for id={netbox_vm_id}.",
+                },
+            )
+            async for frame in bridge.iter_sse():
+                yield frame
+
+            result = await sync_task
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-machine",
+                    "status": "completed",
+                    "message": "Virtual machine synchronization finished.",
+                    "result": {"count": len(result)},
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Virtual machine sync completed.",
+                    "result": {"count": len(result)},
+                },
+            )
+        except HTTPException as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-machine",
+                    "status": "failed",
+                    "error": str(error.detail),
+                    "detail": str(error.detail),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual machine sync failed.",
+                    "errors": [{"detail": str(error.detail)}],
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-machine",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual machine sync failed.",
                     "errors": [{"detail": str(error)}],
                 },
             )
