@@ -54,9 +54,19 @@ jobs:
     uses: ./.github/workflows/docker-hub-publish.yml
     secrets: inherit
 
-  e2e-tests:
+  # Sequential only (no matrix): NetBox demo first, then light HTTP smoke on each image.
+  # After docker-images when it runs (main/testing push) so :latest / :latest-mkcert match this commit.
+  e2e-sequential:
+    name: E2E sequential (local + Docker Hub images)
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, docker-images]
+    if: |
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      (needs.docker-images.result == 'success' || needs.docker-images.result == 'skipped')
+    env:
+      IMAGE_NS: emersonfelipesp/proxbox-api
+      PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -73,9 +83,45 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      # Serial e2e: NetBox demo is rate- and quota-sensitive; xdist caused flaky site/VM creates.
-      - name: Run E2E tests
-        run: uv run pytest tests/e2e/ --tb=short -v
+      - name: "E2E (1/3) — local workspace vs NetBox demo"
+        run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v
+
+      - name: "E2E (2/3) — published image latest (nginx + uvicorn, HTTP)"
+        run: |
+          set -eux
+          docker pull "${IMAGE_NS}:latest"
+          docker rm -f proxbox-e2e-http 2>/dev/null || true
+          docker run -d --name proxbox-e2e-http \
+            -p 127.0.0.1:18080:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            "${IMAGE_NS}:latest"
+          for i in $(seq 1 40); do
+            if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then break; fi
+            sleep 2
+            if [ "$i" -eq 40 ]; then echo "timeout http"; docker logs proxbox-e2e-http; exit 1; fi
+          done
+          export PROXBOX_IMAGE_E2E_BASE_URL=http://127.0.0.1:18080
+          uv run pytest tests/e2e/ -m image_http --tb=short -v
+          docker rm -f proxbox-e2e-http
+
+      - name: "E2E (3/3) — published image latest-mkcert (nginx + HTTPS + uvicorn)"
+        run: |
+          set -eux
+          docker pull "${IMAGE_NS}:latest-mkcert"
+          docker rm -f proxbox-e2e-https 2>/dev/null || true
+          docker run -d --name proxbox-e2e-https \
+            -p 127.0.0.1:18443:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            "${IMAGE_NS}:latest-mkcert"
+          for i in $(seq 1 40); do
+            if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then break; fi
+            sleep 2
+            if [ "$i" -eq 40 ]; then echo "timeout https"; docker logs proxbox-e2e-https; exit 1; fi
+          done
+          export PROXBOX_IMAGE_E2E_BASE_URL=https://127.0.0.1:18443
+          export PROXBOX_IMAGE_E2E_TLS_INSECURE=1
+          uv run pytest tests/e2e/ -m image_http --tb=short -v
+          docker rm -f proxbox-e2e-https
 
       - name: Upload Playwright Report
         if: failure()
