@@ -20,13 +20,14 @@ from proxbox_api.logger import logger  # Logger
 from proxbox_api.netbox_compat import (
     VirtualMachine,
 )
-from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_rest import rest_patch_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxIpAddressSyncState,
     NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineCreateBody,
     NetBoxVirtualMachineInterfaceSyncState,
+    NetBoxVlanSyncState,
     ProxmoxVmConfigInput,
 )
 from proxbox_api.routes.extras import CreateCustomFieldsDep  # Create Custom Fields
@@ -518,6 +519,7 @@ async def create_virtual_machines(
 
         # Create VM interfaces
         netbox_vm_interfaces = []
+        first_ip_id: int | None = None
         if virtual_machine and vm_config:
             guest_agent_interfaces: list[dict] = []
             if vm_type == "qemu" and vm_config_obj.qemu_agent_enabled:
@@ -609,6 +611,8 @@ async def create_virtual_machines(
                                     "bridge": record.get("bridge"),
                                     "enabled": record.get("enabled"),
                                     "mac_address": record.get("mac_address"),
+                                    "untagged_vlan": record.get("untagged_vlan"),
+                                    "mode": record.get("mode"),
                                     "tags": record.get("tags"),
                                     "custom_fields": record.get("custom_fields"),
                                 },
@@ -616,6 +620,46 @@ async def create_virtual_machines(
 
                         if not isinstance(bridge, dict):
                             bridge = bridge.dict()
+
+                        # Resolve VLAN tag from Proxmox network config (e.g. tag=100)
+                        vlan_nb_id: int | None = None
+                        vlan_tag_raw = value.get("tag")
+                        if vlan_tag_raw is not None:
+                            try:
+                                vlan_tag = int(vlan_tag_raw)
+                                vlan_record = await rest_reconcile_async(
+                                    nb,
+                                    "/api/ipam/vlans/",
+                                    lookup={"vid": vlan_tag},
+                                    payload={
+                                        "vid": vlan_tag,
+                                        "name": f"VLAN {vlan_tag}",
+                                        "status": "active",
+                                        "tags": tag_refs,
+                                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                                    },
+                                    schema=NetBoxVlanSyncState,
+                                    current_normalizer=lambda record: {
+                                        "vid": record.get("vid"),
+                                        "name": record.get("name"),
+                                        "status": record.get("status"),
+                                        "tags": record.get("tags"),
+                                        "custom_fields": record.get("custom_fields"),
+                                    },
+                                )
+                                vlan_nb_id = (
+                                    vlan_record.get("id")
+                                    if isinstance(vlan_record, dict)
+                                    else getattr(vlan_record, "id", None)
+                                )
+                            except Exception as vlan_exc:
+                                logger.warning(
+                                    "Failed to create/sync VLAN tag=%s for VM %s interface %s: %s",
+                                    vlan_tag_raw,
+                                    resource.get("name"),
+                                    resolved_interface_name,
+                                    vlan_exc,
+                                )
 
                         vm_interface = await rest_reconcile_async(
                             nb,
@@ -630,6 +674,8 @@ async def create_virtual_machines(
                                 "enabled": True,
                                 "bridge": bridge.get("id", None),
                                 "mac_address": value.get("virtio", value.get("hwaddr", None)),
+                                "untagged_vlan": vlan_nb_id,
+                                "mode": "access" if vlan_nb_id is not None else None,
                                 "tags": tag_refs,
                                 "custom_fields": {"proxmox_last_updated": now.isoformat()},
                             },
@@ -642,6 +688,8 @@ async def create_virtual_machines(
                                 "mac_address": record.get("mac_address"),
                                 "type": record.get("type"),
                                 "description": record.get("description"),
+                                "untagged_vlan": record.get("untagged_vlan"),
+                                "mode": record.get("mode"),
                                 "tags": record.get("tags"),
                                 "custom_fields": record.get("custom_fields"),
                             },
@@ -654,7 +702,7 @@ async def create_virtual_machines(
 
                         interface_ip = _best_guest_agent_ip(guest_iface) or value.get("ip", None)
                         if interface_ip and interface_ip != "dhcp":
-                            await rest_reconcile_async(
+                            ip_record = await rest_reconcile_async(
                                 nb,
                                 "/api/ipam/ip-addresses/",
                                 lookup={"address": interface_ip},
@@ -676,6 +724,12 @@ async def create_virtual_machines(
                                     "custom_fields": record.get("custom_fields"),
                                 },
                             )
+                            if first_ip_id is None:
+                                first_ip_id = (
+                                    ip_record.get("id")
+                                    if isinstance(ip_record, dict)
+                                    else getattr(ip_record, "id", None)
+                                )
 
             for disk_entry in vm_config_obj.disks:
                 await rest_reconcile_async(
@@ -703,6 +757,51 @@ async def create_virtual_machines(
                         "custom_fields": record.get("custom_fields"),
                     },
                 )
+
+        # Set primary IP only when NetBox has no primary IP yet (user choice is preserved)
+        vm_id = virtual_machine.get("id")
+        if virtual_machine.get("primary_ip4") is None:
+            if first_ip_id is not None:
+                try:
+                    await rest_patch_async(
+                        nb,
+                        "/api/virtualization/virtual-machines/",
+                        vm_id,
+                        {"primary_ip4": first_ip_id},
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to set primary_ip4 for VM %s (id=%s): %s",
+                        virtual_machine.get("name"),
+                        vm_id,
+                        exc,
+                    )
+                    if websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "virtual_machine",
+                                "data": {
+                                    "error": f"Could not set primary IP: {exc}",
+                                    "rowid": virtual_machine.get("name"),
+                                },
+                            }
+                        )
+            else:
+                logger.info(
+                    "No IP available for VM %s (vmid=%s), skipping primary_ip4 assignment.",
+                    resource.get("name"),
+                    resource.get("vmid"),
+                )
+                if websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "virtual_machine",
+                            "data": {
+                                "error": "No IP address found; primary IP not set.",
+                                "rowid": virtual_machine.get("name"),
+                            },
+                        }
+                    )
 
         return virtual_machine
 

@@ -368,6 +368,18 @@ async def rest_reconcile_async(
     return await _reconcile(existing)
 
 
+async def rest_patch_async(
+    nb: Any,
+    path: str,
+    record_id: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """PATCH a single NetBox record by ID with the given fields."""
+    api = _unwrap_api(nb)
+    response = await api.client.request("PATCH", _detail_path(path, record_id), payload=payload)
+    return _extract_payload(response)
+
+
 def rest_ensure(
     nb: Any,
     path: str,
