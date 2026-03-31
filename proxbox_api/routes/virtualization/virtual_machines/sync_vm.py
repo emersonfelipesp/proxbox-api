@@ -3,6 +3,7 @@
 # FastAPI Imports
 import asyncio
 from datetime import datetime, timezone
+from ipaddress import ip_address
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -37,6 +38,7 @@ from proxbox_api.routes.proxmox.cluster import (
     ClusterStatusDep,
 )  # Cluster Status and Resources
 from proxbox_api.routes.virtualization.virtual_machines.helpers import resolve_vm_sync_concurrency
+from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -143,6 +145,46 @@ def _filter_cluster_resources_for_vm(
             if selected:
                 filtered.append({cluster_key_str: selected})
     return filtered
+
+
+def _normalized_mac(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _guest_agent_ip_with_prefix(addr: dict) -> str | None:
+    ip_text = str(addr.get("ip_address") or "").strip()
+    if not ip_text:
+        return None
+    try:
+        parsed = ip_address(ip_text)
+    except ValueError:
+        return None
+    if parsed.is_loopback or parsed.is_link_local:
+        return None
+    prefix = addr.get("prefix")
+    if isinstance(prefix, int) and 0 <= prefix <= 128:
+        return f"{parsed.compressed}/{prefix}"
+    return parsed.compressed
+
+
+def _best_guest_agent_ip(guest_iface: dict | None) -> str | None:
+    if not isinstance(guest_iface, dict):
+        return None
+    for addr in guest_iface.get("ip_addresses") or []:
+        if not isinstance(addr, dict):
+            continue
+        if str(addr.get("ip_address_type") or "").lower() == "ipv6":
+            continue
+        candidate = _guest_agent_ip_with_prefix(addr)
+        if candidate:
+            return candidate
+    for addr in guest_iface.get("ip_addresses") or []:
+        if not isinstance(addr, dict):
+            continue
+        candidate = _guest_agent_ip_with_prefix(addr)
+        if candidate:
+            return candidate
+    return None
 
 
 async def _create_virtual_machine_by_netbox_id(
@@ -333,6 +375,7 @@ async def create_virtual_machines(
 
         if vm_config is None:
             vm_config = {}
+        vm_config_obj = ProxmoxVmConfigInput.model_validate(vm_config)
 
         initial_vm_json = websocket_vm_json | {
             "completed": False,
@@ -466,6 +509,39 @@ async def create_virtual_machines(
         # Create VM interfaces
         netbox_vm_interfaces = []
         if virtual_machine and vm_config:
+            guest_agent_interfaces: list[dict] = []
+            if vm_type == "qemu" and vm_config_obj.qemu_agent_enabled:
+                proxmox_session = next(
+                    (
+                        px
+                        for px, cluster in zip(pxs, cluster_status)
+                        if getattr(cluster, "name", None) == cluster_name
+                    ),
+                    None,
+                )
+                if proxmox_session is not None:
+                    guest_agent_interfaces = get_qemu_guest_agent_network_interfaces(
+                        proxmox_session,
+                        node=str(resource.get("node")),
+                        vmid=int(resource.get("vmid")),
+                    )
+                    if not guest_agent_interfaces:
+                        logger.info(
+                            "Guest agent network data unavailable for VM %s (vmid=%s); falling back to config networks.",
+                            resource.get("name"),
+                            resource.get("vmid"),
+                        )
+
+            guest_by_name = {
+                str(iface.get("name", "")).strip().lower(): iface
+                for iface in guest_agent_interfaces
+            }
+            guest_by_mac = {
+                _normalized_mac(iface.get("mac_address")): iface
+                for iface in guest_agent_interfaces
+                if _normalized_mac(iface.get("mac_address"))
+            }
+
             vm_networks = []
             network_id = 0
             while True:
@@ -552,7 +628,16 @@ async def create_virtual_machines(
 
                         netbox_vm_interfaces.append(vm_interface)
 
-                        interface_ip = value.get("ip", None)
+                        interface_mac = value.get("virtio", value.get("hwaddr", None))
+                        guest_iface = None
+                        if interface_mac:
+                            guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                        if guest_iface is None:
+                            guest_iface = guest_by_name.get(
+                                str(value.get("name", interface_name)).strip().lower()
+                            )
+
+                        interface_ip = _best_guest_agent_ip(guest_iface) or value.get("ip", None)
                         if interface_ip and interface_ip != "dhcp":
                             await rest_reconcile_async(
                                 nb,
@@ -577,33 +662,32 @@ async def create_virtual_machines(
                                 },
                             )
 
-                        vm_config_obj = ProxmoxVmConfigInput.model_validate(vm_config)
-                        for disk_entry in vm_config_obj.disks:
-                            await rest_reconcile_async(
-                                nb,
-                                "/api/virtualization/virtual-disks/",
-                                lookup={
-                                    "virtual_machine_id": virtual_machine.get("id"),
-                                    "name": disk_entry.name,
-                                },
-                                payload={
-                                    "virtual_machine": virtual_machine.get("id"),
-                                    "name": disk_entry.name,
-                                    "size": disk_entry.size,
-                                    "description": disk_entry.description,
-                                    "tags": tag_refs,
-                                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                                },
-                                schema=NetBoxVirtualDiskSyncState,
-                                current_normalizer=lambda record: {
-                                    "virtual_machine": record.get("virtual_machine"),
-                                    "name": record.get("name"),
-                                    "size": record.get("size"),
-                                    "description": record.get("description"),
-                                    "tags": record.get("tags"),
-                                    "custom_fields": record.get("custom_fields"),
-                                },
-                            )
+            for disk_entry in vm_config_obj.disks:
+                await rest_reconcile_async(
+                    nb,
+                    "/api/virtualization/virtual-disks/",
+                    lookup={
+                        "virtual_machine_id": virtual_machine.get("id"),
+                        "name": disk_entry.name,
+                    },
+                    payload={
+                        "virtual_machine": virtual_machine.get("id"),
+                        "name": disk_entry.name,
+                        "size": disk_entry.size,
+                        "description": disk_entry.description,
+                        "tags": tag_refs,
+                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                    },
+                    schema=NetBoxVirtualDiskSyncState,
+                    current_normalizer=lambda record: {
+                        "virtual_machine": record.get("virtual_machine"),
+                        "name": record.get("name"),
+                        "size": record.get("size"),
+                        "description": record.get("description"),
+                        "tags": record.get("tags"),
+                        "custom_fields": record.get("custom_fields"),
+                    },
+                )
 
         return virtual_machine
 
