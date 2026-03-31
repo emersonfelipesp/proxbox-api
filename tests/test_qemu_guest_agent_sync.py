@@ -291,3 +291,44 @@ def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
     )
     assert len(result) == 1
     assert ip_payloads and ip_payloads[0]["address"] == "10.0.0.22/24"
+
+
+def test_vm_sync_marks_missing_primary_ip_as_warning(monkeypatch):
+    data = _vm_sync_inputs({"agent": 0, "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0"})
+    ip_payloads: list[dict] = []
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+
+    class _WebSocket:
+        def __init__(self):
+            self.payloads: list[dict] = []
+
+        async def send_json(self, payload: dict):
+            self.payloads.append(payload)
+
+    websocket = _WebSocket()
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            websocket=websocket,
+            use_websocket=True,
+        )
+    )
+
+    assert len(result) == 1
+    warning_payloads = [
+        payload
+        for payload in websocket.payloads
+        if payload.get("object") == "virtual_machine"
+        and isinstance(payload.get("data"), dict)
+        and payload["data"].get("warning")
+    ]
+    assert warning_payloads
+    assert warning_payloads[0]["data"]["completed"] is True
+    assert "No IP address found; primary IP not set." in warning_payloads[0]["data"]["warning"]
+    assert not ip_payloads
