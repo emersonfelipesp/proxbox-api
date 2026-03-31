@@ -60,11 +60,10 @@ jobs:
   # Each uses different mock data to avoid conflicts.
   e2e-demo:
     runs-on: ubuntu-latest
-    needs: [test, docker-images]
+    needs: [test]
     if: |
       !cancelled() &&
-      needs.test.result == 'success' &&
-      (needs.docker-images.result == 'success' || needs.docker-images.result == 'skipped')
+      needs.test.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -104,14 +103,10 @@ jobs:
 
   e2e-http:
     runs-on: ubuntu-latest
-    needs: [test, docker-images]
+    needs: [test]
     if: |
       !cancelled() &&
-      needs.test.result == 'success' &&
-      (needs.docker-images.result == 'success' || needs.docker-images.result == 'skipped')
-    env:
-      IMAGE_NS: emersonfelipesp/proxbox-api
-      PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
+      needs.test.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -123,17 +118,19 @@ jobs:
           python-version: "3.12"
 
       - name: Sync dependencies
-        run: uv sync --frozen --extra e2e --group dev
+        run: uv sync --frozen --no-dev
+
+      - name: Build Docker image
+        run: docker build -t proxbox-e2e:test .
 
       - name: "E2E — published image latest (nginx + uvicorn, HTTP)"
         run: |
           set -eux
-          docker pull "${IMAGE_NS}:latest"
           docker rm -f proxbox-e2e-http 2>/dev/null || true
           docker run -d --name proxbox-e2e-http \
             -p 127.0.0.1:18080:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
-            "${IMAGE_NS}:latest"
+            proxbox-e2e:test
           for i in $(seq 1 40); do
             if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then break; fi
             sleep 2
@@ -145,14 +142,10 @@ jobs:
 
   e2e-https:
     runs-on: ubuntu-latest
-    needs: [test, docker-images]
+    needs: [test]
     if: |
       !cancelled() &&
-      needs.test.result == 'success' &&
-      (needs.docker-images.result == 'success' || needs.docker-images.result == 'skipped')
-    env:
-      IMAGE_NS: emersonfelipesp/proxbox-api
-      PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
+      needs.test.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -164,17 +157,19 @@ jobs:
           python-version: "3.12"
 
       - name: Sync dependencies
-        run: uv sync --frozen --extra e2e --group dev
+        run: uv sync --frozen --no-dev
+
+      - name: Build Docker image (mkcert)
+        run: docker build -t proxbox-e2e-https:test --target mkcert .
 
       - name: "E2E — published image latest-mkcert (nginx + HTTPS + uvicorn)"
         run: |
           set -eux
-          docker pull "${IMAGE_NS}:latest-mkcert"
           docker rm -f proxbox-e2e-https 2>/dev/null || true
           docker run -d --name proxbox-e2e-https \
             -p 127.0.0.1:18443:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
-            "${IMAGE_NS}:latest-mkcert"
+            proxbox-e2e-https:test
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then break; fi
             sleep 2
