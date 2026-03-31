@@ -1,4 +1,4 @@
-"""Full device + VM synchronization HTTP and SSE endpoints."""
+"""Full multi-stage synchronization HTTP and SSE endpoints."""
 
 from __future__ import annotations
 
@@ -13,11 +13,38 @@ from proxbox_api.logger import logger
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
+from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
+    _create_all_virtual_machine_backups,
+    create_all_virtual_machine_backups,
+)
+from proxbox_api.routes.virtualization.virtual_machines.disks_vm import (
+    create_virtual_disks,
+)
+from proxbox_api.routes.virtualization.virtual_machines.snapshots_vm import (
+    _create_all_virtual_machine_snapshots,
+    create_all_virtual_machine_snapshots,
+)
+from proxbox_api.routes.virtualization.virtual_machines.storages_vm import (
+    create_storages,
+)
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 full_update_router = APIRouter()
+
+
+def _result_count(value) -> int:
+    """Best-effort count for stage payloads returned by sync helpers."""
+    if isinstance(value, dict):
+        for key in ("count", "created", "devices_count", "virtual_machines_count"):
+            raw = value.get(key)
+            if isinstance(raw, int):
+                return raw
+        return 0
+    if isinstance(value, list):
+        return len(value)
+    return 0
 
 
 @full_update_router.get("/full-update")
@@ -28,9 +55,14 @@ async def full_update_sync(
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: int | None = None,
 ) -> dict:
     sync_nodes: list = []
+    sync_storage: list = []
     sync_vms: list = []
+    sync_disks: dict = {}
+    sync_backups: list = []
+    sync_snapshots: dict = {}
 
     try:
         sync_nodes = await create_proxmox_devices(
@@ -46,6 +78,23 @@ async def full_update_sync(
         logger.exception("Error while syncing nodes during full-update")
         raise ProxboxException(
             message="Error while syncing nodes.", python_exception=str(error)
+        ) from error
+
+    try:
+        sync_storage = await create_storages(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            tag=tag,
+            use_websocket=False,
+            fetch_max_concurrency=fetch_max_concurrency,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing storages during full-update")
+        raise ProxboxException(
+            message="Error while syncing storages.",
+            python_exception=str(error),
         ) from error
 
     try:
@@ -67,12 +116,75 @@ async def full_update_sync(
             python_exception=str(error),
         ) from error
 
+    try:
+        sync_disks = await create_virtual_disks(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            tag=tag,
+            use_websocket=False,
+            use_css=False,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing virtual disks during full-update")
+        raise ProxboxException(
+            message="Error while syncing virtual disks.",
+            python_exception=str(error),
+        ) from error
+
+    try:
+        sync_backups = await create_all_virtual_machine_backups(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            tag=tag,
+            delete_nonexistent_backup=True,
+            fetch_max_concurrency=fetch_max_concurrency,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing backups during full-update")
+        raise ProxboxException(
+            message="Error while syncing backups.",
+            python_exception=str(error),
+        ) from error
+
+    try:
+        sync_snapshots = await create_all_virtual_machine_snapshots(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            tag=tag,
+            fetch_max_concurrency=fetch_max_concurrency,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing snapshots during full-update")
+        raise ProxboxException(
+            message="Error while syncing snapshots.",
+            python_exception=str(error),
+        ) from error
+
     return {
         "status": "completed",
         "devices": sync_nodes,
+        "storage": sync_storage,
         "virtual_machines": sync_vms,
+        "virtual_disks": sync_disks,
+        "backups": sync_backups,
+        "snapshots": sync_snapshots,
         "devices_count": len(sync_nodes),
+        "storage_count": len(sync_storage),
         "virtual_machines_count": len(sync_vms),
+        "virtual_disks_count": _result_count(sync_disks),
+        "backups_count": len(sync_backups),
+        "snapshots_count": _result_count(sync_snapshots),
     }
 
 
@@ -84,12 +196,21 @@ async def full_update_sync_stream(
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: int | None = None,
 ) -> StreamingResponse:
     async def event_stream():
         sync_nodes: list = []
+        sync_storage: list = []
         sync_vms: list = []
+        sync_disks: dict = {}
+        sync_backups: list = []
+        sync_snapshots: dict = {}
         devices_bridge = WebSocketSSEBridge()
+        storage_bridge = WebSocketSSEBridge()
         vm_bridge = WebSocketSSEBridge()
+        disks_bridge = WebSocketSSEBridge()
+        backups_bridge = WebSocketSSEBridge()
+        snapshots_bridge = WebSocketSSEBridge()
         try:
             yield sse_event(
                 "step",
@@ -139,6 +260,43 @@ async def full_update_sync_stream(
             yield sse_event(
                 "step",
                 {
+                    "step": "storage",
+                    "status": "started",
+                    "message": "Starting storage synchronization.",
+                },
+            )
+
+            async def _run_storage_sync():
+                try:
+                    return await create_storages(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        tag=tag,
+                        websocket=storage_bridge,
+                        use_websocket=True,
+                        fetch_max_concurrency=fetch_max_concurrency,
+                    )
+                finally:
+                    await storage_bridge.close()
+
+            storage_task = asyncio.create_task(_run_storage_sync())
+            async for frame in storage_bridge.iter_sse():
+                yield frame
+            sync_storage = await storage_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "storage",
+                    "status": "completed",
+                    "message": "Storage synchronization finished.",
+                    "result": {"count": len(sync_storage)},
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
                     "step": "virtual-machines",
                     "status": "started",
                     "message": "Starting virtual machines synchronization.",
@@ -176,15 +334,140 @@ async def full_update_sync_stream(
             )
 
             yield sse_event(
+                "step",
+                {
+                    "step": "virtual-disks",
+                    "status": "started",
+                    "message": "Starting virtual disks synchronization.",
+                },
+            )
+
+            async def _run_disks_sync():
+                try:
+                    return await create_virtual_disks(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        cluster_resources=cluster_resources,
+                        tag=tag,
+                        websocket=disks_bridge,
+                        use_websocket=True,
+                        use_css=False,
+                    )
+                finally:
+                    await disks_bridge.close()
+
+            disks_task = asyncio.create_task(_run_disks_sync())
+            async for frame in disks_bridge.iter_sse():
+                yield frame
+            sync_disks = await disks_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-disks",
+                    "status": "completed",
+                    "message": "Virtual disks synchronization finished.",
+                    "result": {"count": _result_count(sync_disks)},
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "backups",
+                    "status": "started",
+                    "message": "Starting backup synchronization.",
+                },
+            )
+
+            async def _run_backups_sync():
+                try:
+                    return await _create_all_virtual_machine_backups(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        tag=tag,
+                        delete_nonexistent_backup=True,
+                        fetch_max_concurrency=fetch_max_concurrency,
+                        websocket=backups_bridge,
+                        use_websocket=True,
+                    )
+                finally:
+                    await backups_bridge.close()
+
+            backups_task = asyncio.create_task(_run_backups_sync())
+            async for frame in backups_bridge.iter_sse():
+                yield frame
+            sync_backups = await backups_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "backups",
+                    "status": "completed",
+                    "message": "Backup synchronization finished.",
+                    "result": {"count": len(sync_backups)},
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "snapshots",
+                    "status": "started",
+                    "message": "Starting snapshot synchronization.",
+                },
+            )
+
+            async def _run_snapshots_sync():
+                try:
+                    return await _create_all_virtual_machine_snapshots(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        cluster_resources=cluster_resources,
+                        tag=tag,
+                        fetch_max_concurrency=fetch_max_concurrency,
+                        websocket=snapshots_bridge,
+                        use_websocket=True,
+                    )
+                finally:
+                    await snapshots_bridge.close()
+
+            snapshots_task = asyncio.create_task(_run_snapshots_sync())
+            async for frame in snapshots_bridge.iter_sse():
+                yield frame
+            sync_snapshots = await snapshots_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "snapshots",
+                    "status": "completed",
+                    "message": "Snapshot synchronization finished.",
+                    "result": {"count": _result_count(sync_snapshots)},
+                },
+            )
+
+            yield sse_event(
                 "complete",
                 {
                     "ok": True,
                     "message": "Full update sync completed.",
                     "result": {
                         "devices": sync_nodes,
+                        "storage": sync_storage,
                         "virtual_machines": sync_vms,
+                        "virtual_disks": sync_disks,
+                        "backups": sync_backups,
+                        "snapshots": sync_snapshots,
                         "devices_count": len(sync_nodes),
+                        "storage_count": len(sync_storage),
                         "virtual_machines_count": len(sync_vms),
+                        "virtual_disks_count": _result_count(sync_disks),
+                        "backups_count": len(sync_backups),
+                        "snapshots_count": _result_count(sync_snapshots),
                     },
                 },
             )

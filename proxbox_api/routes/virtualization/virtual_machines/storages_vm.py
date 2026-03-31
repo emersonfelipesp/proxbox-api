@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -13,6 +14,9 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
+_DEFAULT_FETCH_CONCURRENCY = max(
+    1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8"))
+)
 
 
 @router.get("/storage/create")
@@ -22,6 +26,7 @@ async def create_storages(
     tag: ProxboxTagDep,
     websocket=None,
     use_websocket: bool = False,
+    fetch_max_concurrency: int | None = None,
 ):
     """Sync Proxmox storages into NetBox plugin storage rows."""
     return await sync_storages(
@@ -30,6 +35,7 @@ async def create_storages(
         tag=tag,
         websocket=websocket,
         use_websocket=use_websocket,
+        fetch_concurrency=fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY,
     )
 
 

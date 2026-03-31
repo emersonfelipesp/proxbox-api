@@ -437,6 +437,24 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
         "proxbox_api.app.full_update.create_virtual_machines",
         lambda **kwargs: asyncio.sleep(0, result=[{"id": 101, "name": "vm01"}]),
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_storages",
+        lambda **kwargs: asyncio.sleep(0, result=[{"id": 201, "name": "local"}]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_virtual_disks",
+        lambda **kwargs: asyncio.sleep(
+            0, result={"count": 2, "created": 2, "updated": 0, "skipped": 0}
+        ),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_backups",
+        lambda **kwargs: asyncio.sleep(0, result=[{"id": 301, "vmid": "101"}]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_snapshots",
+        lambda **kwargs: asyncio.sleep(0, result={"count": 1, "created": 1, "skipped": 0}),
+    )
 
     body = asyncio.run(
         full_update_sync(
@@ -452,9 +470,17 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
     assert body == {
         "status": "completed",
         "devices": [{"id": 1, "name": "node01"}],
+        "storage": [{"id": 201, "name": "local"}],
         "virtual_machines": [{"id": 101, "name": "vm01"}],
+        "virtual_disks": {"count": 2, "created": 2, "updated": 0, "skipped": 0},
+        "backups": [{"id": 301, "vmid": "101"}],
+        "snapshots": {"count": 1, "created": 1, "skipped": 0},
         "devices_count": 1,
+        "storage_count": 1,
         "virtual_machines_count": 1,
+        "virtual_disks_count": 2,
+        "backups_count": 1,
+        "snapshots_count": 1,
     }
 
 
@@ -466,6 +492,24 @@ def test_full_update_sync_handles_empty_device_result(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.app.full_update.create_virtual_machines",
         lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_storages",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_virtual_disks",
+        lambda **kwargs: asyncio.sleep(
+            0, result={"count": 0, "created": 0, "updated": 0, "skipped": 0}
+        ),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_backups",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_snapshots",
+        lambda **kwargs: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0}),
     )
 
     body = asyncio.run(
@@ -480,8 +524,13 @@ def test_full_update_sync_handles_empty_device_result(monkeypatch):
     )
 
     assert body["devices"] == []
+    assert body["storage"] == []
     assert body["virtual_machines"] == []
+    assert body["virtual_disks_count"] == 0
+    assert body["backups_count"] == 0
+    assert body["snapshots_count"] == 0
     assert body["devices_count"] == 0
+    assert body["storage_count"] == 0
     assert body["virtual_machines_count"] == 0
 
 
@@ -508,6 +557,10 @@ def test_full_update_sync_wraps_vm_phase_unexpected_errors(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.app.full_update.create_proxmox_devices",
         lambda **kwargs: asyncio.sleep(0, result=[{"id": 1}]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_storages",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
     )
 
     async def _fail_vms(**kwargs):
@@ -734,9 +787,66 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):
             )
         return [{"id": 101, "name": "vm01"}]
 
+    async def _fake_storage(**kwargs):
+        bridge = kwargs.get("websocket")
+        if bridge is not None:
+            await bridge.send_json(
+                {
+                    "step": "storage",
+                    "status": "synced",
+                    "message": "Synced storage lab/local",
+                }
+            )
+        return [{"id": 201, "name": "local"}]
+
+    async def _fake_disks(**kwargs):
+        bridge = kwargs.get("websocket")
+        if bridge is not None:
+            await bridge.send_json(
+                {
+                    "step": "virtual-disks",
+                    "status": "synced",
+                    "message": "Synced virtual disk vm01/scsi0",
+                }
+            )
+        return {"count": 1, "created": 1, "updated": 0, "skipped": 0}
+
+    async def _fake_backups(**kwargs):
+        bridge = kwargs.get("websocket")
+        if bridge is not None:
+            await bridge.send_json(
+                {
+                    "step": "backups",
+                    "status": "completed",
+                    "message": "Backup sync completed.",
+                }
+            )
+        return [{"id": 301}]
+
+    async def _fake_snapshots(**kwargs):
+        bridge = kwargs.get("websocket")
+        if bridge is not None:
+            await bridge.send_json(
+                {
+                    "step": "snapshots",
+                    "status": "completed",
+                    "message": "Snapshot sync completed.",
+                }
+            )
+        return {"count": 1, "created": 1, "skipped": 0}
+
     monkeypatch.setattr("proxbox_api.app.full_update.StreamingResponse", _StreamingResponseStub)
     monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fake_devices)
     monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_storages", _fake_storage)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_disks", _fake_disks)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update._create_all_virtual_machine_backups", _fake_backups
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update._create_all_virtual_machine_snapshots",
+        _fake_snapshots,
+    )
 
     response = asyncio.run(
         full_update_sync_stream(
@@ -756,6 +866,8 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):
     assert "Synced device pve01" in payload
     assert "Processing virtual_machine vm01" in payload
     assert "Synced virtual_machine vm01" in payload
+    assert "Synced storage lab/local" in payload
+    assert "Synced virtual disk vm01/scsi0" in payload
     assert "event: complete" in payload
 
 

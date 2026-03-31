@@ -1,7 +1,7 @@
 """VM backup discovery, batch processing, and sync routes."""
 
-# FastAPI Imports
 import asyncio
+import os
 from datetime import datetime
 from typing import Annotated
 
@@ -25,16 +25,20 @@ from proxbox_api.netbox_rest import (
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxBackupSyncState,
 )
-from proxbox_api.routes.proxmox import (
-    get_proxmox_node_storage_content,  # Get VM Config
-)  # Get Proxmox Node Storage Content
 from proxbox_api.routes.proxmox.cluster import (
     ClusterStatusDep,
 )  # Cluster Status and Resources
+from proxbox_api.services.proxmox_helpers import (
+    dump_models,
+    get_node_storage_content,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
+_DEFAULT_FETCH_CONCURRENCY = max(
+    1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8"))
+)
 
 
 def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
@@ -181,13 +185,16 @@ async def get_node_backups(
             for cluster_node in cluster.node_list:
                 if cluster_node.name == node:
                     try:
-                        backups = await get_proxmox_node_storage_content(
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            node=node,
-                            storage=storage,
-                            vmid=vmid,
-                            content="backup",
+                        backups = await asyncio.to_thread(
+                            lambda: dump_models(
+                                get_node_storage_content(
+                                    proxmox,
+                                    node=node,
+                                    storage=storage,
+                                    vmid=vmid,
+                                    content="backup",
+                                )
+                            )
                         )
 
                         volids = _volids_from_proxmox_storage_backup_items(backups)
@@ -243,6 +250,7 @@ async def _create_all_virtual_machine_backups(
     cluster_status,
     tag,
     delete_nonexistent_backup=False,
+    fetch_max_concurrency: int | None = None,
     websocket=None,
     use_websocket=False,
 ):
@@ -265,6 +273,34 @@ async def _create_all_virtual_machine_backups(
 
         all_backup_tasks = []
         proxmox_backups = set()
+        discovery_tasks: list[asyncio.Task] = []
+        fetch_semaphore = asyncio.Semaphore(
+            fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY
+        )
+
+        async def _discover_backups_for_node_storage(
+            proxmox,
+            node_name: str,
+            storage_name: str,
+        ) -> tuple[list, set[str]]:
+            async with fetch_semaphore:
+                backups = await asyncio.to_thread(
+                    lambda: dump_models(
+                        get_node_storage_content(
+                            proxmox,
+                            node=node_name,
+                            storage=storage_name,
+                            content="backup",
+                        )
+                    )
+                )
+            volids = _volids_from_proxmox_storage_backup_items(backups)
+            tasks = [
+                create_netbox_backups(backup, nb)
+                for backup in backups
+                if backup.get("content") == "backup"
+            ]
+            return tasks, volids
 
         for proxmox, cluster in zip(pxs, cluster_status):
             storage_list = [
@@ -282,24 +318,27 @@ async def _create_all_virtual_machine_backups(
                         if storage.get("nodes") == "all" or cluster_node.name in storage.get(
                             "nodes", []
                         ):
-                            try:
-                                node_backup_tasks, node_volids = await get_node_backups(
-                                    pxs=pxs,
-                                    cluster_status=cluster_status,
-                                    node=cluster_node.name,
-                                    storage=storage.get("storage"),
-                                    netbox_session=nb,
+                            discovery_tasks.append(
+                                asyncio.create_task(
+                                    _discover_backups_for_node_storage(
+                                        proxmox=proxmox,
+                                        node_name=cluster_node.name,
+                                        storage_name=storage.get("storage"),
+                                    )
                                 )
-                                all_backup_tasks.extend(node_backup_tasks)
-                                proxmox_backups.update(node_volids)
-                            except Exception:
-                                logger.warning(
-                                    "Backup discovery failed for node %s storage %s",
-                                    cluster_node.name,
-                                    storage.get("storage"),
-                                    exc_info=True,
-                                )
-                                continue
+                            )
+
+        if discovery_tasks:
+            discovery_results = await asyncio.gather(
+                *discovery_tasks, return_exceptions=True
+            )
+            for result in discovery_results:
+                if isinstance(result, Exception):
+                    logger.warning("Backup discovery failed: %s", result, exc_info=True)
+                    continue
+                node_backup_tasks, node_volids = result
+                all_backup_tasks.extend(node_backup_tasks)
+                proxmox_backups.update(node_volids)
 
         if not all_backup_tasks:
             error_msg = "No backups found to process"
@@ -408,6 +447,14 @@ async def create_all_virtual_machine_backups(
             description="If true, deletes backups that exist in NetBox but not in Proxmox.",
         ),
     ] = False,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            title="Fetch max concurrency",
+            description="Maximum parallel Proxmox fetch operations for backup discovery.",
+            ge=1,
+        ),
+    ] = None,
 ):
     return await _create_all_virtual_machine_backups(
         netbox_session=netbox_session,
@@ -415,6 +462,7 @@ async def create_all_virtual_machine_backups(
         cluster_status=cluster_status,
         tag=tag,
         delete_nonexistent_backup=delete_nonexistent_backup,
+        fetch_max_concurrency=fetch_max_concurrency,
     )
 
 
@@ -431,6 +479,14 @@ async def create_all_virtual_machine_backups_stream(
             description="If true, deletes backups that exist in NetBox but not in Proxmox.",
         ),
     ] = False,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            title="Fetch max concurrency",
+            description="Maximum parallel Proxmox fetch operations for backup discovery.",
+            ge=1,
+        ),
+    ] = None,
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -443,6 +499,7 @@ async def create_all_virtual_machine_backups_stream(
                     cluster_status=cluster_status,
                     tag=tag,
                     delete_nonexistent_backup=delete_nonexistent_backup,
+                    fetch_max_concurrency=fetch_max_concurrency,
                     websocket=bridge,
                     use_websocket=True,
                 )
