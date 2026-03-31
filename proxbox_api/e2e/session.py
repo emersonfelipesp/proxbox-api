@@ -12,10 +12,32 @@ if TYPE_CHECKING:
     from netbox_sdk.config import Config
     from netbox_sdk.facade import Api
 
+from netbox_sdk.client import NetBoxApiClient
+
 E2E_TAG_NAME = "proxbox e2e testing"
 E2E_TAG_SLUG = "proxbox-e2e-testing"
 E2E_TAG_COLOR = "4caf50"
 E2E_TAG_DESCRIPTION = "Objects created during proxbox-api e2e testing"
+
+
+class E2ENetBoxApiClient(NetBoxApiClient):
+    """Same as ``NetBoxApiClient`` but without HTTP response caching.
+
+    The SDK caches GET list responses (e.g. ``/api/dcim/sites/``) for up to 60s.
+    Reconcile helpers often GET (empty), POST (create), then GET again with the
+    same query; a cache hit returns the stale empty list, so the second pass
+    tries POST again and NetBox rejects the duplicate.
+    """
+
+    def _cache_policy(
+        self,
+        *,
+        method: str,
+        path: str,
+        query: Any = None,
+        payload: dict[str, Any] | list[Any] | None = None,
+    ) -> None:
+        return None
 
 
 async def create_netbox_demo_session(config: "Config") -> "Api":
@@ -27,14 +49,13 @@ async def create_netbox_demo_session(config: "Config") -> "Api":
     Returns:
         Async NetBox API instance ready for requests.
     """
-    from netbox_sdk.client import NetBoxApiClient
     from netbox_sdk.config import resolved_token
     from netbox_sdk.facade import Api
 
     if not resolved_token(config):
         raise ValueError("Config must have valid token for demo session")
 
-    client = NetBoxApiClient(config)
+    client = E2ENetBoxApiClient(config)
     return Api(client=client)
 
 

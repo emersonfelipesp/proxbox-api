@@ -7,11 +7,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any
-
-from playwright.async_api import BrowserContext, Page, TimeoutError, async_playwright
+from typing import TYPE_CHECKING, Any
 
 from proxbox_api.proxmox_codegen.apidoc_parser import PROXMOX_API_VIEWER_URL
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
 
 HTTP_METHODS = ("GET", "POST", "PUT", "DELETE")
 
@@ -252,6 +253,8 @@ def _synthesize_raw_sections(method_data: dict[str, Any]) -> list[str]:
 async def _capture_endpoint(
     page: Page, item: dict[str, Any], timeout_ms: int
 ) -> tuple[str, dict[str, Any]] | None:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
     path = str(item.get("path") or "")
     if not path:
         return None
@@ -279,7 +282,7 @@ async def _capture_endpoint(
             try:
                 await tab.click(timeout=timeout_ms)
                 await page.wait_for_timeout(60)
-            except TimeoutError:
+            except PlaywrightTimeoutError:
                 pass
 
             buttons = page.locator("#docview .x-btn-inner")
@@ -290,7 +293,7 @@ async def _capture_endpoint(
                     try:
                         await buttons.nth(idx).click(timeout=timeout_ms)
                         await page.wait_for_timeout(40)
-                    except TimeoutError:
+                    except PlaywrightTimeoutError:
                         continue
 
             pre_texts = await page.locator("#docview pre").all_text_contents()
@@ -424,6 +427,8 @@ async def crawl_proxmox_api_viewer_async(
     checkpoint_every: int = 50,
 ) -> dict[str, Any]:
     """Recursively traverse all navigation items and capture endpoint raw data in parallel."""
+
+    from playwright.async_api import async_playwright
 
     started_at = perf_counter()
     config = CrawlConfig(
