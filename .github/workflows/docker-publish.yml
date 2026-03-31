@@ -78,6 +78,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Required for cache-to: gha together with load: true (docker driver cannot export cache).
+          driver: docker-container
 
       - name: Build amd64 image for in-container tests
         uses: docker/build-push-action@v6
