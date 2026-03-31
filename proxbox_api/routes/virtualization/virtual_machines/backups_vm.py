@@ -134,7 +134,7 @@ async def create_netbox_backups(
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
                 "storage": _relation_id_or_none(record.get("storage")),
-                "virtual_machine": record.get("virtual_machine"),
+                "virtual_machine": _relation_id_or_none(record.get("virtual_machine")),
                 "subtype": record.get("subtype"),
                 "creation_time": record.get("creation_time"),
                 "size": record.get("size"),
