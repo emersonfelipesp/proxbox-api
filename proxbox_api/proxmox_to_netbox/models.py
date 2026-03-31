@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import (
@@ -95,6 +96,7 @@ class NetBoxNamedSlugTaggedState(BaseModel):
     name: str
     slug: str
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("tags", mode="before")
     @classmethod
@@ -133,6 +135,7 @@ class NetBoxClusterSyncState(BaseModel):
     type: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("type", mode="before")
     @classmethod
@@ -152,6 +155,7 @@ class NetBoxDeviceTypeSyncState(BaseModel):
     slug: str
     manufacturer: int | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("manufacturer", mode="before")
     @classmethod
@@ -219,6 +223,7 @@ class NetBoxInterfaceSyncState(BaseModel):
     status: str = "active"
     type: str
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("device", mode="before")
     @classmethod
@@ -248,6 +253,7 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     type: str | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("virtual_machine", "bridge", mode="before")
     @classmethod
@@ -268,6 +274,7 @@ class NetBoxIpAddressSyncState(BaseModel):
     assigned_object_id: int | None = None
     status: str = "active"
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("assigned_object_id", mode="before")
     @classmethod
@@ -346,6 +353,7 @@ class NetBoxVirtualDiskSyncState(BaseModel):
     size: int
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("virtual_machine", mode="before")
     @classmethod
@@ -511,6 +519,7 @@ class NetBoxDeviceSyncState(BaseModel):
     site: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -548,17 +557,21 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     device_id: int | None = None
     role_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
+    last_updated: datetime | None = None
 
     @computed_field(return_type=dict)
     @property
     def vm_custom_fields(self) -> dict[str, Any]:
-        return {
+        fields = {
             "proxmox_vm_id": self.resource.vmid,
             "proxmox_start_at_boot": self.config.start_at_boot,
             "proxmox_unprivileged_container": self.config.unprivileged_container,
             "proxmox_qemu_agent": self.config.qemu_agent_enabled,
             "proxmox_search_domain": self.config.searchdomain,
         }
+        if self.last_updated:
+            fields["proxmox_last_updated"] = self.last_updated.isoformat()
+        return fields
 
     def as_netbox_create_body(self) -> NetBoxVirtualMachineCreateBody:
         """Return validated NetBox virtual machine create body."""
