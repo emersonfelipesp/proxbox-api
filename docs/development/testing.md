@@ -6,7 +6,14 @@
 - `httpx`
 - FastAPI `TestClient`
 
-Dependencies are listed in `requirements-test.txt`.
+Test dependencies are defined in `pyproject.toml` under
+`[project.optional-dependencies] -> test`.
+
+Install them with:
+
+```bash
+uv sync --extra test --group dev
+```
 
 ## Run tests
 

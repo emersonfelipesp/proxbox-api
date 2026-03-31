@@ -123,6 +123,12 @@ Normalizacao de parametros de caminho:
 - `GET /virtualization/virtual-machines/summary/example`
 - `GET /virtualization/virtual-machines/backups/create`
 - `GET /virtualization/virtual-machines/backups/all/create`
+- `GET /virtualization/virtual-machines/backups/all/create/stream`
+- `GET /virtualization/virtual-machines/snapshots/create`
+- `GET /virtualization/virtual-machines/snapshots/all/create`
+- `GET /virtualization/virtual-machines/snapshots/all/create/stream`
+- `GET /virtualization/virtual-machines/storage/create`
+- `GET /virtualization/virtual-machines/storage/create/stream`
 
 ## Atualizacao completa (`/full-update`)
 
