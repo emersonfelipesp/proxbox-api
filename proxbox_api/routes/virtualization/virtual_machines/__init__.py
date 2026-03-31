@@ -22,8 +22,10 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
 )
 
 router = APIRouter()
-router.include_router(sync_vm.router)
+# Include read_vm first so its static routes (e.g., /interfaces/create) are matched
+# before sync_vm's dynamic routes (e.g., /{netbox_vm_id}/create)
 router.include_router(read_vm.router)
+router.include_router(sync_vm.router)
 router.include_router(disks_vm.router)
 router.include_router(storages_vm.router)
 router.include_router(backups_vm.router)

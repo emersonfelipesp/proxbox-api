@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,31 @@ class FakeNetBoxSession:
         )
         self._status_error = status_error
         self._openapi_error = openapi_error
+        # Set up fake virtualization endpoint for VM routes
+        self.virtualization = self._FakeVirtualization()
+
+    class _FakeVirtualization:
+        def __init__(self):
+            self.virtual_machines = FakeNetBoxSession._FakeVMEndpoint()
+
+    class _FakeVMEndpoint:
+        def all(self):
+            return FakeNetBoxSession._FakeAsyncIter([])
+
+        async def get(self, *args, **kwargs):
+            return None
+
+    class _FakeAsyncIter:
+        def __init__(self, items):
+            self._items = items
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._items:
+                raise StopAsyncIteration
+            return self._items.pop(0)
 
     def status(self) -> Any:
         if self._status_error:

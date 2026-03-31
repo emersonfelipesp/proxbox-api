@@ -447,7 +447,18 @@ class NetBoxTaskHistorySyncState(BaseModel):
     def normalize_relations(cls, value: Any) -> Any:
         return _relation_id(value)
 
-    @field_validator("vm_type", "upid", "node", "task_id", "task_type", "username", "status", "task_state", "exitstatus", mode="before")
+    @field_validator(
+        "vm_type",
+        "upid",
+        "node",
+        "task_id",
+        "task_type",
+        "username",
+        "status",
+        "task_state",
+        "exitstatus",
+        mode="before",
+    )
     @classmethod
     def normalize_text(cls, value: Any) -> Any:
         if value is None:
@@ -485,7 +496,9 @@ class NetBoxTaskHistorySyncState(BaseModel):
         if not self.status:
             self.status = self.exitstatus or self.task_state or "unknown"
         else:
-            self.status = str(self.status).strip() or self.exitstatus or self.task_state or "unknown"
+            self.status = (
+                str(self.status).strip() or self.exitstatus or self.task_state or "unknown"
+            )
         return self
 
 

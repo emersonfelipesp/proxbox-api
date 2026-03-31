@@ -5,9 +5,9 @@ Verifies that the backend produces SSE events in the correct format
 for the plugin to consume. These tests ensure the SSE contract is maintained.
 """
 
-import json
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
+
 from proxbox_api.main import app
 
 
@@ -15,7 +15,7 @@ class TestPluginAPIPath:
     """Test paths expected by the plugin."""
 
     @pytest.mark.asyncio
-    async def test_devices_create_path_exists(self):
+    async def test_devices_create_path_exists(self, client_with_fake_netbox):
         """Plugin expects /dcim/devices/create endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -26,7 +26,7 @@ class TestPluginAPIPath:
             assert resp.status_code != 404
 
     @pytest.mark.asyncio
-    async def test_vms_create_path_exists(self):
+    async def test_vms_create_path_exists(self, client_with_fake_netbox):
         """Plugin expects /virtualization/virtual-machines/create endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -36,7 +36,7 @@ class TestPluginAPIPath:
             assert resp.status_code != 404
 
     @pytest.mark.asyncio
-    async def test_backups_create_path_exists(self):
+    async def test_backups_create_path_exists(self, client_with_fake_netbox):
         """Plugin expects /virtualization/virtual-machines/backups/all/create endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -46,7 +46,7 @@ class TestPluginAPIPath:
             assert resp.status_code != 404
 
     @pytest.mark.asyncio
-    async def test_snapshots_create_path_exists(self):
+    async def test_snapshots_create_path_exists(self, client_with_fake_netbox):
         """Plugin expects /virtualization/virtual-machines/snapshots/all/create endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -56,7 +56,7 @@ class TestPluginAPIPath:
             assert resp.status_code != 404
 
     @pytest.mark.asyncio
-    async def test_storage_create_path_exists(self):
+    async def test_storage_create_path_exists(self, client_with_fake_netbox):
         """Plugin expects /virtualization/virtual-machines/storage/create endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -66,7 +66,7 @@ class TestPluginAPIPath:
             assert resp.status_code != 404
 
     @pytest.mark.asyncio
-    async def test_virtual_disks_create_path_exists(self):
+    async def test_virtual_disks_create_path_exists(self, client_with_fake_netbox):
         """Plugin expects /virtualization/virtual-machines/virtual-disks/create endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -76,7 +76,7 @@ class TestPluginAPIPath:
             assert resp.status_code != 404
 
     @pytest.mark.asyncio
-    async def test_full_update_path_exists(self):
+    async def test_full_update_path_exists(self, client_with_fake_netbox):
         """Plugin expects /full-update endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -90,7 +90,7 @@ class TestStreamEndpoints:
     """Test stream endpoint variants."""
 
     @pytest.mark.asyncio
-    async def test_devices_create_stream_path_exists(self):
+    async def test_devices_create_stream_path_exists(self, client_with_fake_netbox):
         """Plugin expects /dcim/devices/create/stream endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -102,7 +102,7 @@ class TestStreamEndpoints:
                 assert resp.status_code != 405
 
     @pytest.mark.asyncio
-    async def test_vms_create_stream_path_exists(self):
+    async def test_vms_create_stream_path_exists(self, client_with_fake_netbox):
         """Plugin expects /virtualization/virtual-machines/create/stream endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -115,7 +115,7 @@ class TestStreamEndpoints:
                 assert resp.status_code != 405
 
     @pytest.mark.asyncio
-    async def test_full_update_stream_path_exists(self):
+    async def test_full_update_stream_path_exists(self, client_with_fake_netbox):
         """Plugin expects /full-update/stream endpoint."""
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -130,7 +130,7 @@ class TestNonStreamEndpoints:
     """Test non-stream endpoints return JSON."""
 
     @pytest.mark.asyncio
-    async def test_root_returns_json(self):
+    async def test_root_returns_json(self, client_with_fake_netbox):
         """Root endpoint should return JSON."""
         async with AsyncClient(
             transport=ASGITransport(app=app),

@@ -65,6 +65,7 @@ class ClusterResourcesTypeResponse(str, Enum):
     lxc = "lxc"
     openvz = "openvz"
     sdn = "sdn"
+    network = "network"
 
 
 class ProxmoxNodesPaths(str, Enum):
@@ -79,6 +80,7 @@ class ResourceType(Enum):
     lxc = "lxc"
     openvz = "openvz"
     sdn = "sdn"
+    network = "network"
 
 
 class NodeStatus(Enum):

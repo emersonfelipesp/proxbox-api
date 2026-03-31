@@ -109,7 +109,11 @@ class _BaseCompat:
     def find(self, **kwargs: Any) -> dict[str, Any] | None:
         async def _op() -> dict[str, Any] | None:
             endpoint = self._endpoint(self._nb())
-            result = await endpoint.get(**kwargs)
+            # Handle 'id' specially: pass as positional arg to use detail endpoint
+            if "id" in kwargs:
+                result = await endpoint.get(kwargs.pop("id"), **kwargs)
+            else:
+                result = await endpoint.get(**kwargs)
             return to_dict(result) if result else None
 
         return _run(_op())

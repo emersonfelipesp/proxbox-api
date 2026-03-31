@@ -72,23 +72,23 @@ async def create_storages(
 
     for (cluster_name, storage_name), payload in unique_payloads.items():
         record = await rest_reconcile_async(
-                nb,
-                "/api/plugins/proxbox/storage/",
-                lookup={"cluster": cluster_name, "name": storage_name},
-                payload=payload,
-                schema=NetBoxStorageSyncState,
-                current_normalizer=lambda item: {
-                    "cluster": item.get("cluster"),
-                    "name": item.get("name"),
-                    "storage_type": item.get("storage_type"),
-                    "content": item.get("content"),
-                    "path": item.get("path"),
-                    "nodes": item.get("nodes"),
-                    "shared": item.get("shared"),
-                    "enabled": item.get("enabled"),
-                    "backups": item.get("backups"),
-                    "tags": item.get("tags"),
-                },
+            nb,
+            "/api/plugins/proxbox/storage/",
+            lookup={"cluster": cluster_name, "name": storage_name},
+            payload=payload,
+            schema=NetBoxStorageSyncState,
+            current_normalizer=lambda item: {
+                "cluster": item.get("cluster"),
+                "name": item.get("name"),
+                "storage_type": item.get("storage_type"),
+                "content": item.get("content"),
+                "path": item.get("path"),
+                "nodes": item.get("nodes"),
+                "shared": item.get("shared"),
+                "enabled": item.get("enabled"),
+                "backups": item.get("backups"),
+                "tags": item.get("tags"),
+            },
         )
         data = record.serialize()
         synced.append(data)

@@ -195,10 +195,8 @@ def get_node_task_status(
 ) -> generated_models.GetNodesNodeTasksUpidStatusResponse:
     return _wrap_backend_call(
         "Error fetching Proxmox task status",
-        lambda: (
-            generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(
-                session.session.nodes(node).tasks(upid).status.get()
-            )
+        lambda: generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(
+            session.session.nodes(node).tasks(upid).status.get()
         ),
     )
 

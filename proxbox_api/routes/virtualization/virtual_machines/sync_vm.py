@@ -734,7 +734,9 @@ async def create_virtual_machines(
                                 )
 
         for disk_entry in vm_config_obj.disks:
-            storage_name = disk_entry.storage_name or storage_name_from_volume_id(disk_entry.storage)
+            storage_name = disk_entry.storage_name or storage_name_from_volume_id(
+                disk_entry.storage
+            )
             storage_record = find_storage_record(
                 storage_index,
                 cluster_name=cluster_name,
@@ -808,6 +810,7 @@ async def create_virtual_machines(
                             "object": "virtual_machine",
                             "data": {
                                 "completed": True,
+                                "status": "warning",
                                 "warning": "No IP address found; primary IP not set.",
                                 "rowid": virtual_machine.get("name"),
                             },
