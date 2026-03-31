@@ -750,6 +750,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#sync-de-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync de snapshots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync-de-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync de storage
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -998,6 +1020,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#sync-de-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync de snapshots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync-de-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync de storage
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1033,7 +1077,11 @@
 <ol>
 <li>Cria sync-process no NetBox.</li>
 <li>Sincroniza nodes Proxmox em devices NetBox.</li>
+<li>Sincroniza storages Proxmox em registros de storage do plugin NetBox.</li>
 <li>Sincroniza VMs Proxmox em VMs NetBox.</li>
+<li>Sincroniza discos virtuais das VMs descobertas.</li>
+<li>Sincroniza backups de VMs.</li>
+<li>Sincroniza snapshots de VMs.</li>
 <li>Atualiza runtime e status final.</li>
 </ol>
 <h2 id="sync-de-vms">Sync de VMs<a class="headerlink" href="#sync-de-vms" title="Permanent link">&para;</a></h2>
@@ -1045,6 +1093,18 @@
 <ul>
 <li><code>GET /virtualization/virtual-machines/backups/create</code></li>
 <li><code>GET /virtualization/virtual-machines/backups/all/create</code></li>
+<li><code>GET /virtualization/virtual-machines/backups/all/create/stream</code></li>
+</ul>
+<h2 id="sync-de-snapshots">Sync de snapshots<a class="headerlink" href="#sync-de-snapshots" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>GET /virtualization/virtual-machines/snapshots/create</code></li>
+<li><code>GET /virtualization/virtual-machines/snapshots/all/create</code></li>
+<li><code>GET /virtualization/virtual-machines/snapshots/all/create/stream</code></li>
+</ul>
+<h2 id="sync-de-storage">Sync de storage<a class="headerlink" href="#sync-de-storage" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>GET /virtualization/virtual-machines/storage/create</code></li>
+<li><code>GET /virtualization/virtual-machines/storage/create/stream</code></li>
 </ul>
 
 

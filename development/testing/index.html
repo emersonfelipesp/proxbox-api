@@ -1096,7 +1096,11 @@
 <li><code>httpx</code></li>
 <li>FastAPI <code>TestClient</code></li>
 </ul>
-<p>Dependencies are listed in <code>requirements-test.txt</code>.</p>
+<p>Test dependencies are defined in <code>pyproject.toml</code> under
+<code>[project.optional-dependencies] -&gt; test</code>.</p>
+<p>Install them with:</p>
+<p><code>bash
+uv sync --extra test --group dev</code></p>
 <h2 id="run-tests">Run tests<a class="headerlink" href="#run-tests" title="Permanent link">&para;</a></h2>
 <p><code>bash
 pytest</code></p>

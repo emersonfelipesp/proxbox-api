@@ -1269,6 +1269,31 @@
 <td><code>4</code></td>
 <td>Maximum number of concurrent VM creation tasks during synchronization. Uses an <code>asyncio.Semaphore</code> to limit parallel NetBox API load. Lower values reduce timeout risk; higher values increase throughput on fast backends.</td>
 </tr>
+<tr>
+<td><code>PROXBOX_FETCH_MAX_CONCURRENCY</code></td>
+<td><code>8</code></td>
+<td>Maximum number of concurrent fetch operations used in backup, snapshot, and storage sync flows.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_CORS_EXTRA_ORIGINS</code></td>
+<td>(empty)</td>
+<td>Comma-separated extra CORS origins added to the runtime allowlist.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_EXPOSE_INTERNAL_ERRORS</code></td>
+<td>unset</td>
+<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, HTTP 500 responses include internal exception details. By default, details are hidden from API clients and logged server-side.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_STRICT_STARTUP</code></td>
+<td>unset</td>
+<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, startup fails if generated Proxmox routes cannot be mounted. Default behavior logs a warning and continues.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code></td>
+<td>unset</td>
+<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, skips creating the default NetBox client during app startup. Useful for local development or partial startup workflows.</td>
+</tr>
 </tbody>
 </table>
 <h2 id="cors-behavior">CORS behavior<a class="headerlink" href="#cors-behavior" title="Permanent link">&para;</a></h2>

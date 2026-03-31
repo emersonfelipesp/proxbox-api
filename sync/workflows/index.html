@@ -751,6 +751,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#snapshot-sync-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snapshot sync flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-sync-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage sync flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#sse-streaming-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1043,6 +1065,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#snapshot-sync-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snapshot sync flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-sync-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage sync flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#sse-streaming-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1122,7 +1166,11 @@
 <ol>
 <li>Create NetBox sync-process record.</li>
 <li>Sync Proxmox nodes into NetBox devices.</li>
+<li>Sync Proxmox storages into NetBox plugin storage records.</li>
 <li>Sync Proxmox virtual machines into NetBox VMs.</li>
+<li>Sync virtual disks for discovered VMs.</li>
+<li>Sync VM backups.</li>
+<li>Sync VM snapshots.</li>
 <li>Mark sync-process as completed and store runtime.</li>
 </ol>
 <h2 id="virtual-machine-sync-flow">Virtual machine sync flow<a class="headerlink" href="#virtual-machine-sync-flow" title="Permanent link">&para;</a></h2>
@@ -1144,6 +1192,7 @@
 <ul>
 <li><code>GET /virtualization/virtual-machines/backups/create</code></li>
 <li><code>GET /virtualization/virtual-machines/backups/all/create</code></li>
+<li><code>GET /virtualization/virtual-machines/backups/all/create/stream</code></li>
 </ul>
 <p>Core behavior:</p>
 <ul>
@@ -1152,6 +1201,30 @@
 <li>Creates backup objects under NetBox plugin model.</li>
 <li>Handles duplicate detection.</li>
 <li>Optional deletion of backups missing in Proxmox source.</li>
+</ul>
+<h2 id="snapshot-sync-flow">Snapshot sync flow<a class="headerlink" href="#snapshot-sync-flow" title="Permanent link">&para;</a></h2>
+<p>Endpoints:</p>
+<ul>
+<li><code>GET /virtualization/virtual-machines/snapshots/create</code></li>
+<li><code>GET /virtualization/virtual-machines/snapshots/all/create</code></li>
+<li><code>GET /virtualization/virtual-machines/snapshots/all/create/stream</code></li>
+</ul>
+<p>Core behavior:</p>
+<ul>
+<li>Discovers snapshots for NetBox VMs mapped to Proxmox VM IDs.</li>
+<li>Reconciles snapshot objects in NetBox plugin model.</li>
+<li>Resolves related storage records when possible.</li>
+</ul>
+<h2 id="storage-sync-flow">Storage sync flow<a class="headerlink" href="#storage-sync-flow" title="Permanent link">&para;</a></h2>
+<p>Endpoints:</p>
+<ul>
+<li><code>GET /virtualization/virtual-machines/storage/create</code></li>
+<li><code>GET /virtualization/virtual-machines/storage/create/stream</code></li>
+</ul>
+<p>Core behavior:</p>
+<ul>
+<li>Discovers Proxmox storage definitions.</li>
+<li>Reconciles NetBox plugin storage records used by backup/snapshot flows.</li>
 </ul>
 <h2 id="sse-streaming-mode">SSE streaming mode<a class="headerlink" href="#sse-streaming-mode" title="Permanent link">&para;</a></h2>
 <p>Each sync flow has a corresponding <code>/stream</code> endpoint that emits Server-Sent Events in real time:</p>

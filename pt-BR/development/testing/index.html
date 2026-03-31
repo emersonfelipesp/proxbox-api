@@ -756,6 +756,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -772,6 +790,91 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Índice
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#stack-de-testes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stack de testes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#executar-testes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executar testes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testes-direcionados-de-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testes direcionados de endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verificacao-de-compilacao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verificacao de compilacao
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checks-recomendados-antes-de-pr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checks recomendados antes de PR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checks-de-contrato-proxmox-gerado" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checks de contrato Proxmox gerado
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -889,6 +992,80 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Índice
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#stack-de-testes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stack de testes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#executar-testes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executar testes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testes-direcionados-de-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testes direcionados de endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verificacao-de-compilacao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verificacao de compilacao
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checks-recomendados-antes-de-pr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checks recomendados antes de PR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checks-de-contrato-proxmox-gerado" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checks de contrato Proxmox gerado
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -913,15 +1090,49 @@
 
 
 <h1 id="testes">Testes<a class="headerlink" href="#testes" title="Permanent link">&para;</a></h1>
-<p>Executar toda a suite:</p>
+<h2 id="stack-de-testes">Stack de testes<a class="headerlink" href="#stack-de-testes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>pytest</code></li>
+<li><code>httpx</code></li>
+<li>FastAPI <code>TestClient</code></li>
+</ul>
+<p>As dependencias de teste sao definidas em <code>pyproject.toml</code> em
+<code>[project.optional-dependencies] -&gt; test</code>.</p>
+<p>Instale com:</p>
+<p><code>bash
+uv sync --extra test --group dev</code></p>
+<h2 id="executar-testes">Executar testes<a class="headerlink" href="#executar-testes" title="Permanent link">&para;</a></h2>
 <p><code>bash
 pytest</code></p>
-<p>Executar testes de CRUD de endpoints:</p>
+<p>Para o caminho especifico de geracao de schema e helpers tipados:</p>
+<p><code>bash
+pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py</code></p>
+<h2 id="testes-direcionados-de-endpoints">Testes direcionados de endpoints<a class="headerlink" href="#testes-direcionados-de-endpoints" title="Permanent link">&para;</a></h2>
+<p>O arquivo <code>proxbox_api/test_endpoint_crud.py</code> cobre:</p>
+<ul>
+<li>Ciclo completo de CRUD de endpoint Proxmox.</li>
+<li>Regras de validacao de autenticacao de endpoint Proxmox.</li>
+<li>Regra singleton para endpoint NetBox.</li>
+</ul>
+<p>Executar apenas este arquivo:</p>
 <p><code>bash
 pytest proxbox_api/test_endpoint_crud.py</code></p>
-<p>Verificacao de compilacao:</p>
+<h2 id="verificacao-de-compilacao">Verificacao de compilacao<a class="headerlink" href="#verificacao-de-compilacao" title="Permanent link">&para;</a></h2>
 <p><code>bash
 python -m compileall proxbox_api</code></p>
+<h2 id="checks-recomendados-antes-de-pr">Checks recomendados antes de PR<a class="headerlink" href="#checks-recomendados-antes-de-pr" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>pytest</code></li>
+<li><code>python -m compileall proxbox_api</code></li>
+<li><code>mkdocs build --strict</code> (quando docs mudarem)</li>
+</ul>
+<h2 id="checks-de-contrato-proxmox-gerado">Checks de contrato Proxmox gerado<a class="headerlink" href="#checks-de-contrato-proxmox-gerado" title="Permanent link">&para;</a></h2>
+<p>Ao alterar <code>proxbox_api/proxmox_codegen/</code> ou a camada de servico Proxmox voltada para sync:</p>
+<ul>
+<li>Regenere <code>proxbox_api/generated/proxmox/*/pydantic_models.py</code> a partir dos artefatos <code>openapi.json</code> versionados.</li>
+<li>Confirme que respostas array-de-objetos continuam emitindo schemas concretos <code>...ResponseItem</code>.</li>
+<li>Confirme que rotas com helpers continuam retornando payloads compativeis com o codigo de sync existente.</li>
+</ul>
 
 
 

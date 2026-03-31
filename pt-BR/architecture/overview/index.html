@@ -512,10 +512,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#camadas-principais" class="md-nav__link">
+  <a href="#camadas-de-alto-nivel" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Camadas principais
+        Camadas de alto nivel
       
     </span>
   </a>
@@ -527,6 +527,78 @@
     <span class="md-ellipsis">
       
         Componentes de runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#modelos-de-dados-principais" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modelos de dados principais
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Modelos de dados principais">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#netboxendpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBoxEndpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#proxmoxendpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ProxmoxEndpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fluxo-de-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fluxo de startup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extensao-de-openapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extensao de OpenAPI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ciclo-de-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ciclo de sync
       
     </span>
   </a>
@@ -955,10 +1027,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#camadas-principais" class="md-nav__link">
+  <a href="#camadas-de-alto-nivel" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Camadas principais
+        Camadas de alto nivel
       
     </span>
   </a>
@@ -970,6 +1042,78 @@
     <span class="md-ellipsis">
       
         Componentes de runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#modelos-de-dados-principais" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modelos de dados principais
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Modelos de dados principais">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#netboxendpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBoxEndpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#proxmoxendpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ProxmoxEndpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fluxo-de-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fluxo de startup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extensao-de-openapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extensao de OpenAPI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ciclo-de-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ciclo de sync
       
     </span>
   </a>
@@ -1002,20 +1146,61 @@
 
 
 <h1 id="visao-geral-da-arquitetura">Visao Geral da Arquitetura<a class="headerlink" href="#visao-geral-da-arquitetura" title="Permanent link">&para;</a></h1>
-<p><code>proxbox-api</code> e organizado em camadas de rotas FastAPI, dependencias de sessao, servicos de sync e esquemas.</p>
-<h2 id="camadas-principais">Camadas principais<a class="headerlink" href="#camadas-principais" title="Permanent link">&para;</a></h2>
+<p><code>proxbox-api</code> e organizado em camadas de rotas FastAPI, dependencias de sessao, servicos de sync e camadas de schema.</p>
+<h2 id="camadas-de-alto-nivel">Camadas de alto nivel<a class="headerlink" href="#camadas-de-alto-nivel" title="Permanent link">&para;</a></h2>
 <ul>
-<li>API: <code>proxbox_api/main.py</code>, <code>proxbox_api/routes/*</code></li>
-<li>Sessao: <code>proxbox_api/session/*</code></li>
-<li>Servicos: <code>proxbox_api/services/sync/*</code></li>
-<li>Persistencia: <code>proxbox_api/database.py</code></li>
+<li>Camada de API: <code>proxbox_api/main.py</code>, <code>proxbox_api/routes/*</code></li>
+<li>Camada de sessao: <code>proxbox_api/session/*</code></li>
+<li>Camada de servicos: <code>proxbox_api/services/sync/*</code></li>
+<li>Camada de schemas e enums: <code>proxbox_api/schemas/*</code>, <code>proxbox_api/enum/*</code></li>
+<li>Camada de persistencia: <code>proxbox_api/database.py</code></li>
+<li>Camada utilitaria: decorators, logger, cache e excecoes</li>
 </ul>
 <h2 id="componentes-de-runtime">Componentes de runtime<a class="headerlink" href="#componentes-de-runtime" title="Permanent link">&para;</a></h2>
 <ul>
-<li>App FastAPI com roteadores em <code>/netbox</code>, <code>/proxmox</code>, <code>/dcim</code>, <code>/virtualization</code> e <code>/extras</code>.</li>
-<li>Configuracao de endpoint em SQLite.</li>
-<li>Sessao NetBox por <code>netbox-sdk</code>.</li>
-<li>Sessao Proxmox por <code>proxmoxer</code>.</li>
+<li>App FastAPI com grupos de rotas:</li>
+<li><code>/netbox</code></li>
+<li><code>/proxmox</code></li>
+<li><code>/dcim</code></li>
+<li><code>/virtualization</code></li>
+<li><code>/extras</code></li>
+<li>Configuracao de endpoints persistida em SQLite.</li>
+<li>Acesso a NetBox via <code>netbox-sdk</code> sync proxy.</li>
+<li>Acesso a Proxmox via sessoes <code>proxmoxer</code>.</li>
+</ul>
+<h2 id="modelos-de-dados-principais">Modelos de dados principais<a class="headerlink" href="#modelos-de-dados-principais" title="Permanent link">&para;</a></h2>
+<h3 id="netboxendpoint"><code>NetBoxEndpoint</code><a class="headerlink" href="#netboxendpoint" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Campos: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>token</code>, <code>verify_ssl</code></li>
+<li>Inclui propriedade computada <code>url</code> para criar sessao NetBox.</li>
+<li>Comportamento singleton e aplicado na logica do endpoint de criacao.</li>
+</ul>
+<h3 id="proxmoxendpoint"><code>ProxmoxEndpoint</code><a class="headerlink" href="#proxmoxendpoint" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Campos: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>username</code>, <code>password</code>, <code>verify_ssl</code>, <code>token_name</code>, <code>token_value</code></li>
+<li>Suporta autenticacao por senha ou por token.</li>
+</ul>
+<h2 id="fluxo-de-startup">Fluxo de startup<a class="headerlink" href="#fluxo-de-startup" title="Permanent link">&para;</a></h2>
+<ol>
+<li>A app inicializa e tenta criar tabelas do banco.</li>
+<li>Carrega endpoint NetBox, se existir.</li>
+<li>Inicializa sessao NetBox e salva na camada de compatibilidade.</li>
+<li>Monta origins de CORS.</li>
+<li>Inclui routers.</li>
+</ol>
+<h2 id="extensao-de-openapi">Extensao de OpenAPI<a class="headerlink" href="#extensao-de-openapi" title="Permanent link">&para;</a></h2>
+<p><code>proxbox_api/openapi_custom.py</code> substitui a geracao de OpenAPI do FastAPI e embute metadados do OpenAPI Proxmox gerado quando disponivel:</p>
+<ul>
+<li>Arquivo-fonte: <code>proxbox_api/generated/proxmox/openapi.json</code></li>
+<li>Campos de extensao:</li>
+<li><code>info.x-proxmox-generated-openapi</code></li>
+<li><code>x-proxmox-generated-openapi</code></li>
+</ul>
+<h2 id="ciclo-de-sync">Ciclo de sync<a class="headerlink" href="#ciclo-de-sync" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Endpoints de sync orquestram descoberta no Proxmox e criacao de objetos no NetBox.</li>
+<li>Journal entries e registros de sync-process fornecem rastreabilidade.</li>
+<li>Endpoints WebSocket e SSE fornecem progresso em tempo real por objeto.</li>
 </ul>
 
 
