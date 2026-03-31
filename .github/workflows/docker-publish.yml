@@ -66,6 +66,9 @@ jobs:
           cat <<'EOF' > /tmp/docker-tests.sh
           #!/bin/sh
           set -eux
+          # tests/ is bind-mounted read-only; keep bytecode out of the tree
+          export PYTHONPYCACHEPREFIX=/tmp/pycache
+          mkdir -p "$PYTHONPYCACHEPREFIX"
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
