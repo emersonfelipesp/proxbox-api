@@ -1,92 +1,17 @@
 name: Release validation and publish
 
+# Runs when a GitHub Release is published (tag + release), not on raw tag pushes alone.
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  version-gate:
-    name: version bump or tag or manual
-    runs-on: ubuntu-latest
-    outputs:
-      should_release: ${{ steps.gate.outputs.should_release }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Decide whether to run the release pipeline
-        id: gate
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_REF: ${{ github.ref }}
-          GITHUB_BEFORE: ${{ github.event.before }}
-        run: |
-          python <<'PY'
-          import os
-          import pathlib
-          import subprocess
-          import tomllib
-
-          out = os.environ["GITHUB_OUTPUT"]
-          event = os.environ["GITHUB_EVENT_NAME"]
-          ref = os.environ["GITHUB_REF"]
-          before = os.environ.get("GITHUB_BEFORE", "")
-
-          def write(key: str, value: str) -> None:
-              with open(out, "a", encoding="utf-8") as fh:
-                  fh.write(f"{key}={value}\n")
-
-          if event == "workflow_dispatch":
-              write("should_release", "true")
-              raise SystemExit(0)
-
-          if event == "push" and ref.startswith("refs/tags/v"):
-              write("should_release", "true")
-              raise SystemExit(0)
-
-          if event == "push" and ref == "refs/heads/main":
-              head_ver = tomllib.loads(
-                  pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
-              )["project"]["version"]
-              prev_ver = None
-              if before and before != "0" * 40:
-                  try:
-                      raw = subprocess.check_output(
-                          ["git", "show", f"{before}:pyproject.toml"],
-                          text=True,
-                      )
-                      prev_ver = tomllib.loads(raw)["project"]["version"]
-                  except subprocess.CalledProcessError:
-                      prev_ver = None
-              if prev_ver is None:
-                  try:
-                      raw = subprocess.check_output(
-                          ["git", "show", "HEAD^:pyproject.toml"],
-                          text=True,
-                      )
-                      prev_ver = tomllib.loads(raw)["project"]["version"]
-                  except subprocess.CalledProcessError:
-                      prev_ver = None
-              bumped = prev_ver is None or head_ver != prev_ver
-              write("should_release", "true" if bumped else "false")
-              raise SystemExit(0)
-
-          write("should_release", "false")
-          PY
-
   prepare-release:
     name: prepare artifacts + metadata
-    needs: version-gate
-    if: needs.version-gate.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     outputs:
       package_name: ${{ steps.meta.outputs.package_name }}
@@ -95,6 +20,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6
@@ -107,9 +34,8 @@ jobs:
       - name: Validate package metadata and tag
         id: meta
         env:
-          GITHUB_REF: ${{ github.ref }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           python - <<'PY'
           import os
@@ -119,13 +45,14 @@ jobs:
           data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
           project_name = data['project']['name']
           version = data['project']['version']
-          ref = os.getenv('GITHUB_REF', '')
-          tag = os.getenv('GITHUB_REF_NAME', '')
           event = os.getenv('GITHUB_EVENT_NAME', '')
+          release_tag = os.getenv('RELEASE_TAG_NAME', '') or ''
           if project_name != 'proxbox_api':
               raise SystemExit(f'Expected project name proxbox_api, got {project_name!r}')
-          if event == 'push' and ref.startswith('refs/tags/') and tag != f'v{version}':
-              raise SystemExit(f'Tag/version mismatch: tag={tag!r}, version={version!r}')
+          if event == 'release' and release_tag != f'v{version}':
+              raise SystemExit(
+                  f'Release tag/version mismatch: tag={release_tag!r}, version={version!r}'
+              )
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               fh.write(f'package_name={project_name}\nversion={version}\n')
           PY
@@ -183,6 +110,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -215,7 +144,7 @@ jobs:
 
   publish-pypi:
     name: publish to PyPI
-    if: github.event_name == 'push'
+    if: github.event_name == 'release'
     needs: [prepare-release, validate-testpypi]
     runs-on: ubuntu-latest
     steps:
@@ -248,7 +177,7 @@ jobs:
 
   docker-publish:
     name: publish Docker image to Docker Hub
-    if: github.event_name == 'push'
+    if: github.event_name == 'release'
     needs: [prepare-release, validate-testpypi]
     runs-on: ubuntu-latest
     env:
@@ -256,6 +185,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
