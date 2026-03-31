@@ -81,6 +81,7 @@ jobs:
           # tests/ is bind-mounted read-only; keep bytecode out of the tree
           export PYTHONPYCACHEPREFIX=/tmp/pycache
           mkdir -p "$PYTHONPYCACHEPREFIX"
+          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
@@ -194,6 +195,7 @@ jobs:
           # tests/ is bind-mounted read-only; keep bytecode out of the tree
           export PYTHONPYCACHEPREFIX=/tmp/pycache
           mkdir -p "$PYTHONPYCACHEPREFIX"
+          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
@@ -315,6 +317,7 @@ jobs:
           # tests/ is bind-mounted read-only; keep bytecode out of the tree
           export PYTHONPYCACHEPREFIX=/tmp/pycache
           mkdir -p "$PYTHONPYCACHEPREFIX"
+          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
