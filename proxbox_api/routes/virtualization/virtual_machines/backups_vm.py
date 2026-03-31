@@ -36,9 +36,7 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
-_DEFAULT_FETCH_CONCURRENCY = max(
-    1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8"))
-)
+_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
 
 
 def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
@@ -274,9 +272,7 @@ async def _create_all_virtual_machine_backups(
         all_backup_tasks = []
         proxmox_backups = set()
         discovery_tasks: list[asyncio.Task] = []
-        fetch_semaphore = asyncio.Semaphore(
-            fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY
-        )
+        fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
 
         async def _discover_backups_for_node_storage(
             proxmox,
@@ -329,9 +325,7 @@ async def _create_all_virtual_machine_backups(
                             )
 
         if discovery_tasks:
-            discovery_results = await asyncio.gather(
-                *discovery_tasks, return_exceptions=True
-            )
+            discovery_results = await asyncio.gather(*discovery_tasks, return_exceptions=True)
             for result in discovery_results:
                 if isinstance(result, Exception):
                     logger.warning("Backup discovery failed: %s", result, exc_info=True)

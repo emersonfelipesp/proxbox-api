@@ -17,9 +17,7 @@ from proxbox_api.services.proxmox_helpers import get_vm_snapshots
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
-_DEFAULT_FETCH_CONCURRENCY = max(
-    1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8"))
-)
+_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
 
 
 async def create_netbox_snapshots(snapshot, netbox_session, vmid, node):
@@ -216,9 +214,7 @@ async def create_virtual_machine_snapshots(
     skipped = 0
 
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
-    fetch_semaphore = asyncio.Semaphore(
-        fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY
-    )
+    fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
 
     for vm in vms:
         vmid = vm.get("cf_proxmox_vm_id")
