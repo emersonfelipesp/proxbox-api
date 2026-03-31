@@ -8,9 +8,22 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 
+def _to_serializable(obj: Any) -> Any:
+    """Recursively convert RestRecord and similar objects to JSON-serializable dicts."""
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_serializable(item) for item in obj]
+    if hasattr(obj, "serialize") and callable(obj.serialize):
+        return _to_serializable(obj.serialize())
+    if hasattr(obj, "dict") and callable(obj.dict):
+        return _to_serializable(obj.dict())
+    return obj
+
+
 def sse_event(event: str, data: Any) -> str:
     """Serialize one SSE frame."""
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    return f"event: {event}\ndata: {json.dumps(_to_serializable(data))}\n\n"
 
 
 class WebSocketSSEBridge:
