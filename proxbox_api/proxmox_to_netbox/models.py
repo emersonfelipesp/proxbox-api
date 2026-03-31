@@ -222,10 +222,12 @@ class NetBoxInterfaceSyncState(BaseModel):
     name: str
     status: str = "active"
     type: str
+    untagged_vlan: int | None = None
+    mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("device", mode="before")
+    @field_validator("device", "untagged_vlan", mode="before")
     @classmethod
     def normalize_device(cls, value: Any) -> Any:
         return _relation_id(value)
@@ -252,10 +254,12 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     mac_address: str | None = None
     type: str | None = None
     description: str | None = None
+    untagged_vlan: int | None = None
+    mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("virtual_machine", "bridge", mode="before")
+    @field_validator("virtual_machine", "bridge", "untagged_vlan", mode="before")
     @classmethod
     def normalize_relations(cls, value: Any) -> Any:
         return _relation_id(value)
@@ -291,6 +295,27 @@ class NetBoxIpAddressSyncState(BaseModel):
     @classmethod
     def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
         return NetBoxNamedSlugTaggedState.normalize_tags(value)
+
+
+class NetBoxVlanSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    vid: int
+    name: str
+    status: str = "active"
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: Any) -> str:
+        text = str(_status_value(value) or "active").strip().lower()
+        return text or "active"
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return _normalized_tag_list(value)
 
 
 class NetBoxBackupSyncState(BaseModel):
@@ -359,6 +384,25 @@ class NetBoxVirtualDiskSyncState(BaseModel):
     @classmethod
     def normalize_virtual_machine(cls, value: Any) -> Any:
         return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+        return _normalized_tag_list(value)
+
+
+class NetBoxStorageSyncState(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    cluster: str
+    name: str
+    storage_type: str | None = None
+    content: str | None = None
+    path: str | None = None
+    nodes: str | None = None
+    shared: bool = False
+    enabled: bool = True
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
 
     @field_validator("tags", mode="before")
     @classmethod
@@ -562,8 +606,10 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     @computed_field(return_type=dict)
     @property
     def vm_custom_fields(self) -> dict[str, Any]:
+        vm_type = self.resource.type if self.resource.type in {"qemu", "lxc"} else "unknown"
         fields = {
             "proxmox_vm_id": self.resource.vmid,
+            "proxmox_vm_type": vm_type,
             "proxmox_start_at_boot": self.config.start_at_boot,
             "proxmox_unprivileged_container": self.config.unprivileged_container,
             "proxmox_qemu_agent": self.config.qemu_agent_enabled,
