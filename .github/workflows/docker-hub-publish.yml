@@ -1,0 +1,245 @@
+# Publishes two images in parallel:
+# - runtime: nginx (HTTP) → uvicorn on 127.0.0.1:8001
+# - mkcert: nginx (HTTPS) → uvicorn on 127.0.0.1:8001
+# Invoked from CI (push to main/testing) and from the release workflow.
+name: Docker Hub publish
+
+on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Git ref to build (release tag); empty uses github.sha
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  docker-runtime:
+    name: Docker Hub — runtime (nginx + uvicorn)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Required for cache-to: gha together with load: true (docker driver cannot export cache).
+          driver: docker-container
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve image version from pyproject
+        id: version
+        env:
+          GIT_REF: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = data["project"]["version"]
+          expected_tag = f"v{version}"
+          git_ref = os.environ["GIT_REF"].strip()
+          if git_ref.startswith("v") and git_ref != expected_tag:
+              raise SystemExit(
+                  f"git ref / pyproject mismatch: ref={git_ref!r}, expected {expected_tag!r}"
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"tag={version}\n")
+          PY
+
+      - name: Keep image tag in env
+        run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
+
+      - name: Create Docker test script
+        run: |
+          cat <<'EOF' > /tmp/docker-tests.sh
+          #!/bin/sh
+          set -eux
+          uv sync --frozen --extra test --group dev
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run python -m compileall proxbox_api scripts tests
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
+          EOF
+          chmod +x /tmp/docker-tests.sh
+
+      - name: Build amd64 image for pre-release tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      - name: Run pre-release tests in Docker image (runtime / nginx→uvicorn)
+        run: |
+          docker run --rm \
+            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
+            /tmp/docker-tests.sh
+
+      - name: Extract metadata (labels, etc.)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: emersonfelipesp/proxbox-api
+          tags: |
+            type=raw,value=${{ steps.version.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Build and push Docker image (runtime)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      - name: Pull and verify pushed runtime images
+        run: |
+          docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}
+          docker pull emersonfelipesp/proxbox-api:latest
+          for TAG in "${{ env.IMAGE_TAG }}" latest; do
+            docker run --rm \
+              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              -v "${{ github.workspace }}/tests:/app/tests:ro" \
+              emersonfelipesp/proxbox-api:"$TAG" \
+              /tmp/docker-tests.sh
+          done
+
+  docker-mkcert:
+    name: Docker Hub — mkcert (nginx + HTTPS + uvicorn)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Required for cache-to: gha together with load: true (docker driver cannot export cache).
+          driver: docker-container
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve image version from pyproject
+        id: version
+        env:
+          GIT_REF: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = data["project"]["version"]
+          expected_tag = f"v{version}"
+          git_ref = os.environ["GIT_REF"].strip()
+          if git_ref.startswith("v") and git_ref != expected_tag:
+              raise SystemExit(
+                  f"git ref / pyproject mismatch: ref={git_ref!r}, expected {expected_tag!r}"
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"tag={version}\n")
+          PY
+
+      - name: Keep image tag in env
+        run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
+
+      - name: Create Docker test script
+        run: |
+          cat <<'EOF' > /tmp/docker-tests.sh
+          #!/bin/sh
+          set -eux
+          uv sync --frozen --extra test --group dev
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run python -m compileall proxbox_api scripts tests
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
+          EOF
+          chmod +x /tmp/docker-tests.sh
+
+      - name: Build amd64 mkcert image for pre-release tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mkcert
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre
+          cache-from: type=gha,scope=mkcert
+          cache-to: type=gha,mode=max,scope=mkcert
+
+      - name: Run pre-release tests in mkcert Docker image
+        run: |
+          docker run --rm \
+            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
+            /tmp/docker-tests.sh
+
+      - name: Build and push mkcert Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mkcert
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert,emersonfelipesp/proxbox-api:latest-mkcert
+          cache-from: type=gha,scope=mkcert
+          cache-to: type=gha,mode=max,scope=mkcert
+
+      - name: Pull and verify pushed mkcert images
+        run: |
+          docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert
+          docker pull emersonfelipesp/proxbox-api:latest-mkcert
+          for TAG in "${{ env.IMAGE_TAG }}-mkcert" latest-mkcert; do
+            docker run --rm \
+              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              -v "${{ github.workspace }}/tests:/app/tests:ro" \
+              emersonfelipesp/proxbox-api:"$TAG" \
+              /tmp/docker-tests.sh
+          done
