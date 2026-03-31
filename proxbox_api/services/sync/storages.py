@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
 from proxbox_api.services.proxmox_helpers import dump_models, get_storage_list
 
@@ -32,6 +32,20 @@ async def create_storages(
 
     fetch_sem = asyncio.Semaphore(max(1, int(fetch_concurrency)))
 
+    # Pre-fetch all clusters from NetBox to build a name -> id mapping
+    cluster_id_map: dict[str, int] = {}
+    try:
+        clusters = await rest_list_async(nb, "/api/virtualization/clusters/")
+        for cluster in clusters:
+            cluster_name = str(cluster.get("name", "")).strip()
+            cluster_id = cluster.get("id")
+            if cluster_name and cluster_id:
+                cluster_id_map[cluster_name] = cluster_id
+    except Exception:
+        # If we can't fetch clusters, we'll try to continue and let individual
+        # storage syncs fail gracefully
+        pass
+
     async def _fetch_cluster_storages(proxmox):
         cluster_name = str(getattr(proxmox, "name", "") or "").strip() or "unknown"
         async with fetch_sem:
@@ -52,13 +66,19 @@ async def create_storages(
         if isinstance(cluster_data, Exception):
             continue
         cluster_name, storages = cluster_data
+
+        # Skip if we don't have a cluster ID for this cluster name
+        cluster_id = cluster_id_map.get(cluster_name)
+        if cluster_id is None:
+            continue
+
         for storage in storages:
             storage_name = str(storage.get("storage") or "").strip()
             if not storage_name:
                 continue
 
             payload = {
-                "cluster": cluster_name,
+                "cluster": cluster_id,
                 "name": storage_name,
                 "storage_type": storage.get("type"),
                 "content": storage.get("content"),
@@ -71,14 +91,17 @@ async def create_storages(
             unique_payloads.setdefault((cluster_name, storage_name), payload)
 
     for (cluster_name, storage_name), payload in unique_payloads.items():
+        cluster_id = payload["cluster"]
         record = await rest_reconcile_async(
             nb,
             "/api/plugins/proxbox/storage/",
-            lookup={"cluster": cluster_name, "name": storage_name},
+            lookup={"cluster": cluster_id, "name": storage_name},
             payload=payload,
             schema=NetBoxStorageSyncState,
             current_normalizer=lambda item: {
-                "cluster": item.get("cluster"),
+                "cluster": item.get("cluster", {}).get("id")
+                if isinstance(item.get("cluster"), dict)
+                else item.get("cluster"),
                 "name": item.get("name"),
                 "storage_type": item.get("storage_type"),
                 "content": item.get("content"),

@@ -25,6 +25,7 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
 
 def _cluster_name(value: Any) -> str | None:
     if isinstance(value, dict):
+        # Cluster is now a nested object with id, name, etc.
         value = value.get("name") or value.get("slug") or value.get("id")
     return _normalize_text(value)
 

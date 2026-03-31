@@ -51,6 +51,9 @@ def test_create_storages_reconciles_and_updates_enabled_flag(monkeypatch):
         reconciled.append((lookup, payload))
         return _Record(payload)
 
+    async def _fake_list_clusters(*args, **kwargs):
+        return [{"id": 42, "name": "cluster-a"}]
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.storages.get_storage_list",
         _fake_get_storage_list,
@@ -63,6 +66,10 @@ def test_create_storages_reconciles_and_updates_enabled_flag(monkeypatch):
         "proxbox_api.services.sync.storages.rest_reconcile_async",
         _fake_reconcile,
     )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.storages.rest_list_async",
+        _fake_list_clusters,
+    )
 
     tag = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
     pxs = [SimpleNamespace(name="cluster-a")]
@@ -70,9 +77,9 @@ def test_create_storages_reconciles_and_updates_enabled_flag(monkeypatch):
     asyncio.run(create_storages(netbox_session=object(), pxs=pxs, tag=tag))
     asyncio.run(create_storages(netbox_session=object(), pxs=pxs, tag=tag))
 
-    assert reconciled[0][0] == {"cluster": "cluster-a", "name": "local"}
+    assert reconciled[0][0] == {"cluster": 42, "name": "local"}
     assert reconciled[0][1]["enabled"] is True
-    assert reconciled[1][0] == {"cluster": "cluster-a", "name": "local"}
+    assert reconciled[1][0] == {"cluster": 42, "name": "local"}
     assert reconciled[1][1]["enabled"] is False
 
 
@@ -129,11 +136,18 @@ def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
         calls.append((lookup, payload))
         return _Record(payload)
 
+    async def _fake_list_clusters(*args, **kwargs):
+        return [{"id": 99, "name": "TEST-CLUSTER"}]
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.storages.get_storage_list", _fake_get_storage_list
     )
     monkeypatch.setattr("proxbox_api.services.sync.storages.dump_models", lambda items: items)
     monkeypatch.setattr("proxbox_api.services.sync.storages.rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.storages.rest_list_async",
+        _fake_list_clusters,
+    )
 
     tag = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
     pxs = [SimpleNamespace(name="TEST-CLUSTER"), SimpleNamespace(name="TEST-CLUSTER")]
@@ -141,18 +155,19 @@ def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
     asyncio.run(create_storages(netbox_session=object(), pxs=pxs, tag=tag))
 
     assert len(calls) == 1
-    assert calls[0][0] == {"cluster": "TEST-CLUSTER", "name": "local-zfs"}
+    assert calls[0][0] == {"cluster": 99, "name": "local-zfs"}
 
 
 def test_storage_state_normalizes_backups_relation():
     payload = {
-        "cluster": "TEST-CLUSTER",
+        "cluster": 42,
         "name": "local-zfs",
         "backups": [{"id": 31}, {"id": "32"}, 31],
     }
 
     state = NetBoxStorageSyncState.model_validate(payload)
 
+    assert state.cluster == 42
     assert state.backups == [31, 32]
 
 

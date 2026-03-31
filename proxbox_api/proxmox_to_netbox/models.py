@@ -532,7 +532,7 @@ class NetBoxVirtualDiskSyncState(BaseModel):
 class NetBoxStorageSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    cluster: str
+    cluster: int
     name: str
     storage_type: str | None = None
     content: str | None = None
@@ -542,6 +542,18 @@ class NetBoxStorageSyncState(BaseModel):
     enabled: bool = True
     backups: list[int] = Field(default_factory=list)
     tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+    @field_validator("cluster", mode="before")
+    @classmethod
+    def normalize_cluster(cls, value: Any) -> int:
+        """Ensure cluster is an integer ID."""
+        relation_id = _relation_id(value)
+        if relation_id is None:
+            raise ValueError("cluster is required")
+        try:
+            return int(relation_id)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"cluster must be a valid integer ID: {e}")
 
     @field_validator("backups", mode="before")
     @classmethod
