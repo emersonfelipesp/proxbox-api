@@ -14,6 +14,42 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
 
+def _normalize_vmid(vmid):
+    """Normalize VMID values for safe cross-system comparisons."""
+    if vmid is None:
+        return None
+    vmid_str = str(vmid).strip()
+    return vmid_str or None
+
+
+def _extract_proxmox_vmid(vm: dict) -> str | None:
+    """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
+    top_level_keys = (
+        "cf_proxmox_vm_id",
+        "proxmox_vm_id",
+        "cf_proxmox_vmid",
+        "proxmox_vmid",
+    )
+    for key in top_level_keys:
+        normalized = _normalize_vmid(vm.get(key))
+        if normalized:
+            return normalized
+
+    custom_fields = vm.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        custom_field_keys = (
+            "proxmox_vm_id",
+            "cf_proxmox_vm_id",
+            "proxmox_vmid",
+            "cf_proxmox_vmid",
+        )
+        for key in custom_field_keys:
+            normalized = _normalize_vmid(custom_fields.get(key))
+            if normalized:
+                return normalized
+    return None
+
+
 async def create_virtual_disks(
     netbox_session,
     pxs: ProxmoxSessionsDep,
@@ -69,7 +105,7 @@ async def create_virtual_disks(
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
-    vms_with_proxmox_id = [vm for vm in vms if vm.get("cf_proxmox_vm_id")]
+    vms_with_proxmox_id = [vm for vm in vms if _extract_proxmox_vmid(vm)]
     vms = vms_with_proxmox_id
 
     if not vms:
@@ -95,7 +131,7 @@ async def create_virtual_disks(
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
 
     for vm in vms:
-        vmid = vm.get("cf_proxmox_vm_id")
+        vmid = _extract_proxmox_vmid(vm)
         vm_name = vm.get("name", "unknown")
         vm_id = vm.get("id")
 
@@ -142,7 +178,7 @@ async def create_virtual_disks(
                     if cluster_name_key:
                         resources = cluster[cluster_name_key]
                         for resource in resources:
-                            if resource.get("vmid") == vmid:
+                            if _normalize_vmid(resource.get("vmid")) == vmid:
                                 node_name = resource.get("node")
                                 cluster_name = cluster_name_key
                                 break
