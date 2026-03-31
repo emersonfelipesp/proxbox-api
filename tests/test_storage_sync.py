@@ -107,6 +107,40 @@ def test_create_storages_stream_emits_complete_event(monkeypatch):
     assert '"count": 2' in payload
 
 
+def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
+    class _Record:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def serialize(self):
+            return {"id": 1, **self.payload}
+
+    storages = [
+        {"storage": "local-zfs", "type": "zfspool", "shared": 0, "disable": 0},
+        {"storage": "local-zfs", "type": "zfspool", "shared": 0, "disable": 0},
+    ]
+    calls: list[tuple[dict, dict]] = []
+
+    def _fake_get_storage_list(_px):
+        return storages
+
+    async def _fake_reconcile(_nb, _path, lookup, payload, **kwargs):
+        calls.append((lookup, payload))
+        return _Record(payload)
+
+    monkeypatch.setattr("proxbox_api.services.sync.storages.get_storage_list", _fake_get_storage_list)
+    monkeypatch.setattr("proxbox_api.services.sync.storages.dump_models", lambda items: items)
+    monkeypatch.setattr("proxbox_api.services.sync.storages.rest_reconcile_async", _fake_reconcile)
+
+    tag = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
+    pxs = [SimpleNamespace(name="TEST-CLUSTER"), SimpleNamespace(name="TEST-CLUSTER")]
+
+    asyncio.run(create_storages(netbox_session=object(), pxs=pxs, tag=tag))
+
+    assert len(calls) == 1
+    assert calls[0][0] == {"cluster": "TEST-CLUSTER", "name": "local-zfs"}
+
+
 async def _collect_async_frames(stream) -> list[str]:
     output: list[str] = []
     async for frame in stream:
