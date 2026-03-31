@@ -97,9 +97,11 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 
 - `PROXBOX_NETBOX_TIMEOUT`: NetBox API client timeout in seconds (default: `120`). Controls `netbox-sdk` `Config.timeout` and `aiohttp` request timeouts.
 - `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: Maximum concurrent VM creation tasks during sync (default: `4`). Uses an `asyncio.Semaphore` to limit parallel NetBox API load.
+- `PROXBOX_FETCH_MAX_CONCURRENCY`: Maximum concurrent fetch operations in storage/backup/snapshot sync flows (default: `8`).
 - `PROXBOX_CORS_EXTRA_ORIGINS`: Comma-separated extra CORS origins (see `proxbox_api.app.cors.build_cors_origins`).
 - `PROXBOX_EXPOSE_INTERNAL_ERRORS`: When set to `1`, `true`, or `yes`, unhandled exceptions return `detail` and `python_exception` derived from the raw exception in the JSON 500 body. When unset (default), the client receives a generic `detail` and `python_exception: null`; the full traceback is logged server-side only (`proxbox_api.app.exceptions`).
 - `PROXBOX_STRICT_STARTUP`: When set to `1`, `true`, or `yes`, failure to mount generated Proxmox proxy routes during lifespan raises `ProxboxException` and fails startup instead of logging a warning only (`proxbox_api.app.factory`).
+- `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: When set to `1`, `true`, or `yes`, skips default NetBox client bootstrap during startup (`proxbox_api.app.bootstrap`).
 
 ## Runtime Flow
 
@@ -119,7 +121,7 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 4. Service and route workflows create or update NetBox objects (clusters, devices, VMs, interfaces, backups).
 5. Sync metadata is recorded in NetBox sync-process objects and journal entries.
 6. Optional websocket messages stream progress updates to clients.
-7. SSE streaming endpoints (`/full-update/stream`, `/devices/create/stream`, `/virtualization/virtual-machines/create/stream`) proxy sync progress via `text/event-stream`. The `WebSocketSSEBridge` utility converts websocket-style progress JSON into SSE frames with per-object granularity (e.g., `Processing device pve01`, `Synced virtual_machine vm101`).
+7. SSE streaming endpoints (`/full-update/stream`, `/dcim/devices/create/stream`, `/virtualization/virtual-machines/create/stream`) proxy sync progress via `text/event-stream`. The `WebSocketSSEBridge` utility converts websocket-style progress JSON into SSE frames with per-object granularity (e.g., `Processing device pve01`, `Synced virtual_machine vm101`).
 
 ### Error handling
 
@@ -173,7 +175,7 @@ If any check fails, fix locally until all checks pass before pushing.
 
 ## Coding Conventions
 
-- Python version target: `>=3.10`.
+- Python version target: `>=3.11`.
 - Keep modules import-safe; avoid side effects beyond required startup wiring.
 - Prefer explicit Pydantic models and typed aliases (`Annotated[...]`) for dependencies.
 - Raise `ProxboxException` for predictable API error payloads.

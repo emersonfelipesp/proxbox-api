@@ -162,7 +162,7 @@ uv run mkdocs build --strict
 
 ## 11) Quick factual references
 
-- Python target: `>=3.10`
+- Python target: `>=3.11`
 - API framework: FastAPI
 - Proxmox client: `proxmoxer`
 - NetBox client facade: `netbox-sdk`
