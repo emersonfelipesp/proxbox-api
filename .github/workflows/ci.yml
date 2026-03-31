@@ -26,8 +26,9 @@ jobs:
 
       - name: Ruff (lint + format check)
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
+          ruff check . &
+          ruff format --check . &
+          wait
 
       - name: Compile package
         run: uv run python -m compileall proxbox_api scripts tests
@@ -38,7 +39,7 @@ jobs:
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Run mocked schema-driven tests
-        run: uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
+        run: uv run pytest -n auto --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v7
