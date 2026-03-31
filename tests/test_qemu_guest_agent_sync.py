@@ -71,6 +71,11 @@ def _install_common_sync_patches(
             return SimpleNamespace(id=33, name=payload.get("name"))
         return {"id": 99}
 
+    async def _fake_rest_list(_nb, path, **kwargs):
+        if path == "/api/plugins/proxbox/storage/":
+            return []
+        return []
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
         _fake_get_vm_config,
@@ -110,6 +115,10 @@ def _install_common_sync_patches(
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_reconcile_async",
         _fake_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
+        _fake_rest_list,
     )
 
 
@@ -263,6 +272,46 @@ def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
     )
     assert len(result) == 1
     assert interface_payloads and interface_payloads[0]["name"] == "net0"
+
+
+def test_vm_sync_populates_task_history(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 0,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    ip_payloads: list[dict] = []
+    _install_common_sync_patches(
+        monkeypatch,
+        vm_config=data["vm_config"],
+        ip_payloads=ip_payloads,
+    )
+    task_history_calls: list[dict] = []
+
+    async def _fake_task_history(**kwargs):
+        task_history_calls.append(kwargs)
+        return 2
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
+        _fake_task_history,
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert len(result) == 1
+    assert task_history_calls and task_history_calls[0]["virtual_machine_id"] == 55
+    assert task_history_calls[0]["vm_type"] == "qemu"
 
 
 def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):

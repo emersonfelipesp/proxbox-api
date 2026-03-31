@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
 from proxbox_api.routes.virtualization.virtual_machines.storages_vm import (
     create_storages_stream,
 )
@@ -139,6 +140,18 @@ def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0][0] == {"cluster": "TEST-CLUSTER", "name": "local-zfs"}
+
+
+def test_storage_state_normalizes_backups_relation():
+    payload = {
+        "cluster": "TEST-CLUSTER",
+        "name": "local-zfs",
+        "backups": [{"id": 31}, {"id": "32"}, 31],
+    }
+
+    state = NetBoxStorageSyncState.model_validate(payload)
+
+    assert state.backups == [31, 32]
 
 
 async def _collect_async_frames(stream) -> list[str]:

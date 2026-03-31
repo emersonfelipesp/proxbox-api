@@ -9,18 +9,11 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
-from proxbox_api.dependencies import (
-    NetBoxSessionDep,  # NetBox Session
-    ProxboxTagDep,  # Proxbox Tag
-)
-from proxbox_api.exception import ProxboxException  # Proxbox Exception
-from proxbox_api.logger import logger  # Logger
-
-# NetBox compatibility wrappers
-from proxbox_api.netbox_compat import (
-    VirtualMachine,
-)
-from proxbox_api.netbox_rest import rest_patch_async, rest_reconcile_async
+from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
+from proxbox_api.netbox_compat import VirtualMachine
+from proxbox_api.netbox_rest import rest_list_async, rest_patch_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxIpAddressSyncState,
@@ -30,14 +23,9 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVlanSyncState,
     ProxmoxVmConfigInput,
 )
-from proxbox_api.routes.extras import CreateCustomFieldsDep  # Create Custom Fields
-from proxbox_api.routes.proxmox import (
-    get_vm_config,  # Get VM Config
-)  # Get Proxmox Node Storage Content
-from proxbox_api.routes.proxmox.cluster import (
-    ClusterResourcesDep,
-    ClusterStatusDep,
-)  # Cluster Status and Resources
+from proxbox_api.routes.extras import CreateCustomFieldsDep
+from proxbox_api.routes.proxmox import get_vm_config
+from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines.helpers import resolve_vm_sync_concurrency
 from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
 from proxbox_api.services.sync.devices import (
@@ -51,10 +39,18 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
+from proxbox_api.services.sync.storage_links import (
+    build_storage_index,
+    find_storage_record,
+    storage_name_from_volume_id,
+)
+from proxbox_api.services.sync.task_history import (
+    sync_virtual_machine_task_history,
+)
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
-from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
+from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
@@ -330,6 +326,12 @@ async def create_virtual_machines(
     ]
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
     flattened_results = []
+    storage_index: dict[tuple[str, str], dict] = {}
+    try:
+        storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
+        storage_index = build_storage_index(storage_records)
+    except Exception as error:
+        logger.warning("Error loading storage records for VM sync: %s", error)
 
     async def create_vm_task(cluster_name, resource):
         undefined_html = return_status_html("undefined", use_css)
@@ -731,32 +733,40 @@ async def create_virtual_machines(
                                     else getattr(ip_record, "id", None)
                                 )
 
-            for disk_entry in vm_config_obj.disks:
-                await rest_reconcile_async(
-                    nb,
-                    "/api/virtualization/virtual-disks/",
-                    lookup={
-                        "virtual_machine_id": virtual_machine.get("id"),
-                        "name": disk_entry.name,
-                    },
-                    payload={
-                        "virtual_machine": virtual_machine.get("id"),
-                        "name": disk_entry.name,
-                        "size": disk_entry.size,
-                        "description": disk_entry.description,
-                        "tags": tag_refs,
-                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                    },
-                    schema=NetBoxVirtualDiskSyncState,
-                    current_normalizer=lambda record: {
-                        "virtual_machine": record.get("virtual_machine"),
-                        "name": record.get("name"),
-                        "size": record.get("size"),
-                        "description": record.get("description"),
-                        "tags": record.get("tags"),
-                        "custom_fields": record.get("custom_fields"),
-                    },
-                )
+        for disk_entry in vm_config_obj.disks:
+            storage_name = disk_entry.storage_name or storage_name_from_volume_id(disk_entry.storage)
+            storage_record = find_storage_record(
+                storage_index,
+                cluster_name=cluster_name,
+                storage_name=storage_name,
+            )
+            await rest_reconcile_async(
+                nb,
+                "/api/virtualization/virtual-disks/",
+                lookup={
+                    "virtual_machine_id": virtual_machine.get("id"),
+                    "name": disk_entry.name,
+                },
+                payload={
+                    "virtual_machine": virtual_machine.get("id"),
+                    "name": disk_entry.name,
+                    "size": disk_entry.size,
+                    "storage": storage_record.get("id") if storage_record else None,
+                    "description": disk_entry.description,
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                schema=NetBoxVirtualDiskSyncState,
+                current_normalizer=lambda record: {
+                    "virtual_machine": record.get("virtual_machine"),
+                    "name": record.get("name"),
+                    "size": record.get("size"),
+                    "storage": record.get("storage"),
+                    "description": record.get("description"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            )
 
         # Set primary IP only when NetBox has no primary IP yet (user choice is preserved)
         vm_id = virtual_machine.get("id")
@@ -803,6 +813,31 @@ async def create_virtual_machines(
                             },
                         }
                     )
+
+        try:
+            task_history_count = await sync_virtual_machine_task_history(
+                netbox_session=nb,
+                pxs=pxs,
+                cluster_status=cluster_status,
+                virtual_machine_id=int(virtual_machine.get("id")),
+                vm_type=str(vm_type or "unknown"),
+                cluster_name=cluster_name,
+                tag_refs=tag_refs,
+                websocket=websocket,
+                use_websocket=use_websocket,
+            )
+            logger.debug(
+                "Synced %s task history records for VM %s",
+                task_history_count,
+                resource.get("name"),
+            )
+        except Exception as error:
+            logger.warning(
+                "Error syncing task history for VM %s (%s): %s",
+                resource.get("name"),
+                resource.get("vmid"),
+                error,
+            )
 
         return virtual_machine
 
