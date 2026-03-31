@@ -17,6 +17,8 @@ Environment variables:
     PROXBOX_E2E_DEMO_URL: NetBox demo URL (default: https://demo.netbox.dev)
     PROXBOX_E2E_TIMEOUT: Browser timeout in seconds (default: 60)
     PROXBOX_E2E_HEADLESS: Run browser headless (default: true)
+    PROXBOX_IMAGE_E2E_BASE_URL: For ``image_http`` tests only — running container root URL
+    PROXBOX_IMAGE_E2E_TLS_INSECURE: Set to 1/true for mkcert HTTPS smoke (insecure TLS)
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
     from netbox_sdk.facade import Api
 
 from proxbox_api.e2e.demo_auth import (
+    DemoUnavailableError,
     PlaywrightNotInstalledError,
     bootstrap_demo_profile,
 )
@@ -94,6 +97,8 @@ async def netbox_demo_config() -> "Config":
         pytest.skip(
             "Playwright not installed. Run: pip install playwright && playwright install chromium"
         )
+    except DemoUnavailableError as exc:
+        pytest.skip(str(exc))
 
 
 @pytest_asyncio.fixture(scope="session")

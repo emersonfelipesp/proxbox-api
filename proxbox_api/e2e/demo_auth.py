@@ -47,6 +47,12 @@ class DemoAuthError(Exception):
     pass
 
 
+class DemoUnavailableError(DemoAuthError):
+    """Raised when demo.netbox.dev is not reachable."""
+
+    pass
+
+
 class PlaywrightNotInstalledError(DemoAuthError):
     """Raised when Playwright is not installed."""
 
@@ -201,8 +207,22 @@ async def _create_demo_user(page: "Page", username: str, password: str, timeout:
 
     Returns:
         True if user was created, False if user already exists.
+
+    Raises:
+        DemoUnavailableError: If demo.netbox.dev is not reachable.
     """
-    await page.goto(DEMO_CREATE_USER_URL, wait_until="domcontentloaded", timeout=timeout * 1000)
+    from playwright.async_api import Error as PlaywrightError
+
+    try:
+        await page.goto(DEMO_CREATE_USER_URL, wait_until="domcontentloaded", timeout=timeout * 1000)
+    except PlaywrightError as exc:
+        error_text = str(exc)
+        if "ERR_CONNECTION_REFUSED" in error_text or "net::ERR_CONNECTION_REFUSED" in error_text:
+            raise DemoUnavailableError(
+                f"demo.netbox.dev is not reachable ({DEMO_BASE_URL}). "
+                "E2E tests against NetBox demo require the demo instance to be accessible."
+            ) from exc
+        raise
     await page.get_by_label("Username").fill(username)
     await page.get_by_label("Password").fill(password)
     await page.get_by_role("button", name="Create & Sign In").click()
