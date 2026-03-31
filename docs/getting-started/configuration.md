@@ -88,6 +88,11 @@ Authentication rules for create and update:
 |----------|---------|-------------|
 | `PROXBOX_NETBOX_TIMEOUT` | `120` | NetBox API client timeout in seconds. Applied to `netbox-sdk` config and underlying `aiohttp` requests. Increase if NetBox responses are slow under load. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent VM creation tasks during synchronization. Uses an `asyncio.Semaphore` to limit parallel NetBox API load. Lower values reduce timeout risk; higher values increase throughput on fast backends. |
+| `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Maximum number of concurrent fetch operations used in backup, snapshot, and storage sync flows. |
+| `PROXBOX_CORS_EXTRA_ORIGINS` | (empty) | Comma-separated extra CORS origins added to the runtime allowlist. |
+| `PROXBOX_EXPOSE_INTERNAL_ERRORS` | unset | When set to `1`, `true`, or `yes`, HTTP 500 responses include internal exception details. By default, details are hidden from API clients and logged server-side. |
+| `PROXBOX_STRICT_STARTUP` | unset | When set to `1`, `true`, or `yes`, startup fails if generated Proxmox routes cannot be mounted. Default behavior logs a warning and continues. |
+| `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | unset | When set to `1`, `true`, or `yes`, skips creating the default NetBox client during app startup. Useful for local development or partial startup workflows. |
 
 ## CORS behavior
 

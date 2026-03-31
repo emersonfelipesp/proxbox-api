@@ -10,8 +10,8 @@ Top-level route namespace package for FastAPI router modules.
 
 ## Key Data Flow and Dependencies
 
-- main.py imports routers from nested route packages and mounts them with prefixes.
+- `proxbox_api.app.factory.create_app()` imports routers from nested route packages and mounts them with prefixes.
 
 ## Extension Guidance
 
-- Create new endpoint groups as subpackages and register them in main.py.
+- Create new endpoint groups as subpackages and register them in `proxbox_api.app.factory.create_app()`.
