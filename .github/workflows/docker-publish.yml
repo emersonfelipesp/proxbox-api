@@ -1,19 +1,31 @@
-name: Docker publish
+name: Docker build and publish
 
+# Manual only: either validate the Dockerfile with in-container tests (no registry),
+# or run the same tests then push multi-arch images to Docker Hub.
 on:
   workflow_dispatch:
     inputs:
-      release_ref:
-        description: Tag or ref to publish from
+      git_ref:
+        description: Branch, tag, or SHA to build
         required: true
-        default: v0.0.4
+        default: main
+      mode:
+        description: >-
+          build-and-test-only — build amd64, run tests, stop (no Docker Hub).
+          publish — after tests, push version + latest to Docker Hub.
+        required: true
+        type: choice
+        options:
+          - build-and-test-only
+          - publish
+        default: build-and-test-only
 
 permissions:
   contents: read
 
 jobs:
-  docker-publish:
-    name: publish Docker image to Docker Hub
+  docker:
+    name: Docker image (manual)
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,9 +33,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.release_ref }}
+          ref: ${{ inputs.git_ref }}
 
-      - name: Validate release version
+      - name: Validate pyproject version vs tag ref
         id: version
         run: |
           python - <<'PY'
@@ -31,23 +43,22 @@ jobs:
           import pathlib
           import tomllib
 
-          release_ref = os.environ["RELEASE_REF"].strip()
+          git_ref = os.environ["GIT_REF"].strip()
           version = tomllib.loads(
               pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
           )["project"]["version"]
           expected_tag = f"v{version}"
-          if release_ref.startswith("v") and release_ref != expected_tag:
+          if git_ref.startswith("v") and git_ref != expected_tag:
               raise SystemExit(
-                  f"release_ref/version mismatch: ref={release_ref!r}, "
-                  f"expected {expected_tag!r}"
+                  f"git_ref/version mismatch: ref={git_ref!r}, expected {expected_tag!r}"
               )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
               fh.write(f"tag={version}\n")
           PY
         env:
-          RELEASE_REF: ${{ inputs.release_ref }}
+          GIT_REF: ${{ inputs.git_ref }}
 
-      - name: Keep release tag in env
+      - name: Keep image tag in env
         run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
 
       - name: Create Docker test script
@@ -65,10 +76,14 @@ jobs:
           EOF
           chmod +x /tmp/docker-tests.sh
 
-      - name: Build amd64 image for pre-release tests
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image for in-container tests
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: runtime
           platforms: linux/amd64
           push: false
           load: true
@@ -76,26 +91,47 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Run pre-release tests in Docker image
+      - name: Run tests in local image
         run: |
           docker run --rm \
             -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
             /tmp/docker-tests.sh
 
+      - name: Build amd64 mkcert image for in-container tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mkcert
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run tests in mkcert local image
+        run: |
+          docker run --rm \
+            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
+            /tmp/docker-tests.sh
+
       - name: Set up QEMU
+        if: inputs.mode == 'publish'
         uses: docker/setup-qemu-action@v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Log in to Docker Hub
+        if: inputs.mode == 'publish'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata
+        if: inputs.mode == 'publish'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -105,9 +141,11 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image
+        if: inputs.mode == 'publish'
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: runtime
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -115,16 +153,41 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push mkcert Docker image
+        if: inputs.mode == 'publish'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mkcert
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert,emersonfelipesp/proxbox-api:latest-mkcert
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Pull release + latest images
+        if: inputs.mode == 'publish'
         run: |
           docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}
           docker pull emersonfelipesp/proxbox-api:latest
+          docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert
+          docker pull emersonfelipesp/proxbox-api:latest-mkcert
 
-      - name: Run post-release tests in Docker images
+      - name: Run tests on pushed images
+        if: inputs.mode == 'publish'
         run: |
           for TAG in "${{ env.IMAGE_TAG }}" latest; do
             docker run --rm \
               -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              -v "${{ github.workspace }}/tests:/app/tests:ro" \
+              emersonfelipesp/proxbox-api:"$TAG" \
+              /tmp/docker-tests.sh
+          done
+          for TAG in "${{ env.IMAGE_TAG }}-mkcert" latest-mkcert; do
+            docker run --rm \
+              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              -v "${{ github.workspace }}/tests:/app/tests:ro" \
               emersonfelipesp/proxbox-api:"$TAG" \
               /tmp/docker-tests.sh
           done

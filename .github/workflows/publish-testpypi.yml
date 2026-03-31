@@ -236,6 +236,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: runtime
           platforms: linux/amd64
           push: false
           load: true
@@ -247,7 +248,28 @@ jobs:
         run: |
           docker run --rm \
             -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
+            /tmp/docker-tests.sh
+
+      - name: Build amd64 mkcert image for pre-release tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mkcert
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run pre-release tests in mkcert Docker image
+        run: |
+          docker run --rm \
+            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
             /tmp/docker-tests.sh
 
       - name: Extract metadata (labels, etc.)
@@ -263,9 +285,22 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: runtime
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push mkcert Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mkcert
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert,emersonfelipesp/proxbox-api:latest-mkcert
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -274,12 +309,22 @@ jobs:
         run: |
           docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}
           docker pull emersonfelipesp/proxbox-api:latest
+          docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert
+          docker pull emersonfelipesp/proxbox-api:latest-mkcert
 
       - name: Run post-release tests in Docker images
         run: |
           for TAG in "${{ env.IMAGE_TAG }}" latest; do
             docker run --rm \
               -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              -v "${{ github.workspace }}/tests:/app/tests:ro" \
+              emersonfelipesp/proxbox-api:"$TAG" \
+              /tmp/docker-tests.sh
+          done
+          for TAG in "${{ env.IMAGE_TAG }}-mkcert" latest-mkcert; do
+            docker run --rm \
+              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
+              -v "${{ github.workspace }}/tests:/app/tests:ro" \
               emersonfelipesp/proxbox-api:"$TAG" \
               /tmp/docker-tests.sh
           done
