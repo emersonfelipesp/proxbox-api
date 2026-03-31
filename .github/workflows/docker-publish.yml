@@ -38,7 +38,7 @@ jobs:
       - name: Validate pyproject version vs tag ref
         id: version
         run: |
-          python - <<'PY'
+          python3 <<'PY'
           import os
           import pathlib
           import tomllib
