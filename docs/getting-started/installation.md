@@ -4,7 +4,7 @@ This page documents supported ways to run `proxbox-api`.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - `uv` (recommended) or `pip`
 - Network access to NetBox and Proxmox targets
 
