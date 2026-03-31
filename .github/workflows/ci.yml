@@ -46,6 +46,7 @@ jobs:
           path: coverage.xml
 
   # Pushes runtime (nginx→uvicorn) and mkcert (HTTPS nginx→uvicorn) to Docker Hub.
+  # Manual runs: Actions → "Docker images" → workflow_dispatch (test-only or publish).
   docker-images:
     name: Publish Docker images (Hub)
     needs: [test]
