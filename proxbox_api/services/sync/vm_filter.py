@@ -7,7 +7,6 @@ from typing import Any
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async
-from proxbox_api.services.sync.vm_helpers import relation_id
 
 
 async def filter_cluster_resources_by_netbox_vm_ids(

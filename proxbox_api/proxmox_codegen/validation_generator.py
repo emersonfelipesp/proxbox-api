@@ -59,13 +59,13 @@ def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> li
         if pattern or min_length or max_length or enum_vals:
             validator_name = f"validate_{prop_name}"
             lines.append(f"    @field_validator('{prop_name}')")
-            lines.append(f"    @classmethod")
+            lines.append("    @classmethod")
             lines.append(f"    def {validator_name}(cls, v: str | None) -> str | None:")
-            lines.append(f"        if v is None:")
-            lines.append(f"            return None")
+            lines.append("        if v is None:")
+            lines.append("            return None")
 
             if pattern:
-                lines.append(f"        import re")
+                lines.append("        import re")
                 lines.append(f"        if not re.match(r'{pattern}', v):")
                 lines.append(
                     f"            raise ValueError(f'{{prop_name}} does not match pattern: {pattern}')"
@@ -90,7 +90,7 @@ def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> li
                     f"            raise ValueError(f'{{prop_name}} must be one of: {allowed}')"
                 )
 
-            lines.append(f"        return v")
+            lines.append("        return v")
             lines.append("")
 
     # Numeric validators
@@ -102,12 +102,12 @@ def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> li
         if minimum is not None or maximum is not None or enum_vals:
             validator_name = f"validate_{prop_name}"
             lines.append(f"    @field_validator('{prop_name}')")
-            lines.append(f"    @classmethod")
+            lines.append("    @classmethod")
             lines.append(
                 f"    def {validator_name}(cls, v: int | float | None) -> int | float | None:"
             )
-            lines.append(f"        if v is None:")
-            lines.append(f"            return None")
+            lines.append("        if v is None:")
+            lines.append("            return None")
 
             if minimum is not None:
                 lines.append(f"        if v < {minimum}:")
@@ -124,7 +124,7 @@ def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> li
                     f"            raise ValueError(f'{{prop_name}} must be one of: {allowed}')"
                 )
 
-            lines.append(f"        return v")
+            lines.append("        return v")
             lines.append("")
 
     return lines
@@ -140,7 +140,7 @@ def add_model_docstring(model_name: str, schema: dict[str, Any]) -> str:
     Returns:
         Docstring with description and field documentation
     """
-    lines = [f'    """']
+    lines = ['    """']
 
     # Add description
     description = schema.get("description")
@@ -149,16 +149,16 @@ def add_model_docstring(model_name: str, schema: dict[str, Any]) -> str:
     else:
         lines.append(f"    {model_name} model from Proxmox API.")
 
-    lines.append(f"    ")
+    lines.append("    ")
 
     # Add field documentation
     properties = schema.get("properties", {}) or {}
     if properties:
-        lines.append(f"    Fields:")
+        lines.append("    Fields:")
         for prop_name, prop_schema in sorted(properties.items()):
             if isinstance(prop_schema, dict):
                 prop_desc = prop_schema.get("description", prop_name)
                 lines.append(f"        {prop_name}: {prop_desc}")
 
-    lines.append(f'    """')
+    lines.append('    """')
     return "\n".join(lines)

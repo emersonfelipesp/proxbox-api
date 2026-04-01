@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, WebSocket
+from fastapi import APIRouter, Depends
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger

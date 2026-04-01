@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_reconcile_async, rest_patch_async
+from proxbox_api.netbox_rest import rest_patch_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxIpAddressSyncState,
     NetBoxVirtualDiskSyncState,
@@ -16,7 +17,6 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.services.sync.storage_links import find_storage_record
 from proxbox_api.services.sync.vm_helpers import best_guest_agent_ip
-from datetime import datetime
 
 
 async def sync_vm_interfaces(
@@ -54,8 +54,8 @@ async def sync_vm_interfaces(
     netbox_vm_interfaces = []
     first_ip_id: int | None = None
 
-    from proxbox_api.services.sync.vm_helpers import normalized_mac
     from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
+    from proxbox_api.services.sync.vm_helpers import normalized_mac
 
     guest_by_name = {
         str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
