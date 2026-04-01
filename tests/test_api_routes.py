@@ -455,6 +455,10 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
         "proxbox_api.app.full_update.create_all_virtual_machine_snapshots",
         lambda **kwargs: asyncio.sleep(0, result={"count": 1, "created": 1, "skipped": 0}),
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories",
+        lambda **kwargs: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0, "error": "'object' object has no attribute 'client'"}),
+    )
 
     body = asyncio.run(
         full_update_sync(
@@ -475,12 +479,14 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
         "virtual_disks": {"count": 2, "created": 2, "updated": 0, "skipped": 0},
         "backups": [{"id": 301, "vmid": "101"}],
         "snapshots": {"count": 1, "created": 1, "skipped": 0},
+        "task_history": {"count": 0, "created": 0, "skipped": 0, "error": "'object' object has no attribute 'client'"},
         "devices_count": 1,
         "storage_count": 1,
         "virtual_machines_count": 1,
         "virtual_disks_count": 2,
         "backups_count": 1,
         "snapshots_count": 1,
+        "task_history_count": 0,
     }
 
 
@@ -511,6 +517,10 @@ def test_full_update_sync_handles_empty_device_result(monkeypatch):
         "proxbox_api.app.full_update.create_all_virtual_machine_snapshots",
         lambda **kwargs: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0}),
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories",
+        lambda **kwargs: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0}),
+    )
 
     body = asyncio.run(
         full_update_sync(
@@ -529,6 +539,7 @@ def test_full_update_sync_handles_empty_device_result(monkeypatch):
     assert body["virtual_disks_count"] == 0
     assert body["backups_count"] == 0
     assert body["snapshots_count"] == 0
+    assert body["task_history_count"] == 0
     assert body["devices_count"] == 0
     assert body["storage_count"] == 0
     assert body["virtual_machines_count"] == 0
