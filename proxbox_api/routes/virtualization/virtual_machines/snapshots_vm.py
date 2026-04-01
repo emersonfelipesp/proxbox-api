@@ -38,6 +38,7 @@ async def _create_all_virtual_machine_snapshots(
     websocket=None,
     use_websocket=False,
     vmid_filter: int | None = None,
+    delete_nonexistent_snapshot: bool = False,
 ):
     """Internal function that handles snapshot sync with optional websocket support.
 
@@ -67,6 +68,7 @@ async def _create_all_virtual_machine_snapshots(
             use_css=False,
             fetch_max_concurrency=fetch_max_concurrency,
             vmid=vmid_filter,
+            delete_nonexistent_snapshot=delete_nonexistent_snapshot,
         )
 
         if result:
@@ -153,6 +155,13 @@ async def create_all_virtual_machine_snapshots(
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
+    delete_nonexistent_snapshot: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Snapshot",
+            description="If true, deletes snapshots that exist in NetBox but not in Proxmox.",
+        ),
+    ] = False,
 ):
     vmid_filter = None
     vm_ids = parse_comma_separated_ints(netbox_vm_ids)
@@ -169,6 +178,7 @@ async def create_all_virtual_machine_snapshots(
         tag=tag,
         fetch_max_concurrency=fetch_max_concurrency,
         vmid_filter=vmid_filter,
+        delete_nonexistent_snapshot=delete_nonexistent_snapshot,
     )
 
 
@@ -221,6 +231,13 @@ async def create_all_virtual_machine_snapshots_stream(
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
+    delete_nonexistent_snapshot: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Snapshot",
+            description="If true, deletes snapshots that exist in NetBox but not in Proxmox.",
+        ),
+    ] = False,
 ):
     vmid_filter = None
     vm_ids = parse_comma_separated_ints(netbox_vm_ids)
@@ -244,6 +261,7 @@ async def create_all_virtual_machine_snapshots_stream(
                     vmid_filter=vmid_filter,
                     websocket=bridge,
                     use_websocket=True,
+                    delete_nonexistent_snapshot=delete_nonexistent_snapshot,
                 )
             finally:
                 await bridge.close()

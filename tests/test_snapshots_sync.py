@@ -84,7 +84,7 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
         )
     )
 
-    assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0}
+    assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0, "deleted": 0}
     assert calls["get_vm_snapshots"] == [
         {"session": proxmox_session, "node": "pve01", "vm_type": "qemu", "vmid": 101}
     ]
