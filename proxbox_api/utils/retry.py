@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Callable, TypeVar
+from typing import Callable, TypeVar
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -40,7 +40,7 @@ def _resolve_base_delay() -> float:
 def _is_transient_netbox_error(error: Exception) -> bool:
     """Check if an error is transient and worth retrying."""
     error_str = str(error).lower()
-    transientIndicators = [
+    transient_indicators = [
         "connection refused",
         "cannot connect",
         "connect call failed",
@@ -50,17 +50,17 @@ def _is_transient_netbox_error(error: Exception) -> bool:
         "no route to host",
         "network is unreachable",
     ]
-    return any(indicator in error_str for indicator in transientIndicators)
+    return any(indicator in error_str for indicator in transient_indicators)
 
 
 async def retry_async(
-    coro: Callable[..., Any],
-    *args: Any,
+    coro: Callable[..., object],
+    *args: object,
     max_retries: int | None = None,
     base_delay: float | None = None,
     operation_name: str = "operation",
-    **kwargs: Any,
-) -> Any:
+    **kwargs: object,
+) -> object:
     """
     Retry an async operation with exponential backoff for transient failures.
 
@@ -124,13 +124,13 @@ async def retry_async(
 
 
 def retry_sync(
-    coro: Callable[..., Any],
-    *args: Any,
+    coro: Callable[..., object],
+    *args: object,
     max_retries: int | None = None,
     base_delay: float | None = None,
     operation_name: str = "operation",
-    **kwargs: Any,
-) -> Any:
+    **kwargs: object,
+) -> object:
     """
     Synchronous wrapper for retry_async using run_coroutine_blocking.
     """

@@ -1,12 +1,11 @@
 """NetBox DCIM schema models used by API payloads."""
 
-from pydantic import BaseModel
-
 from proxbox_api.enum.netbox.dcim import StatusOptions
+from proxbox_api.schemas._base import ProxboxBaseModel
 from proxbox_api.schemas.netbox.extras import TagSchema
 
 
-class SitesSchema(BaseModel):
+class SitesSchema(ProxboxBaseModel):
     name: str
     slug: str
     status: StatusOptions
@@ -17,7 +16,7 @@ class SitesSchema(BaseModel):
     time_zone: str | None = None
     description: str | None = None
     tags: list[TagSchema | int] | None = None
-    custom_fields: dict | None = None
+    custom_fields: dict[str, object] | None = None
     physical_address: str | None = None
     shipping_address: str | None = None
     latitude: float | None = None

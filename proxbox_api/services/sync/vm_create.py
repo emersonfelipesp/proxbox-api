@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
@@ -12,6 +11,8 @@ from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualMachineCreateBody,
+    ProxmoxVmConfigInput,
+    ProxmoxVmResourceInput,
 )
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.sync.devices import (
@@ -178,13 +179,13 @@ async def ensure_vm_role(
 
 async def create_or_update_virtual_machine(
     netbox_session: NetBoxSessionDep,
-    proxmox_resource: dict[str, Any],
-    proxmox_config: dict[str, Any] | None,
+    proxmox_resource: ProxmoxVmResourceInput | dict[str, object],
+    proxmox_config: ProxmoxVmConfigInput | dict[str, object] | None,
     cluster_id: int,
     device_id: int,
     role_id: int,
     tag_id: int,
-    tag_refs: list[dict],
+    tag_refs: list[dict[str, object]],
 ) -> dict:
     """Create or update a virtual machine in NetBox.
 

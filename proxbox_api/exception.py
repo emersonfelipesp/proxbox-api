@@ -1,7 +1,5 @@
 """Custom exception types and async exception logging helpers."""
 
-from typing import Any
-
 from fastapi import WebSocket
 
 from proxbox_api.logger import logger
@@ -13,7 +11,7 @@ class ProxboxException(Exception):
     def __init__(
         self,
         message: str,
-        detail: str | dict[str, Any] | None = None,
+        detail: str | dict[str, object] | None = None,
         python_exception: str | None = None,
     ):
         super().__init__(message)
@@ -237,7 +235,7 @@ class ValidationError(ProxboxException):
         message: str,
         *,
         field: str | None = None,
-        value: Any = None,
+        value: object = None,
         constraint: str | None = None,
         original_error: Exception | None = None,
     ):

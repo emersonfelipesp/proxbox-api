@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import os
-from typing import Any
 
 
-def build_cors_origins(netbox_endpoints: list[Any]) -> list[str]:
+def build_cors_origins(netbox_endpoints: list[object]) -> list[str]:
     """Return unique allowed origins for CORSMiddleware."""
     origins: list[str] = []
     for netbox_endpoint in netbox_endpoints:
-        protocol = "https" if netbox_endpoint.verify_ssl else "http"
+        protocol = "https" if bool(getattr(netbox_endpoint, "verify_ssl", False)) else "http"
+        domain = getattr(netbox_endpoint, "domain", None)
+        if not domain:
+            continue
         origins.extend(
             [
-                f"{protocol}://{netbox_endpoint.domain}",
-                f"{protocol}://{netbox_endpoint.domain}:80",
-                f"{protocol}://{netbox_endpoint.domain}:443",
-                f"{protocol}://{netbox_endpoint.domain}:8000",
+                f"{protocol}://{domain}",
+                f"{protocol}://{domain}:80",
+                f"{protocol}://{domain}:443",
+                f"{protocol}://{domain}:8000",
             ]
         )
 

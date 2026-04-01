@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
@@ -19,7 +19,7 @@ from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 _DEFAULT_FETCH_CONCURRENCY = 4
 
 
-def _normalize_text(value: Any) -> str | None:
+def _normalize_text(value: object) -> str | None:
     """Normalize text value, handling None, dict, and string types."""
     if value is None:
         return None
@@ -129,11 +129,11 @@ def _cluster_nodes(cluster_status: list | None, cluster_name: str | None) -> lis
 def _build_task_payload(
     virtual_machine_id: int,
     vm_type: str,
-    task: dict[str, Any],
-    task_status: dict[str, Any],
-    tag_refs: list[dict[str, Any]],
+    task: dict[str, object],
+    task_status: dict[str, object],
+    tag_refs: list[dict[str, object]],
     now: datetime,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build task history payload from Proxmox task data."""
     start_time = task.get("starttime")
     if start_time:
@@ -234,14 +234,14 @@ async def _list_all_vms_with_proxmox_id(
 
 
 async def sync_all_virtual_machine_task_histories(  # noqa: C901
-    netbox_session: Any,
-    pxs: list[Any] | None,
-    cluster_status: list[Any] | None,
-    tag_refs: list[dict[str, Any]] | None = None,
-    websocket: Any | None = None,
+    netbox_session: object,
+    pxs: list[object] | None,
+    cluster_status: list[object] | None,
+    tag_refs: list[dict[str, object]] | None = None,
+    websocket: object | None = None,
     use_websocket: bool = False,
     fetch_max_concurrency: int | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Sync task history for all Virtual Machines in NetBox."""
 
     nb = netbox_session
@@ -351,14 +351,14 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
 
 async def sync_virtual_machine_task_history(
     *,
-    netbox_session: Any,
-    pxs: list[Any] | None,
-    cluster_status: list[Any] | None,
+    netbox_session: object,
+    pxs: list[object] | None,
+    cluster_status: list[object] | None,
     virtual_machine_id: int,
     vm_type: str,
     cluster_name: str | None,
-    tag_refs: list[dict[str, Any]] | None = None,
-    websocket: Any | None = None,
+    tag_refs: list[dict[str, object]] | None = None,
+    websocket: object | None = None,
     use_websocket: bool = False,
     fetch_max_concurrency: int | None = None,
 ) -> int:

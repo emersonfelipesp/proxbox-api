@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async
@@ -11,9 +9,9 @@ from proxbox_api.netbox_rest import rest_first_async
 
 async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     netbox_session: NetBoxSessionDep,
-    cluster_resources: list[dict],
+    cluster_resources: list[dict[str, object]],
     netbox_vm_ids: list[int],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Filter cluster resources to only include VMs matching the given NetBox VM IDs.
 
     Args:
@@ -27,7 +25,7 @@ async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     if not netbox_vm_ids:
         return cluster_resources
 
-    id_to_vm: dict[int, dict] = {}
+    id_to_vm: dict[int, dict[str, object]] = {}
     for vm_id in netbox_vm_ids:
         id_to_vm[vm_id] = {"id": vm_id, "name": None, "cluster": None, "cf_proxmox_vm_id": None}
 
@@ -68,7 +66,7 @@ async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
                 target_cluster_ids.add(cluster_id)
 
     # Filter resources by target identifiers
-    filtered: list[dict] = []
+    filtered: list[dict[str, object]] = []
     for cluster in cluster_resources:
         if not isinstance(cluster, dict):
             continue
@@ -95,7 +93,7 @@ async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     return filtered
 
 
-def parse_network_config(vm_config: dict[str, Any]) -> list[dict]:
+def parse_network_config(vm_config: dict[str, object]) -> list[dict[str, dict[str, str]]]:
     """Parse Proxmox VM network configuration into list of network dicts.
 
     Extracts net0, net1, net2, etc. from config and parses key=value pairs.
@@ -106,7 +104,7 @@ def parse_network_config(vm_config: dict[str, Any]) -> list[dict]:
     Returns:
         List of parsed network configs
     """
-    networks = []
+    networks: list[dict[str, dict[str, str]]] = []
     network_id = 0
     while True:
         network_name = f"net{network_id}"
@@ -126,8 +124,8 @@ def parse_network_config(vm_config: dict[str, Any]) -> list[dict]:
 
 def get_interface_name_from_config_and_agent(
     config_interface_name: str,
-    config_dict: dict,
-    guest_agent_interfaces: list[dict],
+    config_dict: dict[str, object],
+    guest_agent_interfaces: list[dict[str, object]],
     use_guest_agent_name: bool = True,
 ) -> str:
     """Determine final interface name from config and guest agent data.

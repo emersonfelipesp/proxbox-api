@@ -6,12 +6,12 @@ import time
 from collections.abc import Callable
 from functools import wraps
 from logging.handlers import TimedRotatingFileHandler
-from typing import Any, ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar
 
 from fastapi import WebSocket
 
 # Context variable for operation tracking
-_operation_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+_operation_context: contextvars.ContextVar[dict[str, object]] = contextvars.ContextVar(
     "operation_context", default={}
 )
 
@@ -111,7 +111,7 @@ class OperationLogger:
             await sync_operation()
     """
 
-    def __init__(self, operation: str, **context: Any):
+    def __init__(self, operation: str, **context: object):
         """Initialize the operation logger.
 
         Args:
@@ -121,7 +121,7 @@ class OperationLogger:
         self.operation = operation
         self.context = context
         self.start_time = 0.0
-        self.previous_context: dict[str, Any] = {}
+        self.previous_context: dict[str, object] = {}
 
     async def __aenter__(self) -> "OperationLogger":
         """Enter the context and set operation context."""
@@ -135,7 +135,10 @@ class OperationLogger:
         return self
 
     async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
     ) -> None:
         """Exit the context and log completion/failure."""
         elapsed = time.time() - self.start_time
@@ -158,7 +161,7 @@ class OperationLogger:
         _operation_context.set(self.previous_context)
 
 
-def get_operation_context() -> dict[str, Any]:
+def get_operation_context() -> dict[str, object]:
     """Get the current operation context.
 
     Returns:

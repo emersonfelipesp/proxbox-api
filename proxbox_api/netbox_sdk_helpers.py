@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from proxbox_api.logger import logger
 
 
-def to_dict(value: Any) -> dict[str, Any]:
+def to_dict(value: object) -> dict[str, object]:
     """Convert netbox-sdk records or plain objects into dictionaries."""
     if value is None:
         return {}
@@ -30,7 +28,7 @@ def to_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _is_duplicate_error(detail: Any) -> bool:
+def _is_duplicate_error(detail: object) -> bool:
     if isinstance(detail, dict):
         return any(_is_duplicate_error(value) for value in detail.values())
     if isinstance(detail, list):
@@ -40,13 +38,13 @@ def _is_duplicate_error(detail: Any) -> bool:
 
 
 def _candidate_reuse_lookups(
-    lookup: dict[str, Any],
-    payload: dict[str, Any],
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    seen: set[tuple[tuple[str, Any], ...]] = set()
+    lookup: dict[str, object],
+    payload: dict[str, object],
+) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    seen: set[tuple[tuple[str, object], ...]] = set()
 
-    def _add(candidate: dict[str, Any]) -> None:
+    def _add(candidate: dict[str, object]) -> None:
         normalized = {key: value for key, value in candidate.items() if value not in (None, "")}
         if not normalized:
             return
@@ -83,7 +81,7 @@ def _candidate_reuse_lookups(
     return candidates
 
 
-async def ensure_record(endpoint: Any, lookup: dict[str, Any], payload: dict[str, Any]) -> Any:
+async def ensure_record(endpoint: object, lookup: dict[str, object], payload: dict[str, object]) -> object:
     """Get a record by lookup fields or create it when missing."""
     for candidate in _candidate_reuse_lookups(lookup, payload):
         record = await endpoint.get(**candidate)
@@ -104,7 +102,7 @@ async def ensure_record(endpoint: Any, lookup: dict[str, Any], payload: dict[str
         raise error
 
 
-async def ensure_tag(nb: Any, *, name: str, slug: str, color: str, description: str) -> Any:
+async def ensure_tag(nb: object, *, name: str, slug: str, color: str, description: str) -> object:
     """Get or create a NetBox tag."""
     return await ensure_record(
         nb.extras.tags,

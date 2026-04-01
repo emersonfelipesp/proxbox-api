@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import ssl
-from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -72,7 +71,7 @@ def extract_api_schema_text(apidoc_source: str) -> str:  # noqa: C901
     return apidoc_source[start_index : end_index + 1]
 
 
-def parse_api_schema(apidoc_source: str) -> list[dict[str, Any]]:
+def parse_api_schema(apidoc_source: str) -> list[dict[str, object]]:
     """Parse Proxmox API viewer schema tree from `apidoc.js` source."""
 
     schema_text = extract_api_schema_text(apidoc_source)
@@ -82,12 +81,12 @@ def parse_api_schema(apidoc_source: str) -> list[dict[str, Any]]:
     return parsed
 
 
-def flatten_api_schema(schema_tree: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def flatten_api_schema(schema_tree: list[dict[str, object]]) -> dict[str, dict[str, object]]:
     """Flatten tree nodes into a path-keyed endpoint map."""
 
-    output: dict[str, dict[str, Any]] = {}
+    output: dict[str, dict[str, object]] = {}
 
-    def walk(node: dict[str, Any]) -> None:
+    def walk(node: dict[str, object]) -> None:
         path = node.get("path")
         if path:
             output[path] = {
