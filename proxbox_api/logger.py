@@ -29,7 +29,7 @@ class ColorizedFormatter(logging.Formatter):
         logging.CRITICAL: AnsiColorCodes.MAGENTA,
     }
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         color = self.LEVEL_COLORS.get(record.levelno, AnsiColorCodes.WHITE)
 
         record.module = f"{AnsiColorCodes.DARK_GRAY}{record.module}{AnsiColorCodes.RESET}"
@@ -38,7 +38,7 @@ class ColorizedFormatter(logging.Formatter):
         return super().format(record)
 
 
-def setup_logger():
+def setup_logger() -> logging.Logger:
     # Path to log file
     log_path = "/var/log/proxbox.log"
 
@@ -61,6 +61,7 @@ def setup_logger():
     # Set the formatter for the console handler and file handler
     console_handler.setFormatter(formatter)
 
+    file_handler: TimedRotatingFileHandler | None = None
     try:
         # Create a file handler
         file_handler = TimedRotatingFileHandler(
@@ -73,11 +74,12 @@ def setup_logger():
         # Set the formatter for the file handler
         file_handler.setFormatter(formatter)
     except OSError:
-        print("Not able to create '/var/log/proxbox.log' archive.")
+        logger.warning("Not able to create '%s' archive.", log_path)
 
     # Add the handlers to the logger
     logger.addHandler(console_handler)
-    # logger.addHandler(file_handler)
+    if file_handler is not None:
+        logger.addHandler(file_handler)
 
     logger.propagate = False
 
@@ -87,7 +89,7 @@ def setup_logger():
 logger = setup_logger()
 
 
-async def log(websocket: WebSocket, msg, level=None):
+async def log(websocket: WebSocket, msg: str, level: str | None = None) -> None:
     if websocket:
         await websocket.send_text(msg)
 

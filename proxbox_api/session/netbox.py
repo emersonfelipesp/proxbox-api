@@ -68,9 +68,6 @@ def get_netbox_session(database_session: DatabaseSessionDep) -> Any:
 
         return SyncProxy(netbox_api_from_endpoint(netbox_endpoint))
 
-    except ProxboxException as error:
-        raise error
-
     except Exception as error:
         raise ProxboxException(
             message="Error establishing NetBox API session", python_exception=str(error)
@@ -92,8 +89,8 @@ def get_netbox_async_session(database_session: DatabaseSessionDep) -> Api:
 
         return netbox_api_from_endpoint(netbox_endpoint)
 
-    except ProxboxException as error:
-        raise error
+    except ProxboxException:
+        raise
 
     except Exception as error:
         raise ProxboxException(

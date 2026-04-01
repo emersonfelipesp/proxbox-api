@@ -6,6 +6,7 @@ from typing import Any
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
+from proxbox_api.logger import logger
 from proxbox_api.session.proxmox import ProxmoxSession
 
 
@@ -121,12 +122,24 @@ def get_qemu_guest_agent_network_interfaces(
     try:
         try:
             payload = session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
-        except Exception:
+        except Exception as error:
+            logger.debug(
+                "Primary guest-agent interfaces call failed for node=%s vmid=%s: %s",
+                node,
+                vmid,
+                error,
+            )
             payload = (
                 session.session.nodes(node).qemu(vmid).agent.get(command="network-get-interfaces")
             )
         return _normalize_guest_agent_interfaces(payload)
-    except Exception:
+    except Exception as error:
+        logger.warning(
+            "Unable to fetch guest-agent interfaces for node=%s vmid=%s: %s",
+            node,
+            vmid,
+            error,
+        )
         return []
 
 
@@ -239,7 +252,14 @@ def get_vm_snapshots(
             _fetch_snapshots,
         )
         return result if isinstance(result, list) else []
-    except Exception:
+    except Exception as error:
+        logger.warning(
+            "Error fetching snapshots for vmid=%s node=%s type=%s: %s",
+            vmid,
+            node,
+            vm_type,
+            error,
+        )
         return []
 
 
@@ -267,7 +287,13 @@ def get_cluster_snapshots_for_vm(
     try:
         snapshots = get_vm_snapshots(session, node, vm_type, vmid)
         all_snapshots.extend(snapshots)
-    except Exception:
-        pass
+    except Exception as error:
+        logger.warning(
+            "Error aggregating cluster snapshots for vmid=%s node=%s type=%s: %s",
+            vmid,
+            node,
+            vm_type,
+            error,
+        )
 
     return all_snapshots

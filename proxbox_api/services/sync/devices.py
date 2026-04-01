@@ -1,6 +1,6 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends
 
@@ -9,7 +9,6 @@ from proxbox_api.dependencies import ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.sync.device_ensure import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -20,19 +19,18 @@ from proxbox_api.services.sync.device_ensure import (
     _ensure_site,
     _wrap_device_phase_error,
 )
-from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.utils import return_status_html
 
 
 async def create_proxmox_devices(
-    netbox_session: NetBoxSessionDep,
-    clusters_status: ClusterStatusDep,
+    netbox_session: Any,
+    clusters_status: list[Any] | None,
     tag: ProxboxTagDep,
-    websocket=None,
+    websocket: Any | None = None,
     node: str | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
-):
+) -> list[dict[str, Any]]:
     tag_refs = nested_tag_payload(tag)
 
     nb = netbox_session
@@ -43,7 +41,11 @@ async def create_proxmox_devices(
 
     logger.info("Device Sync Process Started")
 
-    device_list: list = []
+    device_list: list[dict[str, Any]] = []
+
+    if not clusters_status:
+        logger.info("No cluster status data provided for device sync")
+        return device_list
 
     try:
         # Count total devices to process (just for journalling)

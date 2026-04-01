@@ -1,8 +1,11 @@
 """Virtual machine snapshots synchronization service from Proxmox to NetBox."""
 
+from __future__ import annotations
+
 import asyncio
 import os
 from datetime import datetime
+from typing import Any
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
@@ -19,49 +22,12 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid, normalize_vmid
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
-
-
-def _normalize_vmid(vmid):
-    """Normalize VMID values for safe cross-system comparisons."""
-    if vmid is None:
-        return None
-    vmid_str = str(vmid).strip()
-    return vmid_str or None
-
-
-def _extract_proxmox_vmid(vm: dict) -> str | None:
-    """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
-    top_level_keys = (
-        "cf_proxmox_vm_id",
-        "proxmox_vm_id",
-        "cf_proxmox_vmid",
-        "proxmox_vmid",
-    )
-    for key in top_level_keys:
-        normalized = _normalize_vmid(vm.get(key))
-        if normalized:
-            return normalized
-
-    custom_fields = vm.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        custom_field_keys = (
-            "proxmox_vm_id",
-            "cf_proxmox_vm_id",
-            "proxmox_vmid",
-            "cf_proxmox_vmid",
-        )
-        for key in custom_field_keys:
-            normalized = _normalize_vmid(custom_fields.get(key))
-            if normalized:
-                return normalized
-    return None
-
-
-async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
+async def _load_storage_index(netbox_session: Any) -> dict[tuple[str, str], dict[str, Any]]:
     nb = netbox_session
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
@@ -72,12 +38,12 @@ async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
 
 
 async def _resolve_snapshot_storage_record(
-    netbox_session,
+    netbox_session: Any,
     *,
     vm_id: int,
     cluster_name: str | None,
-    storage_index: dict[tuple[str, str], dict],
-) -> dict | None:
+    storage_index: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any] | None:
     nb = netbox_session
     try:
         virtual_disks = await rest_list_async(
@@ -110,12 +76,12 @@ async def _resolve_snapshot_storage_record(
 
 
 async def create_netbox_snapshots(
-    snapshot,
-    netbox_session,
-    vmid,
-    node,
+    snapshot: Any,
+    netbox_session: Any,
+    vmid: str | int,
+    node: str,
     storage_record: dict | None = None,
-):
+) -> Any | None:
     """
     Create or update a snapshot in NetBox.
 
@@ -231,18 +197,18 @@ async def process_snapshots_batch(snapshot_tasks: list, batch_size: int = 10) ->
 
 
 async def create_virtual_machine_snapshots(
-    netbox_session,
+    netbox_session: Any,
     pxs: ProxmoxSessionsDep,
-    cluster_status,
-    cluster_resources=None,
-    tag=None,
+    cluster_status: list[Any] | None,
+    cluster_resources: list[dict[str, Any]] | None = None,
+    tag: Any | None = None,
     vmid: int | None = None,
     node: str | None = None,
-    websocket=None,
-    use_websocket=False,
-    use_css=False,
+    websocket: Any | None = None,
+    use_websocket: bool = False,
+    use_css: bool = False,
     fetch_max_concurrency: int | None = None,
-):
+) -> dict[str, Any]:
     """
     Sync snapshots for existing Virtual Machines in NetBox.
 
@@ -287,8 +253,7 @@ async def create_virtual_machine_snapshots(
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
-    vms_with_proxmox_id = [vm for vm in vms if _extract_proxmox_vmid(vm)]
-    vms = vms_with_proxmox_id
+    vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
 
     if not vms:
         logger.info("No VMs found with cf_proxmox_vm_id set")
@@ -315,7 +280,7 @@ async def create_virtual_machine_snapshots(
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
 
     for vm in vms:
-        vmid = _extract_proxmox_vmid(vm)
+        vmid = extract_proxmox_vmid(vm)
         vm_name = vm.get("name", "unknown")
 
         if not vmid:
@@ -355,7 +320,7 @@ async def create_virtual_machine_snapshots(
                     if not isinstance(resources, list):
                         continue
                     for resource in resources:
-                        if _normalize_vmid(resource.get("vmid")) == vmid:
+                        if normalize_vmid(resource.get("vmid")) == vmid:
                             node_name = resource.get("node")
                             cluster_name = cluster_key
                             break
