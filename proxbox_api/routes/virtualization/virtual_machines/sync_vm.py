@@ -59,6 +59,20 @@ router = APIRouter()
 
 
 def _to_mapping(value: Any) -> dict[str, Any]:
+    """Coerce a value to a dictionary representation.
+
+    Attempts multiple serialization strategies in order:
+    1. Direct dict check
+    2. Call serialize() method if available
+    3. Call dict() method if available (Pydantic models)
+    4. Return empty dict if all fail
+
+    Args:
+        value: Value to convert to a dictionary
+
+    Returns:
+        Dictionary representation of the value, or empty dict if conversion fails
+    """
     if isinstance(value, dict):
         return value
     if hasattr(value, "serialize"):
@@ -81,6 +95,18 @@ def _to_mapping(value: Any) -> dict[str, Any]:
 
 
 def _relation_name(value: Any) -> str | None:
+    """Extract a human-readable name from a relation object or value.
+
+    Attempts to extract a name string from various object representations:
+    - Dict values by key priority: 'name', 'display', 'label', 'value'
+    - Direct string values (trimmed)
+
+    Args:
+        value: Value to extract name from (dict, string, or object)
+
+    Returns:
+        Extracted name string, or None if no valid name found
+    """
     if isinstance(value, dict):
         for key in ("name", "display", "label", "value"):
             candidate = value.get(key)
@@ -92,6 +118,19 @@ def _relation_name(value: Any) -> str | None:
 
 
 def _relation_id(value: Any) -> int | None:
+    """Extract a numeric ID from a relation object or value.
+
+    Attempts to extract an integer ID from various object representations:
+    - Direct int values
+    - Dict values by key priority: 'id', 'value' (as int or digit string)
+    - String digit values
+
+    Args:
+        value: Value to extract ID from (int, dict, or string)
+
+    Returns:
+        Extracted ID as integer, or None if no valid ID found
+    """
     if isinstance(value, int):
         return value
     if isinstance(value, dict):
@@ -114,6 +153,21 @@ def _filter_cluster_resources_for_vm(
     cluster_name: str | None,
     cluster_id: int | None,
 ) -> list[dict]:
+    """Filter cluster resources to find VM matching name and/or ID criteria.
+
+    Searches through cluster resource lists to find QEMU VMs or LXC containers
+    matching the provided identifiers. Optionally filters by cluster name/ID.
+
+    Args:
+        cluster_resources: List of cluster resource dicts from Proxmox
+        vm_name: VM name to match (exact match)
+        proxmox_vm_id: Proxmox VM ID to match, or None
+        cluster_name: Cluster name to filter by, or None for all clusters
+        cluster_id: NetBox cluster ID to filter by, or None for all
+
+    Returns:
+        Filtered list of cluster resource dicts containing matching VMs
+    """
     cluster_hint = (cluster_name or "").strip().lower()
     filtered: list[dict] = []
     for cluster in cluster_resources:
@@ -224,10 +278,29 @@ async def _filter_cluster_resources_by_netbox_vm_ids(
 
 
 def _normalized_mac(value: str | None) -> str:
+    """Normalize a MAC address to lowercase string.
+
+    Args:
+        value: MAC address string or None
+
+    Returns:
+        Normalized (lowercase, trimmed) MAC address string, or empty string
+    """
     return str(value or "").strip().lower()
 
 
 def _guest_agent_ip_with_prefix(addr: dict) -> str | None:
+    """Extract IP address with CIDR prefix from guest agent address dict.
+
+    Filters out loopback and link-local addresses. Returns the IP in CIDR
+    notation (e.g., "192.168.1.1/24") when prefix is available.
+
+    Args:
+        addr: Address dict from guest agent with 'ip_address', 'prefix' keys
+
+    Returns:
+        IP address with CIDR prefix, just IP, or None if invalid
+    """
     ip_text = str(addr.get("ip_address") or "").strip()
     if not ip_text:
         return None
@@ -244,6 +317,17 @@ def _guest_agent_ip_with_prefix(addr: dict) -> str | None:
 
 
 def _best_guest_agent_ip(guest_iface: dict | None) -> str | None:
+    """Select the best IP address from guest agent interface data.
+
+    Prioritizes IPv4 addresses with valid CIDR prefixes, then falls back to
+    any valid IPv4 address. Skips loopback and link-local addresses.
+
+    Args:
+        guest_iface: Guest agent interface dict with 'ip_addresses' list
+
+    Returns:
+        Best available IP address (with prefix if available), or None
+    """
     if not isinstance(guest_iface, dict):
         return None
     for addr in guest_iface.get("ip_addresses") or []:
