@@ -117,6 +117,25 @@ jobs:
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
             /tmp/docker-tests.sh
 
+      - name: Smoke-test runtime image startup
+        run: |
+          set -eux
+          docker rm -f proxbox-smoke-http 2>/dev/null || true
+          docker run -d --name proxbox-smoke-http \
+            -p 127.0.0.1:18080:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre
+          for i in $(seq 1 40); do
+            if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then
+              docker rm -f proxbox-smoke-http
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs proxbox-smoke-http
+          docker rm -f proxbox-smoke-http
+          exit 1
+
       - name: Build amd64 mkcert image for in-container tests
         uses: docker/build-push-action@v6
         with:
@@ -136,6 +155,25 @@ jobs:
             -v "${{ github.workspace }}/tests:/app/tests:ro" \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
             /tmp/docker-tests.sh
+
+      - name: Smoke-test mkcert image startup
+        run: |
+          set -eux
+          docker rm -f proxbox-smoke-https 2>/dev/null || true
+          docker run -d --name proxbox-smoke-https \
+            -p 127.0.0.1:18443:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre
+          for i in $(seq 1 40); do
+            if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then
+              docker rm -f proxbox-smoke-https
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs proxbox-smoke-https
+          docker rm -f proxbox-smoke-https
+          exit 1
 
   docker-runtime:
     if: github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
@@ -261,6 +299,32 @@ jobs:
               /tmp/docker-tests.sh
           done
 
+      - name: Smoke-test pushed runtime images
+        run: |
+          set -eux
+          for TAG in "${{ env.IMAGE_TAG }}" latest; do
+            NAME=$(printf 'proxbox-smoke-%s' "$TAG" | tr '.:' '-')
+            docker rm -f "$NAME" 2>/dev/null || true
+            docker run -d --name "$NAME" \
+              -p 127.0.0.1:18080:8000 \
+              -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+              emersonfelipesp/proxbox-api:"$TAG"
+            ok=0
+            for i in $(seq 1 40); do
+              if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+              sleep 2
+            done
+            if [ "$ok" -ne 1 ]; then
+              docker logs "$NAME"
+              docker rm -f "$NAME"
+              exit 1
+            fi
+            docker rm -f "$NAME"
+          done
+
   docker-mkcert:
     if: github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
     name: Docker Hub — mkcert (nginx + HTTPS + uvicorn)
@@ -350,6 +414,25 @@ jobs:
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
             /tmp/docker-tests.sh
 
+      - name: Smoke-test mkcert image startup
+        run: |
+          set -eux
+          docker rm -f proxbox-smoke-https 2>/dev/null || true
+          docker run -d --name proxbox-smoke-https \
+            -p 127.0.0.1:18443:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre
+          for i in $(seq 1 40); do
+            if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then
+              docker rm -f proxbox-smoke-https
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs proxbox-smoke-https
+          docker rm -f proxbox-smoke-https
+          exit 1
+
       - name: Build and push mkcert Docker image
         uses: docker/build-push-action@v6
         with:
@@ -371,4 +454,30 @@ jobs:
               -v "${{ github.workspace }}/tests:/app/tests:ro" \
               emersonfelipesp/proxbox-api:"$TAG" \
               /tmp/docker-tests.sh
+          done
+
+      - name: Smoke-test pushed mkcert images
+        run: |
+          set -eux
+          for TAG in "${{ env.IMAGE_TAG }}-mkcert" latest-mkcert; do
+            NAME=$(printf 'proxbox-smoke-%s' "$TAG" | tr '.:' '-')
+            docker rm -f "$NAME" 2>/dev/null || true
+            docker run -d --name "$NAME" \
+              -p 127.0.0.1:18443:8000 \
+              -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+              emersonfelipesp/proxbox-api:"$TAG"
+            ok=0
+            for i in $(seq 1 40); do
+              if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+              sleep 2
+            done
+            if [ "$ok" -ne 1 ]; then
+              docker logs "$NAME"
+              docker rm -f "$NAME"
+              exit 1
+            fi
+            docker rm -f "$NAME"
           done
