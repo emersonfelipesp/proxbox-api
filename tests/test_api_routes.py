@@ -700,6 +700,153 @@ def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypat
     ]
 
 
+def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
+    monkeypatch,
+):
+    """The single-VM bundle must still create interfaces, IPs, disks, and task history."""
+
+    interface_calls: list[dict[str, object]] = []
+    disk_calls: list[dict[str, object]] = []
+    task_history_calls: list[dict[str, object]] = []
+    patch_calls: list[tuple[object, ...]] = []
+    netbox_session = object()
+
+    async def _fake_reconcile(*args, **kwargs):
+        lookup = kwargs.get("lookup") or {}
+        if lookup.get("cf_proxmox_vm_id") == 101:
+            return {"id": 101, "name": "vm-101", "primary_ip4": None}
+        return {"id": len(patch_calls) + 1, "name": kwargs.get("payload", {}).get("name")}
+
+    async def _fake_ensure(*args, **kwargs):
+        return SimpleNamespace(id=1)
+
+    async def _fake_rest_list(*args, **kwargs):
+        return []
+
+    async def _fake_patch(*args, **kwargs):
+        patch_calls.append(args)
+        return None
+
+    async def _fake_create_vm_interface_parallel(**kwargs):
+        interface_calls.append(kwargs)
+        return {"interface": {"id": 66, "name": kwargs["interface_name"]}, "first_ip_id": 77}
+
+    async def _fake_create_vm_disk_parallel(**kwargs):
+        disk_calls.append(kwargs)
+        return {"id": 88}
+
+    async def _fake_task_history(**kwargs):
+        task_history_calls.append(kwargs)
+        return 3
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_reconcile_async",
+        _fake_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_patch_async",
+        _fake_patch,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        lambda **kwargs: {
+            "onboot": 1,
+            "agent": 1,
+            "unprivileged": 0,
+            "searchdomain": "lab.local",
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+            "scsi0": "local-lvm:vm-101-disk-0,size=20G",
+        },
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_cluster_type",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_cluster",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_manufacturer",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_device_type",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_site",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_device",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_proxmox_node_role",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.build_netbox_virtual_machine_payload",
+        lambda **kwargs: {"name": "vm-101", "status": "active", "cluster": 1},
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._create_vm_interface_parallel",
+        _fake_create_vm_interface_parallel,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._create_vm_disk_parallel",
+        _fake_create_vm_disk_parallel,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
+        _fake_task_history,
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=netbox_session,
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[
+                {
+                    "cluster-a": [
+                        {
+                            "type": "qemu",
+                            "name": "vm-101",
+                            "vmid": 101,
+                            "node": "pve01",
+                        }
+                    ]
+                }
+            ],
+            custom_fields=[],
+            tag=SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722"),
+        )
+    )
+
+    assert result == [{"id": 101, "name": "vm-101", "primary_ip4": None}]
+    assert len(interface_calls) == 1
+    assert len(disk_calls) == 1
+    assert len(task_history_calls) == 1
+    assert patch_calls == [
+        (
+            netbox_session,
+            "/api/virtualization/virtual-machines/",
+            101,
+            {"primary_ip4": 77},
+        )
+    ]
+
+
 def test_create_virtual_machine_by_netbox_id_raises_404_when_missing():
     fake_nb = SimpleNamespace(
         virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=lambda id: None))
