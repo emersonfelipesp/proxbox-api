@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_rest import rest_first_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxClusterSyncState,
     NetBoxClusterTypeSyncState,
@@ -194,6 +194,16 @@ async def _ensure_device(
     site_id: int | None,
     tag_refs: list[dict[str, Any]],
 ) -> object:
+    existing_device = await rest_first_async(
+        nb,
+        "/api/dcim/devices/",
+        query={"name": device_name, "limit": 2},
+    )
+    if existing_device is not None:
+        existing_site = existing_device.get("site")
+        if existing_site is not None and (site_id is None or existing_site != site_id):
+            site_id = existing_site
+
     payload = {
         "name": device_name,
         "tags": tag_refs,
