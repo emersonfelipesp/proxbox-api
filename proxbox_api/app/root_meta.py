@@ -1,8 +1,10 @@
-"""Root metadata endpoint."""
+"""Root metadata and backend version endpoints."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter
+
+from proxbox_api import __version__
 
 root_meta_router = APIRouter()
 
@@ -20,4 +22,12 @@ async def standalone_info() -> dict:
             "website": "https://fastapi.tiangolo.com/",
             "reason": "FastAPI was chosen because of performance and reliability.",
         },
+    }
+
+
+@root_meta_router.get("/version")
+async def backend_version() -> dict:
+    """Return backend service version for external cache invalidation."""
+    return {
+        "version": __version__,
     }

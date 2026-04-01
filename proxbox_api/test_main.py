@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxbox_api.main import app
 from proxbox_api.app import factory
+from proxbox_api.main import app
 from proxbox_api.proxmox_codegen.normalize import normalize_captured_endpoints
 from proxbox_api.proxmox_codegen.openapi_generator import generate_openapi_schema
 from proxbox_api.proxmox_codegen.pipeline import (
@@ -36,6 +36,15 @@ def test_read_root():
             "reason": "FastAPI was chosen because of performance and reliability.",
         },
     }
+
+
+def test_read_backend_version():
+    response = client.get("/version")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, dict)
+    assert "version" in payload
+    assert isinstance(payload["version"], str)
 
 
 def test_custom_openapi_contains_embedded_proxmox_extension():
