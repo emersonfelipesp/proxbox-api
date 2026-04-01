@@ -31,7 +31,8 @@ from proxbox_api.services.sync.vmid_helpers import (
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
-_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
+_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
+_DEFAULT_VM_SYNC_CONCURRENCY = max(1, int(os.getenv("PROXBOX_NETBOX_WRITE_CONCURRENCY", "4")))
 
 
 async def _load_storage_index(netbox_session: object) -> dict[tuple[str, str], dict[str, object]]:
@@ -203,6 +204,193 @@ async def process_snapshots_batch(snapshot_tasks: list, batch_size: int = 10) ->
     return results, failures
 
 
+async def _sync_single_vm_snapshots(
+    vm: object,
+    nb,
+    pxs: list,
+    cluster_status: list | None,
+    cluster_resources: list[dict[str, object]] | None,
+    node: str | None,
+    storage_index: dict,
+    fetch_semaphore: asyncio.Semaphore,
+    tag_refs: list[dict],
+    use_websocket: bool,
+    websocket: object | None,
+    undefined_html: str,
+    completed_html: str,
+    failed_html: str,
+) -> tuple[int, int, int]:
+    """Sync snapshots for a single VM. Returns (created, updated, skipped)."""
+    created = 0
+    updated = 0
+    skipped = 0
+
+    vmid = extract_proxmox_vmid(vm)
+    vm_name = vm.get("name", "unknown")
+
+    if not vmid:
+        return (0, 0, 1)
+
+    if use_websocket and websocket:
+        await websocket.send_json(
+            {
+                "object": "snapshot",
+                "type": "sync",
+                "data": {
+                    "sync_status": undefined_html,
+                    "name": vm_name,
+                    "netbox_id": vm.get("id"),
+                    "status": "Processing...",
+                },
+            }
+        )
+
+    try:
+        proxmox_type = extract_proxmox_vm_type(vm) or vm.get("type", "qemu")
+        if proxmox_type not in ("qemu", "lxc"):
+            proxmox_type = "qemu"
+
+        node_name = node
+        cluster_name = None
+
+        if not node_name and cluster_resources:
+            for cluster in cluster_resources:
+                if not isinstance(cluster, dict):
+                    continue
+                cluster_items = list(cluster.items())
+                if not cluster_items:
+                    continue
+                cluster_key, resources = cluster_items[0]
+                if not isinstance(resources, list):
+                    continue
+                for resource in resources:
+                    if normalize_vmid(resource.get("vmid")) == vmid:
+                        node_name = resource.get("node")
+                        cluster_name = cluster_key
+                        break
+                if node_name:
+                    break
+
+        if not node_name:
+            for cs in cluster_status:
+                if hasattr(cs, "node_list") and cs.node_list:
+                    node_name = cs.node_list[0].name
+                    cluster_name = getattr(cs, "name", None)
+                    break
+
+        if not node_name:
+            if use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "object": "snapshot",
+                        "type": "sync",
+                        "data": {
+                            "completed": True,
+                            "name": vm_name,
+                            "sync_status": failed_html,
+                            "error": "No node associated",
+                        },
+                    }
+                )
+            return (0, 0, 1)
+
+        if not cluster_name:
+            for cs in cluster_status:
+                if getattr(cs, "node_list", None):
+                    if any(node_item.name == node_name for node_item in cs.node_list):
+                        cluster_name = getattr(cs, "name", None)
+                        break
+
+        storage_record = await _resolve_snapshot_storage_record(
+            nb,
+            vm_id=int(vmid),
+            cluster_name=cluster_name,
+            storage_index=storage_index,
+        )
+
+        snapshot_tasks = []
+        proxmox_snapshot_names = set()
+
+        async def _fetch_snapshots_for_endpoint(proxmox):
+            async with fetch_semaphore:
+                return await asyncio.to_thread(
+                    lambda: get_vm_snapshots(
+                        session=proxmox.session,
+                        node=node_name,
+                        vm_type=proxmox_type,
+                        vmid=int(vmid),
+                    )
+                )
+
+        snapshot_results = await asyncio.gather(
+            *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],
+            return_exceptions=True,
+        )
+        for result in snapshot_results:
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Error getting snapshots for VM %s on node %s: %s",
+                    vmid,
+                    node_name,
+                    result,
+                )
+                continue
+            for snapshot in result:
+                snap_name = snapshot.get("name")
+                if snap_name:
+                    proxmox_snapshot_names.add(snap_name)
+                    snapshot_tasks.append(
+                        create_netbox_snapshots(
+                            snapshot,
+                            nb,
+                            vmid,
+                            node_name,
+                            storage_record=storage_record,
+                        )
+                    )
+
+        if snapshot_tasks:
+            results, failures = await process_snapshots_batch(snapshot_tasks)
+            created = len(results)
+            skipped = failures
+        else:
+            skipped = 1
+
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "object": "snapshot",
+                    "type": "sync",
+                    "data": {
+                        "completed": True,
+                        "name": vm_name,
+                        "netbox_id": vm.get("id"),
+                        "snapshots_found": len(proxmox_snapshot_names),
+                        "sync_status": completed_html,
+                    },
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Error syncing snapshots for VM {vm_name} ({vmid}): {e}")
+        skipped = 1
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "object": "snapshot",
+                    "type": "sync",
+                    "data": {
+                        "completed": True,
+                        "error": str(e),
+                        "name": vm_name,
+                        "sync_status": failed_html,
+                    },
+                }
+            )
+
+    return (created, updated, skipped)
+
+
 async def _list_all_vms_with_proxmox_id(
     nb,
     batch_size: int = 500,
@@ -307,176 +495,39 @@ async def create_virtual_machine_snapshots(  # noqa: C901
 
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
+    vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
 
-    for vm in vms:
-        vmid = extract_proxmox_vmid(vm)
-        vm_name = vm.get("name", "unknown")
-
-        if not vmid:
-            skipped += 1
-            continue
-
-        if use_websocket and websocket:
-            await websocket.send_json(
-                {
-                    "object": "snapshot",
-                    "type": "sync",
-                    "data": {
-                        "sync_status": undefined_html,
-                        "name": vm_name,
-                        "netbox_id": vm.get("id"),
-                        "status": "Processing...",
-                    },
-                }
-            )
-
-        try:
-            proxmox_type = extract_proxmox_vm_type(vm) or vm.get("type", "qemu")
-            if proxmox_type not in ("qemu", "lxc"):
-                proxmox_type = "qemu"
-
-            node_name = node
-            cluster_name = None
-
-            if not node_name and cluster_resources:
-                for cluster in cluster_resources:
-                    if not isinstance(cluster, dict):
-                        continue
-                    cluster_items = list(cluster.items())
-                    if not cluster_items:
-                        continue
-                    cluster_key, resources = cluster_items[0]
-                    if not isinstance(resources, list):
-                        continue
-                    for resource in resources:
-                        if normalize_vmid(resource.get("vmid")) == vmid:
-                            node_name = resource.get("node")
-                            cluster_name = cluster_key
-                            break
-                    if node_name:
-                        break
-
-            if not node_name:
-                for cs in cluster_status:
-                    if hasattr(cs, "node_list") and cs.node_list:
-                        node_name = cs.node_list[0].name
-                        cluster_name = getattr(cs, "name", None)
-                        break
-
-            if not node_name:
-                logger.warning(
-                    f"No node found for VM {vm_name} (vmid: {vmid}), skipping snapshot sync"
-                )
-                skipped += 1
-                if use_websocket and websocket:
-                    await websocket.send_json(
-                        {
-                            "object": "snapshot",
-                            "type": "sync",
-                            "data": {
-                                "completed": True,
-                                "name": vm_name,
-                                "sync_status": failed_html,
-                                "error": "No node associated",
-                            },
-                        }
-                    )
-                continue
-
-            if not cluster_name:
-                for cs in cluster_status:
-                    if getattr(cs, "node_list", None):
-                        if any(node_item.name == node_name for node_item in cs.node_list):
-                            cluster_name = getattr(cs, "name", None)
-                            break
-
-            storage_record = await _resolve_snapshot_storage_record(
-                nb,
-                vm_id=int(vmid),
-                cluster_name=cluster_name,
+    async def _sync_vm_with_semaphore(vm):
+        async with vm_sync_semaphore:
+            return await _sync_single_vm_snapshots(
+                vm=vm,
+                nb=nb,
+                pxs=pxs,
+                cluster_status=cluster_status,
+                cluster_resources=cluster_resources,
+                node=node,
                 storage_index=storage_index,
+                fetch_semaphore=fetch_semaphore,
+                tag_refs=tag_refs,
+                use_websocket=use_websocket,
+                websocket=websocket,
+                undefined_html=undefined_html,
+                completed_html=completed_html,
+                failed_html=failed_html,
             )
 
-            snapshot_tasks = []
-            proxmox_snapshot_names = set()
+    sync_tasks = [_sync_vm_with_semaphore(vm) for vm in vms]
+    results = await asyncio.gather(*sync_tasks, return_exceptions=True)
 
-            async def _fetch_snapshots_for_endpoint(proxmox):
-                async with fetch_semaphore:
-                    return await asyncio.to_thread(
-                        lambda: get_vm_snapshots(
-                            session=proxmox.session,
-                            node=node_name,
-                            vm_type=proxmox_type,
-                            vmid=int(vmid),
-                        )
-                    )
-
-            snapshot_results = await asyncio.gather(
-                *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],
-                return_exceptions=True,
-            )
-            for result in snapshot_results:
-                if isinstance(result, Exception):
-                    logger.warning(
-                        "Error getting snapshots for VM %s on node %s: %s",
-                        vmid,
-                        node_name,
-                        result,
-                    )
-                    continue
-                for snapshot in result:
-                    snap_name = snapshot.get("name")
-                    if snap_name:
-                        proxmox_snapshot_names.add(snap_name)
-                        snapshot_tasks.append(
-                            create_netbox_snapshots(
-                                snapshot,
-                                nb,
-                                vmid,
-                                node_name,
-                                storage_record=storage_record,
-                            )
-                        )
-
-            if snapshot_tasks:
-                results, failures = await process_snapshots_batch(snapshot_tasks)
-                created += len(results)
-                if failures:
-                    skipped += failures
-            else:
-                skipped += 1
-
-            if use_websocket and websocket:
-                await websocket.send_json(
-                    {
-                        "object": "snapshot",
-                        "type": "sync",
-                        "data": {
-                            "completed": True,
-                            "name": vm_name,
-                            "netbox_id": vm.get("id"),
-                            "snapshots_found": len(proxmox_snapshot_names),
-                            "sync_status": completed_html,
-                        },
-                    }
-                )
-
-        except Exception as e:
-            logger.error(f"Error syncing snapshots for VM {vm_name} ({vmid}): {e}")
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning("Snapshot sync task failed: %s", result)
             skipped += 1
-            if use_websocket and websocket:
-                await websocket.send_json(
-                    {
-                        "object": "snapshot",
-                        "type": "sync",
-                        "data": {
-                            "completed": True,
-                            "error": str(e),
-                            "name": vm_name,
-                            "sync_status": failed_html,
-                        },
-                    }
-                )
+        else:
+            c, u, s = result
+            created += c
+            updated += u
+            skipped += s
 
     logger.info(f"Snapshot sync completed: {created} created/updated, {skipped} skipped")
 
