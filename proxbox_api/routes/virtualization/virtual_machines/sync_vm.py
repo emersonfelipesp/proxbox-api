@@ -2,6 +2,7 @@
 
 # FastAPI Imports
 import asyncio
+import inspect
 from datetime import datetime, timezone
 from ipaddress import ip_address
 
@@ -142,6 +143,44 @@ def _relation_id(value: object) -> int | None:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+def _parse_network_config_entry(raw_value: object) -> dict[str, str]:
+    """Parse a Proxmox `netX` config entry into a key/value mapping.
+
+    Proxmox returns these values as comma-separated `key=value` pairs.
+    When a non-string value slips through, treat it as absent instead of
+    raising an attribute error on `.split()`.
+    """
+    if not isinstance(raw_value, str):
+        return {}
+
+    parsed: dict[str, str] = {}
+    for part in (segment.strip() for segment in raw_value.split(",")):
+        if not part or "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            parsed[key] = value
+    return parsed
+
+
+def _parse_vm_networks(vm_config: dict[str, object]) -> list[dict[str, dict[str, str]]]:
+    """Extract and parse `net0`, `net1`, ... entries from a VM config."""
+    networks: list[dict[str, dict[str, str]]] = []
+    network_id = 0
+    while True:
+        network_name = f"net{network_id}"
+        raw = vm_config.get(network_name)
+        if raw is None:
+            break
+        network_dict = _parse_network_config_entry(raw)
+        if network_dict:
+            networks.append({network_name: network_dict})
+        network_id += 1
+    return networks
 
 
 def _filter_cluster_resources_for_vm(  # noqa: C901
@@ -657,13 +696,16 @@ async def create_virtual_machines(  # noqa: C901
         }
 
         vm_type = resource.get("type", "unknown")
-        vm_config = await get_vm_config(
+        vm_config_result = get_vm_config(
             pxs=pxs,
             cluster_status=cluster_status,
             node=resource.get("node"),
             type=vm_type,
             vmid=resource.get("vmid"),
         )
+        if inspect.isawaitable(vm_config_result):
+            vm_config_result = await vm_config_result
+        vm_config = vm_config_result
 
         if vm_config is None:
             vm_config = {}
@@ -835,18 +877,7 @@ async def create_virtual_machines(  # noqa: C901
                 if _normalized_mac(iface.get("mac_address"))
             }
 
-            vm_networks = []
-            network_id = 0
-            while True:
-                network_name = f"net{network_id}"
-                vm_network_info = vm_config.get(network_name, None)
-                if vm_network_info is not None:
-                    net_fields = vm_network_info.split(",")
-                    network_dict = dict([field.split("=") for field in net_fields])
-                    vm_networks.append({network_name: network_dict})
-                    network_id += 1
-                else:
-                    break
+            vm_networks = _parse_vm_networks(vm_config)
 
             if vm_networks:
                 for network in vm_networks:
@@ -1300,7 +1331,16 @@ async def create_only_vm_interfaces(  # noqa: C901
         vm_config: dict[str, object] = {}
         try:
             if proxmox_session and resource_node:
-                vm_config = get_vm_config(proxmox_session, resource_node, int(vmid)) or {}
+                vm_config_result = get_vm_config(
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    node=resource_node,
+                    type=vm_type,
+                    vmid=int(vmid),
+                )
+                if inspect.isawaitable(vm_config_result):
+                    vm_config_result = await vm_config_result
+                vm_config = vm_config_result or {}
         except Exception as exc:
             logger.warning("Could not fetch VM config for %s (vmid=%s): %s", vm_name, vmid, exc)
 
@@ -1323,17 +1363,7 @@ async def create_only_vm_interfaces(  # noqa: C901
             if _normalized_mac(iface.get("mac_address"))
         }
 
-        vm_networks: list[dict[str, object]] = []
-        network_id = 0
-        while True:
-            key = f"net{network_id}"
-            raw = vm_config.get(key)
-            if raw is None:
-                break
-            parts = raw.split(",")
-            network_dict = dict(p.split("=", 1) for p in parts if "=" in p)
-            vm_networks.append({key: network_dict})
-            network_id += 1
+        vm_networks = _parse_vm_networks(vm_config)
 
         interfaces_synced: list[dict] = []
 
@@ -1536,7 +1566,16 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         vm_config: dict[str, object] = {}
         try:
             if proxmox_session and resource_node:
-                vm_config = get_vm_config(proxmox_session, resource_node, int(vmid)) or {}
+                vm_config_result = get_vm_config(
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    node=resource_node,
+                    type=vm_type,
+                    vmid=int(vmid),
+                )
+                if inspect.isawaitable(vm_config_result):
+                    vm_config_result = await vm_config_result
+                vm_config = vm_config_result or {}
         except Exception as exc:
             logger.warning(
                 "Could not fetch VM config for IP sync %s (vmid=%s): %s", vm_name, vmid, exc
@@ -1561,17 +1600,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             if _normalized_mac(iface.get("mac_address"))
         }
 
-        vm_networks: list[dict[str, object]] = []
-        network_id = 0
-        while True:
-            key = f"net{network_id}"
-            raw = vm_config.get(key)
-            if raw is None:
-                break
-            parts = raw.split(",")
-            network_dict = dict(p.split("=", 1) for p in parts if "=" in p)
-            vm_networks.append({key: network_dict})
-            network_id += 1
+        vm_networks = _parse_vm_networks(vm_config)
 
         ips_synced: list[dict] = []
 
