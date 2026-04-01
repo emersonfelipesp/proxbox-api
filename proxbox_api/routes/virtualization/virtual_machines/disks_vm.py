@@ -3,7 +3,7 @@
 # FastAPI Imports
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import (
@@ -89,6 +89,109 @@ async def create_virtual_disks_stream(
                     "step": "virtual-disks",
                     "status": "started",
                     "message": "Starting virtual disks synchronization.",
+                },
+            )
+            async for frame in bridge.iter_sse():
+                yield frame
+
+            result = await sync_task
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-disks",
+                    "status": "completed",
+                    "message": "Virtual disks synchronization finished.",
+                    "result": {
+                        "count": result.get("count", 0),
+                        "created": result.get("created", 0),
+                        "updated": result.get("updated", 0),
+                        "skipped": result.get("skipped", 0),
+                    },
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Virtual disks sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-disks",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual disks sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/{netbox_vm_id}/virtual-disks/create/stream", response_model=None)
+async def create_virtual_disks_for_vm_stream(
+    netbox_vm_id: int,
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    tag: ProxboxTagDep,
+):
+    """Sync virtual disks for a single NetBox VM identified by its primary key."""
+    vm_record = await asyncio.to_thread(
+        lambda: netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
+    )
+    if vm_record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
+        )
+
+    async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await sync_virtual_disks(
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    cluster_resources=cluster_resources,
+                    tag=tag,
+                    websocket=bridge,
+                    use_websocket=True,
+                    use_css=False,
+                    netbox_vm_id=netbox_vm_id,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "virtual-disks",
+                    "status": "started",
+                    "message": f"Starting virtual disks sync for VM id={netbox_vm_id}.",
                 },
             )
             async for frame in bridge.iter_sse():
