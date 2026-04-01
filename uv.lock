@@ -1383,7 +1383,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.4"
+version = "0.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },

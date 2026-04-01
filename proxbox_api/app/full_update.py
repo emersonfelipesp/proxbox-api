@@ -51,7 +51,7 @@ def _result_count(value) -> int:
 
 
 @full_update_router.get("/full-update")
-async def full_update_sync(
+async def full_update_sync(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -220,7 +220,7 @@ async def full_update_sync(
 
 
 @full_update_router.get("/full-update/stream", response_model=None)
-async def full_update_sync_stream(
+async def full_update_sync_stream(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -229,7 +229,7 @@ async def full_update_sync_stream(
     tag: ProxboxTagDep,
     fetch_max_concurrency: int | None = None,
 ) -> StreamingResponse:
-    async def event_stream():
+    async def event_stream():  # noqa: C901
         sync_nodes: list = []
         sync_storage: list = []
         sync_vms: list = []

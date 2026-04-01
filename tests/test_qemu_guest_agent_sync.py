@@ -44,7 +44,7 @@ def _vm_sync_inputs(vm_config: dict):
     }
 
 
-def _install_common_sync_patches(
+def _install_common_sync_patches(  # noqa: C901
     monkeypatch,
     *,
     vm_config: dict,

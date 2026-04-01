@@ -37,7 +37,7 @@ def _to_bool(value: Any) -> bool:
     return bool(value)
 
 
-def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:  # noqa: C901
     """Normalize Proxmox method parameter/returns schema to JSON-schema compatible form."""
 
     if schema is None:

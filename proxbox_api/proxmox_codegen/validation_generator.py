@@ -36,7 +36,7 @@ def generate_field_validators(model_name: str, schema: dict[str, Any]) -> list[s
     return validators
 
 
-def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> list[str]:
+def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> list[str]:  # noqa: C901
     """Generate a single field validator.
 
     Args:

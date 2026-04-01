@@ -357,7 +357,7 @@ async def rest_ensure_async(
         raise
 
 
-async def rest_reconcile_async(
+async def rest_reconcile_async(  # noqa: C901
     nb: Any,
     path: str,
     *,

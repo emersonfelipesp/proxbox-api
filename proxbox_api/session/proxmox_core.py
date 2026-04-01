@@ -17,7 +17,7 @@ def _proxmox_api_factory() -> Any:
 
 
 class ProxmoxSession:
-    def __init__(self, cluster_config: Any) -> None:
+    def __init__(self, cluster_config: Any) -> None:  # noqa: C901
         self.CONNECTED = False
         self.permission_limited = False
         #

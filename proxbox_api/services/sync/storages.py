@@ -11,7 +11,7 @@ from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
 from proxbox_api.services.proxmox_helpers import dump_models, get_storage_list
 
 
-async def create_storages(
+async def create_storages(  # noqa: C901
     *,
     netbox_session: Any,
     pxs: list[Any] | None,
