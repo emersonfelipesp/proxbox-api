@@ -4,13 +4,13 @@
 
 Virtualization status enumerations for NetBox schema validation.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: Virtualization status options used by NetBox schema models.
 
 ## Key Data Flow and Dependencies
 
-- schemas/netbox/virtualization imports ClusterStatusOptions for cluster payload correctness.
+- `schemas/netbox/virtualization` imports `ClusterStatusOptions` for cluster payload correctness.
 
 ## Extension Guidance
 

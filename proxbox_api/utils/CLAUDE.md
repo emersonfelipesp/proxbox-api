@@ -2,20 +2,20 @@
 
 ## Purpose
 
-Utility helpers shared across synchronization workflows (SSE streaming, status HTML).
+Utility helpers shared across synchronization workflows.
 
-## Modules and Responsibilities
+## Current Modules
 
 - `__init__.py`: Re-exports `return_status_html` from `status_html.py`.
-- `status_html.py`: `return_status_html(status, use_css)` for sync status badges/text in HTML responses.
-- `streaming.py`: Server-Sent Event (SSE) helpers for streaming sync progress to HTTP clients.
-  - `sse_event(event, data)`: serializes one SSE frame as `event: <name>\ndata: <json>\n\n`.
-  - `WebSocketSSEBridge`: compatibility bridge that accepts websocket-style `send_json(payload)` calls from sync services and converts them into SSE frames via an internal `asyncio.Queue`. Key methods:
-    - `send_json(payload)`: queues an SSE `step` event with normalized `step`, `status`, `message`, `rowid`, and original `payload` fields.
-    - `emit(event, data)`: queues any custom SSE event.
-    - `close()`: signals end of stream.
-    - `iter_sse()`: async iterator that yields serialized SSE frames until closed.
-  - Normalization logic extracts `rowid` from `payload.data.rowid` or `payload.data.name`, derives `status` from `payload.data.completed` or `payload.data.error`, and builds human-readable messages like `Processing device <rowid>` or `Synced virtual_machine <rowid>`.
+- `error_handling.py`: Shared error handling helpers.
+- `netbox_helpers.py`: NetBox-specific helper functions.
+- `retry.py`: Retry helpers for transient requests and sync operations.
+- `status_html.py`: `return_status_html(status, use_css)` for sync status badges and text in HTML responses.
+- `streaming.py`: Server-Sent Event helpers for streaming sync progress to HTTP clients.
+- `structured_logging.py`: Structured logging helpers.
+- `sync_error_handling.py`: Sync-specific error helpers.
+- `type_guards.py`: Type guard and validation helpers.
+- `websocket_utils.py`: WebSocket progress and status message helpers.
 
 ## Key Data Flow and Dependencies
 

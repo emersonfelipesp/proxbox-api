@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Custom object definitions that model plugin-specific NetBox entities.
+Namespace reserved for custom NetBox object wrappers and plugin-specific entity helpers.
 
-## Modules and Responsibilities
+## Current Files
 
-(No Python modules are currently present in this directory.)
+- `__init__.py`: Package marker; there are no active Python modules here yet.
 
 ## Key Data Flow and Dependencies
 
-- This directory is reserved for custom NetBox object wrappers. The sync audit trail uses NetBox journal entries instead.
+- This directory is reserved for future custom object wrappers. The sync audit trail currently uses NetBox journal entries instead.
 
 ## Extension Guidance
 

@@ -4,7 +4,7 @@
 
 Schemas for NetBox extras payloads such as tags.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: NetBox extras schema models such as tags.
 
