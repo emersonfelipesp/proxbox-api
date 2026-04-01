@@ -30,7 +30,7 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
-_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
+_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
 
 
 def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
