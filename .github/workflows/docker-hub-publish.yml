@@ -112,8 +112,9 @@ jobs:
       - name: Run tests in local image
         run: |
           docker run --rm \
+            -w /workspace \
             -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            -v "${{ github.workspace }}:/workspace" \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
             /tmp/docker-tests.sh
 
@@ -151,8 +152,9 @@ jobs:
       - name: Run tests in mkcert local image
         run: |
           docker run --rm \
+            -w /workspace \
             -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-            -v "${{ github.workspace }}/tests:/app/tests:ro" \
+            -v "${{ github.workspace }}:/workspace" \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
             /tmp/docker-tests.sh
 
