@@ -1,4 +1,4 @@
-# Build dependencies and the app into a virtualenv with uv (reproducible via uv.lock).
+# Build dependencies and the app into a virtualenv with uv (install from PyPI).
 FROM python:3.13-slim-bookworm AS builder
 
 WORKDIR /app
@@ -9,10 +9,22 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-COPY pyproject.toml uv.lock ./
-COPY proxbox_api ./proxbox_api/
+# Create a minimal pyproject.toml for dependency installation via uv
+# This installs proxbox-api from PyPI instead of building from source
+RUN cat > pyproject.toml <<'EOF'
+[project]
+name = "proxbox-api-runtime"
+version = "0.1.0"
+dependencies = [
+    "proxbox-api[playwright]",
+]
 
-RUN uv sync --frozen --no-dev --extra playwright
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+EOF
+
+RUN uv sync --frozen --no-dev
 
 # Application tree + venv only (shared by HTTP and HTTPS images).
 FROM python:3.13-slim-bookworm AS runtime-base
@@ -26,9 +38,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
 COPY --from=builder /app/.venv /app/.venv
-COPY pyproject.toml uv.lock ./
-COPY proxbox_api ./proxbox_api/
-COPY scripts ./scripts/
+
+# Create minimal directories for compatibility (no local source needed)
+RUN mkdir -p /app/scripts
 
 EXPOSE 8000
 
