@@ -78,7 +78,7 @@ jobs:
         run: uv sync --frozen --extra e2e --group dev
 
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        run: uv run playwright install chromium --with-deps
 
       - name: "E2E — local workspace vs NetBox demo"
         run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v
