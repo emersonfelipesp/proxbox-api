@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import AsyncIterable, AsyncIterator
-
 from urllib.parse import urlsplit
 
 from netbox_sdk.client import ApiResponse
@@ -365,6 +364,7 @@ async def rest_reconcile_async(  # noqa: C901
     payload: dict[str, object],
     schema: type[BaseModel],
     current_normalizer,
+    patchable_fields: set[str] | frozenset[str] | None = None,
 ) -> RestRecord:
     desired_model = schema.model_validate(payload)
     desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
@@ -417,6 +417,9 @@ async def rest_reconcile_async(  # noqa: C901
             for key, value in desired_payload.items()
             if current_payload.get(key) != value
         }
+        if patchable_fields is not None:
+            allowed = {str(field) for field in patchable_fields}
+            patch_payload = {key: value for key, value in patch_payload.items() if key in allowed}
         if patch_payload:
             for field, value in patch_payload.items():
                 setattr(existing_record, field, value)
@@ -472,6 +475,7 @@ def rest_reconcile(
     payload: dict[str, object],
     schema: type[BaseModel],
     current_normalizer,
+    patchable_fields: set[str] | frozenset[str] | None = None,
 ) -> object:
     return _wrap_sync(
         run_coroutine_blocking(
@@ -482,6 +486,7 @@ def rest_reconcile(
                 payload=payload,
                 schema=schema,
                 current_normalizer=current_normalizer,
+                patchable_fields=patchable_fields,
             )
         )
     )

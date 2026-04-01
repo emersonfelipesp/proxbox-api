@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
@@ -17,6 +16,16 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 
 _DEFAULT_FETCH_CONCURRENCY = 4
+_TASK_HISTORY_PATCHABLE_FIELDS = frozenset(
+    {
+        "end_time",
+        "status",
+        "task_state",
+        "exitstatus",
+        "tags",
+        "custom_fields",
+    }
+)
 
 
 def _normalize_text(value: object) -> str | None:
@@ -469,6 +478,7 @@ async def sync_virtual_machine_task_history(
                         "tags": record.get("tags"),
                         "custom_fields": record.get("custom_fields"),
                     },
+                    patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
                 )
                 reconciled += 1
             except Exception as error:

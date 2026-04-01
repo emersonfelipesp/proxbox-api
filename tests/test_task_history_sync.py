@@ -11,7 +11,15 @@ from proxbox_api.services.sync.task_history import sync_virtual_machine_task_his
 def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeypatch):
     reconciled: list[tuple[dict, dict]] = []
 
-    async def _fake_rest_reconcile(_nb, _path, lookup, payload, schema, current_normalizer):
+    async def _fake_rest_reconcile(
+        _nb,
+        _path,
+        lookup,
+        payload,
+        schema,
+        current_normalizer,
+        patchable_fields=None,
+    ):
         desired_model = schema.model_validate(payload)
         reconciled.append(
             (
@@ -19,6 +27,14 @@ def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeyp
                 desired_model.model_dump(mode="python", by_alias=True, exclude_none=True),
             )
         )
+        assert patchable_fields == {
+            "end_time",
+            "status",
+            "task_state",
+            "exitstatus",
+            "tags",
+            "custom_fields",
+        }
 
         class _Record:
             id = 1
