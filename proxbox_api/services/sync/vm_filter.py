@@ -111,6 +111,14 @@ def parse_network_config(vm_config: dict[str, object]) -> list[dict[str, dict[st
         network_info = vm_config.get(network_name)
         if network_info is None:
             break
+        if not isinstance(network_info, str):
+            logger.debug(
+                "Skipping non-string network config %s during parse: %r",
+                network_name,
+                type(network_info).__name__,
+            )
+            network_id += 1
+            continue
         try:
             net_fields = network_info.split(",")
             network_dict = dict([field.split("=") for field in net_fields if "=" in field])
