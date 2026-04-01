@@ -212,6 +212,33 @@ Headers:
 
 This endpoint creates expected custom fields used by VM synchronization metadata.
 
+## Error Handling and Sync Utilities
+
+All synchronization endpoints employ comprehensive error handling patterns documented in `proxbox_api/utils/sync_error_handling.py`:
+
+### Response Validation
+
+- **NetBox responses** are validated to ensure required `id` field is present
+- **Proxmox responses** are validated against expected structure and Pydantic models
+- Invalid responses raise `NetBoxAPIError` or `ProxmoxAPIError` with context
+
+### Structured Logging
+
+Sync operations use structured logging for observability via `proxbox_api/utils/structured_logging.py`:
+
+- **Phase logging**: Each sync phase (e.g., "filtering", "creation") logs with context (operation name, resource counts)
+- **Resource logging**: Per-resource events include resource ID, type, and status
+- **Result logging**: Sync completion includes success/failure counts and elapsed time
+- **Error logging**: Failures include full context and error details
+
+### Decorators for Resilience
+
+- **`@with_sync_error_handling`**: Wraps sync functions to catch and log errors with context
+- **`@with_retry`**: Implements exponential backoff retry logic for transient failures
+- **`@with_async_sync_error_handling` / `@with_async_retry`**: Async variants for concurrent operations
+
+See the sync operation documentation (`docs/sync/workflows.md`) for detailed execution flow and error recovery patterns.
+
 ## Proxbox plugin config routes
 
 These route handlers exist in `proxbox_api/routes/proxbox/__init__.py` but are not currently mounted in `main.py`:
