@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -662,6 +663,7 @@ def test_rest_reconcile_async_patches_only_schema_detected_changes():
 
 
 def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
+    expected_pstart = datetime.fromtimestamp(3001, timezone.utc).isoformat()
     session = AsyncNetBoxRestFacade(
         {
             ("GET", "/api/plugins/proxbox/task-history/"): (
@@ -677,7 +679,7 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
                             "upid": "UPID:pve01:1",
                             "node": "pve01",
                             "pid": 1001,
-                            "pstart": 3001,
+                            "pstart": expected_pstart,
                             "task_id": "144",
                             "task_type": "qmstart",
                             "username": "root@pam",
@@ -703,7 +705,7 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
                     "upid": "UPID:pve01:1",
                     "node": "pve01",
                     "pid": 1001,
-                    "pstart": 3001,
+                    "pstart": expected_pstart,
                     "task_id": "144",
                     "task_type": "qmstart",
                     "username": "root@pam",
@@ -731,7 +733,7 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
                 "upid": "UPID:pve01:1",
                 "node": "pve01",
                 "pid": 1001,
-                "pstart": 3001,
+                "pstart": expected_pstart,
                 "task_id": "144",
                 "task_type": "qmstart",
                 "username": "root@pam",
