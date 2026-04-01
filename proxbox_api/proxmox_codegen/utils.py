@@ -7,7 +7,6 @@ import keyword
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 
 def utc_now_iso() -> str:
@@ -22,7 +21,7 @@ def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def dump_json(path: Path, data: Any) -> None:
+def dump_json(path: Path, data: object) -> None:
     """Write JSON artifact with stable formatting."""
 
     ensure_parent(path)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from json import JSONDecodeError
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends, Query
 from sqlmodel import select
@@ -108,10 +108,10 @@ async def proxmox_sessions(  # noqa: C901
         )
 
 
-ProxmoxSessionsDep = Annotated[list, Depends(proxmox_sessions)]
+ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions)]
 
 
-def _netbox_field(endpoint: Any, field: str, default: Any = None) -> Any:
+def _netbox_field(endpoint: object, field: str, default: object = None) -> object:
     if isinstance(endpoint, dict):
         return endpoint.get(field, default)
     return getattr(endpoint, field, default)
@@ -133,7 +133,7 @@ def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
     )
 
 
-def _parse_netbox_endpoint(endpoint: Any) -> ProxmoxSessionSchema:
+def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
     ip = None
     ip_address_object = _netbox_field(endpoint, "ip_address")
     if ip_address_object:

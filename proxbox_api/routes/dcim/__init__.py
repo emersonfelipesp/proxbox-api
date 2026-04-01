@@ -281,14 +281,250 @@ async def create_proxmox_device_interfaces(
     return [iface.dict() if hasattr(iface, "dict") else iface for iface, _ in results]
 
 
-ProxmoxCreateDeviceInterfacesDep = Annotated[list[dict], Depends(create_proxmox_device_interfaces)]
+ProxboxCreateDeviceInterfacesDep = Annotated[list[dict], Depends(create_proxmox_device_interfaces)]
+
+
+async def create_all_device_interfaces(
+    netbox_session: NetBoxAsyncSessionDep,
+    tag: ProxboxTagDep,
+    clusters_status: ClusterStatusDep,
+    websocket=None,
+    use_websocket: bool = False,
+) -> list[dict]:
+    """Sync all Proxmox node interfaces and their IP addresses across all clusters.
+
+    Args:
+        netbox_session: NetBox async session.
+        tag: Proxbox tag reference.
+        clusters_status: All cluster status objects from Proxmox.
+        websocket: Optional WebSocketSSEBridge for progress events.
+        use_websocket: Whether to emit progress events.
+
+    Returns:
+        List of all synced interface records.
+    """
+    from proxbox_api.services.sync.network import sync_node_interface_and_ip
+
+    tag_refs = nested_tag_payload(tag)
+    all_results: list[dict] = []
+
+    if not clusters_status:
+        return all_results
+
+    for cluster_status in clusters_status:
+        if not cluster_status or not cluster_status.node_list:
+            continue
+
+        for node_obj in cluster_status.node_list:
+            node_name = node_obj.name
+
+            if use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "object": "node_interface",
+                        "data": {
+                            "completed": False,
+                            "sync_status": "syncing",
+                            "rowid": node_name,
+                            "name": node_name,
+                        },
+                    }
+                )
+
+            try:
+                node_networks = node_obj.network or []
+            except Exception:
+                node_networks = []
+
+            if not node_networks:
+                if use_websocket and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "node_interface",
+                            "data": {
+                                "completed": True,
+                                "rowid": node_name,
+                                "name": node_name,
+                                "warning": "No network interfaces found",
+                            },
+                        }
+                    )
+                continue
+
+            device_record: dict = {"id": getattr(node_obj, "id", None), "name": node_name}
+
+            for iface_data in node_networks:
+                iface_name = str(getattr(iface_data, "iface", "") or "")
+                if not iface_name:
+                    continue
+
+                try:
+                    result = await sync_node_interface_and_ip(
+                        nb=netbox_session,
+                        device=device_record,
+                        interface_name=iface_name,
+                        interface_config={
+                            "type": getattr(iface_data, "type", "other"),
+                            "cidr": getattr(iface_data, "cidr", None),
+                            "address": getattr(iface_data, "address", None),
+                            "vlan_id": getattr(iface_data, "vlan_id", None),
+                            "bridge": getattr(iface_data, "iface", None),
+                        },
+                        tag_refs=tag_refs,
+                    )
+                    all_results.append(result)
+
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "interface",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": iface_name,
+                                    "name": iface_name,
+                                    "netbox_id": result.get("id"),
+                                    "device": node_name,
+                                    "ip_address": result.get("ip_address"),
+                                },
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to sync interface %s on node %s: %s",
+                        iface_name,
+                        node_name,
+                        exc,
+                    )
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "interface",
+                                "data": {
+                                    "completed": False,
+                                    "rowid": iface_name,
+                                    "name": iface_name,
+                                    "error": str(exc),
+                                },
+                            }
+                        )
+
+            if use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "object": "node_interface",
+                        "data": {
+                            "completed": True,
+                            "rowid": node_name,
+                            "name": node_name,
+                        },
+                    }
+                )
+
+    if use_websocket and websocket:
+        await websocket.send_json({"object": "node_interface", "end": True})
+
+    return all_results
 
 
 @router.get("/devices/interfaces/create")
 async def create_all_devices_interfaces(
-    # nodes: ProxmoxCreateDevicesDep,
-    # node_interfaces: ProxmoxNodeInterfacesDep,
+    netbox_session: NetBoxSessionDep,
+    clusters_status: ClusterStatusDep,
+    tag: ProxboxTagDep,
 ):
-    return {
-        "message": "Endpoint currently not working. Use /devices/{node}/interfaces/create instead."
-    }
+    """Sync network interfaces for all Proxmox nodes (dcim.Device interfaces).
+
+    Iterates through all cluster nodes and syncs their network interfaces
+    and IP addresses to NetBox dcim.Interface and ipam.IPAddress records.
+    """
+    results = await create_all_device_interfaces(
+        netbox_session=netbox_session,
+        tag=tag,
+        clusters_status=clusters_status,
+    )
+    return results
+
+
+@router.get("/devices/interfaces/create/stream", response_model=None)
+async def create_all_devices_interfaces_stream(
+    netbox_session: NetBoxSessionDep,
+    clusters_status: ClusterStatusDep,
+    tag: ProxboxTagDep,
+):
+    """Streaming endpoint for syncing all Proxmox node interfaces.
+
+    Emits SSE step events per node and per interface as they are synced.
+    """
+
+    async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await create_all_device_interfaces(
+                    netbox_session=netbox_session,
+                    tag=tag,
+                    clusters_status=clusters_status,
+                    websocket=bridge,
+                    use_websocket=True,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "node-interfaces",
+                    "status": "started",
+                    "message": "Starting node interfaces synchronization.",
+                },
+            )
+            async for frame in bridge.iter_sse():
+                yield frame
+            result = await sync_task
+            yield sse_event(
+                "step",
+                {
+                    "step": "node-interfaces",
+                    "status": "completed",
+                    "message": "Node interfaces synchronization finished.",
+                    "result": {"count": len(result)},
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Node interfaces sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "node-interfaces",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Node interfaces sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

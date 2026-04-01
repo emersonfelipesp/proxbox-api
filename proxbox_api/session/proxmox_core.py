@@ -2,14 +2,14 @@
 
 import json
 import re
-from typing import Any
+from collections.abc import Mapping
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 
 
-def _proxmox_api_factory() -> Any:
+def _proxmox_api_factory() -> object:
     """Return ``ProxmoxAPI`` from ``session.proxmox`` so tests can monkeypatch it."""
     import proxbox_api.session.proxmox as prox_mod
 
@@ -17,7 +17,7 @@ def _proxmox_api_factory() -> Any:
 
 
 class ProxmoxSession:
-    def __init__(self, cluster_config: Any) -> None:  # noqa: C901
+    def __init__(self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str) -> None:  # noqa: C901
         self.CONNECTED = False
         self.permission_limited = False
         #
@@ -41,9 +41,9 @@ class ProxmoxSession:
                     python_exception=str(error),
                 ) from error
             logger.info("json.loads: %s — type: %s", cluster_config, type(cluster_config))
-        elif isinstance(cluster_config, dict):
+        elif isinstance(cluster_config, Mapping):
             logger.info("INPUT is dict")
-            pass
+            cluster_config = dict(cluster_config)
         else:
             raise ProxboxException(
                 message=f"INPUT of ProxmoxSession() must be a pydantic model or dict (either one will work). Input type provided: {type(cluster_config)}",
@@ -161,7 +161,7 @@ class ProxmoxSession:
     # Proxmox Authentication Modes: TOKEN-BASED & PASSWORD-BASED
     #
 
-    def _auth(self, auth_method: str) -> Any:
+    def _auth(self, auth_method: str) -> object:
         if auth_method != "token" and auth_method != "password":
             raise ProxboxException(
                 message=f"Invalid authentication method provided: {auth_method}",
@@ -272,7 +272,7 @@ class ProxmoxSession:
     #
     # Get Proxmox Details about Cluster and Nodes
     #
-    def get_node_fingerprints(self, px: Any) -> list[str]:
+    def get_node_fingerprints(self, px: object) -> list[str]:
         """Get Nodes Fingerprints. It is the way I better found to differentiate clusters."""
         try:
             join_info = px("cluster/config/join").get()

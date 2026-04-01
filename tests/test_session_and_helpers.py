@@ -1180,3 +1180,107 @@ def test_ensure_device_preserves_existing_site_different_from_sync_default():
                 f"PATCH to {path} should NOT contain sync default site_id={sync_default_site_id}. "
                 f"Got payload: {payload}"
             )
+
+
+def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device():
+    """Test that _ensure_device prefers the ProxBox-managed duplicate when present.
+
+    When multiple devices share the same name, the sync must reuse the ProxBox-tagged
+    record instead of arbitrarily updating a user-managed duplicate.
+    """
+    proxbox_site_id = 16
+    manual_site_id = 99
+
+    patch_calls = []
+
+    class DuplicateAwareRestClient(RestClientStub):
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            if method == "PATCH":
+                patch_calls.append((path, payload))
+            return await super().request(
+                method, path, query=query, payload=payload, expect_json=expect_json
+            )
+
+    proxbox_device = {
+        "id": 50,
+        "name": "pve01",
+        "site": proxbox_site_id,
+        "status": "active",
+        "cluster": 12,
+        "device_type": 14,
+        "role": 15,
+        "description": "Proxmox Node pve01",
+        "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+        "custom_fields": {},
+    }
+    manual_device = {
+        "id": 51,
+        "name": "pve01",
+        "site": manual_site_id,
+        "status": "active",
+        "cluster": 12,
+        "device_type": 14,
+        "role": 15,
+        "description": "Manually managed pve01",
+        "tags": [],
+        "custom_fields": {},
+    }
+
+    def make_get_response(query, payload):
+        if query.get("name") == "pve01" and query.get("limit") == 2:
+            return (
+                200,
+                {
+                    "count": 2,
+                    "results": [manual_device, proxbox_device],
+                },
+            )
+        if query.get("name") == "pve01" and query.get("site_id") == proxbox_site_id:
+            return (200, {"count": 1, "results": [proxbox_device]})
+        if query.get("name") == "pve01" and query.get("site_id") == manual_site_id:
+            return (200, {"count": 1, "results": [manual_device]})
+        return (200, {"count": 0, "results": []})
+
+    responses = {
+        ("GET", "/api/dcim/devices/"): make_get_response,
+        ("PATCH", "/api/dcim/devices/50/"): (
+            200,
+            {"id": 50, "name": "pve01", "site": proxbox_site_id},
+        ),
+        ("PATCH", "/api/dcim/devices/51/"): (
+            200,
+            {"id": 51, "name": "pve01", "site": manual_site_id},
+        ),
+        ("POST", "/api/dcim/sites/"): (201, {"id": proxbox_site_id, "name": "Proxmox Default Site - lab"}),
+        ("POST", "/api/dcim/manufacturers/"): (201, {"id": 13, "name": "Proxmox"}),
+        ("POST", "/api/dcim/device-types/"): (201, {"id": 14, "model": "Proxmox Generic Device"}),
+        ("POST", "/api/dcim/device-roles/"): (201, {"id": 15, "name": "Proxmox Node"}),
+        ("POST", "/api/virtualization/cluster-types/"): (201, {"id": 11, "name": "Cluster"}),
+        ("POST", "/api/virtualization/clusters/"): (201, {"id": 12, "name": "lab"}),
+        ("GET", "/api/dcim/sites/"): (200, {"count": 0, "results": []}),
+        ("GET", "/api/dcim/manufacturers/"): (200, {"count": 0, "results": []}),
+        ("GET", "/api/dcim/device-types/"): (200, {"count": 0, "results": []}),
+        ("GET", "/api/dcim/device-roles/"): (200, {"count": 0, "results": []}),
+        ("GET", "/api/virtualization/cluster-types/"): (200, {"count": 0, "results": []}),
+        ("GET", "/api/virtualization/clusters/"): (200, {"count": 0, "results": []}),
+    }
+
+    facade = AsyncNetBoxRestFacade(responses)
+    facade.client = DuplicateAwareRestClient(responses)
+
+    from proxbox_api.services.sync.device_ensure import _ensure_device
+
+    asyncio.run(
+        _ensure_device(
+            nb=facade,
+            device_name="pve01",
+            cluster_id=12,
+            device_type_id=14,
+            role_id=15,
+            site_id=proxbox_site_id,
+            tag_refs=[{"name": "Proxbox", "slug": "proxbox"}],
+        )
+    )
+
+    assert any(path == "/api/dcim/devices/50/" for path, _ in patch_calls)
+    assert all(path != "/api/dcim/devices/51/" for path, _ in patch_calls)

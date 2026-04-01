@@ -1,6 +1,6 @@
 """Protocol definitions for type safety without requiring inheritance."""
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -52,11 +52,11 @@ class TagLike(Protocol):
 class ProxmoxResource(Protocol):
     """Protocol for Proxmox API resource responses."""
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         """Get value by key (dict-like interface)."""
         ...
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> object:
         """Get value by key."""
         ...
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from proxbox_api.logger import logger
 
@@ -54,7 +53,7 @@ def available_proxmox_openapi_versions() -> list[str]:
 
 def load_proxmox_generated_openapi(
     version_tag: str = DEFAULT_PROXMOX_OPENAPI_TAG,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Load generated Proxmox OpenAPI document for version tag if available."""
 
     path = proxmox_generated_openapi_path(version_tag=version_tag)
@@ -72,8 +71,8 @@ def proxmox_operation_schema(
     path: str,
     method: str,
     version_tag: str = DEFAULT_PROXMOX_OPENAPI_TAG,
-    openapi: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
+    openapi: dict[str, object] | None = None,
+) -> dict[str, object] | None:
     """Get operation schema from generated Proxmox OpenAPI by path and method."""
 
     document = openapi or load_proxmox_generated_openapi(version_tag=version_tag)
