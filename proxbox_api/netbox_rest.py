@@ -16,6 +16,7 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
+from proxbox_api.utils.retry import _is_transient_netbox_error
 
 
 def _unwrap_api(nb: Any) -> Any:
@@ -80,6 +81,34 @@ def _extract_payload(response: ApiResponse) -> Any:
             detail=detail,
         )
     return response.json()
+
+
+def _handle_netbox_error(error: Exception, operation: str) -> None:
+    """Log and re-raise NetBox errors with better context."""
+    error_str = str(error)
+    is_transient = _is_transient_netbox_error(error)
+
+    if is_transient:
+        logger.warning(
+            "Transient NetBox error during %s: %s",
+            operation,
+            error_str,
+        )
+    else:
+        logger.error(
+            "NetBox error during %s: %s",
+            operation,
+            error_str,
+        )
+
+    if isinstance(error, ProxboxException):
+        raise
+
+    raise ProxboxException(
+        message=f"NetBox {operation} failed",
+        detail=error_str,
+        python_exception=error_str,
+    ) from error
 
 
 def _is_duplicate_error(detail: Any) -> bool:
@@ -185,12 +214,22 @@ class RestRecord:
         }
         if not payload:
             return self
-        response = await self._api.client.request(
-            "PATCH",
-            self._detail_path,
-            payload=payload,
-        )
-        payload = _extract_payload(response)
+        try:
+            response = await self._api.client.request(
+                "PATCH",
+                self._detail_path,
+                payload=payload,
+            )
+        except Exception as e:
+            _handle_netbox_error(e, f"save record {self._detail_path}")
+
+        try:
+            payload = _extract_payload(response)
+        except ProxboxException:
+            raise
+        except Exception as e:
+            _handle_netbox_error(e, f"parse save record {self._detail_path}")
+
         if not isinstance(payload, dict):
             raise ProxboxException(message="NetBox returned invalid JSON for record update")
         object.__setattr__(self, "_data", payload)
@@ -198,7 +237,13 @@ class RestRecord:
         return self
 
     async def delete(self) -> bool:
-        response = await self._api.client.request("DELETE", self._detail_path, expect_json=False)
+        try:
+            response = await self._api.client.request(
+                "DELETE", self._detail_path, expect_json=False
+            )
+        except Exception as e:
+            _handle_netbox_error(e, f"delete record {self._detail_path}")
+
         if response.status not in {200, 204}:
             raise ProxboxException(
                 message="NetBox REST request failed",
@@ -211,8 +256,18 @@ async def rest_list_async(
     nb: Any, path: str, *, query: dict[str, Any] | None = None
 ) -> list[RestRecord]:
     api = _unwrap_api(nb)
-    response = await api.client.request("GET", _normalize_path(path), query=query)
-    payload = _extract_payload(response)
+    try:
+        response = await api.client.request("GET", _normalize_path(path), query=query)
+    except Exception as e:
+        _handle_netbox_error(e, f"list {path}")
+
+    try:
+        payload = _extract_payload(response)
+    except ProxboxException:
+        raise
+    except Exception as e:
+        _handle_netbox_error(e, f"parse list {path}")
+
     if isinstance(payload, dict):
         results = payload.get("results", [])
     elif isinstance(payload, list):
@@ -244,8 +299,18 @@ async def rest_first_async(
 
 async def rest_create_async(nb: Any, path: str, payload: dict[str, Any]) -> RestRecord:
     api = _unwrap_api(nb)
-    response = await api.client.request("POST", _normalize_path(path), payload=payload)
-    body = _extract_payload(response)
+    try:
+        response = await api.client.request("POST", _normalize_path(path), payload=payload)
+    except Exception as e:
+        _handle_netbox_error(e, f"create {path}")
+
+    try:
+        body = _extract_payload(response)
+    except ProxboxException:
+        raise
+    except Exception as e:
+        _handle_netbox_error(e, f"parse create {path}")
+
     if not isinstance(body, dict):
         raise ProxboxException(message="NetBox REST create response was not a JSON object")
     return RestRecord(api, path, body)

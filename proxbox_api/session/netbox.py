@@ -103,3 +103,30 @@ def get_netbox_async_session(database_session: DatabaseSessionDep) -> Api:
 
 NetBoxSessionDep = Annotated[Any, Depends(get_netbox_session)]
 NetBoxAsyncSessionDep = Annotated[Any, Depends(get_netbox_async_session)]
+
+
+async def check_netbox_connection(nb: Any) -> dict[str, Any]:
+    """
+    Check NetBox connectivity and return status information.
+
+    Returns:
+        dict with keys: available (bool), url (str), error (str or None)
+    """
+    from proxbox_api.netbox_rest import rest_list_async
+
+    try:
+        api = nb
+        if isinstance(nb, SyncProxy):
+            api = object.__getattribute__(nb, "_obj")
+
+        url = api.config.base_url
+        await rest_list_async(nb, "/api/", query={"limit": 1})
+        return {"available": True, "url": url, "error": None}
+    except ProxboxException as e:
+        return {
+            "available": False,
+            "url": getattr(nb, "config", {}).get("base_url", "unknown"),
+            "error": e.detail or e.message,
+        }
+    except Exception as e:
+        return {"available": False, "url": "unknown", "error": str(e)}
