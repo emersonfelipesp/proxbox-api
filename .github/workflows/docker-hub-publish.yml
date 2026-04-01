@@ -18,13 +18,6 @@ on:
         type: string
         required: false
         default: publish
-    outputs:
-      runtime_image_ref:
-        description: Runtime image ref for the exact source revision built by this workflow
-        value: ${{ jobs.docker-runtime.outputs.runtime_image_ref }}
-      mkcert_image_ref:
-        description: Mkcert image ref for the exact source revision built by this workflow
-        value: ${{ jobs.docker-mkcert.outputs.mkcert_image_ref }}
   workflow_dispatch:
     inputs:
       source_ref:
@@ -195,8 +188,6 @@ jobs:
     if: inputs.mode == 'publish'
     name: Docker Hub — runtime (nginx + uvicorn)
     runs-on: ubuntu-latest
-    outputs:
-      runtime_image_ref: ${{ steps.refs.outputs.runtime_image_ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -270,10 +261,6 @@ jobs:
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime
 
-      - name: Publish output refs
-        id: refs
-        run: echo "runtime_image_ref=emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}" >> "$GITHUB_OUTPUT"
-
       - name: Smoke-test pushed runtime images
         run: |
           set -eux
@@ -304,8 +291,6 @@ jobs:
     if: inputs.mode == 'publish'
     name: Docker Hub — mkcert (nginx + HTTPS + uvicorn)
     runs-on: ubuntu-latest
-    outputs:
-      mkcert_image_ref: ${{ steps.refs.outputs.mkcert_image_ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -397,10 +382,6 @@ jobs:
           tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert,emersonfelipesp/proxbox-api:latest-mkcert,emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}-mkcert
           cache-from: type=gha,scope=mkcert
           cache-to: type=gha,mode=max,scope=mkcert
-
-      - name: Publish output refs
-        id: refs
-        run: echo "mkcert_image_ref=emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}-mkcert" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test pushed mkcert images
         run: |

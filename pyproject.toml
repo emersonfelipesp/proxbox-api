@@ -5,6 +5,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["proxbox_api*"]
 
+[tool.setuptools.package-data]
+proxbox_api = ["static/*"]
+
 [project]
 name = "proxbox_api"
 version = "0.0.5"
@@ -123,4 +126,3 @@ warn_unused_ignores = true
 warn_no_return = true
 strict_optional = true
 strict_equality = true
-
