@@ -467,6 +467,18 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
             },
         ),
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_device_interfaces",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_only_vm_interfaces",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_only_vm_ip_addresses",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
 
     body = asyncio.run(
         full_update_sync(
@@ -493,6 +505,9 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
             "skipped": 0,
             "error": "'object' object has no attribute 'client'",
         },
+        "node_interfaces": [],
+        "vm_interfaces": [],
+        "vm_ip_addresses": [],
         "devices_count": 1,
         "storage_count": 1,
         "virtual_machines_count": 1,
@@ -500,6 +515,9 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
         "backups_count": 1,
         "snapshots_count": 1,
         "task_history_count": 0,
+        "node_interfaces_count": 0,
+        "vm_interfaces_count": 0,
+        "vm_ip_addresses_count": 0,
     }
 
 

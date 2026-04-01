@@ -1203,9 +1203,12 @@ async def create_only_vm_interfaces(
     from proxbox_api.services.sync.network import sync_vm_interface_and_ip
 
     nb = netbox_session
-    tag_id = int(getattr(tag, "id", 0) or 0)
     tag_refs = [
-        {"name": getattr(tag, "name"), "slug": getattr(tag, "slug"), "color": getattr(tag, "color")}
+        {
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+        }
     ]
     tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
     now = datetime.now(timezone.utc)
@@ -1436,7 +1439,11 @@ async def create_only_vm_ip_addresses(
 
     nb = netbox_session
     tag_refs = [
-        {"name": getattr(tag, "name"), "slug": getattr(tag, "slug"), "color": getattr(tag, "color")}
+        {
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+        }
     ]
     tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
     now = datetime.now(timezone.utc)
