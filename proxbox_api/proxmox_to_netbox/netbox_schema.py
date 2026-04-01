@@ -25,8 +25,6 @@ def netbox_openapi_cache_path() -> Path:
 def _candidate_schema_urls(base_url: str) -> list[str]:
     base = base_url.rstrip("/")
     return [
-        f"{base}/api/schema/?format=openapi",
-        f"{base}/api/schema/?format=openapi-json",
         f"{base}/api/schema/",
     ]
 
