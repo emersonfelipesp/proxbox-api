@@ -382,3 +382,77 @@ def test_vm_sync_marks_missing_primary_ip_as_warning(monkeypatch):
     assert warning_payloads[0]["data"]["status"] == "warning"
     assert "No IP address found; primary IP not set." in warning_payloads[0]["data"]["warning"]
     assert not ip_payloads
+
+
+def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 1,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    ip_payloads: list[dict] = []
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        lambda *args, **kwargs: [
+            {
+                "name": "ens18",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "ip_addresses": [
+                    {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
+                ],
+            }
+        ],
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            ignore_ipv6_link_local_addresses=True,
+        )
+    )
+    assert len(result) == 1
+    assert ip_payloads == []
+
+
+def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 1,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    ip_payloads: list[dict] = []
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        lambda *args, **kwargs: [
+            {
+                "name": "ens18",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "ip_addresses": [
+                    {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
+                ],
+            }
+        ],
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            ignore_ipv6_link_local_addresses=False,
+        )
+    )
+    assert len(result) == 1
+    assert ip_payloads and ip_payloads[0]["address"] == "fe80::1/64"

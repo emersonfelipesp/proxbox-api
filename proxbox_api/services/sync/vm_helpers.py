@@ -64,7 +64,7 @@ def normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def guest_agent_ip_with_prefix(addr: dict) -> str | None:
+def guest_agent_ip_with_prefix(addr: dict, ignore_ipv6_link_local: bool = True) -> str | None:
     """Extract and format guest agent IP with prefix."""
     ip_text = str(addr.get("ip_address") or "").strip()
     if not ip_text:
@@ -73,7 +73,9 @@ def guest_agent_ip_with_prefix(addr: dict) -> str | None:
         parsed = ip_address(ip_text)
     except ValueError:
         return None
-    if parsed.is_loopback or parsed.is_link_local:
+    if parsed.is_loopback:
+        return None
+    if ignore_ipv6_link_local and parsed.is_link_local:
         return None
     prefix = addr.get("prefix")
     if isinstance(prefix, int) and 0 <= prefix <= 128:
@@ -81,7 +83,9 @@ def guest_agent_ip_with_prefix(addr: dict) -> str | None:
     return parsed.compressed
 
 
-def best_guest_agent_ip(guest_iface: dict | None) -> str | None:
+def best_guest_agent_ip(
+    guest_iface: dict | None, ignore_ipv6_link_local: bool = True
+) -> str | None:
     """Find the best IP address from guest agent interface data."""
     if not isinstance(guest_iface, dict):
         return None
@@ -90,13 +94,13 @@ def best_guest_agent_ip(guest_iface: dict | None) -> str | None:
             continue
         if str(addr.get("ip_address_type") or "").lower() == "ipv6":
             continue
-        candidate = guest_agent_ip_with_prefix(addr)
+        candidate = guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
         if candidate:
             return candidate
     for addr in guest_iface.get("ip_addresses") or []:
         if not isinstance(addr, dict):
             continue
-        candidate = guest_agent_ip_with_prefix(addr)
+        candidate = guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
         if candidate:
             return candidate
     return None
