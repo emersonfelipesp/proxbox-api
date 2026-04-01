@@ -13,7 +13,11 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
-from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid, normalize_vmid
+from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_vmid,
+    extract_proxmox_vm_type,
+    normalize_vmid,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
@@ -202,7 +206,7 @@ async def create_virtual_disks(
                     if node_name:
                         break
 
-            vm_type = "qemu"
+            vm_type = extract_proxmox_vm_type(vm) or "qemu"
 
             if not node_name:
                 logger.warning(f"No node found for VM {vm_name} (vmid: {vmid}), skipping disk sync")

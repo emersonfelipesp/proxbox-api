@@ -90,7 +90,7 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
     ]
     assert calls["rest_list_async"][0] == {
         "path": "/api/virtualization/virtual-machines/",
-        "query": None,
+        "query": {"limit": 500, "offset": 0},
     }
     assert calls["rest_list_async"][1] == {
         "path": "/api/plugins/proxbox/storage/",

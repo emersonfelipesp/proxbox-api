@@ -222,17 +222,19 @@ class RestRecord:
             )
         except Exception as e:
             _handle_netbox_error(e, f"save record {self._detail_path}")
+            raise  # Early return via exception
 
         try:
-            payload = _extract_payload(response)
+            response_payload = _extract_payload(response)
         except ProxboxException:
             raise
         except Exception as e:
             _handle_netbox_error(e, f"parse save record {self._detail_path}")
+            raise  # Early return via exception
 
-        if not isinstance(payload, dict):
+        if not isinstance(response_payload, dict):
             raise ProxboxException(message="NetBox returned invalid JSON for record update")
-        object.__setattr__(self, "_data", payload)
+        object.__setattr__(self, "_data", response_payload)
         object.__setattr__(self, "_dirty_fields", set())
         return self
 
@@ -243,6 +245,7 @@ class RestRecord:
             )
         except Exception as e:
             _handle_netbox_error(e, f"delete record {self._detail_path}")
+            raise  # Early return via exception
 
         if response.status not in {200, 204}:
             raise ProxboxException(
@@ -260,6 +263,7 @@ async def rest_list_async(
         response = await api.client.request("GET", _normalize_path(path), query=query)
     except Exception as e:
         _handle_netbox_error(e, f"list {path}")
+        raise  # Early return via exception
 
     try:
         payload = _extract_payload(response)
@@ -267,6 +271,7 @@ async def rest_list_async(
         raise
     except Exception as e:
         _handle_netbox_error(e, f"parse list {path}")
+        raise  # Early return via exception
 
     if isinstance(payload, dict):
         results = payload.get("results", [])
@@ -303,6 +308,7 @@ async def rest_create_async(nb: Any, path: str, payload: dict[str, Any]) -> Rest
         response = await api.client.request("POST", _normalize_path(path), payload=payload)
     except Exception as e:
         _handle_netbox_error(e, f"create {path}")
+        raise  # Early return via exception
 
     try:
         body = _extract_payload(response)
@@ -310,6 +316,7 @@ async def rest_create_async(nb: Any, path: str, payload: dict[str, Any]) -> Rest
         raise
     except Exception as e:
         _handle_netbox_error(e, f"parse create {path}")
+        raise  # Early return via exception
 
     if not isinstance(body, dict):
         raise ProxboxException(message="NetBox REST create response was not a JSON object")

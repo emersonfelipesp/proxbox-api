@@ -9,7 +9,7 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     calls = {"get_vm_config": []}
     reconciled = []
 
-    async def _fake_rest_list(_nb, _path):
+    async def _fake_rest_list(_nb, _path, query=None):
         if _path == "/api/virtualization/virtual-machines/":
             return [
                 {
