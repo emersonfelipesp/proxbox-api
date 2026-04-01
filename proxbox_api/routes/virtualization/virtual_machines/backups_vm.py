@@ -504,7 +504,20 @@ async def create_all_virtual_machine_backups(
             ge=1,
         ),
     ] = None,
+    netbox_vm_ids: str | None = Query(
+        default=None,
+        title="NetBox VM IDs",
+        description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
 ):
+    vmid_filter_list = None
+    if netbox_vm_ids:
+        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        if vm_ids:
+            vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(
+                netbox_session, [int(vid) for vid in vm_ids]
+            )
+
     return await _create_all_virtual_machine_backups(
         netbox_session=netbox_session,
         pxs=pxs,
@@ -512,7 +525,35 @@ async def create_all_virtual_machine_backups(
         tag=tag,
         delete_nonexistent_backup=delete_nonexistent_backup,
         fetch_max_concurrency=fetch_max_concurrency,
+        vmid_filter=vmid_filter_list,
     )
+
+
+async def _get_proxmox_vmids_from_netbox_vm_ids(
+    netbox_session, netbox_vm_ids: list[int]
+) -> list[int]:
+    """Get Proxmox VM IDs from NetBox VM IDs."""
+    if not netbox_vm_ids:
+        return []
+
+    try:
+        vms = await rest_list_async(
+            netbox_session,
+            "/api/virtualization/virtual-machines/",
+            query={"id": ",".join(str(vid) for vid in netbox_vm_ids)},
+        )
+        proxmox_vmids: list[int] = []
+        if vms and isinstance(vms, list):
+            for vm in vms:
+                if not isinstance(vm, dict):
+                    continue
+                cf = vm.get("custom_fields", {}) or {}
+                raw_vmid = cf.get("proxmox_vm_id")
+                if raw_vmid is not None and str(raw_vmid).strip().isdigit():
+                    proxmox_vmids.append(int(str(raw_vmid).strip()))
+        return proxmox_vmids
+    except Exception:
+        return []
 
 
 @router.get("/backups/all/create/stream", response_model=None)
@@ -536,7 +577,20 @@ async def create_all_virtual_machine_backups_stream(
             ge=1,
         ),
     ] = None,
+    netbox_vm_ids: str | None = Query(
+        default=None,
+        title="NetBox VM IDs",
+        description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
 ):
+    vmid_filter_list = None
+    if netbox_vm_ids:
+        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        if vm_ids:
+            vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(
+                netbox_session, [int(vid) for vid in vm_ids]
+            )
+
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
@@ -549,6 +603,7 @@ async def create_all_virtual_machine_backups_stream(
                     tag=tag,
                     delete_nonexistent_backup=delete_nonexistent_backup,
                     fetch_max_concurrency=fetch_max_concurrency,
+                    vmid_filter=vmid_filter_list,
                     websocket=bridge,
                     use_websocket=True,
                 )
@@ -647,8 +702,10 @@ async def create_virtual_machine_backups_by_id_stream(
             detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
         )
 
-    vm_data = vm_record if isinstance(vm_record, dict) else (
-        vm_record.serialize() if hasattr(vm_record, "serialize") else dict(vm_record)
+    vm_data = (
+        vm_record
+        if isinstance(vm_record, dict)
+        else (vm_record.serialize() if hasattr(vm_record, "serialize") else dict(vm_record))
     )
     cf = vm_data.get("custom_fields") or {}
     raw_vmid = cf.get("proxmox_vm_id")
