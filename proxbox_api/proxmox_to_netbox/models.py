@@ -389,7 +389,7 @@ class NetBoxSnapshotSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     virtual_machine: int
-    storage: int | None = None
+    proxmox_storage: int | None = None
     name: str
     description: str | None = None
     vmid: int
@@ -404,9 +404,9 @@ class NetBoxSnapshotSyncState(BaseModel):
     def normalize_virtual_machine(cls, value: Any) -> Any:
         return _relation_id(value)
 
-    @field_validator("storage", mode="before")
+    @field_validator("proxmox_storage", mode="before")
     @classmethod
-    def normalize_storage(cls, value: Any) -> Any:
+    def normalize_proxmox_storage(cls, value: Any) -> Any:
         return _relation_id(value)
 
     @field_validator("status", mode="before")
