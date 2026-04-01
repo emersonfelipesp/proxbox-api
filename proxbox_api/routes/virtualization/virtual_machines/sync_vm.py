@@ -80,7 +80,7 @@ def _to_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _relation_name(value) -> str | None:
+def _relation_name(value: Any) -> str | None:
     if isinstance(value, dict):
         for key in ("name", "display", "label", "value"):
             candidate = value.get(key)
@@ -91,7 +91,7 @@ def _relation_name(value) -> str | None:
     return None
 
 
-def _relation_id(value) -> int | None:
+def _relation_id(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, dict):
