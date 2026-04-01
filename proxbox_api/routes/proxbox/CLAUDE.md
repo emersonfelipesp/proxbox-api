@@ -4,7 +4,7 @@
 
 Endpoints exposing Proxbox plugin configuration and settings views.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: Proxbox plugin route handlers for configuration access.
 

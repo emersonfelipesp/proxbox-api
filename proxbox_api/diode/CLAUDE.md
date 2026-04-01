@@ -4,13 +4,14 @@
 
 Experimental integration area for NetBox Labs Diode ingestion workflows.
 
-## Modules and Responsibilities
+## Current Files
 
 - `diode.py`: Experimental Diode client integration example script.
+- `docker-compose.yaml`: Local compose file for running the Diode integration sandbox.
 
 ## Key Data Flow and Dependencies
 
-- diode.py creates a Diode client and ingests sample entities to a gRPC target.
+- `diode.py` creates a Diode client and ingests sample entities to a gRPC target.
 - This directory is not currently wired into the FastAPI runtime path.
 
 ## Extension Guidance
