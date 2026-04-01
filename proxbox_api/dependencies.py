@@ -19,13 +19,16 @@ async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep):
             color="ff5722",
             description="Proxbox Identifier (used to identify the items the plugin created)",
         )
-    except ProxboxException:
-        raise
+    except ProxboxException as error:
+        raise ProxboxException(
+            message="Error ensuring Proxbox tag",
+            python_exception=str(error),
+        ) from error
     except Exception as error:
         raise ProxboxException(
             message="Error ensuring Proxbox tag",
             python_exception=str(error),
-        )
+        ) from error
 
 
 # Proxbox Tag Dependency (used to identify the items the plugin created)

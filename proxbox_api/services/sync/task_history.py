@@ -29,6 +29,70 @@ def _normalize_text(value: Any) -> str | None:
     return text or None
 
 
+def _humanize_task_type(task_type: str) -> str:
+    """Convert Proxmox task type to human-readable action.
+
+    Examples:
+        vzstart -> Start
+        vzshutdown -> Shutdown
+        qmstart -> Start
+    """
+    # Map common task type prefixes and suffixes
+    mapping = {
+        "start": "Start",
+        "shutdown": "Shutdown",
+        "reboot": "Reboot",
+        "stop": "Stop",
+        "pause": "Pause",
+        "resume": "Resume",
+        "suspend": "Suspend",
+        "delete": "Delete",
+        "create": "Create",
+        "clone": "Clone",
+        "move": "Move",
+        "backup": "Backup",
+        "restore": "Restore",
+        "snapshot": "Snapshot",
+        "rollback": "Rollback",
+        "migrate": "Migrate",
+        "convert": "Convert",
+    }
+
+    # Try to find matching suffix in the task type
+    task_lower = task_type.lower()
+    for key, value in mapping.items():
+        if key in task_lower:
+            return value
+
+    # Fall back to titlecase
+    return task_type.capitalize()
+
+
+def _format_task_description(vm_type: str, task_id: str | None, task_type: str) -> str:
+    """Format task description in human-readable format.
+
+    Format: {VM_TYPE} {TASK_ID} - {ACTION}
+    Examples:
+        CT 144 - Start
+        QEMU 100 - Shutdown
+    """
+    # Map VM type to display name
+    vm_type_map = {
+        "lxc": "CT",
+        "qemu": "QEMU",
+        "ct": "CT",
+    }
+    vm_display = vm_type_map.get(vm_type.lower(), vm_type.upper())
+
+    # Humanize the task type
+    action = _humanize_task_type(task_type)
+
+    # Build the description
+    if task_id:
+        return f"{vm_display} {task_id} - {action}"
+    return f"{vm_display} - {action}"
+
+
 def _find_cluster_session(pxs: list | None, cluster_status: list | None, cluster_name: str | None):
     """Find Proxmox session for a cluster."""
     if not pxs or not cluster_status:
@@ -94,11 +158,14 @@ def _build_task_payload(
     node = _normalize_text(task.get("node")) or ""
     username = _normalize_text(task.get("user")) or "root@pam"
 
-    description = f"{task_type}"
-    if task_id:
-        description = f"{task_type} {task_id}"
+    description = _format_task_description(vm_type, task_id, task_type)
 
-    status = _normalize_text(task_status.get("status")) or "unknown"
+    # Use exitstatus if available, otherwise use status
+    status = (
+        _normalize_text(task_status.get("exitstatus"))
+        or _normalize_text(task_status.get("status"))
+        or "unknown"
+    )
     task_state = _normalize_text(task_status.get("state"))
     exitstatus = _normalize_text(task_status.get("exitstatus"))
 
