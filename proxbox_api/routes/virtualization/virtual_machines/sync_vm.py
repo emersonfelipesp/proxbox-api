@@ -289,14 +289,15 @@ def _normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def _guest_agent_ip_with_prefix(addr: dict) -> str | None:
+def _guest_agent_ip_with_prefix(addr: dict, ignore_ipv6_link_local: bool = True) -> str | None:
     """Extract IP address with CIDR prefix from guest agent address dict.
 
-    Filters out loopback and link-local addresses. Returns the IP in CIDR
+    Filters out loopback and optionally link-local addresses. Returns the IP in CIDR
     notation (e.g., "192.168.1.1/24") when prefix is available.
 
     Args:
         addr: Address dict from guest agent with 'ip_address', 'prefix' keys
+        ignore_ipv6_link_local: If True, skip IPv6 link-local addresses (fe80::/64)
 
     Returns:
         IP address with CIDR prefix, just IP, or None if invalid
@@ -308,7 +309,9 @@ def _guest_agent_ip_with_prefix(addr: dict) -> str | None:
         parsed = ip_address(ip_text)
     except ValueError:
         return None
-    if parsed.is_loopback or parsed.is_link_local:
+    if parsed.is_loopback:
+        return None
+    if ignore_ipv6_link_local and parsed.is_link_local:
         return None
     prefix = addr.get("prefix")
     if isinstance(prefix, int) and 0 <= prefix <= 128:
@@ -316,14 +319,17 @@ def _guest_agent_ip_with_prefix(addr: dict) -> str | None:
     return parsed.compressed
 
 
-def _best_guest_agent_ip(guest_iface: dict | None) -> str | None:
+def _best_guest_agent_ip(
+    guest_iface: dict | None, ignore_ipv6_link_local: bool = True
+) -> str | None:
     """Select the best IP address from guest agent interface data.
 
     Prioritizes IPv4 addresses with valid CIDR prefixes, then falls back to
-    any valid IPv4 address. Skips loopback and link-local addresses.
+    any valid IPv4 address. Skips loopback and optionally link-local addresses.
 
     Args:
         guest_iface: Guest agent interface dict with 'ip_addresses' list
+        ignore_ipv6_link_local: If True, skip IPv6 link-local addresses
 
     Returns:
         Best available IP address (with prefix if available), or None
@@ -335,13 +341,13 @@ def _best_guest_agent_ip(guest_iface: dict | None) -> str | None:
             continue
         if str(addr.get("ip_address_type") or "").lower() == "ipv6":
             continue
-        candidate = _guest_agent_ip_with_prefix(addr)
+        candidate = _guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
         if candidate:
             return candidate
     for addr in guest_iface.get("ip_addresses") or []:
         if not isinstance(addr, dict):
             continue
-        candidate = _guest_agent_ip_with_prefix(addr)
+        candidate = _guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
         if candidate:
             return candidate
     return None
@@ -359,6 +365,7 @@ async def _create_virtual_machine_by_netbox_id(
     websocket=None,
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
+    ignore_ipv6_link_local_addresses: bool = True,
 ):
     """Create a single virtual machine by its NetBox ID.
 
@@ -376,6 +383,7 @@ async def _create_virtual_machine_by_netbox_id(
         websocket: Optional WebSocket for progress updates.
         use_websocket: Whether to send WebSocket updates.
         use_guest_agent_interface_name: Use guest-agent interface names if available.
+        ignore_ipv6_link_local_addresses: Ignore IPv6 link-local addresses when selecting IPs.
 
     Returns:
         List of created/synced VM records from NetBox.
@@ -434,6 +442,7 @@ async def _create_virtual_machine_by_netbox_id(
         websocket=websocket,
         use_websocket=use_websocket,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
+        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
     )
 
 
@@ -499,6 +508,14 @@ async def create_virtual_machines(  # noqa: C901
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
+    ignore_ipv6_link_local_addresses: bool = Query(
+        default=True,
+        title="Ignore IPv6 Link-Local Addresses",
+        description=(
+            "When true, IPv6 link-local addresses (fe80::/64) are ignored during "
+            "VM interface IP address selection. Disable only if you need link-local addresses included."
+        ),
+    ),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -509,7 +526,7 @@ async def create_virtual_machines(  # noqa: C901
         netbox_session: NetBox API session for creating/updating VMs.
         pxs: Proxmox session(s) for fetching VM configurations.
         cluster_status: Cluster status objects containing node and resource information.
-        cluster_resources: Cluster resources from Proxmox (VMs, LXC containers).
+        cluster_resources: Proxmox cluster resources from Proxmox (VMs, LXC containers).
         custom_fields: Custom field configurations for NetBox.
         tag: ProxBox tag reference for tagging created objects.
         websocket: Optional WebSocket connection for streaming progress updates.
@@ -517,6 +534,7 @@ async def create_virtual_machines(  # noqa: C901
         use_websocket: Whether to send progress updates via WebSocket/SSE.
         use_guest_agent_interface_name: Use QEMU guest-agent interface names if available.
         netbox_vm_ids: Comma-separated NetBox VM IDs to filter sync.
+        ignore_ipv6_link_local_addresses: Ignore IPv6 link-local addresses when selecting IPs.
 
     Returns:
         HTTP response with creation status, or streaming SSE response if using WebSocket.
@@ -924,7 +942,9 @@ async def create_virtual_machines(  # noqa: C901
 
                         netbox_vm_interfaces.append(vm_interface)
 
-                        interface_ip = _best_guest_agent_ip(guest_iface) or value.get("ip", None)
+                        interface_ip = _best_guest_agent_ip(
+                            guest_iface, ignore_ipv6_link_local_addresses
+                        ) or value.get("ip", None)
                         if interface_ip and interface_ip != "dhcp":
                             ip_record = await rest_reconcile_async(
                                 nb,
@@ -1169,6 +1189,14 @@ async def create_virtual_machine_by_netbox_id(
             "are created from guest-agent interface names instead of netX/nicX labels."
         ),
     ),
+    ignore_ipv6_link_local_addresses: bool = Query(
+        default=True,
+        title="Ignore IPv6 Link-Local Addresses",
+        description=(
+            "When true, IPv6 link-local addresses (fe80::/64) are ignored during "
+            "VM interface IP address selection. Disable only if you need link-local addresses included."
+        ),
+    ),
 ):
     return await _create_virtual_machine_by_netbox_id(
         netbox_vm_id=netbox_vm_id,
@@ -1179,6 +1207,7 @@ async def create_virtual_machine_by_netbox_id(
         custom_fields=custom_fields,
         tag=tag,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
+        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
     )
 
 
@@ -1202,6 +1231,14 @@ async def create_virtual_machines_stream(
         default=None,
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
+    ignore_ipv6_link_local_addresses: bool = Query(
+        default=True,
+        title="Ignore IPv6 Link-Local Addresses",
+        description=(
+            "When true, IPv6 link-local addresses (fe80::/64) are ignored during "
+            "VM interface IP address selection. Disable only if you need link-local addresses included."
+        ),
     ),
 ):
     filtered_cluster_resources = cluster_resources
@@ -1230,6 +1267,7 @@ async def create_virtual_machines_stream(
                     websocket=bridge,
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
+                    ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                 )
             finally:
                 await bridge.close()
@@ -1313,6 +1351,14 @@ async def create_virtual_machine_by_netbox_id_stream(
             "are created from guest-agent interface names instead of netX/nicX labels."
         ),
     ),
+    ignore_ipv6_link_local_addresses: bool = Query(
+        default=True,
+        title="Ignore IPv6 Link-Local Addresses",
+        description=(
+            "When true, IPv6 link-local addresses (fe80::/64) are ignored during "
+            "VM interface IP address selection. Disable only if you need link-local addresses included."
+        ),
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -1330,6 +1376,7 @@ async def create_virtual_machine_by_netbox_id_stream(
                     websocket=bridge,
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
+                    ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                 )
             finally:
                 await bridge.close()
