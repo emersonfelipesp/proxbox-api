@@ -10,7 +10,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Create virtual environment and install proxbox-api from PyPI with dependencies
-RUN uv venv /app/.venv && \
+RUN uv venv --seed /app/.venv && \
     /app/.venv/bin/python -m pip install --upgrade pip && \
     /app/.venv/bin/pip install 'proxbox-api[playwright]'
 
@@ -45,6 +45,7 @@ RUN apt-get update \
  && rm -f /etc/nginx/conf.d/default.conf
 
 COPY docker/nginx/proxbox-http.conf.template /etc/proxbox/nginx-http.conf.template
+COPY docker/supervisor/supervisord.conf /etc/supervisor/supervisord.conf
 COPY docker/supervisor/proxbox.conf /etc/supervisor/conf.d/proxbox.conf
 COPY docker/entrypoint-runtime.sh /usr/local/bin/docker-entrypoint-runtime.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint-runtime.sh
