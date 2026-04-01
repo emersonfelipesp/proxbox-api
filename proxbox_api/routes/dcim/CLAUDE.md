@@ -10,7 +10,8 @@ Endpoints that synchronize and expose DCIM entities in NetBox.
   - `GET /devices/create`: creates NetBox devices from Proxmox nodes (returns JSON when complete).
   - `GET /devices/create/stream`: SSE streaming variant. Emits per-device `step` events via `WebSocketSSEBridge` while `create_proxmox_devices(...)` runs with `use_websocket=True`.
   - `GET /devices/{node}/interfaces/create`: creates interfaces for a specific device/node.
-  - `GET /devices/interfaces/create`: placeholder endpoint (currently returns a message pointing to the per-node variant).
+  - `GET /devices/interfaces/create`: sync all node interfaces across all clusters (JSON response).
+  - `GET /devices/interfaces/create/stream`: SSE streaming variant for all-node interface sync.
   - `create_interface_and_ip()`: helper that reconciles interface and IP address objects for a node.
 
 ## Key Data Flow and Dependencies

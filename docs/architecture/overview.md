@@ -48,7 +48,7 @@
 
 `proxbox_api/openapi_custom.py` overrides FastAPI OpenAPI generation and embeds generated Proxmox OpenAPI metadata when available:
 
-- Source file: `proxbox_api/generated/proxmox/openapi.json`
+- Source files: `proxbox_api/generated/proxmox/<version-tag>/openapi.json` (versioned artifacts; `latest` is used as the default version tag).
 - Extension fields:
   - `info.x-proxmox-generated-openapi`
   - `x-proxmox-generated-openapi`

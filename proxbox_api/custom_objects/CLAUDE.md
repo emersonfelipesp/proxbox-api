@@ -6,12 +6,11 @@ Custom object definitions that model plugin-specific NetBox entities.
 
 ## Modules and Responsibilities
 
-- `sync_process.py`: Custom object to manage sync processes.
+(No Python modules are currently present in this directory.)
 
 ## Key Data Flow and Dependencies
 
-- sync_process.py defines a NetBoxBase-backed object model used for sync process records.
-- Services and decorators reference sync process objects to track run status and metadata.
+- This directory is reserved for custom NetBox object wrappers. The sync audit trail uses NetBox journal entries instead.
 
 ## Extension Guidance
 
