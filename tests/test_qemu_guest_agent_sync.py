@@ -474,6 +474,7 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
         return data["vm_config"]
 
     async def _fake_sync_vm_interface_and_ip(**kwargs):
+        assert kwargs["create_ip"] is False
         captured_vm_ids.append(kwargs["virtual_machine"].get("id"))
         return {"id": 66, "ip_id": 77, "ip_address": "10.0.0.50/24"}
 
@@ -519,13 +520,19 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
         }
     )
     captured_vm_ids: list[int | None] = []
+    primary_ip_calls: list[dict] = []
 
     def _fake_get_vm_config(*args, **kwargs):
         return data["vm_config"]
 
     async def _fake_sync_vm_interface_and_ip(**kwargs):
+        assert kwargs["create_interface"] is False
         captured_vm_ids.append(kwargs["virtual_machine"].get("id"))
         return {"id": 66, "ip_id": 77, "ip_address": "10.0.0.20/24"}
+
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
 
     async def _fake_resolve_netbox_vm(*args, **kwargs):
         return {"id": 55, "name": "vm01"}
@@ -545,6 +552,10 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.network.sync_vm_interface_and_ip",
         _fake_sync_vm_interface_and_ip,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_network.set_primary_ip",
+        _fake_set_primary_ip,
     )
 
     result = asyncio.run(
@@ -568,3 +579,4 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
         }
     ]
     assert captured_vm_ids == [55]
+    assert primary_ip_calls == [{"nb": data["netbox_session"], "virtual_machine": {"id": 55, "name": "vm01"}, "primary_ip_id": 77}]

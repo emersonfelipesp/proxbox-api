@@ -45,15 +45,15 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
-from proxbox_api.services.sync.vm_helpers import (
-    parse_comma_separated_ints,
-    parse_key_value_string,
-)
 from proxbox_api.services.sync.task_history import (
     sync_virtual_machine_task_history,
 )
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
+)
+from proxbox_api.services.sync.vm_helpers import (
+    parse_comma_separated_ints,
+    parse_key_value_string,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
@@ -815,6 +815,7 @@ async def create_virtual_machines(  # noqa: C901
     websocket=None,
     use_css: bool = False,
     use_websocket: bool = False,
+    sync_vm_network: bool = True,
     use_guest_agent_interface_name: bool = Query(
         default=True,
         title="Use Guest Agent Interface Name",
@@ -852,6 +853,7 @@ async def create_virtual_machines(  # noqa: C901
         websocket: Optional WebSocket connection for streaming progress updates.
         use_css: Whether to include CSS styling in HTML status responses.
         use_websocket: Whether to send progress updates via WebSocket/SSE.
+        sync_vm_network: When False, skip VM interface and IP reconciliation in this pass.
         use_guest_agent_interface_name: Use QEMU guest-agent interface names if available.
         netbox_vm_ids: Comma-separated NetBox VM IDs to filter sync.
         ignore_ipv6_link_local_addresses: Ignore IPv6 link-local addresses when selecting IPs.
@@ -1085,7 +1087,7 @@ async def create_virtual_machines(  # noqa: C901
         # Create VM interfaces
         netbox_vm_interfaces = []
         first_ip_id: int | None = None
-        if virtual_machine and vm_config:
+        if virtual_machine and vm_config and sync_vm_network:
             guest_agent_interfaces: list[dict] = []
             if vm_type == "qemu" and vm_config_obj.qemu_agent_enabled:
                 proxmox_session = next(
@@ -1507,6 +1509,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                         guest_iface=guest_iface,
                         tag_refs=tag_refs,
                         use_guest_agent_interface_name=use_guest_agent_interface_name,
+                        create_ip=False,
                         now=now,
                     )
                     interfaces_synced.append(result)
@@ -1595,10 +1598,11 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
 ) -> list[dict]:
-    """Sync VM IP addresses only (depends on interface sync being done first).
+    """Sync VM IP addresses and primary IP assignment.
 
-    This function calls create_only_vm_interfaces internally to ensure interfaces
-    exist before assigning IP addresses to them.
+    This function resolves the existing VM interfaces created by the interface
+    sync stage, assigns the best discovered IPs to them, and promotes the first
+    IP to primary IP when available.
 
     Args:
         netbox_session: NetBox session.
@@ -1616,6 +1620,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         List of synced IP address records.
     """
     from proxbox_api.services.sync.network import sync_vm_interface_and_ip
+    from proxbox_api.services.sync.vm_network import set_primary_ip
 
     nb = netbox_session
     tag_refs = [
@@ -1697,6 +1702,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         vm_networks = _parse_vm_networks(vm_config)
 
         ips_synced: list[dict] = []
+        first_ip_id: int | None = None
 
         for network in vm_networks:
             for iface_name, config_dict in network.items():
@@ -1742,9 +1748,12 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                         guest_iface=guest_iface,
                         tag_refs=tag_refs,
                         use_guest_agent_interface_name=use_guest_agent_interface_name,
+                        create_interface=False,
                         now=now,
                     )
                     if result.get("ip_id"):
+                        if first_ip_id is None:
+                            first_ip_id = result.get("ip_id")
                         ips_synced.append(
                             {
                                 "ip_id": result.get("ip_id"),
@@ -1789,6 +1798,13 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 },
                             }
                         )
+
+        if first_ip_id is not None:
+            await set_primary_ip(
+                nb=nb,
+                virtual_machine=netbox_vm,
+                primary_ip_id=first_ip_id,
+            )
 
         return ips_synced
 

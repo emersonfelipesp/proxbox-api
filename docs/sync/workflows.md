@@ -18,7 +18,8 @@ High-level sequence:
 6. Sync VM backups.
 7. Sync VM snapshots.
 8. Sync node interfaces and IP addresses.
-9. Sync VM interfaces and IP addresses.
+9. Sync VM interfaces.
+10. Sync VM IP addresses and primary IP assignment.
 
 ## Virtual machine sync flow
 
@@ -34,6 +35,7 @@ Core behavior:
 - Creates dependencies (cluster, device, role) as needed.
 - Creates VM interfaces and IP addresses when possible.
 - Writes journal entries for auditability.
+- In `Full Update`, VM creation skips network writes so the dedicated VM interface/IP stages own that work.
 
 ## Backup sync flow
 
