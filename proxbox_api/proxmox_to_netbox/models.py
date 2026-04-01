@@ -406,6 +406,11 @@ class NetBoxBackupSyncState(BaseModel):
     def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
+    @field_validator("subtype", "format", "verification_state", mode="before")
+    @classmethod
+    def normalize_choice_fields(cls, value: object) -> object:
+        return _choice_value(value)
+
 
 class NetBoxSnapshotSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
