@@ -63,7 +63,7 @@ Use this root guide first, then jump to the nearest scoped guide for the area yo
 - Bootstrap state: `proxbox_api.app.bootstrap` holds `database_session`, `netbox_session`, `netbox_endpoints`, `init_ok`, and `last_init_error` after `init_database_and_netbox()` runs at app creation time.
 - NetBox API client: Built from a stored endpoint record in SQLite via `get_netbox_session` (dependency and `bootstrap.netbox_session` for legacy WebSocket paths).
 - Proxmox API clients: Built dynamically from DB or NetBox plugin endpoint records via `ProxmoxSession` and `proxmox_sessions` dependency.
-- Sync process tracking: Implemented through the `sync_process` decorator and journal entry creation against NetBox plugin objects.
+- Sync process tracking: Journal entries are created in NetBox for auditability during sync runs.
 
 ## Entrypoints
 
@@ -110,7 +110,7 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 1. `create_app()` runs `proxbox_api.app.bootstrap.init_database_and_netbox()`: create tables, open a DB session, build the default NetBox client, set `NetBoxBase.nb`, load `netbox_endpoints` for CORS (with retry on `OperationalError`). Failures are logged; `init_ok` / `last_init_error` record outcome; `netbox_session` and `NetBoxBase.nb` are cleared on bootstrap failure.
 2. Construct `FastAPI` with lifespan hook that calls `register_generated_proxmox_routes` (warn or strict per `PROXBOX_STRICT_STARTUP`).
 3. Mount static files, CORS middleware (`build_cors_origins`), and global exception handlers.
-4. Include root routers from `proxbox_api.app.*` (cache, sync-processes, full-update, websockets) and domain routers (admin, netbox, proxmox, dcim, virtualization, extras).
+4. Include root routers from `proxbox_api.app.*` (cache, full-update, websockets) and domain routers (admin, netbox, proxmox, dcim, virtualization, extras).
 5. `main.py` imports `app` from the factory path for ASGI servers and test clients.
 
 ### Synchronization flow (high level)
@@ -119,7 +119,7 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 2. Proxmox sessions are created from endpoint data fetched through NetBox plugin APIs.
 3. Cluster status and resource endpoints gather source inventory from Proxmox.
 4. Service and route workflows create or update NetBox objects (clusters, devices, VMs, interfaces, backups).
-5. Sync metadata is recorded in NetBox sync-process objects and journal entries.
+5. Sync metadata is recorded via journal entries in NetBox for traceability.
 6. Optional websocket messages stream progress updates to clients.
 7. SSE streaming endpoints (`/full-update/stream`, `/dcim/devices/create/stream`, `/virtualization/virtual-machines/create/stream`) proxy sync progress via `text/event-stream`. The `WebSocketSSEBridge` utility converts websocket-style progress JSON into SSE frames with per-object granularity (e.g., `Processing device pve01`, `Synced virtual_machine vm101`).
 
@@ -141,7 +141,7 @@ Defined in `pyproject.toml` under `[project.optional-dependencies]` -> `test` (i
 
 - **Blocking async bridge:** `proxbox_api.netbox_async_bridge.run_coroutine_blocking` runs `asyncio.run` in a daemon thread when a loop is already running; it does not inherit caller contextvars and has no built-in timeout (see module docstring).
 
-- **Virtual machine read routes:** `GET .../virtual-machines/{id}` returns **404** when not found and **502** on NetBox errors (no empty `{}` body). Stub routes (`/{id}/summary`, interface helpers) return **501** with explicit `detail` (`read_vm.py`).
+- **Virtual machine read routes:** `GET .../virtual-machines/{id}` returns **404** when not found and **502** on NetBox errors (no empty `{}` body). `GET /{id}/summary` returns **501** with explicit `detail` (`read_vm.py`). VM interface and IP address sync endpoints are implemented in `read_vm.py` (JSON and SSE stream variants).
 
 - **Observability:** Prefer `proxbox_api.logger.logger` over `print` in application code; journal and sync warnings in services/routes should use WARNING level.
 

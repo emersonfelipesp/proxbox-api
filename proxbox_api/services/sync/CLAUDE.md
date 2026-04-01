@@ -12,12 +12,12 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   - `create_proxmox_devices(netbox_session, clusters_status, tag, websocket=None, use_websocket=False, ...)`: main sync function. When `use_websocket=True` and `websocket` is provided, sends progress JSON via `await websocket.send_json(...)` for each device (start, success, failure). Accepts a `WebSocketSSEBridge` instance as `websocket` to produce SSE frames instead of websocket messages.
   - Internal helpers: `_ensure_cluster_type`, `_ensure_cluster`, `_ensure_manufacturer`, `_ensure_device_type`, `_ensure_device_role`, `_ensure_site`, `_ensure_device` — all use `rest_reconcile_async` for idempotent object creation.
   - `_wrap_device_phase_error(phase, error)`: wraps exceptions with phase context for better error messages.
-- `virtual_machines.py`: Virtual machine synchronization service placeholder module.
+- `virtual_machines.py`: Virtual machine helper module containing `build_netbox_virtual_machine_payload` and other mapper logic used by sync routes.
 
 ## Key Data Flow and Dependencies
 
 - `devices.py` implements node-to-device synchronization and journal tracking.
-- `virtual_machines.py` and `clusters.py` are placeholders for future extraction of VM and cluster sync logic.
+- `virtual_machines.py` provides payload builder and normalizer helpers consumed by VM sync routes.
 
 ## Extension Guidance
 

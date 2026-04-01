@@ -6,14 +6,17 @@ Main synchronization endpoints for virtual machines and backups.
 
 ## Modules and Responsibilities
 
-- `read_vm.py` (included from `__init__.py`): Read and stub routes for a single VM by NetBox id.
+- `read_vm.py` (included from `__init__.py`): Read, query, and sync routes for VMs.
   - `GET /{id}`: Returns the VM from NetBox; **404** when missing, **502** on NetBox/API errors (not an empty object).
-  - `GET /{id}/summary`, interface-related stubs: **501 Not Implemented** with explicit `detail` until implemented.
+  - `GET /{id}/summary`: **501 Not Implemented** with explicit `detail`.
+  - `GET /interfaces/create` and `/interfaces/create/stream`: fully implemented VM interface sync (JSON and SSE variants).
+  - `GET /interfaces/ip-address/create` and `/interfaces/ip-address/create/stream`: fully implemented VM IP address sync (JSON and SSE variants).
 - `__init__.py`: Virtual machine sync routes and backup workflows.
   - `GET /create`: creates NetBox virtual machines from Proxmox resources (returns JSON when complete). Supports `websocket` and `use_websocket` parameters for live progress.
   - `GET /create/stream`: SSE streaming variant. Emits per-VM `step` events via `WebSocketSSEBridge` while `create_virtual_machines(...)` runs with `use_websocket=True`.
+  - `GET /{netbox_vm_id}/create` and `/create/stream`: single-VM sync by NetBox ID.
   - `GET /backups/all/create`: creates backup objects for all discovered VMs.
-  - `GET /backups/{vmid}/create`: creates backup objects for a specific VM.
+  - `GET /{netbox_vm_id}/backups/create/stream`: creates backup objects for a specific VM by NetBox ID.
   - Concurrency control: VM sync tasks are wrapped with `asyncio.Semaphore` sized by the `PROXBOX_VM_SYNC_MAX_CONCURRENCY` environment variable (default: 4).
 
 ## Key Data Flow and Dependencies

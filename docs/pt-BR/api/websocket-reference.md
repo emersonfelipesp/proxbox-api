@@ -55,4 +55,4 @@ Comando invalido:
 ## Notas
 
 - Fluxos WebSocket dependem de endpoint NetBox valido e sessoes Proxmox disponiveis.
-- Operacoes longas podem criar sync-processes e journal entries em objetos do plugin NetBox.
+- Operacoes longas criam journal entries em objetos do plugin NetBox para auditabilidade.
