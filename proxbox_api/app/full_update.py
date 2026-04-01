@@ -127,6 +127,7 @@ async def full_update_sync(  # noqa: C901
             custom_fields=custom_fields,
             tag=tag,
             use_websocket=False,
+            sync_vm_network=False,
         )
     except ProxboxException:
         raise
@@ -431,6 +432,7 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=vm_bridge,
                         use_websocket=True,
+                        sync_vm_network=False,
                     )
                 finally:
                     await vm_bridge.close()

@@ -16,13 +16,16 @@ Fluxo:
 6. Sincroniza backups de VMs.
 7. Sincroniza snapshots de VMs.
 8. Sincroniza interfaces e IPs dos nodes.
-9. Sincroniza interfaces e IPs das VMs.
+9. Sincroniza interfaces das VMs.
+10. Sincroniza IPs das VMs e a atribuicao do IP primario.
 
 ## Sync de VMs
 
 Endpoint principal:
 
 - `GET /virtualization/virtual-machines/create`
+
+No `Full Update`, a criacao de VMs pula as escritas de rede para que as etapas dedicadas de interfaces e IPs assumam essa responsabilidade.
 
 ## Sync de backups
 

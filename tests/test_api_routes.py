@@ -429,55 +429,59 @@ def test_netbox_status_route_wraps_dependency_errors():
 
 
 def test_full_update_sync_returns_structured_payload(monkeypatch):
+    create_vm_calls: list[dict] = []
+
+    async def _fake_devices(**kwargs):
+        return [{"id": 1, "name": "node01"}]
+
+    async def _fake_vms(**kwargs):
+        create_vm_calls.append(kwargs)
+        return [{"id": 101, "name": "vm01"}]
+
+    async def _fake_storage(**kwargs):
+        return [{"id": 201, "name": "local"}]
+
+    async def _fake_disks(**kwargs):
+        return {"count": 2, "created": 2, "updated": 0, "skipped": 0}
+
+    async def _fake_backups(**kwargs):
+        return [{"id": 301, "vmid": "101"}]
+
+    async def _fake_snapshots(**kwargs):
+        return {"count": 1, "created": 1, "skipped": 0}
+
+    async def _fake_task_history(**kwargs):
+        return {
+            "count": 0,
+            "created": 0,
+            "skipped": 0,
+            "error": "'object' object has no attribute 'client'",
+        }
+
+    async def _fake_node_interfaces(**kwargs):
+        return []
+
+    async def _fake_vm_interfaces(**kwargs):
+        return []
+
+    async def _fake_vm_ip_addresses(**kwargs):
+        return []
+
+    monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fake_devices)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_storages", _fake_storage)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_disks", _fake_disks)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_all_virtual_machine_backups", _fake_backups)
     monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_proxmox_devices",
-        lambda **kwargs: asyncio.sleep(0, result=[{"id": 1, "name": "node01"}]),
+        "proxbox_api.app.full_update.create_all_virtual_machine_snapshots", _fake_snapshots
     )
     monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_virtual_machines",
-        lambda **kwargs: asyncio.sleep(0, result=[{"id": 101, "name": "vm01"}]),
+        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories", _fake_task_history
     )
+    monkeypatch.setattr("proxbox_api.app.full_update.create_all_device_interfaces", _fake_node_interfaces)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_only_vm_interfaces", _fake_vm_interfaces)
     monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_storages",
-        lambda **kwargs: asyncio.sleep(0, result=[{"id": 201, "name": "local"}]),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_virtual_disks",
-        lambda **kwargs: asyncio.sleep(
-            0, result={"count": 2, "created": 2, "updated": 0, "skipped": 0}
-        ),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_all_virtual_machine_backups",
-        lambda **kwargs: asyncio.sleep(0, result=[{"id": 301, "vmid": "101"}]),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_all_virtual_machine_snapshots",
-        lambda **kwargs: asyncio.sleep(0, result={"count": 1, "created": 1, "skipped": 0}),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories",
-        lambda **kwargs: asyncio.sleep(
-            0,
-            result={
-                "count": 0,
-                "created": 0,
-                "skipped": 0,
-                "error": "'object' object has no attribute 'client'",
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_all_device_interfaces",
-        lambda **kwargs: asyncio.sleep(0, result=[]),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_only_vm_interfaces",
-        lambda **kwargs: asyncio.sleep(0, result=[]),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.app.full_update.create_only_vm_ip_addresses",
-        lambda **kwargs: asyncio.sleep(0, result=[]),
+        "proxbox_api.app.full_update.create_only_vm_ip_addresses", _fake_vm_ip_addresses
     )
 
     body = asyncio.run(
@@ -491,6 +495,7 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
         )
     )
 
+    assert create_vm_calls and create_vm_calls[0]["sync_vm_network"] is False
     assert body == {
         "status": "completed",
         "devices": [{"id": 1, "name": "node01"}],
@@ -957,7 +962,10 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
             )
         return [{"id": 1, "name": "pve01"}]
 
+    create_vm_calls: list[dict] = []
+
     async def _fake_vms(**kwargs):
+        create_vm_calls.append(kwargs)
         bridge = kwargs.get("websocket")
         if bridge is not None:
             await bridge.send_json(
@@ -1058,6 +1066,7 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
     assert "Synced storage lab/local" in payload
     assert "Synced virtual disk vm01/scsi0" in payload
     assert "event: complete" in payload
+    assert create_vm_calls[0]["sync_vm_network"] is False
 
 
 async def _collect_async_frames(stream) -> list[str]:

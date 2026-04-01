@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_rest import rest_first_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxInterfaceSyncState,
     NetBoxIpAddressSyncState,
@@ -150,6 +150,8 @@ async def sync_vm_interface_and_ip(
     guest_iface: dict | None,
     tag_refs: list[dict],
     use_guest_agent_interface_name: bool = True,
+    create_interface: bool = True,
+    create_ip: bool = True,
     now: datetime | None = None,
 ) -> dict:
     if now is None:
@@ -159,7 +161,7 @@ async def sync_vm_interface_and_ip(
 
     bridge: dict = {}
     bridge_name = interface_config.get("bridge")
-    if bridge_name and vm_id:
+    if create_interface and bridge_name and vm_id:
         bridge = await rest_reconcile_async(
             nb,
             "/api/virtualization/interfaces/",
@@ -188,7 +190,7 @@ async def sync_vm_interface_and_ip(
 
     vlan_nb_id: int | None = None
     vlan_tag_raw = interface_config.get("tag")
-    if vlan_tag_raw is not None:
+    if create_interface and vlan_tag_raw is not None:
         try:
             vlan_tag = int(vlan_tag_raw)
             vlan_record = await rest_reconcile_async(
@@ -252,28 +254,46 @@ async def sync_vm_interface_and_ip(
     if vm_id:
         lookup["virtual_machine_id"] = vm_id
 
-    vm_interface = await rest_reconcile_async(
-        nb,
-        "/api/virtualization/interfaces/",
-        lookup=lookup,
-        payload=payload,
-        schema=NetBoxVirtualMachineInterfaceSyncState,
-        current_normalizer=lambda record: {
-            "name": record.get("name"),
-            "virtual_machine": record.get("virtual_machine"),
-            "enabled": record.get("enabled"),
-            "bridge": record.get("bridge"),
-            "mac_address": record.get("mac_address"),
-            "type": record.get("type"),
-            "description": record.get("description"),
-            "untagged_vlan": record.get("untagged_vlan"),
-            "mode": record.get("mode"),
-            "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
-        },
-    )
-    if not isinstance(vm_interface, dict):
-        vm_interface = getattr(vm_interface, "dict", lambda: {})()
+    vm_interface: dict[str, object] = {}
+    if create_interface:
+        vm_interface = await rest_reconcile_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            lookup=lookup,
+            payload=payload,
+            schema=NetBoxVirtualMachineInterfaceSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "virtual_machine": record.get("virtual_machine"),
+                "enabled": record.get("enabled"),
+                "bridge": record.get("bridge"),
+                "mac_address": record.get("mac_address"),
+                "type": record.get("type"),
+                "description": record.get("description"),
+                "untagged_vlan": record.get("untagged_vlan"),
+                "mode": record.get("mode"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        if not isinstance(vm_interface, dict):
+            vm_interface = getattr(vm_interface, "dict", lambda: {})()
+    else:
+        vm_interface = await rest_first_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            query={**lookup, "limit": 2},
+        )
+        if not vm_interface:
+            logger.warning(
+                "Skipping VM IP sync for %s: interface %s not found on VM %s",
+                interface_name,
+                resolved_name,
+                vm_id,
+            )
+            return {"id": None, "mac_address": mac_address}
+        if not isinstance(vm_interface, dict):
+            vm_interface = getattr(vm_interface, "dict", lambda: {})()
 
     interface_id = (
         vm_interface.get("id")
@@ -286,31 +306,33 @@ async def sync_vm_interface_and_ip(
     }
 
     interface_ip: str | None = None
-    if guest_iface:
-        for addr in guest_iface.get("ip_addresses") or []:
-            if not isinstance(addr, dict):
-                continue
-            ip_text = str(addr.get("ip_address") or "").strip()
-            if not ip_text:
-                continue
-            try:
-                from ipaddress import ip_address as ipaddr
-                parsed = ipaddr(ip_text)
-            except ValueError:
-                continue
-            if parsed.is_loopback or parsed.is_link_local:
-                continue
-            prefix = addr.get("prefix")
-            if isinstance(prefix, int) and 0 <= prefix <= 128:
-                interface_ip = f"{parsed.compressed}/{prefix}"
-            else:
-                interface_ip = parsed.compressed
-            break
+    if create_ip:
+        if guest_iface:
+            for addr in guest_iface.get("ip_addresses") or []:
+                if not isinstance(addr, dict):
+                    continue
+                ip_text = str(addr.get("ip_address") or "").strip()
+                if not ip_text:
+                    continue
+                try:
+                    from ipaddress import ip_address as ipaddr
 
-    if not interface_ip:
-        interface_ip = interface_config.get("ip")
+                    parsed = ipaddr(ip_text)
+                except ValueError:
+                    continue
+                if parsed.is_loopback or parsed.is_link_local:
+                    continue
+                prefix = addr.get("prefix")
+                if isinstance(prefix, int) and 0 <= prefix <= 128:
+                    interface_ip = f"{parsed.compressed}/{prefix}"
+                else:
+                    interface_ip = parsed.compressed
+                break
 
-    if interface_ip and interface_ip != "dhcp" and interface_id is not None:
+        if not interface_ip:
+            interface_ip = interface_config.get("ip")
+
+    if create_ip and interface_ip and interface_ip != "dhcp" and interface_id is not None:
         try:
             ip_record = await rest_reconcile_async(
                 nb,
