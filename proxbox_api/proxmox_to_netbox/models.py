@@ -446,7 +446,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
     upid: str
     node: str
     pid: int | None = None
-    pstart: int | None = None
+    pstart: str | None = None
     task_id: str | None = None
     task_type: str
     username: str
@@ -488,7 +488,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
         text = str(value).strip()
         return text or None
 
-    @field_validator("start_time", "end_time", mode="before")
+    @field_validator("pstart", "start_time", "end_time", mode="before")
     @classmethod
     def normalize_datetimes(cls, value: object) -> object:
         normalized = _task_datetime(value)

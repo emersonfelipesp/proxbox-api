@@ -190,7 +190,7 @@ def _build_task_payload(
     pstart_val = task.get("pstart")
     if pstart_val is not None:
         try:
-            pstart = int(pstart_val)
+            pstart = datetime.fromtimestamp(int(pstart_val), timezone.utc).isoformat()
         except (ValueError, TypeError):
             pstart = None
     else:
