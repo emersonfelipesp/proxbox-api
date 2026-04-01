@@ -23,7 +23,11 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
-from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid, normalize_vmid
+from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_vmid,
+    extract_proxmox_vm_type,
+    normalize_vmid,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
@@ -327,7 +331,7 @@ async def create_virtual_machine_snapshots(
             )
 
         try:
-            proxmox_type = vm.get("type", "qemu")
+            proxmox_type = extract_proxmox_vm_type(vm) or vm.get("type", "qemu")
             if proxmox_type not in ("qemu", "lxc"):
                 proxmox_type = "qemu"
 

@@ -1,9 +1,22 @@
 """Logging setup utilities for console and file outputs."""
 
+import contextvars
 import logging
+import time
+from collections.abc import Callable
+from functools import wraps
 from logging.handlers import TimedRotatingFileHandler
+from typing import Any, ParamSpec, TypeVar
 
 from fastapi import WebSocket
+
+# Context variable for operation tracking
+_operation_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "operation_context", default={}
+)
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 # ANSI escape sequences for colors
@@ -89,15 +102,157 @@ def setup_logger() -> logging.Logger:
 logger = setup_logger()
 
 
+class OperationLogger:
+    """Context manager for operation-scoped logging with structured fields.
+
+    Usage:
+        async with OperationLogger("sync_vm", vm_id=123, cluster="prod"):
+            # All logs within this context will include the operation context
+            await sync_operation()
+    """
+
+    def __init__(self, operation: str, **context: Any):
+        """Initialize the operation logger.
+
+        Args:
+            operation: Name of the operation being performed
+            **context: Additional context fields (vm_id, cluster, etc.)
+        """
+        self.operation = operation
+        self.context = context
+        self.start_time = 0.0
+        self.previous_context: dict[str, Any] = {}
+
+    async def __aenter__(self) -> "OperationLogger":
+        """Enter the context and set operation context."""
+        self.previous_context = _operation_context.get()
+        self.start_time = time.time()
+
+        new_context = {"operation": self.operation, **self.context}
+        _operation_context.set(new_context)
+
+        logger.info(f"Starting {self.operation}", extra=new_context)
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any
+    ) -> None:
+        """Exit the context and log completion/failure."""
+        elapsed = time.time() - self.start_time
+        context = _operation_context.get()
+        context["elapsed_seconds"] = round(elapsed, 3)
+
+        if exc_type:
+            logger.error(
+                f"Failed {self.operation} after {elapsed:.3f}s",
+                exc_info=True,
+                extra=context,
+            )
+        else:
+            logger.info(
+                f"Completed {self.operation} in {elapsed:.3f}s",
+                extra=context,
+            )
+
+        # Restore previous context
+        _operation_context.set(self.previous_context)
+
+
+def get_operation_context() -> dict[str, Any]:
+    """Get the current operation context.
+
+    Returns:
+        Dictionary with operation context fields
+    """
+    return _operation_context.get().copy()
+
+
+def timed_operation(func: Callable[P, R]) -> Callable[P, R]:
+    """Decorator to log operation timing for sync functions.
+
+    Usage:
+        @timed_operation
+        def sync_devices():
+            ...
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        operation_name = func.__name__
+        start_time = time.time()
+
+        logger.debug(f"Starting {operation_name}")
+
+        try:
+            result = func(*args, **kwargs)
+            elapsed = time.time() - start_time
+            logger.debug(
+                f"Completed {operation_name} in {elapsed:.3f}s",
+                extra={"elapsed_seconds": round(elapsed, 3)},
+            )
+            return result
+        except Exception as error:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"Failed {operation_name} after {elapsed:.3f}s: {error}",
+                exc_info=True,
+                extra={"elapsed_seconds": round(elapsed, 3)},
+            )
+            raise
+
+    return wrapper
+
+
+def async_timed_operation(func: Callable[P, R]) -> Callable[P, R]:
+    """Decorator to log operation timing for async functions.
+
+    Usage:
+        @async_timed_operation
+        async def sync_vms():
+            ...
+    """
+
+    @wraps(func)
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        operation_name = func.__name__
+        start_time = time.time()
+
+        logger.debug(f"Starting {operation_name}")
+
+        try:
+            result = await func(*args, **kwargs)
+            elapsed = time.time() - start_time
+            logger.debug(
+                f"Completed {operation_name} in {elapsed:.3f}s",
+                extra={"elapsed_seconds": round(elapsed, 3)},
+            )
+            return result
+        except Exception as error:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"Failed {operation_name} after {elapsed:.3f}s: {error}",
+                exc_info=True,
+                extra={"elapsed_seconds": round(elapsed, 3)},
+            )
+            raise
+
+    return wrapper  # type: ignore
+
+
 async def log(websocket: WebSocket, msg: str, level: str | None = None) -> None:
+    """Legacy log function for WebSocket + console logging.
+
+    Args:
+        websocket: WebSocket connection to send message to
+        msg: Message to log
+        level: Log level (debug, error, ERROR, or info)
+    """
     if websocket:
         await websocket.send_text(msg)
 
     if level == "debug":
         logger.debug(msg)
-
-    if level == "ERROR" or level == "error":
+    elif level in ("ERROR", "error"):
         logger.error(msg)
-
     else:
         logger.info(msg)

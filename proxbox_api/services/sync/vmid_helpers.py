@@ -15,6 +15,86 @@ def normalize_vmid(vmid: Any) -> str | None:
 
 def extract_proxmox_vmid(vm: dict[str, Any]) -> str | None:
     """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
+    if hasattr(vm, "get"):
+        vm = vm.dict() if hasattr(vm, "dict") else dict(vm)
+    else:
+        vm = dict(vm) if vm else {}
+
+    top_level_keys = (
+        "cf_proxmox_vm_id",
+        "proxmox_vm_id",
+        "cf_proxmox_vmid",
+        "proxmox_vmid",
+    )
+    for key in top_level_keys:
+        normalized = normalize_vmid(vm.get(key))
+        if normalized:
+            return normalized
+
+    custom_fields = vm.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        custom_field_keys = (
+            "proxmox_vm_id",
+            "cf_proxmox_vm_id",
+            "proxmox_vmid",
+            "cf_proxmox_vmid",
+        )
+        for key in custom_field_keys:
+            normalized = normalize_vmid(custom_fields.get(key))
+            if normalized:
+                return normalized
+    return None
+
+
+def extract_proxmox_vm_type(vm: dict[str, Any]) -> str | None:
+    """Extract Proxmox VM type from NetBox VM payload across known field layouts."""
+    if hasattr(vm, "get"):
+        vm = vm.dict() if hasattr(vm, "dict") else dict(vm)
+    else:
+        vm = dict(vm) if vm else {}
+
+    top_level_keys = (
+        "cf_proxmox_vm_type",
+        "proxmox_vm_type",
+    )
+    for key in top_level_keys:
+        value = vm.get(key)
+        if value and str(value).strip().lower() in ("qemu", "lxc"):
+            return str(value).strip().lower()
+
+    custom_fields = vm.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        for key in ("proxmox_vm_type", "cf_proxmox_vm_type"):
+            value = custom_fields.get(key)
+            if value and str(value).strip().lower() in ("qemu", "lxc"):
+                return str(value).strip().lower()
+    return None
+    vmid_str = str(vmid).strip()
+    return vmid_str or None
+
+
+def extract_proxmox_vm_type(vm: dict[str, Any]) -> str | None:
+    """Extract Proxmox VM type from NetBox VM payload across known field layouts."""
+    top_level_keys = (
+        "cf_proxmox_vm_type",
+        "proxmox_vm_type",
+    )
+    for key in top_level_keys:
+        value = vm.get(key)
+        if value and str(value).strip().lower() in ("qemu", "lxc"):
+            return str(value).strip().lower()
+
+    custom_fields = vm.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        for key in ("proxmox_vm_type", "cf_proxmox_vm_type"):
+            value = custom_fields.get(key)
+            if value and str(value).strip().lower() in ("qemu", "lxc"):
+                return str(value).strip().lower()
+    return None
+
+
+def extract_proxmox_vmid(vm: dict[str, Any]) -> str | None:
+    """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
     top_level_keys = (
         "cf_proxmox_vm_id",
         "proxmox_vm_id",
