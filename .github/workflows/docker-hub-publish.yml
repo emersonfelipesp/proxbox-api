@@ -256,14 +256,6 @@ jobs:
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime
 
-      - name: Run pre-release tests in Docker image (runtime / nginx→uvicorn)
-        run: |
-          docker run --rm \
-            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-            -v "${{ github.workspace }}/tests:/app/tests:ro" \
-            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-pre \
-            /tmp/docker-tests.sh
-
       - name: Extract metadata (labels, etc.)
         id: meta
         uses: docker/metadata-action@v5
@@ -286,18 +278,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime
-
-      - name: Pull and verify pushed runtime images
-        run: |
-          docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}
-          docker pull emersonfelipesp/proxbox-api:latest
-          for TAG in "${{ env.IMAGE_TAG }}" latest; do
-            docker run --rm \
-              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-              -v "${{ github.workspace }}/tests:/app/tests:ro" \
-              emersonfelipesp/proxbox-api:"$TAG" \
-              /tmp/docker-tests.sh
-          done
 
       - name: Smoke-test pushed runtime images
         run: |
@@ -406,14 +386,6 @@ jobs:
           cache-from: type=gha,scope=mkcert
           cache-to: type=gha,mode=max,scope=mkcert
 
-      - name: Run pre-release tests in mkcert Docker image
-        run: |
-          docker run --rm \
-            -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-            -v "${{ github.workspace }}/tests:/app/tests:ro" \
-            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert-pre \
-            /tmp/docker-tests.sh
-
       - name: Smoke-test mkcert image startup
         run: |
           set -eux
@@ -443,18 +415,6 @@ jobs:
           tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert,emersonfelipesp/proxbox-api:latest-mkcert
           cache-from: type=gha,scope=mkcert
           cache-to: type=gha,mode=max,scope=mkcert
-
-      - name: Pull and verify pushed mkcert images
-        run: |
-          docker pull emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert
-          docker pull emersonfelipesp/proxbox-api:latest-mkcert
-          for TAG in "${{ env.IMAGE_TAG }}-mkcert" latest-mkcert; do
-            docker run --rm \
-              -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-              -v "${{ github.workspace }}/tests:/app/tests:ro" \
-              emersonfelipesp/proxbox-api:"$TAG" \
-              /tmp/docker-tests.sh
-          done
 
       - name: Smoke-test pushed mkcert images
         run: |

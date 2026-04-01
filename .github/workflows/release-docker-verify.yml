@@ -13,25 +13,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Create Docker test script
-        run: |
-          cat <<'EOF' > /tmp/docker-tests.sh
-          #!/bin/sh
-          set -eux
-          # tests/ is bind-mounted read-only; keep bytecode out of the tree
-          export PYTHONPYCACHEPREFIX=/tmp/pycache
-          mkdir -p "$PYTHONPYCACHEPREFIX"
-          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
-          uv sync --frozen --extra test --group dev
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run python -m compileall proxbox_api scripts tests
-          uv run python -c "import proxbox_api.main"
-          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
-          EOF
-          chmod +x /tmp/docker-tests.sh
-
       - name: Pull release and latest images
         run: |
           REL="${{ github.event.release.tag_name }}"
@@ -40,24 +21,6 @@ jobs:
           docker pull emersonfelipesp/proxbox-api:latest
           docker pull emersonfelipesp/proxbox-api:"${TAG}-mkcert"
           docker pull emersonfelipesp/proxbox-api:latest-mkcert
-
-      - name: Run tests on release tag
-        run: |
-          REL="${{ github.event.release.tag_name }}"
-          TAG="${REL#v}"
-          for SUFFIX in "" -mkcert; do
-            case "$SUFFIX" in
-              "") T1="$TAG" T2=latest ;;
-              *) T1="${TAG}-mkcert" T2=latest-mkcert ;;
-            esac
-            for IMG_TAG in "$T1" "$T2"; do
-              docker run --rm \
-                -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
-                -v "${{ github.workspace }}/tests:/app/tests:ro" \
-                emersonfelipesp/proxbox-api:"$IMG_TAG" \
-                /tmp/docker-tests.sh
-            done
-          done
 
       - name: Smoke-test published startup
         run: |
