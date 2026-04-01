@@ -9,11 +9,13 @@ Before pushing any changes, always run (use `rtk` for compact output):
 ```bash
 rtk ruff check .
 rtk ruff format --check .
-uv run python -m compileall proxbox_api scripts tests
+uv run python -m compileall proxbox_api tests
 uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 rtk pytest tests
 ```
+
+If you touch `nextjs-ui/`, also run `npm run lint` and `npm run build` there.
 
 Fix any failures locally before pushing.
 
@@ -27,6 +29,7 @@ Fix any failures locally before pushing.
 - `proxbox_api/CLAUDE.md`
 - `proxbox_api/custom_objects/CLAUDE.md`
 - `proxbox_api/diode/CLAUDE.md`
+- `proxbox_api/e2e/CLAUDE.md`
 - `proxbox_api/enum/CLAUDE.md`
 - `proxbox_api/enum/netbox/CLAUDE.md`
 - `proxbox_api/enum/netbox/dcim/CLAUDE.md`
@@ -36,8 +39,10 @@ Fix any failures locally before pushing.
 - `proxbox_api/generated/proxmox/CLAUDE.md`
 - `proxbox_api/proxmox_codegen/CLAUDE.md`
 - `proxbox_api/proxmox_to_netbox/CLAUDE.md`
+- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md`
 - `proxbox_api/proxmox_to_netbox/mappers/CLAUDE.md`
 - `proxbox_api/routes/CLAUDE.md`
+- `proxbox_api/routes/admin/CLAUDE.md`
 - `proxbox_api/routes/dcim/CLAUDE.md`
 - `proxbox_api/routes/extras/CLAUDE.md`
 - `proxbox_api/routes/netbox/CLAUDE.md`

@@ -4,7 +4,7 @@
 
 Reserved route namespace for Proxbox cluster-specific endpoints.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: Cluster-specific Proxbox route namespace.
 

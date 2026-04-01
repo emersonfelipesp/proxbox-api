@@ -4,10 +4,13 @@
 
 Top-level Pydantic schema package for plugin and API contracts.
 
-## Modules and Responsibilities
+## Current Modules
 
 - `__init__.py`: Top-level schema exports and plugin configuration schema.
+- `_base.py`: Shared Proxbox base model.
 - `proxmox.py`: Pydantic schemas for Proxmox sessions and resource payloads.
+- `netbox/`: NetBox session and payload schemas.
+- `virtualization/`: VM config and summary schemas.
 
 ## Key Data Flow and Dependencies
 
