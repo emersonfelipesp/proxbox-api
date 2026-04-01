@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+
 
 
 @dataclass
@@ -22,7 +22,7 @@ class MockProxmoxNode:
     max_mem: int = 68719476736
     level: str = ""
 
-    def to_api_response(self) -> dict[str, Any]:
+    def to_api_response(self) -> dict[str, object]:
         """Convert to Proxmox API response format."""
         return {
             "node": self.name,
@@ -46,9 +46,9 @@ class MockProxmoxVM:
     maxcpu: int = 2
     maxmem: int = 4294967296
     maxdisk: int = 53687091200
-    config: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, object] = field(default_factory=dict)
 
-    def to_resource(self) -> dict[str, Any]:
+    def to_resource(self) -> dict[str, object]:
         """Convert to Proxmox cluster/resources API response."""
         return {
             "vmid": self.vmid,
@@ -61,7 +61,7 @@ class MockProxmoxVM:
             "maxdisk": self.maxdisk,
         }
 
-    def to_config(self) -> dict[str, Any]:
+    def to_config(self) -> dict[str, object]:
         """Convert to Proxmox VM config API response."""
         return {
             "onboot": self.config.get("onboot", 1),
@@ -79,9 +79,9 @@ class MockProxmoxCluster:
     mode: str = "pve"
     nodes: list[MockProxmoxNode] = field(default_factory=list)
     vms: list[MockProxmoxVM] = field(default_factory=list)
-    storage: list[dict[str, Any]] = field(default_factory=list)
+    storage: list[dict[str, object]] = field(default_factory=list)
 
-    def to_cluster_status(self) -> dict[str, Any]:
+    def to_cluster_status(self) -> dict[str, object]:
         """Convert to cluster/status API response."""
         return {
             "name": self.name,
@@ -89,7 +89,7 @@ class MockProxmoxCluster:
             "node_list": [node.to_api_response() for node in self.nodes],
         }
 
-    def to_cluster_resources(self) -> list[dict[str, Any]]:
+    def to_cluster_resources(self) -> list[dict[str, object]]:
         """Convert to cluster/resources API response."""
         return [vm.to_resource() for vm in self.vms]
 
@@ -154,7 +154,7 @@ class MockProxmoxBackup:
         self.subtype = subtype
         self.notes = notes
 
-    def to_api_response(self) -> dict[str, Any]:
+    def to_api_response(self) -> dict[str, object]:
         """Convert to Proxmox storage/content API response."""
         return {
             "vmid": self.vmid,

@@ -9,7 +9,7 @@ import os
 import secrets
 import string
 import time
-from typing import Any
+
 
 E2E_TAG_NAME = "proxbox e2e testing"
 E2E_TAG_SLUG = "proxbox-e2e-testing"
@@ -23,7 +23,7 @@ E2E_TAG: dict[str, str] = {
     "description": E2E_TAG_DESCRIPTION,
 }
 
-E2E_VM_QEMU: dict[str, Any] = {
+E2E_VM_QEMU: dict[str, object] = {
     "vmid": 99901,
     "name": "e2e-test-qemu",
     "node": "e2e-node-01",
@@ -34,14 +34,14 @@ E2E_VM_QEMU: dict[str, Any] = {
     "maxdisk": 53687091200,
 }
 
-E2E_VM_QEMU_CONFIG: dict[str, Any] = {
+E2E_VM_QEMU_CONFIG: dict[str, object] = {
     "onboot": 1,
     "agent": 1,
     "unprivileged": 0,
     "searchdomain": "lab.local",
 }
 
-E2E_VM_LXC: dict[str, Any] = {
+E2E_VM_LXC: dict[str, object] = {
     "vmid": 99902,
     "name": "e2e-test-lxc",
     "node": "e2e-node-01",
@@ -52,29 +52,29 @@ E2E_VM_LXC: dict[str, Any] = {
     "maxdisk": 8589934592,
 }
 
-E2E_VM_LXC_CONFIG: dict[str, Any] = {
+E2E_VM_LXC_CONFIG: dict[str, object] = {
     "onboot": 1,
     "unprivileged": 1,
 }
 
-E2E_NODE: dict[str, Any] = {
+E2E_NODE: dict[str, object] = {
     "node": "e2e-node-01",
     "status": "online",
     "uptime": 3600,
 }
 
-E2E_CLUSTER: dict[str, Any] = {
+E2E_CLUSTER: dict[str, object] = {
     "name": "e2e-test-cluster",
     "mode": "pve",
 }
 
-E2E_CLUSTER_STATUS: dict[str, Any] = {
+E2E_CLUSTER_STATUS: dict[str, object] = {
     "name": "e2e-test-cluster",
     "mode": "pve",
     "node_list": [E2E_NODE],
 }
 
-E2E_BACKUP: dict[str, Any] = {
+E2E_BACKUP: dict[str, object] = {
     "vmid": 99901,
     "volid": "backup:99901/vm-99901-disk-0.qcow2",
     "storage": "backup",
@@ -85,7 +85,7 @@ E2E_BACKUP: dict[str, Any] = {
     "notes": "Test backup",
 }
 
-E2E_VM_WITH_INTERFACES: dict[str, Any] = {
+E2E_VM_WITH_INTERFACES: dict[str, object] = {
     "vmid": 99903,
     "name": "e2e-test-with-nics",
     "node": "e2e-node-01",
@@ -96,7 +96,7 @@ E2E_VM_WITH_INTERFACES: dict[str, Any] = {
     "maxdisk": 107374182400,
 }
 
-E2E_VM_WITH_INTERFACES_CONFIG: dict[str, Any] = {
+E2E_VM_WITH_INTERFACES_CONFIG: dict[str, object] = {
     "onboot": 1,
     "agent": 1,
     "net0": "virtio=aa:bb:cc:dd:ee:01,bridge=vmbr0,firewall=1",
@@ -141,7 +141,7 @@ def _generate_password(length: int = 32) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
-def get_e2e_demo_config() -> dict[str, Any]:
+def get_e2e_demo_config() -> dict[str, object]:
     """Get e2e demo configuration from environment.
 
     Returns:
@@ -159,7 +159,7 @@ def create_test_vm(
     name: str | None = None,
     node: str = "e2e-node-01",
     vm_type: str = "qemu",
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Create a test VM resource dict.
 
     Args:
@@ -187,7 +187,7 @@ def create_test_node(
     name: str,
     status: str = "online",
     uptime: int = 3600,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Create a test node dict.
 
     Args:

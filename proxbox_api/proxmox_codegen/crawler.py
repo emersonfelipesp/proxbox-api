@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from proxbox_api.proxmox_codegen.apidoc_parser import PROXMOX_API_VIEWER_URL
 
@@ -29,7 +29,7 @@ class CrawlConfig:
     checkpoint_every: int = 50
 
 
-def _normalize_doc_section_text(value: Any) -> str | None:
+def _normalize_doc_section_text(value: object) -> str | None:
     """Normalize rendered doc section text while preserving paragraph breaks."""
 
     if not isinstance(value, str):
@@ -52,7 +52,7 @@ def _normalize_doc_section_text(value: Any) -> str | None:
     return normalized or None
 
 
-def _normalize_doc_sections(sections: list[dict[str, Any]] | None) -> dict[str, str]:
+def _normalize_doc_sections(sections: list[dict[str, object]] | None) -> dict[str, str]:
     """Reduce rendered doc sections into a heading-keyed text map."""
 
     normalized: dict[str, str] = {}
@@ -71,7 +71,7 @@ def _normalize_doc_sections(sections: list[dict[str, Any]] | None) -> dict[str, 
     return normalized
 
 
-async def _setup_page(page: Page, config: CrawlConfig) -> list[dict[str, Any]]:
+async def _setup_page(page: Page, config: CrawlConfig) -> list[dict[str, object]]:
     await page.goto(config.url, wait_until="networkidle", timeout=config.timeout_ms)
     await page.wait_for_timeout(900)
     await page.evaluate(
@@ -144,7 +144,7 @@ async def _select_path(page: Page, path: str) -> bool:
     )
 
 
-async def _extract_method_data(page: Page, path: str, method: str) -> dict[str, Any] | None:
+async def _extract_method_data(page: Page, path: str, method: str) -> dict[str, object] | None:
     return await page.evaluate(
         """
         ({method, path}) => {
@@ -237,7 +237,7 @@ async def _extract_rendered_doc_sections(page: Page) -> dict[str, str]:
     return _normalize_doc_sections(sections)
 
 
-def _synthesize_raw_sections(method_data: dict[str, Any]) -> list[str]:
+def _synthesize_raw_sections(method_data: dict[str, object]) -> list[str]:
     returns = method_data.get("returns")
     if not isinstance(returns, dict):
         return []
@@ -251,8 +251,8 @@ def _synthesize_raw_sections(method_data: dict[str, Any]) -> list[str]:
 
 
 async def _capture_endpoint(  # noqa: C901
-    page: Page, item: dict[str, Any], timeout_ms: int
-) -> tuple[str, dict[str, Any]] | None:
+    page: Page, item: dict[str, object], timeout_ms: int
+) -> tuple[str, dict[str, object]] | None:
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
     path = str(item.get("path") or "")
@@ -316,7 +316,7 @@ async def _capture_endpoint(  # noqa: C901
     return (path, endpoint)
 
 
-async def _write_checkpoint(checkpoint_path: Path, payload: dict[str, Any]) -> None:
+async def _write_checkpoint(checkpoint_path: Path, payload: dict[str, object]) -> None:
     """Persist crawler checkpoint without blocking the event loop."""
 
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -327,7 +327,7 @@ async def _write_checkpoint(checkpoint_path: Path, payload: dict[str, Any]) -> N
 async def _worker(  # noqa: C901
     context: BrowserContext,
     queue: asyncio.Queue,
-    output: dict[str, dict[str, Any]],
+    output: dict[str, dict[str, object]],
     failures: dict[str, str],
     state: dict[str, int],
     lock: asyncio.Lock,
@@ -362,7 +362,7 @@ async def _worker(  # noqa: C901
 
             try:
                 path = str(item.get("path") or "")
-                captured: tuple[str, dict[str, Any]] | None = None
+                captured: tuple[str, dict[str, object]] | None = None
                 last_error: Exception | None = None
 
                 for attempt in range(retry_count + 1):
@@ -380,7 +380,7 @@ async def _worker(  # noqa: C901
                     if attempt < retry_count:
                         await asyncio.sleep(retry_backoff_seconds * (2**attempt))
 
-                checkpoint_payload: dict[str, Any] | None = None
+                checkpoint_payload: dict[str, object] | None = None
 
                 async with lock:
                     state["processed"] += 1
@@ -425,7 +425,7 @@ async def crawl_proxmox_api_viewer_async(
     retry_backoff_seconds: float = 0.35,
     checkpoint_path: str | Path | None = None,
     checkpoint_every: int = 50,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Recursively traverse all navigation items and capture endpoint raw data in parallel."""
 
     from playwright.async_api import async_playwright
@@ -454,7 +454,7 @@ async def crawl_proxmox_api_viewer_async(
         for item in all_items:
             queue.put_nowait(item)
 
-        results: dict[str, dict[str, Any]] = {}
+        results: dict[str, dict[str, object]] = {}
         failures: dict[str, str] = {}
         state = {"processed": 0, "last_checkpoint": 0}
         lock = asyncio.Lock()
@@ -528,7 +528,7 @@ def crawl_proxmox_api_viewer(
     retry_backoff_seconds: float = 0.35,
     checkpoint_path: str | Path | None = None,
     checkpoint_every: int = 50,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Synchronous wrapper for async crawler, preserving existing call sites."""
 
     return asyncio.run(

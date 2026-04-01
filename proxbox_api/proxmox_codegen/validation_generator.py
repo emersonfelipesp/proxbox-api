@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
 
-
-def generate_field_validators(model_name: str, schema: dict[str, Any]) -> list[str]:
+def generate_field_validators(model_name: str, schema: dict[str, object]) -> list[str]:
     """Generate Pydantic v2 field validators for common validation patterns.
 
     Args:
@@ -36,7 +34,7 @@ def generate_field_validators(model_name: str, schema: dict[str, Any]) -> list[s
     return validators
 
 
-def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> list[str]:  # noqa: C901
+def _generate_field_validator(prop_name: str, prop_schema: dict[str, object]) -> list[str]:  # noqa: C901
     """Generate a single field validator.
 
     Args:
@@ -130,7 +128,7 @@ def _generate_field_validator(prop_name: str, prop_schema: dict[str, Any]) -> li
     return lines
 
 
-def add_model_docstring(model_name: str, schema: dict[str, Any]) -> str:
+def add_model_docstring(model_name: str, schema: dict[str, object]) -> str:
     """Generate a docstring for a generated model.
 
     Args:

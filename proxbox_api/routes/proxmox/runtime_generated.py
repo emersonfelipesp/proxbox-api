@@ -10,7 +10,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path as FilePath
 from types import ModuleType
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import Body, Depends, FastAPI, Path, Query
 
@@ -33,7 +33,7 @@ _GENERATED_ROUTE_TAG_PREFIX = "proxmox / live-generated"
 _GENERATED_ROUTE_NAME_PREFIX = "generated_proxmox_route__"
 _GENERATED_ROUTE_CACHE_FORMAT = 1
 _GENERATED_ROUTE_STATE_LOCK = threading.RLock()
-_GENERATED_ROUTE_STATE: dict[str, Any] = {
+_GENERATED_ROUTE_STATE: dict[str, object] = {
     "route_names": set(),
     "versions": {},
     "alias_version_tag": DEFAULT_PROXMOX_OPENAPI_TAG,
@@ -43,9 +43,9 @@ _GENERATED_ROUTE_STATE: dict[str, Any] = {
 }
 
 
-def _schema_to_annotation(schema: dict[str, Any] | None) -> Any:
+def _schema_to_annotation(schema: dict[str, object] | None) -> object:
     if not isinstance(schema, dict):
-        return Any
+        return object
 
     schema_type = schema.get("type")
     if schema_type == "string":
@@ -59,13 +59,13 @@ def _schema_to_annotation(schema: dict[str, Any] | None) -> Any:
     if schema_type == "array":
         return list[_schema_to_annotation(schema.get("items"))]
     if schema_type == "object":
-        return dict[str, Any]
-    return Any
+        return dict[str, object]
+    return object
 
 
 def _request_schema_without_path_params(
-    path: str, operation: dict[str, Any]
-) -> dict[str, Any] | None:
+    path: str, operation: dict[str, object]
+) -> dict[str, object] | None:
     request_schema = (
         operation.get("requestBody", {})
         .get("content", {})
@@ -91,14 +91,14 @@ def _request_schema_without_path_params(
     return schema
 
 
-def _render_proxmox_path(path_template: str, path_values: dict[str, Any]) -> str:
+def _render_proxmox_path(path_template: str, path_values: dict[str, object]) -> str:
     rendered = path_template
     for name, value in path_values.items():
         rendered = rendered.replace(f"{{{name}}}", str(value))
     return rendered
 
 
-def _load_model_module(openapi_document: dict[str, Any], version_tag: str) -> ModuleType:
+def _load_model_module(openapi_document: dict[str, object], version_tag: str) -> ModuleType:
     code = generate_pydantic_models_from_openapi(openapi_document)
     module = ModuleType(f"proxbox_api.generated.proxmox.runtime_{version_tag.replace('.', '_')}")
     sys.modules[module.__name__] = module
@@ -121,7 +121,7 @@ def _generated_route_cache_path() -> FilePath:
     return proxmox_generated_route_cache_path()
 
 
-def _read_generated_route_cache() -> dict[str, Any] | None:
+def _read_generated_route_cache() -> dict[str, object] | None:
     cache_path = _generated_route_cache_path()
     if not cache_path.exists():
         return None
@@ -145,7 +145,7 @@ def _read_generated_route_cache() -> dict[str, Any] | None:
     if not isinstance(documents, dict) or not documents:
         return None
 
-    normalized_documents: dict[str, dict[str, Any]] = {}
+    normalized_documents: dict[str, dict[str, object]] = {}
     for version_tag, document in documents.items():
         if not isinstance(version_tag, str) or not isinstance(document, dict):
             return None
@@ -163,7 +163,7 @@ def _read_generated_route_cache() -> dict[str, Any] | None:
 
 def _write_generated_route_cache(
     *,
-    documents: dict[str, dict[str, Any]],
+    documents: dict[str, dict[str, object]],
     alias_version_tag: str,
 ) -> FilePath:
     cache_path = _generated_route_cache_path()
@@ -186,7 +186,7 @@ def _operation_response_model(model_module: ModuleType, operation_id: str) -> ty
 def _operation_request_model(
     model_module: ModuleType,
     path: str,
-    operation: dict[str, Any],
+    operation: dict[str, object],
     operation_id: str,
 ) -> type | None:
     request_schema = _request_schema_without_path_params(path=path, operation=operation)
@@ -197,14 +197,14 @@ def _operation_request_model(
     return getattr(model_module, f"{pascal_case(operation_id)}Request", None)
 
 
-def _operation_parameters(operation: dict[str, Any]) -> list[dict[str, Any]]:
+def _operation_parameters(operation: dict[str, object]) -> list[dict[str, object]]:
     parameters = operation.get("parameters")
     if not isinstance(parameters, list):
         return []
     return [parameter for parameter in parameters if isinstance(parameter, dict)]
 
 
-def _path_parameter_name_map(operation: dict[str, Any]) -> dict[str, str]:
+def _path_parameter_name_map(operation: dict[str, object]) -> dict[str, str]:
     used_parameter_names = {
         "_database_session",
         "source",
@@ -237,7 +237,7 @@ def _path_parameter_name_map(operation: dict[str, Any]) -> dict[str, str]:
     return mapping
 
 
-def _mounted_fastapi_path(openapi_path: str, operation: dict[str, Any]) -> str:
+def _mounted_fastapi_path(openapi_path: str, operation: dict[str, object]) -> str:
     mounted_path = openapi_path
     for original_name, python_name in _path_parameter_name_map(operation).items():
         mounted_path = mounted_path.replace(f"{{{original_name}}}", f"{{{python_name}}}")
@@ -248,10 +248,10 @@ def _build_generated_endpoint(  # noqa: C901
     *,
     openapi_path: str,
     method: str,
-    operation: dict[str, Any],
+    operation: dict[str, object],
     request_model: type | None,
     response_model: type | None,
-) -> Any:
+) -> object:
     operation_id = operation.get("operationId") or f"{method.lower()}_{openapi_path}"
     path_param_name_map = _path_parameter_name_map(operation)
     path_param_map: dict[str, str] = {
@@ -262,7 +262,7 @@ def _build_generated_endpoint(  # noqa: C901
         inspect.Parameter(
             "_database_session",
             inspect.Parameter.KEYWORD_ONLY,
-            annotation=Any,
+            annotation=object,
             default=Depends(get_session),
         ),
         inspect.Parameter(
@@ -378,7 +378,7 @@ def _build_generated_endpoint(  # noqa: C901
             )
         )
 
-    async def generated_endpoint(**kwargs: Any) -> Any:
+    async def generated_endpoint(**kwargs: object) -> object:
         database_session = kwargs.pop("_database_session")
         request_body = kwargs.pop("request_body", None)
         source = kwargs.pop("source", "database")
@@ -407,7 +407,7 @@ def _build_generated_endpoint(  # noqa: C901
         resource = target.session(_render_proxmox_path(openapi_path, path_values).lstrip("/"))
         handler = getattr(resource, method.lower())
 
-        payload: dict[str, Any] = {}
+        payload: dict[str, object] = {}
         if request_body is not None:
             payload.update(request_body.model_dump(by_alias=True, exclude_none=True))
         payload.update(query_values)
@@ -442,7 +442,7 @@ def _build_generated_endpoint(  # noqa: C901
     generated_endpoint.__qualname__ = generated_endpoint.__name__
     generated_endpoint.__signature__ = inspect.Signature(
         parameters=signature_parameters,
-        return_annotation=response_model or dict[str, Any],
+        return_annotation=response_model or dict[str, object],
     )
     return generated_endpoint
 
@@ -471,10 +471,10 @@ def _prioritize_generated_routes(app: FastAPI, route_names: set[str]) -> None:
 def _build_version_route_specs(
     *,
     version_tag: str,
-    document: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    document: dict[str, object],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
     model_module = _load_model_module(document, version_tag=version_tag)
-    route_specs: list[dict[str, Any]] = []
+    route_specs: list[dict[str, object]] = []
     method_count = 0
     version_route_names: set[str] = set()
 
@@ -554,9 +554,9 @@ def _build_version_route_specs(
 def _load_documents_for_registration(
     *,
     version_tag: str | None = None,
-    openapi_document: dict[str, Any] | None = None,
-    openapi_documents: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, dict[str, Any]]:
+    openapi_document: dict[str, object] | None = None,
+    openapi_documents: dict[str, dict[str, object]] | None = None,
+) -> dict[str, dict[str, object]]:
     if openapi_documents is not None:
         return dict(sorted(openapi_documents.items(), key=lambda item: _version_sort_key(item[0])))
     if openapi_document is not None:
@@ -580,9 +580,9 @@ def register_generated_proxmox_routes(
     app: FastAPI,
     *,
     version_tag: str | None = None,
-    openapi_document: dict[str, Any] | None = None,
-    openapi_documents: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+    openapi_document: dict[str, object] | None = None,
+    openapi_documents: dict[str, dict[str, object]] | None = None,
+) -> dict[str, object]:
     """Register runtime-generated live Proxmox proxy routes on the FastAPI app."""
 
     with _GENERATED_ROUTE_STATE_LOCK:
@@ -608,8 +608,8 @@ def register_generated_proxmox_routes(
                 detail="Run /proxmox/viewer/generate first.",
             )
 
-        route_specs: list[dict[str, Any]] = []
-        version_state: dict[str, dict[str, Any]] = {}
+        route_specs: list[dict[str, object]] = []
+        version_state: dict[str, dict[str, object]] = {}
         all_route_names: set[str] = set()
 
         for mounted_version, document in documents.items():
@@ -665,7 +665,7 @@ def register_generated_proxmox_routes(
         }
 
 
-def generated_proxmox_route_state() -> dict[str, Any]:
+def generated_proxmox_route_state() -> dict[str, object]:
     """Return metadata about the currently mounted generated Proxmox route set."""
 
     with _GENERATED_ROUTE_STATE_LOCK:

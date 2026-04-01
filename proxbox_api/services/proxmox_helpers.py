@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
@@ -10,7 +10,7 @@ from proxbox_api.logger import logger
 from proxbox_api.session.proxmox import ProxmoxSession
 
 
-def _model_dump(model: Any) -> dict[str, Any]:
+def _model_dump(model: object) -> dict[str, object]:
     return model.model_dump(mode="python", by_alias=True, exclude_none=True)
 
 
@@ -73,7 +73,7 @@ def get_vm_config(
     return _wrap_backend_call("Error fetching Proxmox VM config", _fetch_config)
 
 
-def _normalize_guest_agent_interfaces(payload: Any) -> list[dict[str, Any]]:
+def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]]:
     if isinstance(payload, dict):
         raw_interfaces = payload.get("result") or payload.get("interfaces") or []
     elif isinstance(payload, list):
@@ -81,14 +81,14 @@ def _normalize_guest_agent_interfaces(payload: Any) -> list[dict[str, Any]]:
     else:
         raw_interfaces = []
 
-    normalized: list[dict[str, Any]] = []
+    normalized: list[dict[str, object]] = []
     for item in raw_interfaces:
         if not isinstance(item, dict):
             continue
         name = item.get("name")
         if not name:
             continue
-        addresses: list[dict[str, Any]] = []
+        addresses: list[dict[str, object]] = []
         for addr in item.get("ip-addresses") or item.get("ip_addresses") or []:
             if not isinstance(addr, dict):
                 continue
@@ -116,7 +116,7 @@ def get_qemu_guest_agent_network_interfaces(
     session: ProxmoxSession,
     node: str,
     vmid: int,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Return normalized guest-agent interfaces or [] when unavailable."""
 
     try:
@@ -158,7 +158,7 @@ def get_node_storage_content(
     session: ProxmoxSession,
     node: str,
     storage: str,
-    **kwargs: Any,
+    **kwargs: object,
 ) -> list[generated_models.GetNodesNodeStorageStorageContentResponseItem]:
     params = {key: value for key, value in kwargs.items() if value is not None}
     return _wrap_backend_call(
@@ -214,7 +214,7 @@ def get_node_task_status(
     )
 
 
-def dump_models(items: list[Any]) -> list[dict[str, Any]]:
+def dump_models(items: list[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 
 
@@ -223,7 +223,7 @@ def get_vm_snapshots(
     node: str,
     vm_type: str,
     vmid: int,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Get snapshots for a specific VM from Proxmox.
 
@@ -268,7 +268,7 @@ def get_cluster_snapshots_for_vm(
     node: str,
     vm_type: str,
     vmid: int,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Get all snapshots for a VM across all nodes in the cluster.
     Uses the VM's configured nodes if available.

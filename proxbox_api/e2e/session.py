@@ -6,7 +6,7 @@ the 'proxbox e2e testing' tag.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from netbox_sdk.config import Config
@@ -34,8 +34,8 @@ class E2ENetBoxApiClient(NetBoxApiClient):
         *,
         method: str,
         path: str,
-        query: Any = None,
-        payload: dict[str, Any] | list[Any] | None = None,
+        query: object = None,
+        payload: dict[str, object] | list[object] | None = None,
     ) -> None:
         return None
 
@@ -59,7 +59,7 @@ async def create_netbox_demo_session(config: "Config") -> "Api":
     return Api(client=client)
 
 
-async def ensure_e2e_tag(nb: "Api") -> dict[str, Any]:
+async def ensure_e2e_tag(nb: "Api") -> dict[str, object]:
     """Ensure the 'proxbox e2e testing' tag exists in NetBox.
 
     Creates the tag if it doesn't exist, or returns existing tag if it does.
@@ -88,7 +88,7 @@ async def ensure_e2e_tag(nb: "Api") -> dict[str, Any]:
     }
 
 
-async def get_e2e_tag(nb: "Api") -> dict[str, Any] | None:
+async def get_e2e_tag(nb: "Api") -> dict[str, object] | None:
     """Get the 'proxbox e2e testing' tag if it exists.
 
     Args:
@@ -114,7 +114,7 @@ async def get_e2e_tag(nb: "Api") -> dict[str, Any] | None:
 async def list_objects_with_e2e_tag(
     nb: "Api",
     object_type: str,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """List all objects of a type that have the e2e testing tag.
 
     Args:
@@ -190,7 +190,7 @@ async def cleanup_e2e_objects(
     return deleted_counts
 
 
-def build_e2e_tag_refs(tag: dict[str, Any]) -> list[dict[str, Any]]:
+def build_e2e_tag_refs(tag: dict[str, object]) -> list[dict[str, object]]:
     """Build tag refs list for NetBox API payloads.
 
     Args:

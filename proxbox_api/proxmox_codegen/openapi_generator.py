@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
 
 from proxbox_api.proxmox_codegen.models import NormalizedOperation
 from proxbox_api.proxmox_codegen.utils import to_openapi_path
@@ -15,10 +14,10 @@ def generate_openapi_schema(
     title: str = "Proxmox VE API (Generated from API Viewer)",
     version: str = "generated",
     server_url: str = "/api2/json",
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Generate OpenAPI 3.1 schema from normalized Proxmox operations."""
 
-    grouped: dict[str, dict[str, Any]] = defaultdict(dict)
+    grouped: dict[str, dict[str, object]] = defaultdict(dict)
 
     for operation in operations:
         path = to_openapi_path(operation.path)

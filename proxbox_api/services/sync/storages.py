@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
@@ -13,13 +13,13 @@ from proxbox_api.services.proxmox_helpers import dump_models, get_storage_list
 
 async def create_storages(  # noqa: C901
     *,
-    netbox_session: Any,
-    pxs: list[Any] | None,
-    tag: Any,
-    websocket: Any | None = None,
+    netbox_session: object,
+    pxs: list[object] | None,
+    tag: object,
+    websocket: object | None = None,
     use_websocket: bool = False,
     fetch_concurrency: int = 8,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Create or update plugin storage rows for each Proxmox endpoint storage."""
     nb = netbox_session
     tag_refs = [
@@ -30,7 +30,7 @@ async def create_storages(  # noqa: C901
         }
     ]
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
-    synced: list[dict[str, Any]] = []
+    synced: list[dict[str, object]] = []
 
     if not pxs:
         logger.info("No Proxmox sessions available for storage sync")
@@ -52,7 +52,7 @@ async def create_storages(  # noqa: C901
         # storage syncs fail gracefully
         logger.warning("Unable to prefetch NetBox clusters for storage sync: %s", error)
 
-    async def _fetch_cluster_storages(proxmox: Any) -> tuple[str, list[dict[str, Any]]]:
+    async def _fetch_cluster_storages(proxmox: object) -> tuple[str, list[dict[str, object]]]:
         cluster_name = str(getattr(proxmox, "name", "") or "").strip() or "unknown"
         async with fetch_sem:
             storages = await asyncio.to_thread(lambda: dump_models(get_storage_list(proxmox)))

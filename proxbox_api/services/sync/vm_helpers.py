@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
-from typing import Any
 
 from proxbox_api.logger import logger
 
 
-def to_mapping(value: Any) -> dict[str, Any]:
+def to_mapping(value: object) -> dict[str, object]:
     """Coerce any value to a dictionary mapping."""
     if isinstance(value, dict):
         return value
@@ -31,7 +30,7 @@ def to_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def relation_name(value: Any) -> str | None:
+def relation_name(value: object) -> str | None:
     """Extract relation name from a value."""
     if isinstance(value, dict):
         for key in ("name", "display", "label", "value"):
@@ -43,7 +42,7 @@ def relation_name(value: Any) -> str | None:
     return None
 
 
-def relation_id(value: Any) -> int | None:
+def relation_id(value: object) -> int | None:
     """Extract relation ID from a value."""
     if isinstance(value, int):
         return value
@@ -64,7 +63,9 @@ def normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def guest_agent_ip_with_prefix(addr: dict) -> str | None:
+def guest_agent_ip_with_prefix(
+    addr: dict[str, object], ignore_ipv6_link_local: bool = True
+) -> str | None:
     """Extract and format guest agent IP with prefix."""
     ip_text = str(addr.get("ip_address") or "").strip()
     if not ip_text:
@@ -73,7 +74,9 @@ def guest_agent_ip_with_prefix(addr: dict) -> str | None:
         parsed = ip_address(ip_text)
     except ValueError:
         return None
-    if parsed.is_loopback or parsed.is_link_local:
+    if parsed.is_loopback:
+        return None
+    if ignore_ipv6_link_local and parsed.is_link_local:
         return None
     prefix = addr.get("prefix")
     if isinstance(prefix, int) and 0 <= prefix <= 128:
@@ -81,7 +84,9 @@ def guest_agent_ip_with_prefix(addr: dict) -> str | None:
     return parsed.compressed
 
 
-def best_guest_agent_ip(guest_iface: dict | None) -> str | None:
+def best_guest_agent_ip(
+    guest_iface: dict[str, object] | None, ignore_ipv6_link_local: bool = True
+) -> str | None:
     """Find the best IP address from guest agent interface data."""
     if not isinstance(guest_iface, dict):
         return None
@@ -90,29 +95,29 @@ def best_guest_agent_ip(guest_iface: dict | None) -> str | None:
             continue
         if str(addr.get("ip_address_type") or "").lower() == "ipv6":
             continue
-        candidate = guest_agent_ip_with_prefix(addr)
+        candidate = guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
         if candidate:
             return candidate
     for addr in guest_iface.get("ip_addresses") or []:
         if not isinstance(addr, dict):
             continue
-        candidate = guest_agent_ip_with_prefix(addr)
+        candidate = guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
         if candidate:
             return candidate
     return None
 
 
 def filter_cluster_resources_for_vm(  # noqa: C901
-    cluster_resources: list[dict],
+    cluster_resources: list[dict[str, object]],
     *,
     vm_name: str,
     proxmox_vm_id: int | None,
     cluster_name: str | None,
     cluster_id: int | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Filter cluster resources to find matching VM resources."""
     cluster_hint = (cluster_name or "").strip().lower()
-    filtered: list[dict] = []
+    filtered: list[dict[str, object]] = []
     for cluster in cluster_resources:
         if not isinstance(cluster, dict):
             continue

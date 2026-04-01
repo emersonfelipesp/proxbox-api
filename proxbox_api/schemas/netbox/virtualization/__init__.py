@@ -1,20 +1,19 @@
 """NetBox virtualization schema models for clusters and types."""
 
-from pydantic import BaseModel
-
 from proxbox_api.enum.netbox.virtualization import ClusterStatusOptions
+from proxbox_api.schemas._base import ProxboxBaseModel
 from proxbox_api.schemas.netbox.extras import TagSchema
 
 
-class ClusterTypeSchema(BaseModel):
+class ClusterTypeSchema(ProxboxBaseModel):
     name: str
     slug: str | None = None
     description: str | None = None
     tags: list[TagSchema] | None = None
-    custom_fields: dict | None = None
+    custom_fields: dict[str, object] | None = None
 
 
-class ClusterSchema(BaseModel):
+class ClusterSchema(ProxboxBaseModel):
     name: str
     type: int
     group: int | None = None
@@ -24,4 +23,4 @@ class ClusterSchema(BaseModel):
     description: str | None = None
     comments: str | None = None
     tags: list[int] | None = None
-    custom_fields: dict | None = None
+    custom_fields: dict[str, object] | None = None

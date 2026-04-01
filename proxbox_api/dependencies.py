@@ -1,7 +1,7 @@
 """FastAPI dependency providers shared by route modules."""
 
 # Sessions
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends
 
@@ -34,4 +34,4 @@ async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep):
 # Proxbox Tag Dependency (used to identify the items the plugin created)
 # It's used to tag the items created by the plugin
 # NetBox Tag Object.
-ProxboxTagDep = Annotated[Any, Depends(proxbox_tag)]
+ProxboxTagDep = Annotated[object, Depends(proxbox_tag)]

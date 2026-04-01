@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
@@ -90,14 +88,14 @@ class PostAccessDomainsRequest(ProxmoxBaseModel):
 class PostAccessDomainsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteAccessDomainsRealmRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteAccessDomainsRealmRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteAccessDomainsRealmResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetAccessDomainsRealmResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetAccessDomainsRealmResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutAccessDomainsRealmRequest(ProxmoxBaseModel):
     acr_values: str | None = Field(None, alias="acr-values", description='Specifies the Authentication Context Class Reference values that theAuthorization Server is being requested to use for the Auth Request.')
@@ -167,8 +165,8 @@ class PostAccessGroupsRequest(ProxmoxBaseModel):
 class PostAccessGroupsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteAccessGroupsGroupidRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteAccessGroupsGroupidRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteAccessGroupsGroupidResponse(RootModel[None]):
     root: None = Field(...)
@@ -203,7 +201,7 @@ class PostAccessOpenidLoginRequest(ProxmoxBaseModel):
 
 class PostAccessOpenidLoginResponse(ProxmoxBaseModel):
     csrfprevention_token: str = Field(..., alias="CSRFPreventionToken")
-    cap: dict[str, Any] = Field(...)
+    cap: dict[str, object] = Field(...)
     clustername: str | None = Field(None)
     ticket: str = Field(...)
     username: str = Field(...)
@@ -216,8 +214,8 @@ class PutAccessPasswordRequest(ProxmoxBaseModel):
 class PutAccessPasswordResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetAccessPermissionsResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetAccessPermissionsResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class GetAccessRolesResponseItem(ProxmoxBaseModel):
     privs: str | None = Field(None)
@@ -234,8 +232,8 @@ class PostAccessRolesRequest(ProxmoxBaseModel):
 class PostAccessRolesResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteAccessRolesRoleidRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteAccessRolesRoleidRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteAccessRolesRoleidResponse(RootModel[None]):
     root: None = Field(...)
@@ -292,7 +290,7 @@ class PutAccessRolesRoleidResponse(RootModel[None]):
     root: None = Field(...)
 
 class GetAccessTfaResponseItem(ProxmoxBaseModel):
-    entries: list[dict[str, Any]] | None = Field(None)
+    entries: list[dict[str, object]] | None = Field(None)
     tfa_locked_until: int | None = Field(None, alias="tfa-locked-until", description='Contains a timestamp until when a user is locked out of 2nd factors.')
     totp_locked: bool | None = Field(None, alias="totp-locked", description='True if the user is currently locked out of TOTP factors.')
     userid: str | None = Field(None, description='User this entry belongs to.')
@@ -374,7 +372,7 @@ class GetAccessUsersResponseItem(ProxmoxBaseModel):
     lastname: str | None = Field(None)
     realm_type: str | None = Field(None, alias="realm-type", description='The type of the users realm')
     tfa_locked_until: int | None = Field(None, alias="tfa-locked-until", description='Contains a timestamp until when a user is locked out of 2nd factors.')
-    tokens: list[dict[str, Any]] | None = Field(None)
+    tokens: list[dict[str, object]] | None = Field(None)
     totp_locked: bool | None = Field(None, alias="totp-locked", description='True if the user is currently locked out of TOTP factors.')
     userid: str | None = Field(None, description='Full User ID, in the `name@realm` format.')
 
@@ -396,8 +394,8 @@ class PostAccessUsersRequest(ProxmoxBaseModel):
 class PostAccessUsersResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteAccessUsersUseridRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteAccessUsersUseridRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteAccessUsersUseridResponse(RootModel[None]):
     root: None = Field(...)
@@ -411,7 +409,7 @@ class GetAccessUsersUseridResponse(ProxmoxBaseModel):
     groups: list[str] | None = Field(None)
     keys: str | None = Field(None, description='Keys for two factor auth (yubico).')
     lastname: str | None = Field(None)
-    tokens: dict[str, Any] | None = Field(None)
+    tokens: dict[str, object] | None = Field(None)
 
 class PutAccessUsersUseridRequest(ProxmoxBaseModel):
     append: bool | None = Field(None)
@@ -441,8 +439,8 @@ class GetAccessUsersUseridTokenResponseItem(ProxmoxBaseModel):
 class GetAccessUsersUseridTokenResponse(RootModel[list[GetAccessUsersUseridTokenResponseItem]]):
     root: list[GetAccessUsersUseridTokenResponseItem] = Field(...)
 
-class DeleteAccessUsersUseridTokenTokenidRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteAccessUsersUseridTokenTokenidRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteAccessUsersUseridTokenTokenidResponse(RootModel[None]):
     root: None = Field(...)
@@ -459,7 +457,7 @@ class PostAccessUsersUseridTokenTokenidRequest(ProxmoxBaseModel):
 
 class PostAccessUsersUseridTokenTokenidResponse(ProxmoxBaseModel):
     full_tokenid: str = Field(..., alias="full-tokenid", description='The full token id.')
-    info: dict[str, Any] = Field(...)
+    info: dict[str, object] = Field(...)
     value: str = Field(..., description='API token value used for authentication.')
 
 class PutAccessUsersUseridTokenTokenidRequest(ProxmoxBaseModel):
@@ -472,20 +470,20 @@ class PutAccessUsersUseridTokenTokenidResponse(ProxmoxBaseModel):
     expire: int | None = Field(None, description="API token expiration date (seconds since epoch). '0' means no expiration date.")
     privsep: bool | None = Field(None, description='Restrict API token privileges with separate ACLs (default), or give full privileges of corresponding user.')
 
-class PutAccessUsersUseridUnlockTfaRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PutAccessUsersUseridUnlockTfaRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutAccessUsersUseridUnlockTfaResponse(RootModel[bool]):
     root: bool = Field(...)
 
-class GetClusterResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetClusterAcmeResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterAcmeResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetClusterAcmeAccountResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterAcmeAccountResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostClusterAcmeAccountRequest(ProxmoxBaseModel):
     contact: str = Field(..., description='Contact email addresses.')
@@ -498,14 +496,14 @@ class PostClusterAcmeAccountRequest(ProxmoxBaseModel):
 class PostClusterAcmeAccountResponse(RootModel[str]):
     root: str = Field(...)
 
-class DeleteClusterAcmeAccountNameRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterAcmeAccountNameRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterAcmeAccountNameResponse(RootModel[str]):
     root: str = Field(...)
 
 class GetClusterAcmeAccountNameResponse(ProxmoxBaseModel):
-    account: dict[str, Any] | None = Field(None)
+    account: dict[str, object] | None = Field(None)
     directory: str | None = Field(None, description='URL of ACME CA directory endpoint.')
     location: str | None = Field(None)
     tos: str | None = Field(None)
@@ -519,7 +517,7 @@ class PutClusterAcmeAccountNameResponse(RootModel[str]):
 class GetClusterAcmeChallengeSchemaResponseItem(ProxmoxBaseModel):
     id: str | None = Field(None)
     name: str | None = Field(None, description='Human readable name, falls back to id')
-    schema: dict[str, Any] | None = Field(None)
+    schema: dict[str, object] | None = Field(None)
     type: str | None = Field(None)
 
 class GetClusterAcmeChallengeSchemaResponse(RootModel[list[GetClusterAcmeChallengeSchemaResponseItem]]):
@@ -556,14 +554,14 @@ class PostClusterAcmePluginsRequest(ProxmoxBaseModel):
 class PostClusterAcmePluginsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterAcmePluginsIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterAcmePluginsIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterAcmePluginsIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterAcmePluginsIdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterAcmePluginsIdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterAcmePluginsIdRequest(ProxmoxBaseModel):
     api: str | None = Field(None, description='API plugin name')
@@ -646,14 +644,14 @@ class GetClusterBackupInfoNotBackedUpResponseItem(ProxmoxBaseModel):
 class GetClusterBackupInfoNotBackedUpResponse(RootModel[list[GetClusterBackupInfoNotBackedUpResponseItem]]):
     root: list[GetClusterBackupInfoNotBackedUpResponseItem] = Field(..., description='Contains the guest objects.')
 
-class DeleteClusterBackupIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterBackupIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterBackupIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterBackupIdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterBackupIdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterBackupIdRequest(ProxmoxBaseModel):
     all: bool | None = Field(None, description='Backup all known guest systems on this host.')
@@ -702,10 +700,10 @@ class PutClusterBackupIdResponse(RootModel[None]):
     root: None = Field(...)
 
 class GetClusterBackupIdIncludedVolumesResponse(ProxmoxBaseModel):
-    children: list[dict[str, Any]] = Field(...)
+    children: list[dict[str, object]] = Field(...)
 
-class GetClusterCephResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterCephResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetClusterCephFlagsResponseItem(ProxmoxBaseModel):
     description: str | None = Field(None, description='Flag description.')
@@ -741,17 +739,17 @@ class PutClusterCephFlagsFlagResponse(RootModel[None]):
     root: None = Field(...)
 
 class GetClusterCephMetadataResponse(ProxmoxBaseModel):
-    mds: dict[str, Any] = Field(..., description='Metadata servers configured in the cluster and their properties.')
-    mgr: dict[str, Any] = Field(..., description='Managers configured in the cluster and their properties.')
-    mon: dict[str, Any] = Field(..., description='Monitors configured in the cluster and their properties.')
-    node: dict[str, Any] = Field(..., description='Ceph version installed on the nodes.')
-    osd: list[Any] = Field(..., description='OSDs configured in the cluster and their properties.')
+    mds: dict[str, object] = Field(..., description='Metadata servers configured in the cluster and their properties.')
+    mgr: dict[str, object] = Field(..., description='Managers configured in the cluster and their properties.')
+    mon: dict[str, object] = Field(..., description='Monitors configured in the cluster and their properties.')
+    node: dict[str, object] = Field(..., description='Ceph version installed on the nodes.')
+    osd: list[object] = Field(..., description='OSDs configured in the cluster and their properties.')
 
-class GetClusterCephStatusResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterCephStatusResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetClusterConfigResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterConfigResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostClusterConfigRequest(ProxmoxBaseModel):
     clustername: str = Field(..., description='The name of the cluster.')
@@ -767,9 +765,9 @@ class GetClusterConfigApiversionResponse(RootModel[int]):
 
 class GetClusterConfigJoinResponse(ProxmoxBaseModel):
     config_digest: str = Field(...)
-    nodelist: list[dict[str, Any]] = Field(...)
+    nodelist: list[dict[str, object]] = Field(...)
     preferred_node: str = Field(..., description='The cluster node name.')
-    totem: dict[str, Any] = Field(...)
+    totem: dict[str, object] = Field(...)
 
 class PostClusterConfigJoinRequest(ProxmoxBaseModel):
     fingerprint: str = Field(..., description='Certificate SHA 256 fingerprint.')
@@ -789,8 +787,8 @@ class GetClusterConfigNodesResponseItem(ProxmoxBaseModel):
 class GetClusterConfigNodesResponse(RootModel[list[GetClusterConfigNodesResponseItem]]):
     root: list[GetClusterConfigNodesResponseItem] = Field(...)
 
-class DeleteClusterConfigNodesNodeRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterConfigNodesNodeRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterConfigNodesNodeResponse(RootModel[None]):
     root: None = Field(...)
@@ -808,14 +806,14 @@ class PostClusterConfigNodesNodeResponse(ProxmoxBaseModel):
     corosync_conf: str = Field(...)
     warnings: list[str] = Field(...)
 
-class GetClusterConfigQdeviceResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterConfigQdeviceResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetClusterConfigTotemResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterConfigTotemResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetClusterFirewallResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterFirewallResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetClusterFirewallAliasesResponseItem(ProxmoxBaseModel):
     cidr: str | None = Field(None)
@@ -840,8 +838,8 @@ class DeleteClusterFirewallAliasesNameRequest(ProxmoxBaseModel):
 class DeleteClusterFirewallAliasesNameResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterFirewallAliasesNameResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterFirewallAliasesNameResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterFirewallAliasesNameRequest(ProxmoxBaseModel):
     cidr: str = Field(..., description='Network/IP specification in CIDR format.')
@@ -869,8 +867,8 @@ class PostClusterFirewallGroupsRequest(ProxmoxBaseModel):
 class PostClusterFirewallGroupsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterFirewallGroupsGroupRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterFirewallGroupsGroupRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterFirewallGroupsGroupResponse(RootModel[None]):
     root: None = Field(...)
@@ -991,8 +989,8 @@ class DeleteClusterFirewallIpsetNameCidrRequest(ProxmoxBaseModel):
 class DeleteClusterFirewallIpsetNameCidrResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterFirewallIpsetNameCidrResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterFirewallIpsetNameCidrResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterFirewallIpsetNameCidrRequest(ProxmoxBaseModel):
     comment: str | None = Field(None)
@@ -1133,14 +1131,14 @@ class PostClusterHaGroupsRequest(ProxmoxBaseModel):
 class PostClusterHaGroupsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterHaGroupsGroupRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterHaGroupsGroupRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterHaGroupsGroupResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterHaGroupsGroupResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterHaGroupsGroupResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterHaGroupsGroupRequest(ProxmoxBaseModel):
     comment: str | None = Field(None, description='Description.')
@@ -1171,8 +1169,8 @@ class PostClusterHaResourcesRequest(ProxmoxBaseModel):
 class PostClusterHaResourcesResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterHaResourcesSidRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterHaResourcesSidRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterHaResourcesSidResponse(RootModel[None]):
     root: None = Field(...)
@@ -1211,8 +1209,8 @@ class PostClusterHaResourcesSidRelocateRequest(ProxmoxBaseModel):
 class PostClusterHaResourcesSidRelocateResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterHaStatusResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterHaStatusResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetClusterHaStatusCurrentResponseItem(ProxmoxBaseModel):
     crm_state: str | None = Field(None, description="For type 'service'. Service state as seen by the CRM.")
@@ -1226,13 +1224,13 @@ class GetClusterHaStatusCurrentResponseItem(ProxmoxBaseModel):
     state: str | None = Field(None, description="For type 'service'. Verbose service state.")
     status: str | None = Field(None, description='Status of the entry (value depends on type).')
     timestamp: int | None = Field(None, description="For type 'lrm','master'. Timestamp of the status information.")
-    type: Any | None = Field(None, description='Type of status entry.')
+    type: object | None = Field(None, description='Type of status entry.')
 
 class GetClusterHaStatusCurrentResponse(RootModel[list[GetClusterHaStatusCurrentResponseItem]]):
     root: list[GetClusterHaStatusCurrentResponseItem] = Field(...)
 
-class GetClusterHaStatusManagerStatusResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterHaStatusManagerStatusResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class GetClusterJobsResponseItem(ProxmoxBaseModel):
     subdir: str | None = Field(None, description='API sub-directory endpoint')
@@ -1254,14 +1252,14 @@ class GetClusterJobsRealmSyncResponseItem(ProxmoxBaseModel):
 class GetClusterJobsRealmSyncResponse(RootModel[list[GetClusterJobsRealmSyncResponseItem]]):
     root: list[GetClusterJobsRealmSyncResponseItem] = Field(...)
 
-class DeleteClusterJobsRealmSyncIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterJobsRealmSyncIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterJobsRealmSyncIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterJobsRealmSyncIdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterJobsRealmSyncIdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostClusterJobsRealmSyncIdRequest(ProxmoxBaseModel):
     comment: str | None = Field(None, description='Description for the Job.')
@@ -1294,14 +1292,14 @@ class GetClusterJobsScheduleAnalyzeResponseItem(ProxmoxBaseModel):
 class GetClusterJobsScheduleAnalyzeResponse(RootModel[list[GetClusterJobsScheduleAnalyzeResponseItem]]):
     root: list[GetClusterJobsScheduleAnalyzeResponseItem] = Field(..., description='An array of the next <iterations> events since <starttime>.')
 
-class GetClusterLogResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterLogResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetClusterMappingResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterMappingResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetClusterMappingPciResponseItem(ProxmoxBaseModel):
-    checks: list[dict[str, Any]] | None = Field(None, description="A list of checks, only present if 'check_node' is set.")
+    checks: list[dict[str, object]] | None = Field(None, description="A list of checks, only present if 'check_node' is set.")
     description: str | None = Field(None, description='A description of the logical mapping.')
     id: str | None = Field(None, description='The logical ID of the mapping.')
     map: list[str] | None = Field(None, description='The entries of the mapping.')
@@ -1318,14 +1316,14 @@ class PostClusterMappingPciRequest(ProxmoxBaseModel):
 class PostClusterMappingPciResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterMappingPciIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterMappingPciIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterMappingPciIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterMappingPciIdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterMappingPciIdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterMappingPciIdRequest(ProxmoxBaseModel):
     delete: str | None = Field(None, description='A list of settings you want to delete.')
@@ -1339,7 +1337,7 @@ class PutClusterMappingPciIdResponse(RootModel[None]):
 
 class GetClusterMappingUsbResponseItem(ProxmoxBaseModel):
     description: str | None = Field(None, description='A description of the logical mapping.')
-    error: Any | None = Field(None, description="A list of errors when 'check_node' is given.")
+    error: object | None = Field(None, description="A list of errors when 'check_node' is given.")
     id: str | None = Field(None, description='The logical ID of the mapping.')
     map: list[str] | None = Field(None, description='The entries of the mapping.')
 
@@ -1354,14 +1352,14 @@ class PostClusterMappingUsbRequest(ProxmoxBaseModel):
 class PostClusterMappingUsbResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterMappingUsbIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterMappingUsbIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterMappingUsbIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterMappingUsbIdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterMappingUsbIdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterMappingUsbIdRequest(ProxmoxBaseModel):
     delete: str | None = Field(None, description='A list of settings you want to delete.')
@@ -1372,11 +1370,11 @@ class PutClusterMappingUsbIdRequest(ProxmoxBaseModel):
 class PutClusterMappingUsbIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterMetricsResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterMetricsResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetClusterMetricsExportResponse(ProxmoxBaseModel):
-    data: list[dict[str, Any]] = Field(..., description='Array of system metrics. Metrics are sorted by their timestamp.')
+    data: list[dict[str, object]] = Field(..., description='Array of system metrics. Metrics are sorted by their timestamp.')
 
 class GetClusterMetricsServerResponseItem(ProxmoxBaseModel):
     disable: bool | None = Field(None, description='Flag to disable the plugin.')
@@ -1388,14 +1386,14 @@ class GetClusterMetricsServerResponseItem(ProxmoxBaseModel):
 class GetClusterMetricsServerResponse(RootModel[list[GetClusterMetricsServerResponseItem]]):
     root: list[GetClusterMetricsServerResponseItem] = Field(...)
 
-class DeleteClusterMetricsServerIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterMetricsServerIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterMetricsServerIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterMetricsServerIdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterMetricsServerIdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostClusterMetricsServerIdRequest(ProxmoxBaseModel):
     api_path_prefix: str | None = Field(None, alias="api-path-prefix", description="An API path prefix inserted between '<host>:<port>/' and '/api2/'. Can be useful if the InfluxDB service runs behind a reverse proxy.")
@@ -1441,11 +1439,11 @@ class PutClusterMetricsServerIdResponse(RootModel[None]):
 class GetClusterNextidResponse(RootModel[int]):
     root: int = Field(..., description='The next free VMID.')
 
-class GetClusterNotificationsResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterNotificationsResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetClusterNotificationsEndpointsResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterNotificationsEndpointsResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetClusterNotificationsEndpointsGotifyResponseItem(ProxmoxBaseModel):
     comment: str | None = Field(None, description='Comment')
@@ -1467,8 +1465,8 @@ class PostClusterNotificationsEndpointsGotifyRequest(ProxmoxBaseModel):
 class PostClusterNotificationsEndpointsGotifyResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterNotificationsEndpointsGotifyNameRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterNotificationsEndpointsGotifyNameRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterNotificationsEndpointsGotifyNameResponse(RootModel[None]):
     root: None = Field(...)
@@ -1516,8 +1514,8 @@ class PostClusterNotificationsEndpointsSendmailRequest(ProxmoxBaseModel):
 class PostClusterNotificationsEndpointsSendmailResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterNotificationsEndpointsSendmailNameRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterNotificationsEndpointsSendmailNameRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterNotificationsEndpointsSendmailNameResponse(RootModel[None]):
     root: None = Field(...)
@@ -1579,8 +1577,8 @@ class PostClusterNotificationsEndpointsSmtpRequest(ProxmoxBaseModel):
 class PostClusterNotificationsEndpointsSmtpResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterNotificationsEndpointsSmtpNameRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterNotificationsEndpointsSmtpNameRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterNotificationsEndpointsSmtpNameResponse(RootModel[None]):
     root: None = Field(...)
@@ -1644,8 +1642,8 @@ class PostClusterNotificationsEndpointsWebhookRequest(ProxmoxBaseModel):
 class PostClusterNotificationsEndpointsWebhookResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterNotificationsEndpointsWebhookNameRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterNotificationsEndpointsWebhookNameRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterNotificationsEndpointsWebhookNameResponse(RootModel[None]):
     root: None = Field(...)
@@ -1718,8 +1716,8 @@ class PostClusterNotificationsMatchersRequest(ProxmoxBaseModel):
 class PostClusterNotificationsMatchersResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterNotificationsMatchersNameRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterNotificationsMatchersNameRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterNotificationsMatchersNameResponse(RootModel[None]):
     root: None = Field(...)
@@ -1761,14 +1759,14 @@ class GetClusterNotificationsTargetsResponseItem(ProxmoxBaseModel):
 class GetClusterNotificationsTargetsResponse(RootModel[list[GetClusterNotificationsTargetsResponseItem]]):
     root: list[GetClusterNotificationsTargetsResponseItem] = Field(...)
 
-class PostClusterNotificationsTargetsNameTestRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostClusterNotificationsTargetsNameTestRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostClusterNotificationsTargetsNameTestResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterOptionsResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterOptionsResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterOptionsRequest(ProxmoxBaseModel):
     bwlimit: str | None = Field(None, description='Set I/O bandwidth limit for various operations (in KiB/s).')
@@ -1797,8 +1795,8 @@ class PutClusterOptionsRequest(ProxmoxBaseModel):
 class PutClusterOptionsResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterReplicationResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterReplicationResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostClusterReplicationRequest(ProxmoxBaseModel):
     comment: str | None = Field(None, description='Description.')
@@ -1821,8 +1819,8 @@ class DeleteClusterReplicationIdRequest(ProxmoxBaseModel):
 class DeleteClusterReplicationIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterReplicationIdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterReplicationIdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterReplicationIdRequest(ProxmoxBaseModel):
     comment: str | None = Field(None, description='Description.')
@@ -1904,14 +1902,14 @@ class PostClusterSdnControllersRequest(ProxmoxBaseModel):
 class PostClusterSdnControllersResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterSdnControllersControllerRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterSdnControllersControllerRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterSdnControllersControllerResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnControllersControllerResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterSdnControllersControllerResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterSdnControllersControllerRequest(ProxmoxBaseModel):
     asn: int | None = Field(None, description='autonomous system number')
@@ -1949,14 +1947,14 @@ class PostClusterSdnDnsRequest(ProxmoxBaseModel):
 class PostClusterSdnDnsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterSdnDnsDnsRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterSdnDnsDnsRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterSdnDnsDnsResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnDnsDnsResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterSdnDnsDnsResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterSdnDnsDnsRequest(ProxmoxBaseModel):
     delete: str | None = Field(None, description='A list of settings you want to delete.')
@@ -1986,14 +1984,14 @@ class PostClusterSdnIpamsRequest(ProxmoxBaseModel):
 class PostClusterSdnIpamsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterSdnIpamsIpamRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterSdnIpamsIpamRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterSdnIpamsIpamResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnIpamsIpamResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterSdnIpamsIpamResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterSdnIpamsIpamRequest(ProxmoxBaseModel):
     delete: str | None = Field(None, description='A list of settings you want to delete.')
@@ -2005,11 +2003,11 @@ class PutClusterSdnIpamsIpamRequest(ProxmoxBaseModel):
 class PutClusterSdnIpamsIpamResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnIpamsIpamStatusResponse(RootModel[list[Any]]):
-    root: list[Any] = Field(...)
+class GetClusterSdnIpamsIpamStatusResponse(RootModel[list[object]]):
+    root: list[object] = Field(...)
 
-class GetClusterSdnVnetsResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterSdnVnetsResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostClusterSdnVnetsRequest(ProxmoxBaseModel):
     alias: str | None = Field(None, description='alias name of the vnet')
@@ -2023,14 +2021,14 @@ class PostClusterSdnVnetsRequest(ProxmoxBaseModel):
 class PostClusterSdnVnetsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterSdnVnetsVnetRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterSdnVnetsVnetRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterSdnVnetsVnetResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnVnetsVnetResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterSdnVnetsVnetResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterSdnVnetsVnetRequest(ProxmoxBaseModel):
     alias: str | None = Field(None, description='alias name of the vnet')
@@ -2044,8 +2042,8 @@ class PutClusterSdnVnetsVnetRequest(ProxmoxBaseModel):
 class PutClusterSdnVnetsVnetResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnVnetsVnetFirewallResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterSdnVnetsVnetFirewallResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetClusterSdnVnetsVnetFirewallOptionsResponse(ProxmoxBaseModel):
     enable: bool | None = Field(None, description='Enable/disable firewall rules.')
@@ -2157,8 +2155,8 @@ class PutClusterSdnVnetsVnetIpsRequest(ProxmoxBaseModel):
 class PutClusterSdnVnetsVnetIpsResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnVnetsVnetSubnetsResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetClusterSdnVnetsVnetSubnetsResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostClusterSdnVnetsVnetSubnetsRequest(ProxmoxBaseModel):
     dhcp_dns_server: str | None = Field(None, alias="dhcp-dns-server", description='IP address for the DNS server')
@@ -2172,14 +2170,14 @@ class PostClusterSdnVnetsVnetSubnetsRequest(ProxmoxBaseModel):
 class PostClusterSdnVnetsVnetSubnetsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterSdnVnetsVnetSubnetsSubnetRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterSdnVnetsVnetSubnetsSubnetRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterSdnVnetsVnetSubnetsSubnetResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnVnetsVnetSubnetsSubnetResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterSdnVnetsVnetSubnetsSubnetResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterSdnVnetsVnetSubnetsSubnetRequest(ProxmoxBaseModel):
     delete: str | None = Field(None, description='A list of settings you want to delete.')
@@ -2239,14 +2237,14 @@ class PostClusterSdnZonesRequest(ProxmoxBaseModel):
 class PostClusterSdnZonesResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeleteClusterSdnZonesZoneRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteClusterSdnZonesZoneRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteClusterSdnZonesZoneResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterSdnZonesZoneResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetClusterSdnZonesZoneResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutClusterSdnZonesZoneRequest(ProxmoxBaseModel):
     advertise_subnets: bool | None = Field(None, alias="advertise-subnets", description='Advertise evpn subnets if you have silent hosts')
@@ -2314,11 +2312,11 @@ class GetNodesResponseItem(ProxmoxBaseModel):
 class GetNodesResponse(RootModel[list[GetNodesResponseItem]]):
     root: list[GetNodesResponseItem] = Field(...)
 
-class GetNodesNodeResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeAplinfoResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeAplinfoResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostNodesNodeAplinfoRequest(ProxmoxBaseModel):
     storage: str = Field(..., description='The storage where the template will be stored')
@@ -2338,10 +2336,10 @@ class GetNodesNodeAptChangelogResponse(RootModel[str]):
 
 class GetNodesNodeAptRepositoriesResponse(ProxmoxBaseModel):
     digest: str = Field(..., description='Common digest of all files.')
-    errors: list[dict[str, Any]] = Field(..., description='List of problematic repository files.')
-    files: list[dict[str, Any]] = Field(..., description='List of parsed repository files.')
-    infos: list[dict[str, Any]] = Field(..., description='Additional information/warnings for APT repositories.')
-    standard_repos: list[dict[str, Any]] = Field(..., alias="standard-repos", description='List of standard repositories and their configuration status')
+    errors: list[dict[str, object]] = Field(..., description='List of problematic repository files.')
+    files: list[dict[str, object]] = Field(..., description='List of parsed repository files.')
+    infos: list[dict[str, object]] = Field(..., description='Additional information/warnings for APT repositories.')
+    standard_repos: list[dict[str, object]] = Field(..., alias="standard-repos", description='List of standard repositories and their configuration status')
 
 class PostNodesNodeAptRepositoriesRequest(ProxmoxBaseModel):
     digest: str | None = Field(None, description='Digest to detect modifications.')
@@ -2359,8 +2357,8 @@ class PutNodesNodeAptRepositoriesRequest(ProxmoxBaseModel):
 class PutNodesNodeAptRepositoriesResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeAptUpdateResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeAptUpdateResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostNodesNodeAptUpdateRequest(ProxmoxBaseModel):
     notify: bool | None = Field(None, description='Send notification about new packages.')
@@ -2369,14 +2367,14 @@ class PostNodesNodeAptUpdateRequest(ProxmoxBaseModel):
 class PostNodesNodeAptUpdateResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeAptVersionsResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeAptVersionsResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeCapabilitiesResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCapabilitiesResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeCapabilitiesQemuResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCapabilitiesQemuResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeCapabilitiesQemuCpuResponseItem(ProxmoxBaseModel):
     custom: bool | None = Field(None, description='True if this is a custom CPU model.')
@@ -2394,11 +2392,11 @@ class GetNodesNodeCapabilitiesQemuMachinesResponseItem(ProxmoxBaseModel):
 class GetNodesNodeCapabilitiesQemuMachinesResponse(RootModel[list[GetNodesNodeCapabilitiesQemuMachinesResponseItem]]):
     root: list[GetNodesNodeCapabilitiesQemuMachinesResponseItem] = Field(...)
 
-class GetNodesNodeCephResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCephResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeCephCfgResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCephCfgResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeCephCfgDbResponseItem(ProxmoxBaseModel):
     can_update_at_runtime: bool | None = Field(None)
@@ -2414,8 +2412,8 @@ class GetNodesNodeCephCfgDbResponse(RootModel[list[GetNodesNodeCephCfgDbResponse
 class GetNodesNodeCephCfgRawResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeCephCfgValueResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeCephCfgValueResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class GetNodesNodeCephCmdSafetyResponse(ProxmoxBaseModel):
     safe: bool = Field(..., description='If it is safe to run the command.')
@@ -2460,7 +2458,7 @@ class GetNodesNodeCephLogResponse(RootModel[list[GetNodesNodeCephLogResponseItem
 class GetNodesNodeCephMdsResponseItem(ProxmoxBaseModel):
     addr: str | None = Field(None)
     host: str | None = Field(None)
-    name: Any | None = Field(None, description='The name (ID) for the MDS')
+    name: object | None = Field(None, description='The name (ID) for the MDS')
     rank: int | None = Field(None)
     standby_replay: bool | None = Field(None, description='If true, the standby MDS is polling the active MDS for faster recovery (hot standby).')
     state: str | None = Field(None, description='State of the MDS')
@@ -2468,8 +2466,8 @@ class GetNodesNodeCephMdsResponseItem(ProxmoxBaseModel):
 class GetNodesNodeCephMdsResponse(RootModel[list[GetNodesNodeCephMdsResponseItem]]):
     root: list[GetNodesNodeCephMdsResponseItem] = Field(...)
 
-class DeleteNodesNodeCephMdsNameRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeCephMdsNameRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeCephMdsNameResponse(RootModel[str]):
     root: str = Field(...)
@@ -2483,20 +2481,20 @@ class PostNodesNodeCephMdsNameResponse(RootModel[str]):
 class GetNodesNodeCephMgrResponseItem(ProxmoxBaseModel):
     addr: str | None = Field(None)
     host: str | None = Field(None)
-    name: Any | None = Field(None, description='The name (ID) for the MGR')
+    name: object | None = Field(None, description='The name (ID) for the MGR')
     state: str | None = Field(None, description='State of the MGR')
 
 class GetNodesNodeCephMgrResponse(RootModel[list[GetNodesNodeCephMgrResponseItem]]):
     root: list[GetNodesNodeCephMgrResponseItem] = Field(...)
 
-class DeleteNodesNodeCephMgrIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeCephMgrIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeCephMgrIdResponse(RootModel[str]):
     root: str = Field(...)
 
-class PostNodesNodeCephMgrIdRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeCephMgrIdRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeCephMgrIdResponse(RootModel[str]):
     root: str = Field(...)
@@ -2516,8 +2514,8 @@ class GetNodesNodeCephMonResponseItem(ProxmoxBaseModel):
 class GetNodesNodeCephMonResponse(RootModel[list[GetNodesNodeCephMonResponseItem]]):
     root: list[GetNodesNodeCephMonResponseItem] = Field(...)
 
-class DeleteNodesNodeCephMonMonidRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeCephMonMonidRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeCephMonMonidResponse(RootModel[str]):
     root: str = Field(...)
@@ -2528,8 +2526,8 @@ class PostNodesNodeCephMonMonidRequest(ProxmoxBaseModel):
 class PostNodesNodeCephMonMonidResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeCephOsdResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeCephOsdResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeCephOsdRequest(ProxmoxBaseModel):
     crush_device_class: str | None = Field(None, alias="crush-device-class", description='Set the device class of the OSD in crush.')
@@ -2550,11 +2548,11 @@ class DeleteNodesNodeCephOsdOsdidRequest(ProxmoxBaseModel):
 class DeleteNodesNodeCephOsdOsdidResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeCephOsdOsdidResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCephOsdOsdidResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class PostNodesNodeCephOsdOsdidInRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeCephOsdOsdidInRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeCephOsdOsdidInResponse(RootModel[None]):
     root: None = Field(...)
@@ -2568,11 +2566,11 @@ class GetNodesNodeCephOsdOsdidLvInfoResponse(ProxmoxBaseModel):
     vg_name: str = Field(..., description='Name of the volume group (VG).')
 
 class GetNodesNodeCephOsdOsdidMetadataResponse(ProxmoxBaseModel):
-    devices: list[dict[str, Any]] = Field(..., description='Array containing data about devices')
-    osd: dict[str, Any] = Field(..., description='General information about the OSD')
+    devices: list[dict[str, object]] = Field(..., description='Array containing data about devices')
+    osd: dict[str, object] = Field(..., description='General information about the OSD')
 
-class PostNodesNodeCephOsdOsdidOutRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeCephOsdOsdidOutRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeCephOsdOsdidOutResponse(RootModel[None]):
     root: None = Field(...)
@@ -2584,8 +2582,8 @@ class PostNodesNodeCephOsdOsdidScrubResponse(RootModel[None]):
     root: None = Field(...)
 
 class GetNodesNodeCephPoolResponseItem(ProxmoxBaseModel):
-    application_metadata: dict[str, Any] | None = Field(None)
-    autoscale_status: dict[str, Any] | None = Field(None)
+    application_metadata: dict[str, object] | None = Field(None)
+    autoscale_status: dict[str, object] | None = Field(None)
     bytes_used: int | None = Field(None)
     crush_rule: int | None = Field(None)
     crush_rule_name: str | None = Field(None)
@@ -2630,8 +2628,8 @@ class DeleteNodesNodeCephPoolNameRequest(ProxmoxBaseModel):
 class DeleteNodesNodeCephPoolNameResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeCephPoolNameResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCephPoolNameResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PutNodesNodeCephPoolNameRequest(ProxmoxBaseModel):
     application: str | None = Field(None, description='The application of the pool.')
@@ -2649,8 +2647,8 @@ class PutNodesNodeCephPoolNameResponse(RootModel[str]):
 
 class GetNodesNodeCephPoolNameStatusResponse(ProxmoxBaseModel):
     application: str | None = Field(None, description='The application of the pool.')
-    application_list: list[Any] | None = Field(None)
-    autoscale_status: dict[str, Any] | None = Field(None)
+    application_list: list[object] | None = Field(None)
+    autoscale_status: dict[str, object] | None = Field(None)
     crush_rule: str | None = Field(None, description='The rule to use for mapping object placement in the cluster.')
     fast_read: bool = Field(...)
     hashpspool: bool = Field(...)
@@ -2667,7 +2665,7 @@ class GetNodesNodeCephPoolNameStatusResponse(ProxmoxBaseModel):
     pg_num_min: int | None = Field(None, description='Minimal number of placement groups.')
     pgp_num: int = Field(...)
     size: int | None = Field(None, description='Number of replicas per object')
-    statistics: dict[str, Any] | None = Field(None)
+    statistics: dict[str, object] | None = Field(None)
     target_size: str | None = Field(None, description='The estimated target size of the pool for the PG autoscaler.')
     target_size_ratio: float | None = Field(None, description='The estimated target ratio of the pool for the PG autoscaler.')
     use_gmt_hitset: bool = Field(...)
@@ -2691,8 +2689,8 @@ class PostNodesNodeCephStartRequest(ProxmoxBaseModel):
 class PostNodesNodeCephStartResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeCephStatusResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeCephStatusResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeCephStopRequest(ProxmoxBaseModel):
     service: str | None = Field(None, description='Ceph service name.')
@@ -2700,14 +2698,14 @@ class PostNodesNodeCephStopRequest(ProxmoxBaseModel):
 class PostNodesNodeCephStopResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeCertificatesResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCertificatesResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeCertificatesAcmeResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeCertificatesAcmeResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class DeleteNodesNodeCertificatesAcmeCertificateRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeCertificatesAcmeCertificateRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeCertificatesAcmeCertificateResponse(RootModel[str]):
     root: str = Field(...)
@@ -2783,8 +2781,8 @@ class PutNodesNodeConfigRequest(ProxmoxBaseModel):
 class PutNodesNodeConfigResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeDisksResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeDisksResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeDisksDirectoryResponseItem(ProxmoxBaseModel):
     device: str | None = Field(None, description='The mounted device.')
@@ -2838,7 +2836,7 @@ class GetNodesNodeDisksListResponse(RootModel[list[GetNodesNodeDisksListResponse
     root: list[GetNodesNodeDisksListResponseItem] = Field(...)
 
 class GetNodesNodeDisksLvmResponse(ProxmoxBaseModel):
-    children: list[dict[str, Any]] = Field(...)
+    children: list[dict[str, object]] = Field(...)
     leaf: bool = Field(...)
 
 class PostNodesNodeDisksLvmRequest(ProxmoxBaseModel):
@@ -2884,7 +2882,7 @@ class DeleteNodesNodeDisksLvmthinNameResponse(RootModel[str]):
     root: str = Field(...)
 
 class GetNodesNodeDisksSmartResponse(ProxmoxBaseModel):
-    attributes: list[Any] | None = Field(None)
+    attributes: list[object] | None = Field(None)
     health: str = Field(...)
     text: str | None = Field(None)
     type: str | None = Field(None)
@@ -2928,7 +2926,7 @@ class DeleteNodesNodeDisksZfsNameResponse(RootModel[str]):
 
 class GetNodesNodeDisksZfsNameResponse(ProxmoxBaseModel):
     action: str | None = Field(None, description='Information about the recommended action to fix the state.')
-    children: list[dict[str, Any]] = Field(..., description='The pool configuration information, including the vdevs for each section (e.g. spares, cache), may be nested.')
+    children: list[dict[str, object]] = Field(..., description='The pool configuration information, including the vdevs for each section (e.g. spares, cache), may be nested.')
     errors: str = Field(..., description='Information about the errors on the zpool.')
     name: str = Field(..., description='The name of the zpool.')
     scan: str | None = Field(None, description='Information about the last/current scrub.')
@@ -2953,11 +2951,11 @@ class PutNodesNodeDnsResponse(RootModel[None]):
 class PostNodesNodeExecuteRequest(ProxmoxBaseModel):
     commands: str = Field(..., description='JSON encoded array of commands.')
 
-class PostNodesNodeExecuteResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class PostNodesNodeExecuteResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeFirewallResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeFirewallResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeFirewallLogResponseItem(ProxmoxBaseModel):
     n: int | None = Field(None, description='Line number')
@@ -3323,8 +3321,8 @@ class PutNodesNodeLxcVmidConfigResponse(RootModel[None]):
 class GetNodesNodeLxcVmidFeatureResponse(ProxmoxBaseModel):
     has_feature: bool = Field(..., alias="hasFeature")
 
-class GetNodesNodeLxcVmidFirewallResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeLxcVmidFirewallResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeLxcVmidFirewallAliasesResponseItem(ProxmoxBaseModel):
     cidr: str | None = Field(None)
@@ -3349,8 +3347,8 @@ class DeleteNodesNodeLxcVmidFirewallAliasesNameRequest(ProxmoxBaseModel):
 class DeleteNodesNodeLxcVmidFirewallAliasesNameResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeLxcVmidFirewallAliasesNameResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeLxcVmidFirewallAliasesNameResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeLxcVmidFirewallAliasesNameRequest(ProxmoxBaseModel):
     cidr: str = Field(..., description='Network/IP specification in CIDR format.')
@@ -3407,8 +3405,8 @@ class DeleteNodesNodeLxcVmidFirewallIpsetNameCidrRequest(ProxmoxBaseModel):
 class DeleteNodesNodeLxcVmidFirewallIpsetNameCidrResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeLxcVmidFirewallIpsetNameCidrResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeLxcVmidFirewallIpsetNameCidrResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeLxcVmidFirewallIpsetNameCidrRequest(ProxmoxBaseModel):
     comment: str | None = Field(None)
@@ -3614,8 +3612,8 @@ class PutNodesNodeLxcVmidResizeResponse(RootModel[str]):
 class GetNodesNodeLxcVmidRrdResponse(ProxmoxBaseModel):
     filename: str = Field(...)
 
-class GetNodesNodeLxcVmidRrddataResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeLxcVmidRrddataResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeLxcVmidSnapshotResponseItem(ProxmoxBaseModel):
     description: str | None = Field(None, description='Snapshot description.')
@@ -3639,11 +3637,11 @@ class DeleteNodesNodeLxcVmidSnapshotSnapnameRequest(ProxmoxBaseModel):
 class DeleteNodesNodeLxcVmidSnapshotSnapnameResponse(RootModel[str]):
     root: str = Field(..., description='the task ID.')
 
-class GetNodesNodeLxcVmidSnapshotSnapnameResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeLxcVmidSnapshotSnapnameResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeLxcVmidSnapshotSnapnameConfigResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeLxcVmidSnapshotSnapnameConfigResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeLxcVmidSnapshotSnapnameConfigRequest(ProxmoxBaseModel):
     description: str | None = Field(None, description='A textual description or comment.')
@@ -3678,7 +3676,7 @@ class GetNodesNodeLxcVmidStatusCurrentResponse(ProxmoxBaseModel):
     disk: int | None = Field(None, description='Root disk image space-usage in bytes.')
     diskread: int | None = Field(None, description="The amount of bytes the guest read from it's block devices since the guest was started. (Note: This info is not available for all storage types.)")
     diskwrite: int | None = Field(None, description="The amount of bytes the guest wrote from it's block devices since the guest was started. (Note: This info is not available for all storage types.)")
-    ha: dict[str, Any] = Field(..., description='HA manager service status.')
+    ha: dict[str, object] = Field(..., description='HA manager service status.')
     lock: str | None = Field(None, description='The current config lock, if any.')
     maxdisk: int | None = Field(None, description='Root disk image size in bytes.')
     maxmem: int | None = Field(None, description='Maximum memory in bytes.')
@@ -3698,8 +3696,8 @@ class PostNodesNodeLxcVmidStatusRebootRequest(ProxmoxBaseModel):
 class PostNodesNodeLxcVmidStatusRebootResponse(RootModel[str]):
     root: str = Field(...)
 
-class PostNodesNodeLxcVmidStatusResumeRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeLxcVmidStatusResumeRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeLxcVmidStatusResumeResponse(RootModel[str]):
     root: str = Field(...)
@@ -3725,20 +3723,20 @@ class PostNodesNodeLxcVmidStatusStopRequest(ProxmoxBaseModel):
 class PostNodesNodeLxcVmidStatusStopResponse(RootModel[str]):
     root: str = Field(...)
 
-class PostNodesNodeLxcVmidStatusSuspendRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeLxcVmidStatusSuspendRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeLxcVmidStatusSuspendResponse(RootModel[str]):
     root: str = Field(...)
 
-class PostNodesNodeLxcVmidTemplateRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeLxcVmidTemplateRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeLxcVmidTemplateResponse(RootModel[None]):
     root: None = Field(...)
 
-class PostNodesNodeLxcVmidTermproxyRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeLxcVmidTermproxyRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeLxcVmidTermproxyResponse(ProxmoxBaseModel):
     port: int = Field(...)
@@ -3770,17 +3768,17 @@ class PostNodesNodeMigrateallRequest(ProxmoxBaseModel):
 class PostNodesNodeMigrateallResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeNetstatResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeNetstatResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class DeleteNodesNodeNetworkRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeNetworkRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeNetworkResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeNetworkResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeNetworkResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PostNodesNodeNetworkRequest(ProxmoxBaseModel):
     address: str | None = Field(None, description='IP address.')
@@ -3815,14 +3813,14 @@ class PostNodesNodeNetworkRequest(ProxmoxBaseModel):
 class PostNodesNodeNetworkResponse(RootModel[None]):
     root: None = Field(...)
 
-class PutNodesNodeNetworkRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PutNodesNodeNetworkRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeNetworkResponse(RootModel[str]):
     root: str = Field(...)
 
-class DeleteNodesNodeNetworkIfaceRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeNetworkIfaceRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeNetworkIfaceResponse(RootModel[None]):
     root: None = Field(...)
@@ -3994,17 +3992,17 @@ class GetNodesNodeQemuVmidResponseItem(ProxmoxBaseModel):
 class GetNodesNodeQemuVmidResponse(RootModel[list[GetNodesNodeQemuVmidResponseItem]]):
     root: list[GetNodesNodeQemuVmidResponseItem] = Field(...)
 
-class GetNodesNodeQemuVmidAgentResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(..., description='Returns the list of QEMU Guest Agent commands')
+class GetNodesNodeQemuVmidAgentResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(..., description='Returns the list of QEMU Guest Agent commands')
 
 class PostNodesNodeQemuVmidAgentRequest(ProxmoxBaseModel):
     command: str = Field(..., description='The QGA command.')
 
-class PostNodesNodeQemuVmidAgentResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeQemuVmidAgentExecRequest(ProxmoxBaseModel):
-    command: list[Any] = Field(..., description='The command as a list of program + arguments.')
+    command: list[object] = Field(..., description='The command as a list of program + arguments.')
     input_data: str | None = Field(None, alias="input-data", description="Data to pass as 'input-data' to the guest. Usually treated as STDIN to 'command'.")
 
 class PostNodesNodeQemuVmidAgentExecResponse(ProxmoxBaseModel):
@@ -4031,100 +4029,100 @@ class PostNodesNodeQemuVmidAgentFileWriteRequest(ProxmoxBaseModel):
 class PostNodesNodeQemuVmidAgentFileWriteResponse(RootModel[None]):
     root: None = Field(...)
 
-class PostNodesNodeQemuVmidAgentFsfreezeFreezeRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFsfreezeFreezeRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentFsfreezeFreezeResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFsfreezeFreezeResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentFsfreezeStatusRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFsfreezeStatusRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentFsfreezeStatusResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFsfreezeStatusResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentFsfreezeThawRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFsfreezeThawRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentFsfreezeThawResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFsfreezeThawResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentFstrimRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFstrimRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentFstrimResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentFstrimResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetFsinfoResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetFsinfoResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetHostNameResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetHostNameResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetMemoryBlockInfoResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetMemoryBlockInfoResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetMemoryBlocksResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetMemoryBlocksResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetOsinfoResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetOsinfoResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetTimeResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetTimeResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetTimezoneResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetTimezoneResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetUsersResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetUsersResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentGetVcpusResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentGetVcpusResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentInfoResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentInfoResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class GetNodesNodeQemuVmidAgentNetworkGetInterfacesResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidAgentNetworkGetInterfacesResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentPingRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentPingRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentPingResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentPingResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeQemuVmidAgentSetUserPasswordRequest(ProxmoxBaseModel):
     crypted: bool | None = Field(None, description='set to 1 if the password has already been passed through crypt()')
     password: str = Field(..., description='The new password.')
     username: str = Field(..., description='The user to set the password for.')
 
-class PostNodesNodeQemuVmidAgentSetUserPasswordResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentSetUserPasswordResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentShutdownRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentShutdownRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentShutdownResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentShutdownResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentSuspendDiskRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentSuspendDiskRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentSuspendDiskResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentSuspendDiskResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentSuspendHybridRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentSuspendHybridRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentSuspendHybridResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentSuspendHybridResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentSuspendRamRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentSuspendRamRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeQemuVmidAgentSuspendRamResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeQemuVmidAgentSuspendRamResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeQemuVmidCloneRequest(ProxmoxBaseModel):
     bwlimit: int | None = Field(None, description='Override I/O bandwidth limit (in KiB/s).')
@@ -4150,8 +4148,8 @@ class GetNodesNodeQemuVmidCloudinitResponseItem(ProxmoxBaseModel):
 class GetNodesNodeQemuVmidCloudinitResponse(RootModel[list[GetNodesNodeQemuVmidCloudinitResponseItem]]):
     root: list[GetNodesNodeQemuVmidCloudinitResponseItem] = Field(...)
 
-class PutNodesNodeQemuVmidCloudinitRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PutNodesNodeQemuVmidCloudinitRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeQemuVmidCloudinitResponse(RootModel[None]):
     root: None = Field(...)
@@ -4422,8 +4420,8 @@ class GetNodesNodeQemuVmidFeatureResponse(ProxmoxBaseModel):
     has_feature: bool = Field(..., alias="hasFeature")
     nodes: list[str] = Field(...)
 
-class GetNodesNodeQemuVmidFirewallResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeQemuVmidFirewallResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeQemuVmidFirewallAliasesResponseItem(ProxmoxBaseModel):
     cidr: str | None = Field(None)
@@ -4448,8 +4446,8 @@ class DeleteNodesNodeQemuVmidFirewallAliasesNameRequest(ProxmoxBaseModel):
 class DeleteNodesNodeQemuVmidFirewallAliasesNameResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeQemuVmidFirewallAliasesNameResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidFirewallAliasesNameResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeQemuVmidFirewallAliasesNameRequest(ProxmoxBaseModel):
     cidr: str = Field(..., description='Network/IP specification in CIDR format.')
@@ -4506,8 +4504,8 @@ class DeleteNodesNodeQemuVmidFirewallIpsetNameCidrRequest(ProxmoxBaseModel):
 class DeleteNodesNodeQemuVmidFirewallIpsetNameCidrResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeQemuVmidFirewallIpsetNameCidrResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidFirewallIpsetNameCidrResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeQemuVmidFirewallIpsetNameCidrRequest(ProxmoxBaseModel):
     comment: str | None = Field(None)
@@ -4634,11 +4632,11 @@ class PutNodesNodeQemuVmidFirewallRulesPosResponse(RootModel[None]):
     root: None = Field(...)
 
 class GetNodesNodeQemuVmidMigrateResponse(ProxmoxBaseModel):
-    allowed_nodes: list[Any] | None = Field(None, description='List nodes allowed for offline migration, only passed if VM is offline')
-    local_disks: list[Any] = Field(..., description='List local disks including CD-Rom, unused and not referenced disks')
-    local_resources: list[Any] = Field(..., description='List local resources e.g. pci, usb')
-    mapped_resources: list[Any] = Field(..., alias="mapped-resources", description='List of mapped resources e.g. pci, usb')
-    not_allowed_nodes: dict[str, Any] | None = Field(None, description='List not allowed nodes with additional information, only passed if VM is offline')
+    allowed_nodes: list[object] | None = Field(None, description='List nodes allowed for offline migration, only passed if VM is offline')
+    local_disks: list[object] = Field(..., description='List local disks including CD-Rom, unused and not referenced disks')
+    local_resources: list[object] = Field(..., description='List local resources e.g. pci, usb')
+    mapped_resources: list[object] = Field(..., alias="mapped-resources", description='List of mapped resources e.g. pci, usb')
+    not_allowed_nodes: dict[str, object] | None = Field(None, description='List not allowed nodes with additional information, only passed if VM is offline')
     running: bool = Field(...)
 
 class PostNodesNodeQemuVmidMigrateRequest(ProxmoxBaseModel):
@@ -4720,8 +4718,8 @@ class PutNodesNodeQemuVmidResizeResponse(RootModel[str]):
 class GetNodesNodeQemuVmidRrdResponse(ProxmoxBaseModel):
     filename: str = Field(...)
 
-class GetNodesNodeQemuVmidRrddataResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeQemuVmidRrddataResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class PutNodesNodeQemuVmidSendkeyRequest(ProxmoxBaseModel):
     key: str = Field(..., description='The key (qemu monitor encoding).')
@@ -4754,11 +4752,11 @@ class DeleteNodesNodeQemuVmidSnapshotSnapnameRequest(ProxmoxBaseModel):
 class DeleteNodesNodeQemuVmidSnapshotSnapnameResponse(RootModel[str]):
     root: str = Field(..., description='the task ID.')
 
-class GetNodesNodeQemuVmidSnapshotSnapnameResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeQemuVmidSnapshotSnapnameResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeQemuVmidSnapshotSnapnameConfigResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeQemuVmidSnapshotSnapnameConfigResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutNodesNodeQemuVmidSnapshotSnapnameConfigRequest(ProxmoxBaseModel):
     description: str | None = Field(None, description='A textual description or comment.')
@@ -4794,7 +4792,7 @@ class GetNodesNodeQemuVmidStatusCurrentResponse(ProxmoxBaseModel):
     cpus: float | None = Field(None, description='Maximum usable CPUs.')
     diskread: int | None = Field(None, description="The amount of bytes the guest read from it's block devices since the guest was started. (Note: This info is not available for all storage types.)")
     diskwrite: int | None = Field(None, description="The amount of bytes the guest wrote from it's block devices since the guest was started. (Note: This info is not available for all storage types.)")
-    ha: dict[str, Any] = Field(..., description='HA manager service status.')
+    ha: dict[str, object] = Field(..., description='HA manager service status.')
     lock: str | None = Field(None, description='The current config lock, if any.')
     maxdisk: int | None = Field(None, description='Root disk size in bytes.')
     maxmem: int | None = Field(None, description='Maximum memory in bytes.')
@@ -4920,8 +4918,8 @@ class GetNodesNodeReplicationResponseItem(ProxmoxBaseModel):
 class GetNodesNodeReplicationResponse(RootModel[list[GetNodesNodeReplicationResponseItem]]):
     root: list[GetNodesNodeReplicationResponseItem] = Field(...)
 
-class GetNodesNodeReplicationIdResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeReplicationIdResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeReplicationIdLogResponseItem(ProxmoxBaseModel):
     n: int | None = Field(None, description='Line number')
@@ -4930,14 +4928,14 @@ class GetNodesNodeReplicationIdLogResponseItem(ProxmoxBaseModel):
 class GetNodesNodeReplicationIdLogResponse(RootModel[list[GetNodesNodeReplicationIdLogResponseItem]]):
     root: list[GetNodesNodeReplicationIdLogResponseItem] = Field(...)
 
-class PostNodesNodeReplicationIdScheduleNowRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeReplicationIdScheduleNowRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeReplicationIdScheduleNowResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeReplicationIdStatusResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeReplicationIdStatusResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class GetNodesNodeReportResponse(RootModel[str]):
     root: str = Field(...)
@@ -4945,8 +4943,8 @@ class GetNodesNodeReportResponse(RootModel[str]):
 class GetNodesNodeRrdResponse(ProxmoxBaseModel):
     filename: str = Field(...)
 
-class GetNodesNodeRrddataResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeRrddataResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeScanResponseItem(ProxmoxBaseModel):
     method: str | None = Field(None)
@@ -5006,8 +5004,8 @@ class GetNodesNodeScanZfsResponseItem(ProxmoxBaseModel):
 class GetNodesNodeScanZfsResponse(RootModel[list[GetNodesNodeScanZfsResponseItem]]):
     root: list[GetNodesNodeScanZfsResponseItem] = Field(...)
 
-class GetNodesNodeSdnResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeSdnResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeSdnZonesResponseItem(ProxmoxBaseModel):
     status: str | None = Field(None, description='Status of zone')
@@ -5030,8 +5028,8 @@ class GetNodesNodeSdnZonesZoneContentResponseItem(ProxmoxBaseModel):
 class GetNodesNodeSdnZonesZoneContentResponse(RootModel[list[GetNodesNodeSdnZonesZoneContentResponseItem]]):
     root: list[GetNodesNodeSdnZonesZoneContentResponseItem] = Field(...)
 
-class GetNodesNodeServicesResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeServicesResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeServicesServiceResponseItem(ProxmoxBaseModel):
     subdir: str | None = Field(None)
@@ -5039,29 +5037,29 @@ class GetNodesNodeServicesServiceResponseItem(ProxmoxBaseModel):
 class GetNodesNodeServicesServiceResponse(RootModel[list[GetNodesNodeServicesServiceResponseItem]]):
     root: list[GetNodesNodeServicesServiceResponseItem] = Field(...)
 
-class PostNodesNodeServicesServiceReloadRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeServicesServiceReloadRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeServicesServiceReloadResponse(RootModel[str]):
     root: str = Field(...)
 
-class PostNodesNodeServicesServiceRestartRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeServicesServiceRestartRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeServicesServiceRestartResponse(RootModel[str]):
     root: str = Field(...)
 
-class PostNodesNodeServicesServiceStartRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeServicesServiceStartRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeServicesServiceStartResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeServicesServiceStateResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeServicesServiceStateResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
-class PostNodesNodeServicesServiceStopRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeServicesServiceStopRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeServicesServiceStopResponse(RootModel[str]):
     root: str = Field(...)
@@ -5086,8 +5084,8 @@ class PostNodesNodeStartallResponse(RootModel[str]):
     root: str = Field(...)
 
 class GetNodesNodeStatusResponse(ProxmoxBaseModel):
-    boot_info: dict[str, Any] = Field(..., alias="boot-info", description='Meta-information about the boot mode.')
-    current_kernel: dict[str, Any] = Field(..., alias="current-kernel", description='Meta-information about the currently booted kernel of this node.')
+    boot_info: dict[str, object] = Field(..., alias="boot-info", description='Meta-information about the boot mode.')
+    current_kernel: dict[str, object] = Field(..., alias="current-kernel", description='Meta-information about the currently booted kernel of this node.')
 
 class PostNodesNodeStatusRequest(ProxmoxBaseModel):
     command: str = Field(..., description='Specify the command.')
@@ -5133,7 +5131,7 @@ class GetNodesNodeStorageStorageContentResponseItem(ProxmoxBaseModel):
     protected: bool | None = Field(None, description='Protection status. Currently only supported for backups.')
     size: int | None = Field(None, description='Volume size in bytes.')
     used: int | None = Field(None, description='Used space. Please note that most storage plugins do not report anything useful here.')
-    verification: dict[str, Any] | None = Field(None, description='Last backup verification result, only useful for PBS storages.')
+    verification: dict[str, object] | None = Field(None, description='Last backup verification result, only useful for PBS storages.')
     vmid: int | None = Field(None, description='Associated Owner VMID.')
     volid: str | None = Field(None, description='Volume identifier.')
 
@@ -5189,8 +5187,8 @@ class PostNodesNodeStorageStorageDownloadUrlRequest(ProxmoxBaseModel):
 class PostNodesNodeStorageStorageDownloadUrlResponse(RootModel[str]):
     root: str = Field(...)
 
-class GetNodesNodeStorageStorageFileRestoreDownloadResponse(RootModel[Any]):
-    root: Any = Field(...)
+class GetNodesNodeStorageStorageFileRestoreDownloadResponse(RootModel[object]):
+    root: object = Field(...)
 
 class GetNodesNodeStorageStorageFileRestoreListResponseItem(ProxmoxBaseModel):
     filepath: str | None = Field(None, description='base64 path of the current entry')
@@ -5204,12 +5202,12 @@ class GetNodesNodeStorageStorageFileRestoreListResponse(RootModel[list[GetNodesN
     root: list[GetNodesNodeStorageStorageFileRestoreListResponseItem] = Field(...)
 
 class GetNodesNodeStorageStorageImportMetadataResponse(ProxmoxBaseModel):
-    create_args: dict[str, Any] = Field(..., alias="create-args", description='Parameters which can be used in a call to create a VM or container.')
-    disks: dict[str, Any] | None = Field(None, description='Recognised disk volumes as `$bus$id` => `$storeid:$path` map.')
-    net: dict[str, Any] | None = Field(None, description='Recognised network interfaces as `net$id` => { ...params } object.')
+    create_args: dict[str, object] = Field(..., alias="create-args", description='Parameters which can be used in a call to create a VM or container.')
+    disks: dict[str, object] | None = Field(None, description='Recognised disk volumes as `$bus$id` => `$storeid:$path` map.')
+    net: dict[str, object] | None = Field(None, description='Recognised network interfaces as `net$id` => { ...params } object.')
     source: str = Field(..., description='The type of the import-source of this guest volume.')
     type: str = Field(..., description='The type of guest this is going to produce.')
-    warnings: list[dict[str, Any]] | None = Field(None, description='List of known issues that can affect the import of a guest. Note that lack of warning does not imply that there cannot be any problems.')
+    warnings: list[dict[str, object]] | None = Field(None, description='List of known issues that can affect the import of a guest. Note that lack of warning does not imply that there cannot be any problems.')
 
 class DeleteNodesNodeStorageStoragePrunebackupsRequest(ProxmoxBaseModel):
     prune_backups: str | None = Field(None, alias="prune-backups", description='Use these retention options instead of those from the storage configuration.')
@@ -5232,11 +5230,11 @@ class GetNodesNodeStorageStoragePrunebackupsResponse(RootModel[list[GetNodesNode
 class GetNodesNodeStorageStorageRrdResponse(ProxmoxBaseModel):
     filename: str = Field(...)
 
-class GetNodesNodeStorageStorageRrddataResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeStorageStorageRrddataResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
-class GetNodesNodeStorageStorageStatusResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetNodesNodeStorageStorageStatusResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeStorageStorageUploadRequest(ProxmoxBaseModel):
     checksum: str | None = Field(None, description='The expected checksum of the file.')
@@ -5248,8 +5246,8 @@ class PostNodesNodeStorageStorageUploadRequest(ProxmoxBaseModel):
 class PostNodesNodeStorageStorageUploadResponse(RootModel[str]):
     root: str = Field(...)
 
-class DeleteNodesNodeSubscriptionRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeSubscriptionRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeSubscriptionResponse(RootModel[None]):
     root: None = Field(...)
@@ -5308,14 +5306,14 @@ class GetNodesNodeTasksResponseItem(ProxmoxBaseModel):
 class GetNodesNodeTasksResponse(RootModel[list[GetNodesNodeTasksResponseItem]]):
     root: list[GetNodesNodeTasksResponseItem] = Field(...)
 
-class DeleteNodesNodeTasksUpidRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteNodesNodeTasksUpidRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteNodesNodeTasksUpidResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetNodesNodeTasksUpidResponse(RootModel[list[dict[str, Any]]]):
-    root: list[dict[str, Any]] = Field(...)
+class GetNodesNodeTasksUpidResponse(RootModel[list[dict[str, object]]]):
+    root: list[dict[str, object]] = Field(...)
 
 class GetNodesNodeTasksUpidLogResponseItem(ProxmoxBaseModel):
     n: int | None = Field(None, description='Line number')
@@ -5458,8 +5456,8 @@ class GetNodesNodeVzdumpDefaultsResponse(ProxmoxBaseModel):
 class GetNodesNodeVzdumpExtractconfigResponse(RootModel[str]):
     root: str = Field(...)
 
-class PostNodesNodeWakeonlanRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class PostNodesNodeWakeonlanRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PostNodesNodeWakeonlanResponse(RootModel[str]):
     root: str = Field(..., description='MAC address used to assemble the WoL magic packet.')
@@ -5472,7 +5470,7 @@ class DeletePoolsResponse(RootModel[None]):
 
 class GetPoolsResponseItem(ProxmoxBaseModel):
     comment: str | None = Field(None)
-    members: list[dict[str, Any]] | None = Field(None)
+    members: list[dict[str, object]] | None = Field(None)
     poolid: str | None = Field(None)
 
 class GetPoolsResponse(RootModel[list[GetPoolsResponseItem]]):
@@ -5496,15 +5494,15 @@ class PutPoolsRequest(ProxmoxBaseModel):
 class PutPoolsResponse(RootModel[None]):
     root: None = Field(...)
 
-class DeletePoolsPoolidRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeletePoolsPoolidRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeletePoolsPoolidResponse(RootModel[None]):
     root: None = Field(...)
 
 class GetPoolsPoolidResponse(ProxmoxBaseModel):
     comment: str | None = Field(None)
-    members: list[dict[str, Any]] = Field(...)
+    members: list[dict[str, object]] = Field(...)
 
 class PutPoolsPoolidRequest(ProxmoxBaseModel):
     allow_move: bool | None = Field(None, alias="allow-move", description='Allow adding a guest even if already in another pool. The guest will be removed from its current pool and added to this one.')
@@ -5587,18 +5585,18 @@ class PostStorageRequest(ProxmoxBaseModel):
     volume: str | None = Field(None, description='Glusterfs Volume.')
 
 class PostStorageResponse(ProxmoxBaseModel):
-    config: dict[str, Any] | None = Field(None, description='Partial, possible server generated, configuration properties.')
+    config: dict[str, object] | None = Field(None, description='Partial, possible server generated, configuration properties.')
     storage: str = Field(..., description='The ID of the created storage.')
     type: str = Field(..., description='The type of the created storage.')
 
-class DeleteStorageStorageRequest(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class DeleteStorageStorageRequest(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class DeleteStorageStorageResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetStorageStorageResponse(RootModel[dict[str, Any]]):
-    root: dict[str, Any] = Field(...)
+class GetStorageStorageResponse(RootModel[dict[str, object]]):
+    root: dict[str, object] = Field(...)
 
 class PutStorageStorageRequest(ProxmoxBaseModel):
     blocksize: str | None = Field(None, description='block size')
@@ -5653,7 +5651,7 @@ class PutStorageStorageRequest(ProxmoxBaseModel):
     username: str | None = Field(None, description='RBD Id.')
 
 class PutStorageStorageResponse(ProxmoxBaseModel):
-    config: dict[str, Any] | None = Field(None, description='Partial, possible server generated, configuration properties.')
+    config: dict[str, object] | None = Field(None, description='Partial, possible server generated, configuration properties.')
     storage: str = Field(..., description='The ID of the created storage.')
     type: str = Field(..., description='The type of the created storage.')
 

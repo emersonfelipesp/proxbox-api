@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends
 from netbox_sdk.client import NetBoxApiClient
@@ -53,7 +53,10 @@ def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     return Api(client=NetBoxApiClient(cfg))
 
 
-def get_netbox_session(database_session: DatabaseSessionDep) -> Any:
+NetBoxClient = Api | SyncProxy
+
+
+def get_netbox_session(database_session: DatabaseSessionDep) -> NetBoxClient:
     """
     Get NetBox API parameters from database and establish a netbox-sdk API session.
     """
@@ -101,11 +104,11 @@ def get_netbox_async_session(database_session: DatabaseSessionDep) -> Api:
         )
 
 
-NetBoxSessionDep = Annotated[Any, Depends(get_netbox_session)]
-NetBoxAsyncSessionDep = Annotated[Any, Depends(get_netbox_async_session)]
+NetBoxSessionDep = Annotated[NetBoxClient, Depends(get_netbox_session)]
+NetBoxAsyncSessionDep = Annotated[Api, Depends(get_netbox_async_session)]
 
 
-async def check_netbox_connection(nb: Any) -> dict[str, Any]:
+async def check_netbox_connection(nb: NetBoxClient) -> dict[str, object]:
     """
     Check NetBox connectivity and return status information.
 
@@ -125,7 +128,7 @@ async def check_netbox_connection(nb: Any) -> dict[str, Any]:
     except ProxboxException as e:
         return {
             "available": False,
-            "url": getattr(nb, "config", {}).get("base_url", "unknown"),
+            "url": getattr(getattr(nb, "config", None), "base_url", "unknown"),
             "error": e.detail or e.message,
         }
     except Exception as e:

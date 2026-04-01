@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-
-def normalize_vmid(vmid: Any) -> str | None:
+def normalize_vmid(vmid: object) -> str | None:
     """Normalize VMID values for safe cross-system comparisons."""
     if vmid is None:
         return None
@@ -13,7 +10,7 @@ def normalize_vmid(vmid: Any) -> str | None:
     return vmid_str or None
 
 
-def extract_proxmox_vmid(vm: dict[str, Any]) -> str | None:
+def extract_proxmox_vmid(vm: dict[str, object]) -> str | None:
     """Extract Proxmox VMID from NetBox VM payload across known field layouts.
 
     Handles both RestRecord objects and plain dicts by detecting the interface
@@ -50,7 +47,7 @@ def extract_proxmox_vmid(vm: dict[str, Any]) -> str | None:
     return None
 
 
-def extract_proxmox_vm_type(vm: dict[str, Any]) -> str | None:
+def extract_proxmox_vm_type(vm: dict[str, object]) -> str | None:
     """Extract Proxmox VM type from NetBox VM payload across known field layouts.
 
     Returns 'qemu' or 'lxc' (case-normalized), or None if not found.

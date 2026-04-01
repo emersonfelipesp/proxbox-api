@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
@@ -17,16 +16,16 @@ from proxbox_api.services.sync.vm_helpers import normalized_mac
 
 async def process_vm_network_interface(  # noqa: C901
     nb: NetBoxSessionDep,
-    virtual_machine: dict[str, Any],
+    virtual_machine: dict[str, object],
     interface_name: str,
-    interface_config: dict[str, Any],
-    guest_by_mac: dict[str, dict],
-    guest_by_name: dict[str, dict],
+    interface_config: dict[str, object],
+    guest_by_mac: dict[str, dict[str, object]],
+    guest_by_name: dict[str, dict[str, object]],
     use_guest_agent_interface_name: bool,
-    tag_refs: list[dict],
+    tag_refs: list[dict[str, object]],
     resource_node: str,
     now: datetime | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """Process a single VM network interface with flattened logic (no deep nesting).
 
     Args:
