@@ -76,7 +76,10 @@ def create_app() -> FastAPI:
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     static_dir = os.path.join(base_dir, "static")
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    if os.path.isdir(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    else:
+        logger.info("Static asset directory not found; skipping /static mount", extra={"path": static_dir})
 
     origins = build_cors_origins(bootstrap.netbox_endpoints)
     logger.info("CORS allow_origins configured (%d entries)", len(origins))

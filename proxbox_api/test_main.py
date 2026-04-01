@@ -1,11 +1,13 @@
 """Basic API smoke tests for the FastAPI root endpoint."""
 
+import os
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from proxbox_api.main import app
+from proxbox_api.app import factory
 from proxbox_api.proxmox_codegen.normalize import normalize_captured_endpoints
 from proxbox_api.proxmox_codegen.openapi_generator import generate_openapi_schema
 from proxbox_api.proxmox_codegen.pipeline import (
@@ -40,6 +42,23 @@ def test_custom_openapi_contains_embedded_proxmox_extension():
     schema = app.openapi()
     assert isinstance(schema, dict)
     assert "x-proxmox-generated-openapi" in schema
+
+
+def test_create_app_skips_static_mount_when_directory_is_missing(monkeypatch):
+    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda: None)
+
+    real_isdir = os.path.isdir
+
+    def _fake_isdir(path):
+        if path.endswith("/proxbox_api/static"):
+            return False
+        return real_isdir(path)
+
+    monkeypatch.setattr(factory.os.path, "isdir", _fake_isdir)
+
+    test_app = factory.create_app()
+
+    assert not any(route.path == "/static" for route in test_app.routes)
 
 
 def test_openapi_generation_pipeline_from_sample_capture():
