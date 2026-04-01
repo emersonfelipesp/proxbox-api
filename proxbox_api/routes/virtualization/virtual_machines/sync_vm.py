@@ -689,6 +689,8 @@ async def _create_virtual_machine_by_netbox_id(
 
     Looks up the NetBox VM record, extracts metadata, filters Proxmox resources
     for matching VM, and creates/updates the VM in NetBox.
+    The delegated VM bundle also reconciles interfaces, IP addresses, disks,
+    and task history for the targeted VM.
 
     Args:
         netbox_vm_id: NetBox virtual machine ID to sync.

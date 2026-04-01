@@ -14,7 +14,7 @@ Main synchronization endpoints for virtual machines and backups.
 - `__init__.py`: Virtual machine sync routes and backup workflows.
   - `GET /create`: creates NetBox virtual machines from Proxmox resources (returns JSON when complete). Supports `websocket` and `use_websocket` parameters for live progress.
   - `GET /create/stream`: SSE streaming variant. Emits per-VM `step` events via `WebSocketSSEBridge` while `create_virtual_machines(...)` runs with `use_websocket=True`.
-  - `GET /{netbox_vm_id}/create` and `/create/stream`: single-VM sync by NetBox ID.
+  - `GET /{netbox_vm_id}/create` and `/create/stream`: single-VM sync by NetBox ID; reuses the same VM bundle that reconciles interfaces, IP addresses, disks, and task history.
   - `GET /backups/all/create`: creates backup objects for all discovered VMs.
   - `GET /{netbox_vm_id}/backups/create/stream`: creates backup objects for a specific VM by NetBox ID.
   - Concurrency control: VM sync tasks are wrapped with `asyncio.Semaphore` sized by the `PROXBOX_VM_SYNC_MAX_CONCURRENCY` environment variable (default: 4).
