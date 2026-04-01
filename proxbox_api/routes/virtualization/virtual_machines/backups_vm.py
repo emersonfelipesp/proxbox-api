@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
@@ -288,8 +288,13 @@ async def _create_all_virtual_machine_backups(
     fetch_max_concurrency: int | None = None,
     websocket=None,
     use_websocket=False,
+    vmid_filter: str | None = None,
 ):
-    """Internal function that handles backup sync with optional websocket support."""
+    """Internal function that handles backup sync with optional websocket support.
+
+    When ``vmid_filter`` is provided only backups belonging to that Proxmox VMID
+    are fetched and synced.
+    """
     nb = netbox_session
     results = []
     failure_count = 0
@@ -319,6 +324,9 @@ async def _create_all_virtual_machine_backups(
             storage_name: str,
         ) -> tuple[list, set[str]]:
             async with fetch_semaphore:
+                _extra: dict = {}
+                if vmid_filter is not None:
+                    _extra["vmid"] = vmid_filter
                 backups = await asyncio.to_thread(
                     lambda: dump_models(
                         get_node_storage_content(
@@ -326,6 +334,7 @@ async def _create_all_virtual_machine_backups(
                             node=node_name,
                             storage=storage_name,
                             content="backup",
+                            **_extra,
                         )
                     )
                 )
@@ -554,6 +563,137 @@ async def create_all_virtual_machine_backups_stream(
                     "step": "backups",
                     "status": "started",
                     "message": "Starting backup synchronization.",
+                },
+            )
+            async for frame in bridge.iter_sse():
+                yield frame
+            result = await sync_task
+            yield sse_event(
+                "step",
+                {
+                    "step": "backups",
+                    "status": "completed",
+                    "message": "Backup synchronization finished.",
+                    "result": {"count": len(result) if result else 0},
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Backup sync completed.",
+                    "result": {"count": len(result) if result else 0},
+                },
+            )
+        except Exception as error:
+            yield sse_event(
+                "error",
+                {
+                    "step": "backups",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Backup sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/{netbox_vm_id}/backups/create/stream", response_model=None)
+async def create_virtual_machine_backups_by_id_stream(
+    netbox_vm_id: int,
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    tag: ProxboxTagDep,
+    delete_nonexistent_backup: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Backup",
+            description="If true, deletes backups that exist in NetBox but not in Proxmox.",
+        ),
+    ] = False,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            title="Fetch max concurrency",
+            description="Maximum parallel Proxmox fetch operations for backup discovery.",
+            ge=1,
+        ),
+    ] = None,
+):
+    """Sync backups for a single NetBox VM identified by its primary key."""
+    vm_record = await asyncio.to_thread(
+        lambda: netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
+    )
+    if vm_record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
+        )
+
+    vm_data = vm_record if isinstance(vm_record, dict) else (
+        vm_record.serialize() if hasattr(vm_record, "serialize") else dict(vm_record)
+    )
+    cf = vm_data.get("custom_fields") or {}
+    raw_vmid = cf.get("proxmox_vm_id")
+    proxmox_vmid: str | None = None
+    if raw_vmid is not None:
+        stripped = str(raw_vmid).strip()
+        if stripped.isdigit():
+            proxmox_vmid = stripped
+
+    if proxmox_vmid is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Virtual machine id={netbox_vm_id} has no proxmox_vm_id custom field set; "
+                "cannot filter backups."
+            ),
+        )
+
+    async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await _create_all_virtual_machine_backups(
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    tag=tag,
+                    delete_nonexistent_backup=delete_nonexistent_backup,
+                    fetch_max_concurrency=fetch_max_concurrency,
+                    websocket=bridge,
+                    use_websocket=True,
+                    vmid_filter=proxmox_vmid,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "backups",
+                    "status": "started",
+                    "message": f"Starting backup sync for VM id={netbox_vm_id}.",
                 },
             )
             async for frame in bridge.iter_sse():

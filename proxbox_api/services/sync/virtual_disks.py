@@ -1,5 +1,9 @@
 """Virtual disks synchronization service from Proxmox to NetBox."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
@@ -9,61 +13,29 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid, normalize_vmid
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
 
-def _normalize_vmid(vmid):
-    """Normalize VMID values for safe cross-system comparisons."""
-    if vmid is None:
-        return None
-    vmid_str = str(vmid).strip()
-    return vmid_str or None
-
-
-def _extract_proxmox_vmid(vm: dict) -> str | None:
-    """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
-    top_level_keys = (
-        "cf_proxmox_vm_id",
-        "proxmox_vm_id",
-        "cf_proxmox_vmid",
-        "proxmox_vmid",
-    )
-    for key in top_level_keys:
-        normalized = _normalize_vmid(vm.get(key))
-        if normalized:
-            return normalized
-
-    custom_fields = vm.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        custom_field_keys = (
-            "proxmox_vm_id",
-            "cf_proxmox_vm_id",
-            "proxmox_vmid",
-            "cf_proxmox_vmid",
-        )
-        for key in custom_field_keys:
-            normalized = _normalize_vmid(custom_fields.get(key))
-            if normalized:
-                return normalized
-    return None
-
-
 async def create_virtual_disks(
-    netbox_session,
+    netbox_session: Any,
     pxs: ProxmoxSessionsDep,
-    cluster_status,
-    cluster_resources=None,
-    tag=None,
-    websocket=None,
-    use_websocket=False,
-    use_css=False,
-):
+    cluster_status: list[Any] | None,
+    cluster_resources: list[dict[str, Any]] | None = None,
+    tag: Any | None = None,
+    websocket: Any | None = None,
+    use_websocket: bool = False,
+    use_css: bool = False,
+    netbox_vm_id: int | None = None,
+) -> dict[str, Any]:
     """
     Sync virtual disks for existing Virtual Machines in NetBox.
 
     Queries NetBox for VMs that have cf_proxmox_vm_id set, fetches their
     disk configuration from Proxmox, and creates/updates Virtual Disk objects.
+
+    When ``netbox_vm_id`` is provided only that single VM is processed.
     """
     nb = netbox_session
     undefined_html = return_status_html("undefined", use_css)
@@ -82,13 +54,23 @@ async def create_virtual_disks(
         ]
         tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
 
-    logger.info("Starting virtual disks sync for existing VMs")
+    if netbox_vm_id is not None:
+        logger.info("Starting virtual disks sync for NetBox VM id=%s", netbox_vm_id)
+    else:
+        logger.info("Starting virtual disks sync for existing VMs")
 
     try:
-        vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-        )
+        if netbox_vm_id is not None:
+            vms = await rest_list_async(
+                nb,
+                "/api/virtualization/virtual-machines/",
+                query={"id": netbox_vm_id},
+            )
+        else:
+            vms = await rest_list_async(
+                nb,
+                "/api/virtualization/virtual-machines/",
+            )
     except Exception as e:
         logger.error(f"Error fetching VMs from NetBox: {e}")
         if use_websocket and websocket:
@@ -104,8 +86,7 @@ async def create_virtual_disks(
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
-    vms_with_proxmox_id = [vm for vm in vms if _extract_proxmox_vmid(vm)]
-    vms = vms_with_proxmox_id
+    vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
 
     storage_index: dict[tuple[str, str], dict] = {}
     try:
@@ -137,7 +118,7 @@ async def create_virtual_disks(
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
 
     for vm in vms:
-        vmid = _extract_proxmox_vmid(vm)
+        vmid = extract_proxmox_vmid(vm)
         vm_name = vm.get("name", "unknown")
         vm_id = vm.get("id")
 
@@ -184,7 +165,7 @@ async def create_virtual_disks(
                     if cluster_name_key:
                         resources = cluster[cluster_name_key]
                         for resource in resources:
-                            if _normalize_vmid(resource.get("vmid")) == vmid:
+                            if normalize_vmid(resource.get("vmid")) == vmid:
                                 node_name = resource.get("node")
                                 cluster_name = cluster_name_key
                                 break
