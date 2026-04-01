@@ -126,7 +126,7 @@ async def create_netbox_snapshots(
 
         snapshot_payload = {
             "virtual_machine": virtual_machine.get("id"),
-            "storage": storage_record.get("id") if storage_record else None,
+            "proxmox_storage": storage_record.get("id") if storage_record else None,
             "name": snapshot_name,
             "description": snapshot.get("description", ""),
             "vmid": int(vmid),
@@ -145,7 +145,7 @@ async def create_netbox_snapshots(
             schema=NetBoxSnapshotSyncState,
             current_normalizer=lambda record: {
                 "virtual_machine": record.get("virtual_machine"),
-                "storage": record.get("storage"),
+                "proxmox_storage": record.get("proxmox_storage"),
                 "name": record.get("name"),
                 "description": record.get("description"),
                 "vmid": record.get("vmid"),
