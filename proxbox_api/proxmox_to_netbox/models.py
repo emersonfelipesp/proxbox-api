@@ -378,7 +378,7 @@ class NetBoxVlanSyncState(BaseModel):
 class NetBoxBackupSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    storage: int | None = None
+    proxmox_storage: int | None = None
     virtual_machine: int
     subtype: str | None = None
     creation_time: str | None = None
@@ -396,9 +396,9 @@ class NetBoxBackupSyncState(BaseModel):
     def normalize_virtual_machine(cls, value: object) -> object:
         return _relation_id(value)
 
-    @field_validator("storage", mode="before")
+    @field_validator("proxmox_storage", mode="before")
     @classmethod
-    def normalize_storage(cls, value: object) -> object:
+    def normalize_proxmox_storage(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("tags", mode="before")

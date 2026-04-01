@@ -114,7 +114,7 @@ async def create_netbox_backups(
             creation_time = datetime.fromtimestamp(ctime).isoformat()
 
         backup_payload = {
-            "storage": storage_record.get("id") if storage_record else None,
+            "proxmox_storage": storage_record.get("id") if storage_record else None,
             "virtual_machine": virtual_machine.get("id"),
             "subtype": backup.get("subtype"),
             "creation_time": creation_time,
@@ -134,7 +134,7 @@ async def create_netbox_backups(
             payload=backup_payload,
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
-                "storage": _relation_id_or_none(record.get("storage")),
+                "proxmox_storage": _relation_id_or_none(record.get("proxmox_storage")),
                 "virtual_machine": _relation_id_or_none(record.get("virtual_machine")),
                 "subtype": record.get("subtype"),
                 "creation_time": record.get("creation_time"),

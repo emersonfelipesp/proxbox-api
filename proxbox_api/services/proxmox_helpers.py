@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 
-
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
@@ -150,6 +149,25 @@ def get_storage_list(
         "Error fetching Proxmox storage list",
         lambda: (
             generated_models.GetStorageResponse.model_validate(session.session.storage.get()).root
+        ),
+    )
+
+
+def get_storage_config(
+    session: ProxmoxSession,
+    storage_id: str,
+) -> dict[str, object]:
+    """Fetch full storage configuration from Proxmox.
+
+    The /storage endpoint only returns storage IDs. This helper fetches
+    the full configuration including type, content, path, nodes, shared, etc.
+    """
+    return _wrap_backend_call(
+        f"Error fetching Proxmox storage config for {storage_id}",
+        lambda: _model_dump(
+            generated_models.GetStorageStorageResponse.model_validate(
+                session.session.storage(storage_id).get()
+            )
         ),
     )
 
