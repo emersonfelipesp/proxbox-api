@@ -9,22 +9,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Create a minimal pyproject.toml for dependency installation via uv
-# This installs proxbox-api from PyPI instead of building from source
-RUN cat > pyproject.toml <<'EOF'
-[project]
-name = "proxbox-api-runtime"
-version = "0.1.0"
-dependencies = [
-    "proxbox-api[playwright]",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-EOF
-
-RUN uv sync --frozen --no-dev
+# Create virtual environment and install proxbox-api from PyPI with dependencies
+RUN uv venv /app/.venv && \
+    /app/.venv/bin/python -m pip install --upgrade pip && \
+    /app/.venv/bin/pip install 'proxbox-api[playwright]'
 
 # Application tree + venv only (shared by HTTP and HTTPS images).
 FROM python:3.13-slim-bookworm AS runtime-base
