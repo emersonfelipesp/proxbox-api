@@ -147,6 +147,82 @@ def _filter_cluster_resources_for_vm(
     return filtered
 
 
+async def _filter_cluster_resources_by_netbox_vm_ids(
+    netbox_session: NetBoxSessionDep,
+    cluster_resources: list[dict],
+    netbox_vm_ids: list[int],
+) -> list[dict]:
+    """Filter cluster resources to only include VMs matching the given NetBox VM IDs."""
+    from proxbox_api.netbox_rest import rest_list_async
+
+    if not netbox_vm_ids:
+        return cluster_resources
+
+    id_to_vm: dict[int, dict] = {}
+    for vm_id in netbox_vm_ids:
+        id_to_vm[vm_id] = {"id": vm_id, "name": None, "cluster": None, "cf_proxmox_vm_id": None}
+
+    try:
+        vms = await rest_list_async(
+            netbox_session,
+            "/api/virtualization/virtual-machines/",
+            query={"id": ",".join(str(vid) for vid in netbox_vm_ids)},
+        )
+        if vms and isinstance(vms, list):
+            for vm in vms:
+                if not isinstance(vm, dict):
+                    continue
+                vm_id = vm.get("id")
+                if vm_id is not None:
+                    id_to_vm[vm_id] = vm
+    except Exception:
+        pass
+
+    target_proxmox_vm_ids: set[int] = set()
+    target_vm_names: set[str] = set()
+    target_cluster_ids: set[int] = set()
+
+    for vm in id_to_vm.values():
+        cf = vm.get("custom_fields", {}) or {}
+        raw_vmid = cf.get("proxmox_vm_id")
+        if raw_vmid is not None and str(raw_vmid).strip().isdigit():
+            target_proxmox_vm_ids.add(int(str(raw_vmid).strip()))
+        vm_name = str(vm.get("name", "")).strip()
+        if vm_name:
+            target_vm_names.add(vm_name.lower())
+        cluster = vm.get("cluster")
+        if isinstance(cluster, dict):
+            cluster_id = cluster.get("id")
+            if isinstance(cluster_id, int):
+                target_cluster_ids.add(cluster_id)
+
+    filtered: list[dict] = []
+    for cluster in cluster_resources:
+        if not isinstance(cluster, dict):
+            continue
+        for cluster_key, resources in cluster.items():
+            if not isinstance(resources, list):
+                continue
+            selected = []
+            for resource in resources:
+                if not isinstance(resource, dict):
+                    continue
+                if resource.get("type") not in ("qemu", "lxc"):
+                    continue
+                res_vmid = resource.get("vmid")
+                if res_vmid is not None and int(res_vmid) in target_proxmox_vm_ids:
+                    selected.append(resource)
+                    continue
+                res_name = str(resource.get("name", "")).strip().lower()
+                if res_name in target_vm_names:
+                    selected.append(resource)
+                    continue
+            if selected:
+                filtered.append({cluster_key: selected})
+
+    return filtered
+
+
 def _normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
@@ -239,11 +315,13 @@ async def _create_virtual_machine_by_netbox_id(
             ),
         )
 
+    filtered_for_call = filtered_resources
+
     return await create_virtual_machines(
         netbox_session=netbox_session,
         pxs=pxs,
         cluster_status=cluster_status,
-        cluster_resources=filtered_resources,
+        cluster_resources=filtered_for_call,
         custom_fields=custom_fields,
         tag=tag,
         websocket=websocket,
@@ -309,10 +387,26 @@ async def create_virtual_machines(
             "are created from guest-agent interface names instead of netX/nicX labels."
         ),
     ),
+    netbox_vm_ids: str | None = Query(
+        default=None,
+        title="NetBox VM IDs",
+        description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
 ):
     """
     Creates a new virtual machine in Netbox.
     """
+
+    filtered_cluster_resources = cluster_resources
+
+    if netbox_vm_ids and isinstance(netbox_vm_ids, str):
+        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        if vm_ids:
+            filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
+                netbox_session=netbox_session,
+                cluster_resources=cluster_resources,
+                netbox_vm_ids=[int(vid) for vid in vm_ids],
+            )
 
     nb = netbox_session
 
@@ -979,7 +1073,23 @@ async def create_virtual_machines_stream(
             "are created from guest-agent interface names instead of netX/nicX labels."
         ),
     ),
+    netbox_vm_ids: str | None = Query(
+        default=None,
+        title="NetBox VM IDs",
+        description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
 ):
+    filtered_cluster_resources = cluster_resources
+
+    if netbox_vm_ids:
+        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        if vm_ids:
+            filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
+                netbox_session=netbox_session,
+                cluster_resources=cluster_resources,
+                netbox_vm_ids=[int(vid) for vid in vm_ids],
+            )
+
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
@@ -989,7 +1099,7 @@ async def create_virtual_machines_stream(
                     netbox_session=netbox_session,
                     pxs=pxs,
                     cluster_status=cluster_status,
-                    cluster_resources=cluster_resources,
+                    cluster_resources=filtered_cluster_resources,
                     custom_fields=custom_fields,
                     tag=tag,
                     websocket=bridge,
@@ -1006,7 +1116,9 @@ async def create_virtual_machines_stream(
                 {
                     "step": "virtual-machines",
                     "status": "started",
-                    "message": "Starting virtual machines synchronization.",
+                    "message": "Starting virtual machines synchronization."
+                    if not vm_ids
+                    else f"Starting virtual machines synchronization for {len(vm_ids)} VM(s).",
                 },
             )
             async for frame in bridge.iter_sse():

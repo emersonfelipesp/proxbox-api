@@ -3,7 +3,7 @@
 # FastAPI Imports
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import (
@@ -35,6 +35,11 @@ async def create_virtual_disks(
     websocket=None,
     use_css: bool = False,
     use_websocket: bool = False,
+    netbox_vm_ids: str | None = Query(
+        default=None,
+        title="NetBox VM IDs",
+        description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
 ):
     """
     Syncs virtual disks for existing Virtual Machines in NetBox.
@@ -42,6 +47,12 @@ async def create_virtual_disks(
     Queries NetBox for VMs with cf_proxmox_vm_id set, fetches their disk
     configuration from Proxmox, and creates/updates Virtual Disk objects.
     """
+    netbox_vm_id_list = None
+    if netbox_vm_ids:
+        vm_ids = [int(vid.strip()) for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        if vm_ids:
+            netbox_vm_id_list = vm_ids
+
     result = await sync_virtual_disks(
         netbox_session=netbox_session,
         pxs=pxs,
@@ -51,6 +62,7 @@ async def create_virtual_disks(
         websocket=websocket,
         use_websocket=use_websocket,
         use_css=use_css,
+        netbox_vm_ids=netbox_vm_id_list,
     )
     return result
 
@@ -62,7 +74,18 @@ async def create_virtual_disks_stream(
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
+    netbox_vm_ids: str | None = Query(
+        default=None,
+        title="NetBox VM IDs",
+        description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
 ):
+    netbox_vm_id_list = None
+    if netbox_vm_ids:
+        vm_ids = [int(vid.strip()) for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        if vm_ids:
+            netbox_vm_id_list = vm_ids
+
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
@@ -77,6 +100,7 @@ async def create_virtual_disks_stream(
                     websocket=bridge,
                     use_websocket=True,
                     use_css=False,
+                    netbox_vm_ids=netbox_vm_id_list,
                 )
             finally:
                 await bridge.close()
@@ -88,7 +112,9 @@ async def create_virtual_disks_stream(
                 {
                     "step": "virtual-disks",
                     "status": "started",
-                    "message": "Starting virtual disks synchronization.",
+                    "message": "Starting virtual disks synchronization."
+                    if not netbox_vm_id_list
+                    else f"Starting virtual disks synchronization for {len(netbox_vm_id_list)} VM(s).",
                 },
             )
             async for frame in bridge.iter_sse():

@@ -53,6 +53,7 @@ async def create_virtual_disks(
     use_websocket: bool = False,
     use_css: bool = False,
     netbox_vm_id: int | None = None,
+    netbox_vm_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """
     Sync virtual disks for existing Virtual Machines in NetBox.
@@ -61,6 +62,7 @@ async def create_virtual_disks(
     disk configuration from Proxmox, and creates/updates Virtual Disk objects.
 
     When ``netbox_vm_id`` is provided only that single VM is processed.
+    When ``netbox_vm_ids`` is provided only those VMs are processed.
     """
     nb = netbox_session
     undefined_html = return_status_html("undefined", use_css)
@@ -79,17 +81,23 @@ async def create_virtual_disks(
         ]
         tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
 
-    if netbox_vm_id is not None:
-        logger.info("Starting virtual disks sync for NetBox VM id=%s", netbox_vm_id)
+    target_vm_ids: list[int] | None = None
+    if netbox_vm_ids:
+        target_vm_ids = netbox_vm_ids
+    elif netbox_vm_id is not None:
+        target_vm_ids = [netbox_vm_id]
+
+    if target_vm_ids:
+        logger.info("Starting virtual disks sync for NetBox VM ids=%s", target_vm_ids)
     else:
         logger.info("Starting virtual disks sync for existing VMs")
 
     try:
-        if netbox_vm_id is not None:
+        if target_vm_ids:
             vms = await rest_list_async(
                 nb,
                 "/api/virtualization/virtual-machines/",
-                query={"id": netbox_vm_id},
+                query={"id": ",".join(str(vid) for vid in target_vm_ids)},
             )
         else:
             vms = await _list_all_vms_with_proxmox_id(nb)
