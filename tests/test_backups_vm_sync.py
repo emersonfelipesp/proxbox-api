@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
-from proxbox_api.routes.virtualization.virtual_machines.backups_vm import create_netbox_backups
+from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
+    create_netbox_backups,
+    get_node_backups,
+)
 
 
 def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
@@ -64,6 +68,109 @@ def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
     )
 
     assert result is not None
-    assert reconciled[0][1]["storage"] == 99
+    assert reconciled[0][1]["proxmox_storage"] == 99
     assert journal_entries[0]["assigned_object_type"] == "netbox_proxbox.vmbackup"
     assert journal_entries[0]["assigned_object_id"] == 55
+
+
+def test_create_netbox_backups_reuses_cached_vm_lookup(monkeypatch):
+    queries: list[dict] = []
+
+    async def _fake_rest_list_async(_nb, _path, *, query=None):
+        queries.append(query or {})
+        return [{"id": 7, "name": "vm-101"}]
+
+    async def _fake_reconcile_async(_nb, _path, lookup, payload, **kwargs):
+        return SimpleNamespace(id=55)
+
+    async def _fake_rest_create_async(_nb, _path, payload):
+        return payload
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_reconcile_async",
+        _fake_reconcile_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_create_async",
+        _fake_rest_create_async,
+    )
+
+    backup = {
+        "vmid": 101,
+        "volid": "local-zfs:vm-101-disk-0",
+        "ctime": 1700000000,
+        "size": 1024,
+        "subtype": "qemu",
+        "format": "qcow2",
+        "content": "backup",
+    }
+    vm_cache: dict[int, dict | None] = {}
+
+    asyncio.run(
+        create_netbox_backups(
+            backup,
+            netbox_session=object(),
+            cluster_name="cluster-a",
+            storage_index={},
+            vm_cache=vm_cache,
+        )
+    )
+    asyncio.run(
+        create_netbox_backups(
+            backup,
+            netbox_session=object(),
+            cluster_name="cluster-a",
+            storage_index={},
+            vm_cache=vm_cache,
+        )
+    )
+
+    assert queries == [{"cf_proxmox_vm_id": 101}]
+
+
+def test_get_node_backups_enforces_vmid_filter_locally(monkeypatch):
+    seen_backups: list[dict] = []
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.dump_models",
+        lambda items: items,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.get_node_storage_content",
+        lambda *args, **kwargs: [
+            {"content": "backup", "vmid": 101, "volid": "local:vm-101-a"},
+            {"content": "backup", "vmid": 202, "volid": "local:vm-202-a"},
+        ],
+    )
+
+    async def _fake_create_netbox_backups(backup, *_args, **_kwargs):
+        seen_backups.append(backup)
+        return backup
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.create_netbox_backups",
+        _fake_create_netbox_backups,
+    )
+
+    async def _run():
+        tasks, volids = await get_node_backups(
+            [object()],
+            [SimpleNamespace(name="cluster-a", node_list=[SimpleNamespace(name="pve01")])],
+            node="pve01",
+            storage="local",
+            netbox_session=object(),
+            storage_index={},
+            vmid="101",
+        )
+        results = await asyncio.gather(*tasks)
+        return results, volids
+
+    results, volids = asyncio.run(_run())
+
+    assert [backup["vmid"] for backup in seen_backups] == [101]
+    assert [result["vmid"] for result in results] == [101]
+    assert volids == {"local:vm-101-a"}

@@ -70,6 +70,7 @@ async def create_netbox_backups(
     *,
     cluster_name: str | None = None,
     storage_index: dict[tuple[str, str], dict] | None = None,
+    vm_cache: dict[int, dict | None] | None = None,
 ):
     nb = netbox_session
     vmid_log: str | int | None = None
@@ -82,13 +83,18 @@ async def create_netbox_backups(
         if not vmid:
             return None
 
-        # Get the virtual machine on NetBox by the VM ID using custom field filter
-        vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": int(vmid)},
-        )
-        virtual_machine = vms[0] if vms else None
+        vmid_int = int(vmid)
+        virtual_machine = vm_cache.get(vmid_int) if vm_cache is not None else None
+        if virtual_machine is None:
+            # Get the virtual machine on NetBox by the VM ID using custom field filter
+            vms = await rest_list_async(
+                nb,
+                "/api/virtualization/virtual-machines/",
+                query={"cf_proxmox_vm_id": vmid_int},
+            )
+            virtual_machine = vms[0] if vms else None
+            if vm_cache is not None:
+                vm_cache[vmid_int] = virtual_machine
 
         if not virtual_machine:
             return None
@@ -197,6 +203,7 @@ async def get_node_backups(
     vmid: str | None = None,
 ) -> tuple[list, set[str]]:
     nb = netbox_session
+    vm_cache: dict[int, dict | None] = {}
     """
     Get backups for a specific node and storage.
 
@@ -221,6 +228,14 @@ async def get_node_backups(
                             )
                         )
 
+                        if vmid is not None:
+                            filtered_vmid = str(vmid).strip()
+                            backups = [
+                                backup
+                                for backup in backups
+                                if str(backup.get("vmid", "")).strip() == filtered_vmid
+                            ]
+
                         volids = _volids_from_proxmox_storage_backup_items(backups)
                         tasks = [
                             create_netbox_backups(
@@ -228,6 +243,7 @@ async def get_node_backups(
                                 nb,
                                 cluster_name=cluster_name,
                                 storage_index=storage_index,
+                                vm_cache=vm_cache,
                             )
                             for backup in backups
                             if backup.get("content") == "backup"
@@ -302,6 +318,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
     deleted_count = 0
     backup_sync_ok = False
     storage_index = await _load_storage_index(nb)
+    vm_cache: dict[int, dict | None] = {}
 
     try:
         if use_websocket and websocket:
@@ -339,17 +356,25 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                         )
                     )
                 )
-            volids = _volids_from_proxmox_storage_backup_items(backups)
-            tasks = [
-                create_netbox_backups(
-                    backup,
-                    nb,
-                    cluster_name=cluster_name,
-                    storage_index=storage_index,
-                )
-                for backup in backups
-                if backup.get("content") == "backup"
-            ]
+                if vmid_filter is not None:
+                    filtered_vmid = str(vmid_filter).strip()
+                    backups = [
+                        backup
+                        for backup in backups
+                        if str(backup.get("vmid", "")).strip() == filtered_vmid
+                    ]
+                volids = _volids_from_proxmox_storage_backup_items(backups)
+                tasks = [
+                    create_netbox_backups(
+                        backup,
+                        nb,
+                        cluster_name=cluster_name,
+                        storage_index=storage_index,
+                        vm_cache=vm_cache,
+                    )
+                    for backup in backups
+                    if backup.get("content") == "backup"
+                ]
             return tasks, volids
 
         for proxmox, cluster in zip(pxs, cluster_status):
