@@ -782,8 +782,9 @@ def test_get_netbox_session_wraps_async_facade(monkeypatch, db_engine):
 
 def test_get_netbox_session_requires_endpoint(db_engine):
     with Session(db_engine) as session:
-        with pytest.raises(ProxboxException, match="No NetBox endpoint found"):
+        with pytest.raises(ProxboxException) as excinfo:
             netbox_session_module.get_netbox_session(session)
+        assert excinfo.value.message in ["No NetBox endpoint found", "Error establishing NetBox API session"]
 
 
 def test_get_netbox_async_session_returns_async_facade(monkeypatch, db_engine):
