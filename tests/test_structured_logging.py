@@ -1,7 +1,7 @@
 """Tests for structured logging utilities."""
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from proxbox_api.utils.structured_logging import (
     SyncPhaseLogger,
     log_sync_operation,

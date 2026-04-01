@@ -1,19 +1,19 @@
 """Tests for sync error handling decorators and validators."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-import asyncio
-import time
-from unittest.mock import patch, MagicMock, AsyncMock
+
+from proxbox_api.exception import NetBoxAPIError, ProxmoxAPIError, SyncError
 from proxbox_api.utils.sync_error_handling import (
+    EarlyReturnContext,
     validate_netbox_response,
     validate_proxmox_response,
-    with_sync_error_handling,
+    with_async_retry,
     with_async_sync_error_handling,
     with_retry,
-    with_async_retry,
-    EarlyReturnContext,
+    with_sync_error_handling,
 )
-from proxbox_api.exception import NetBoxAPIError, ProxmoxAPIError, SyncError
 
 
 class TestValidateResponses:
@@ -188,7 +188,7 @@ class TestEarlyReturnContext:
         """Test context completes normally."""
         executed = False
 
-        async with EarlyReturnContext("test") as ctx:
+        async with EarlyReturnContext("test"):
             executed = True
             # No early return
 
