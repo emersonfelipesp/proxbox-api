@@ -64,7 +64,7 @@ def event_loop_policy():
     return asyncio.DefaultEventLoopPolicy()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def netbox_demo_config() -> "Config":
     """Bootstrap demo profile once per test session.
 
@@ -101,7 +101,7 @@ async def netbox_demo_config() -> "Config":
         pytest.skip(str(exc))
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def netbox_demo_session(netbox_demo_config: "Config") -> "Api":
     """Create NetBox API session from demo config.
 
@@ -117,7 +117,7 @@ async def netbox_demo_session(netbox_demo_config: "Config") -> "Api":
     return api
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def netbox_proxbox_plugin_available(netbox_demo_session: "Api") -> bool:
     """True if ``/api/plugins/proxbox/`` is reachable (not installed on demo.netbox.dev)."""
 
@@ -133,13 +133,13 @@ async def netbox_proxbox_plugin_available(netbox_demo_session: "Api") -> bool:
     return True
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def require_proxbox_netbox_plugin(netbox_proxbox_plugin_available: bool) -> None:
     if not netbox_proxbox_plugin_available:
         pytest.skip("Proxbox NetBox plugin API not available on this instance (e.g. public demo).")
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def e2e_tag(netbox_demo_session: "Api") -> dict[str, Any]:
     """Ensure the 'proxbox e2e testing' tag exists.
 
@@ -155,7 +155,7 @@ async def e2e_tag(netbox_demo_session: "Api") -> dict[str, Any]:
     return tag
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def e2e_tag_refs(e2e_tag: dict[str, Any]) -> list[dict[str, Any]]:
     """Get tag refs list for NetBox API payloads.
 
@@ -165,7 +165,7 @@ async def e2e_tag_refs(e2e_tag: dict[str, Any]) -> list[dict[str, Any]]:
     return build_e2e_tag_refs(e2e_tag)
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def e2e_shared_proxmox_site(netbox_demo_session: "Api", e2e_tag: dict[str, Any]) -> Any:
     """Single DCIM site reused by VM e2e tests to avoid demo per-run site limits."""
 
