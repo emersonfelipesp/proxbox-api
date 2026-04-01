@@ -9,6 +9,7 @@ from typing import Any
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
+    RestRecord,
     rest_create_async,
     rest_list_async,
     rest_reconcile_async,
@@ -27,6 +28,8 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
+
+
 async def _load_storage_index(netbox_session: Any) -> dict[tuple[str, str], dict[str, Any]]:
     nb = netbox_session
     try:
@@ -196,6 +199,31 @@ async def process_snapshots_batch(snapshot_tasks: list, batch_size: int = 10) ->
     return results, failures
 
 
+async def _list_all_vms_with_proxmox_id(
+    nb,
+    batch_size: int = 500,
+) -> list[RestRecord]:
+    """List all VMs from NetBox with pagination handling."""
+    all_vms = []
+    offset = 0
+
+    while True:
+        vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"limit": batch_size, "offset": offset},
+        )
+        if not vms:
+            break
+        all_vms.extend(vms)
+
+        if len(vms) < batch_size:
+            break
+        offset += batch_size
+
+    return all_vms
+
+
 async def create_virtual_machine_snapshots(
     netbox_session: Any,
     pxs: ProxmoxSessionsDep,
@@ -234,10 +262,7 @@ async def create_virtual_machine_snapshots(
     logger.info("Starting virtual machine snapshots sync")
 
     try:
-        vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-        )
+        vms = await _list_all_vms_with_proxmox_id(nb)
     except Exception as e:
         logger.error(f"Error fetching VMs from NetBox: {e}")
         if use_websocket and websocket:
