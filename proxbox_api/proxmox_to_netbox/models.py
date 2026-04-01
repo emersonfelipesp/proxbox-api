@@ -49,6 +49,12 @@ def _status_value(value: object) -> object:
     return value
 
 
+def _choice_value(value: object) -> object:
+    if isinstance(value, dict):
+        return value.get("value") or value.get("label")
+    return value
+
+
 def _task_action_label(value: object) -> str:
     text = str(value or "").strip()
     if not text:
@@ -273,6 +279,14 @@ class NetBoxInterfaceSyncState(BaseModel):
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
 
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, value: object) -> object:
+        normalized = _choice_value(value)
+        if normalized in (None, ""):
+            return None
+        return str(normalized).strip() or None
+
     @field_validator("tags", mode="before")
     @classmethod
     def normalize_tags(cls, value: object) -> list[dict[str, object]]:
@@ -298,6 +312,14 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, value: object) -> object:
+        normalized = _choice_value(value)
+        if normalized in (None, ""):
+            return None
+        return str(normalized).strip() or None
 
     @field_validator("tags", mode="before")
     @classmethod
