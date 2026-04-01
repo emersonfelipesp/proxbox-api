@@ -8,6 +8,7 @@ from proxmoxer.core import ResourceException
 from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -139,7 +140,7 @@ async def node_qemu(
         try:
             json_result.append({px.name: px.session(f"/nodes/{node}/qemu").get()})
         except ResourceException as error:
-            print(f"Error: {error}")
-            pass
+            logger.warning("Error fetching qemu list for node '%s' on %s: %s", node, px.name, error)
+            continue
 
     return json_result

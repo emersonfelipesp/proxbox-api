@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
 from proxbox_api.services.proxmox_helpers import dump_models, get_storage_list
@@ -11,13 +13,13 @@ from proxbox_api.services.proxmox_helpers import dump_models, get_storage_list
 
 async def create_storages(
     *,
-    netbox_session,
-    pxs,
-    tag,
-    websocket=None,
+    netbox_session: Any,
+    pxs: list[Any] | None,
+    tag: Any,
+    websocket: Any | None = None,
     use_websocket: bool = False,
     fetch_concurrency: int = 8,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Create or update plugin storage rows for each Proxmox endpoint storage."""
     nb = netbox_session
     tag_refs = [
@@ -28,7 +30,11 @@ async def create_storages(
         }
     ]
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
-    synced: list[dict] = []
+    synced: list[dict[str, Any]] = []
+
+    if not pxs:
+        logger.info("No Proxmox sessions available for storage sync")
+        return synced
 
     fetch_sem = asyncio.Semaphore(max(1, int(fetch_concurrency)))
 
@@ -41,12 +47,12 @@ async def create_storages(
             cluster_id = cluster.get("id")
             if cluster_name and cluster_id:
                 cluster_id_map[cluster_name] = cluster_id
-    except Exception:
+    except Exception as error:
         # If we can't fetch clusters, we'll try to continue and let individual
         # storage syncs fail gracefully
-        pass
+        logger.warning("Unable to prefetch NetBox clusters for storage sync: %s", error)
 
-    async def _fetch_cluster_storages(proxmox):
+    async def _fetch_cluster_storages(proxmox: Any) -> tuple[str, list[dict[str, Any]]]:
         cluster_name = str(getattr(proxmox, "name", "") or "").strip() or "unknown"
         async with fetch_sem:
             storages = await asyncio.to_thread(lambda: dump_models(get_storage_list(proxmox)))
@@ -64,12 +70,14 @@ async def create_storages(
 
     for cluster_data in cluster_storage_sets:
         if isinstance(cluster_data, Exception):
+            logger.warning("Error fetching storage list from Proxmox endpoint: %s", cluster_data)
             continue
         cluster_name, storages = cluster_data
 
         # Skip if we don't have a cluster ID for this cluster name
         cluster_id = cluster_id_map.get(cluster_name)
         if cluster_id is None:
+            logger.debug("Skipping storages for unknown NetBox cluster '%s'", cluster_name)
             continue
 
         for storage in storages:

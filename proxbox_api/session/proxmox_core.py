@@ -9,7 +9,7 @@ from proxbox_api.logger import logger
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 
 
-def _proxmox_api_factory():
+def _proxmox_api_factory() -> Any:
     """Return ``ProxmoxAPI`` from ``session.proxmox`` so tests can monkeypatch it."""
     import proxbox_api.session.proxmox as prox_mod
 
@@ -17,7 +17,7 @@ def _proxmox_api_factory():
 
 
 class ProxmoxSession:
-    def __init__(self, cluster_config: Any):
+    def __init__(self, cluster_config: Any) -> None:
         self.CONNECTED = False
         self.permission_limited = False
         #
@@ -89,8 +89,8 @@ class ProxmoxSession:
                 self.session = self.proxmoxer
                 self.CONNECTED = True
 
-        except ProxboxException as error:
-            raise error
+        except ProxboxException:
+            raise
 
         except Exception as error:
             raise ProxboxException(
@@ -154,14 +154,14 @@ class ProxmoxSession:
                     self.name = standalone_node_name
                     self.fingerprints = None
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Proxmox Connection Object. URL: {self.domain}:{self.http_port}"
 
     #
     # Proxmox Authentication Modes: TOKEN-BASED & PASSWORD-BASED
     #
 
-    def _auth(self, auth_method: str):
+    def _auth(self, auth_method: str) -> Any:
         if auth_method != "token" and auth_method != "password":
             raise ProxboxException(
                 message=f"Invalid authentication method provided: {auth_method}",
@@ -235,6 +235,8 @@ class ProxmoxSession:
                     python_exception=f"{error}",
                 )
 
+        return None
+
     def _normalize_token_auth_fields(self) -> None:
         """Normalize token fields from common Proxmox token string formats."""
 
@@ -270,12 +272,12 @@ class ProxmoxSession:
     #
     # Get Proxmox Details about Cluster and Nodes
     #
-    def get_node_fingerprints(self, px):
+    def get_node_fingerprints(self, px: Any) -> list[str]:
         """Get Nodes Fingerprints. It is the way I better found to differentiate clusters."""
         try:
             join_info = px("cluster/config/join").get()
 
-            fingerprints = []
+            fingerprints: list[str] = []
             for node in join_info.get("nodelist"):
                 fingerprints.append(node.get("pve_fp"))
 
@@ -286,29 +288,30 @@ class ProxmoxSession:
                 message="Could not get Nodes Fingerprints", python_exception=f"{error}"
             )
 
-    def get_cluster_mode(self):
+    def get_cluster_mode(self) -> str | None:
         """Get Proxmox Cluster Mode (Standalone or Cluster)"""
-        if self.CONNECTED:
-            try:
-                if len(self.cluster_status) == 1 and self.cluster_status[0].get("type") == "node":
-                    return "standalone"
-                else:
-                    return "cluster"
-
-            except Exception as error:
-                raise ProxboxException(
-                    message="Could not get Proxmox Cluster Mode (Standalone or Cluster)",
-                    python_exception=f"{error}",
-                )
-        else:
+        if not self.CONNECTED:
             logger.info("Proxmox Session is not connected, so not able to get Cluster Mode")
+            return None
 
-    def get_cluster_name(self):
+        try:
+            if len(self.cluster_status) == 1 and self.cluster_status[0].get("type") == "node":
+                return "standalone"
+            return "cluster"
+
+        except Exception as error:
+            raise ProxboxException(
+                message="Could not get Proxmox Cluster Mode (Standalone or Cluster)",
+                python_exception=f"{error}",
+            )
+
+    def get_cluster_name(self) -> str | None:
         """Get Proxmox Cluster Name"""
         try:
             for item in self.cluster_status:
                 if item.get("type") == "cluster":
                     return item.get("name")
+            return None
 
         except Exception as error:
             raise ProxboxException(
@@ -316,11 +319,12 @@ class ProxmoxSession:
                 python_exception=f"{error}",
             )
 
-    def get_standalone_name(self):
+    def get_standalone_name(self) -> str | None:
         """Get Proxmox Standalone Node Name"""
         try:
             if len(self.cluster_status) == 1 and self.cluster_status[0].get("type") == "node":
                 return self.cluster_status[0].get("name")
+            return None
 
         except Exception as error:
             raise ProxboxException(

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from proxbox_api.logger import logger
+
 DEFAULT_PROXMOX_OPENAPI_TAG = "latest"
 RUNTIME_GENERATED_ROUTE_CACHE_FILENAME = "runtime_generated_routes_cache.json"
 
@@ -57,10 +59,12 @@ def load_proxmox_generated_openapi(
 
     path = proxmox_generated_openapi_path(version_tag=version_tag)
     if not path.exists():
+        logger.warning("Generated Proxmox OpenAPI artifact not found at %s", path)
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError) as error:
+        logger.warning("Failed to load generated Proxmox OpenAPI from %s: %s", path, error)
         return {}
 
 

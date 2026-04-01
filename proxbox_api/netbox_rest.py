@@ -416,14 +416,16 @@ def rest_reconcile(
 
 
 def nested_tag_payload(tag: Any) -> list[dict[str, Any]]:
-    slug = getattr(tag, "slug", None) or getattr(tag, "get", lambda *args, **kwargs: None)("slug")
-    name = getattr(tag, "name", None) or getattr(tag, "get", lambda *args, **kwargs: None)("name")
+    slug = getattr(tag, "slug", None)
+    name = getattr(tag, "name", None)
+    color = getattr(tag, "color", None)
+    if isinstance(tag, dict):
+        slug = slug or tag.get("slug")
+        name = name or tag.get("name")
+        color = color or tag.get("color")
     if not slug or not name:
         return []
     payload = {"name": name, "slug": slug}
-    color = getattr(tag, "color", None) or getattr(tag, "get", lambda *args, **kwargs: None)(
-        "color"
-    )
     if color:
         payload["color"] = color
     return [payload]

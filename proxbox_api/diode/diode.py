@@ -7,8 +7,10 @@ from netboxlabs.diode.sdk.ingester import (
     IPAddress,
 )
 
+from proxbox_api.logger import logger
 
-def main():
+
+def main() -> None:
     with DiodeClient(
         target="grpc://localhost:8081",
         app_name="my-test-app",
@@ -40,19 +42,14 @@ def main():
             address="172.16.0.1/24",
         )
 
-        print(f"device: {device}")
+        logger.debug("Device payload: %s", device)
 
-        # print(f"client: {client}")
-        # print(f"client (dir): {dir(client)}")
-        # print(f"client (version): {client._target}")
-        # print(f"ip_address: {ip_address}")
         entities.append(Entity(ip_address=ip_address))
-        # entities.append(Entity(ip_address=ip_address))
 
         response = client.ingest(entities=entities)
-        print(f"response: {response}")
+        logger.info("Diode ingest response: %s", response)
         if response.errors:
-            print(f"Errors: {response.errors}")
+            logger.error("Diode ingest errors: %s", response.errors)
 
 
 if __name__ == "__main__":

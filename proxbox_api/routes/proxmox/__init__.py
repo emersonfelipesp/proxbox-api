@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from proxbox_api.enum.proxmox import *
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.schemas.virtualization import VMConfig
@@ -237,7 +238,7 @@ async def get_proxmox_storage(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
 ):
-    print("storage")
+    logger.debug("Fetching storage inventory for %s Proxmox sessions", len(pxs))
     """
     ### Retrieve the storage information from multiple Proxmox sessions.
     

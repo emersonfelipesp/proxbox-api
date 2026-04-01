@@ -14,44 +14,9 @@ from proxbox_api.services.proxmox_helpers import (
     get_node_task_status,
     get_node_tasks,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 
 _DEFAULT_FETCH_CONCURRENCY = 4
-
-
-def _normalize_vmid(vmid):
-    """Normalize VMID values for safe cross-system comparisons."""
-    if vmid is None:
-        return None
-    vmid_str = str(vmid).strip()
-    return vmid_str or None
-
-
-def _extract_proxmox_vmid(vm: dict) -> str | None:
-    """Extract Proxmox VMID from NetBox VM payload across known field layouts."""
-    top_level_keys = (
-        "cf_proxmox_vm_id",
-        "proxmox_vm_id",
-        "cf_proxmox_vmid",
-        "proxmox_vmid",
-    )
-    for key in top_level_keys:
-        normalized = _normalize_vmid(vm.get(key))
-        if normalized:
-            return normalized
-
-    custom_fields = vm.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        custom_field_keys = (
-            "proxmox_vm_id",
-            "cf_proxmox_vm_id",
-            "proxmox_vmid",
-            "cf_proxmox_vmid",
-        )
-        for key in custom_field_keys:
-            normalized = _normalize_vmid(custom_fields.get(key))
-            if normalized:
-                return normalized
-    return None
 
 
 def _normalize_text(value: Any) -> str | None:
@@ -61,7 +26,7 @@ def _normalize_text(value: Any) -> str | None:
     return text or None
 
 
-def _cluster_nodes(cluster_status, cluster_name: str | None) -> list[str]:
+def _cluster_nodes(cluster_status: list[Any] | None, cluster_name: str | None) -> list[str]:
     nodes: list[str] = []
     for cluster in cluster_status or []:
         if getattr(cluster, "name", None) != cluster_name:
@@ -74,7 +39,11 @@ def _cluster_nodes(cluster_status, cluster_name: str | None) -> list[str]:
     return nodes
 
 
-def _find_cluster_session(pxs, cluster_status, cluster_name: str | None):
+def _find_cluster_session(
+    pxs: list[Any] | None,
+    cluster_status: list[Any] | None,
+    cluster_name: str | None,
+) -> Any | None:
     for px, cluster in zip(pxs, cluster_status or []):
         if getattr(cluster, "name", None) == cluster_name:
             return px
@@ -111,14 +80,14 @@ def _build_task_payload(
 
 
 async def sync_all_virtual_machine_task_histories(
-    netbox_session,
-    pxs,
-    cluster_status,
+    netbox_session: Any,
+    pxs: list[Any] | None,
+    cluster_status: list[Any] | None,
     tag_refs: list[dict[str, Any]] | None = None,
-    websocket=None,
+    websocket: Any | None = None,
     use_websocket: bool = False,
     fetch_max_concurrency: int | None = None,
-):
+) -> dict[str, Any]:
     """Sync task history for all Virtual Machines in NetBox."""
     from proxbox_api.netbox_rest import rest_list_async
 
@@ -133,7 +102,7 @@ async def sync_all_virtual_machine_task_histories(
         logger.error(f"Error fetching VMs from NetBox for task history sync: {e}")
         return {"count": 0, "created": 0, "skipped": 0, "error": str(e)}
 
-    vms_with_proxmox_id = [vm for vm in vms if _extract_proxmox_vmid(vm)]
+    vms_with_proxmox_id = [vm for vm in vms if extract_proxmox_vmid(vm)]
     if not vms_with_proxmox_id:
         logger.info("No VMs found with cf_proxmox_vm_id for task history sync")
         return {"count": 0, "created": 0, "skipped": 0}
@@ -155,7 +124,7 @@ async def sync_all_virtual_machine_task_histories(
         )
 
     for vm in vms_with_proxmox_id:
-        proxmox_vmid = _extract_proxmox_vmid(vm)
+        proxmox_vmid = extract_proxmox_vmid(vm)
         vm_name = vm.get("name", "unknown")
         vm_id = vm.get("id")
 
@@ -229,14 +198,14 @@ async def sync_all_virtual_machine_task_histories(
 
 async def sync_virtual_machine_task_history(
     *,
-    netbox_session,
-    pxs,
-    cluster_status,
+    netbox_session: Any,
+    pxs: list[Any] | None,
+    cluster_status: list[Any] | None,
     virtual_machine_id: int,
     vm_type: str,
     cluster_name: str | None,
     tag_refs: list[dict[str, Any]] | None = None,
-    websocket=None,
+    websocket: Any | None = None,
     use_websocket: bool = False,
     fetch_max_concurrency: int | None = None,
 ) -> int:

@@ -12,6 +12,7 @@ from netbox_sdk.config import authorization_header_value
 from sqlmodel import select
 
 from proxbox_api.database import NetBoxEndpoint, get_session
+from proxbox_api.logger import logger
 from proxbox_api.session.netbox import netbox_config_from_endpoint
 
 
@@ -35,7 +36,8 @@ def _extract_netbox_endpoint_from_db() -> NetBoxEndpoint | None:
         database_session = next(get_session())
         endpoint = database_session.exec(select(NetBoxEndpoint)).first()
         return endpoint
-    except Exception:
+    except Exception as error:
+        logger.warning("Unable to load NetBox endpoint from database: %s", error)
         return None
 
 
@@ -61,7 +63,8 @@ def fetch_live_netbox_openapi(timeout: int = 20) -> dict[str, Any] | None:
                 return data
         except (URLError, TimeoutError, json.JSONDecodeError, ValueError):
             continue
-        except Exception:
+        except Exception as error:
+            logger.warning("Unexpected error fetching NetBox OpenAPI from %s: %s", url, error)
             continue
     return None
 
@@ -82,7 +85,8 @@ def load_netbox_openapi_cache() -> dict[str, Any] | None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError) as error:
+        logger.warning("Unable to load NetBox OpenAPI cache from %s: %s", path, error)
         return None
 
 

@@ -1,7 +1,10 @@
 """NetBox prerequisite records (sites, clusters, device shells) for Proxmox node sync."""
 
+from __future__ import annotations
+
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import rest_reconcile_async
@@ -26,7 +29,12 @@ def _last_updated_cf() -> dict[str, str]:
     return {"proxmox_last_updated": datetime.now(timezone.utc).isoformat()}
 
 
-async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object:
+async def _ensure_cluster_type(
+    nb: Any,
+    *,
+    mode: str,
+    tag_refs: list[dict[str, Any]],
+) -> object:
     return await rest_reconcile_async(
         nb,
         "/api/virtualization/cluster-types/",
@@ -50,8 +58,13 @@ async def _ensure_cluster_type(nb, *, mode: str, tag_refs: list[dict]) -> object
 
 
 async def _ensure_cluster(
-    nb, *, cluster_name: str, cluster_type_id: int | None, mode: str, tag_refs
-):
+    nb: Any,
+    *,
+    cluster_name: str,
+    cluster_type_id: int | None,
+    mode: str,
+    tag_refs: list[dict[str, Any]],
+) -> object:
     return await rest_reconcile_async(
         nb,
         "/api/virtualization/clusters/",
@@ -74,7 +87,7 @@ async def _ensure_cluster(
     )
 
 
-async def _ensure_manufacturer(nb, *, tag_refs: list[dict]) -> object:
+async def _ensure_manufacturer(nb: Any, *, tag_refs: list[dict[str, Any]]) -> object:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/manufacturers/",
@@ -95,7 +108,12 @@ async def _ensure_manufacturer(nb, *, tag_refs: list[dict]) -> object:
     )
 
 
-async def _ensure_device_type(nb, *, manufacturer_id: int | None, tag_refs: list[dict]) -> object:
+async def _ensure_device_type(
+    nb: Any,
+    *,
+    manufacturer_id: int | None,
+    tag_refs: list[dict[str, Any]],
+) -> object:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/device-types/",
@@ -118,7 +136,7 @@ async def _ensure_device_type(nb, *, manufacturer_id: int | None, tag_refs: list
     )
 
 
-async def _ensure_device_role(nb, *, tag_refs: list[dict]) -> object:
+async def _ensure_device_role(nb: Any, *, tag_refs: list[dict[str, Any]]) -> object:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/device-roles/",
@@ -141,7 +159,7 @@ async def _ensure_device_role(nb, *, tag_refs: list[dict]) -> object:
     )
 
 
-async def _ensure_site(nb, *, cluster_name: str, tag_refs: list[dict]) -> object:
+async def _ensure_site(nb: Any, *, cluster_name: str, tag_refs: list[dict[str, Any]]) -> object:
     site_name = f"Proxmox Default Site - {cluster_name}"
     site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
     return await rest_reconcile_async(
@@ -167,14 +185,14 @@ async def _ensure_site(nb, *, cluster_name: str, tag_refs: list[dict]) -> object
 
 
 async def _ensure_device(
-    nb,
+    nb: Any,
     *,
     device_name: str,
     cluster_id: int | None,
     device_type_id: int | None,
     role_id: int | None,
     site_id: int | None,
-    tag_refs: list[dict],
+    tag_refs: list[dict[str, Any]],
 ) -> object:
     payload = {
         "name": device_name,
