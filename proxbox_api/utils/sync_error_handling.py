@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, TypeVar, Callable, ParamSpec
 from functools import wraps
+from typing import Any, Callable, ParamSpec, TypeVar
 
 from proxbox_api.exception import (
-    SyncError,
-    VMSyncError,
-    DeviceSyncError,
-    StorageSyncError,
-    NetworkSyncError,
-    ValidationError,
-    ProxmoxAPIError,
     NetBoxAPIError,
+    ProxmoxAPIError,
+    SyncError,
 )
 from proxbox_api.logger import logger
 

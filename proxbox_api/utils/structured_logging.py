@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from proxbox_api.logger import logger, get_operation_context
+
+from proxbox_api.logger import get_operation_context, logger
 
 
 class SyncPhaseLogger:
