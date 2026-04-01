@@ -1317,10 +1317,9 @@
 <h2 id="root-e-utilitarios">Root e utilitarios<a class="headerlink" href="#root-e-utilitarios" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /</code> - Metadados do servico e links.</li>
+<li><code>GET /version</code> - Versao do servico backend para invalidacao de cache externa.</li>
 <li><code>GET /cache</code> - Inspecao do snapshot da cache em memoria.</li>
 <li><code>GET /clear-cache</code> - Limpar cache em memoria.</li>
-<li><code>GET /sync-processes</code> - Listar registros de processos de sincronizacao da API do plugin NetBox.</li>
-<li><code>POST /sync-processes</code> - Criar um registro de processo de sincronizacao na API do plugin NetBox.</li>
 </ul>
 <h2 id="rotas-netbox-netbox">Rotas NetBox (<code>/netbox</code>)<a class="headerlink" href="#rotas-netbox-netbox" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1414,7 +1413,8 @@
 <li><code>GET /dcim/devices/create</code> - criar dispositivos NetBox a partir de nodes Proxmox (retorna JSON ao completar).</li>
 <li><code>GET /dcim/devices/create/stream</code> - variante SSE streaming. Emite eventos <code>step</code> por dispositivo com progresso granular enquanto dispositivos sao criados.</li>
 <li><code>GET /dcim/devices/{node}/interfaces/create</code></li>
-<li><code>GET /dcim/devices/interfaces/create</code></li>
+<li><code>GET /dcim/devices/interfaces/create</code> - sincroniza interfaces de todos os nodes em todos os clusters.</li>
+<li><code>GET /dcim/devices/interfaces/create/stream</code> - variante SSE streaming para sincronizacao de interfaces de todos os nodes.</li>
 </ul>
 <h2 id="rotas-de-virtualizacao-virtualization">Rotas de Virtualizacao (<code>/virtualization</code>)<a class="headerlink" href="#rotas-de-virtualizacao-virtualization" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1422,15 +1422,26 @@
 <li><code>GET /virtualization/clusters/create</code> (placeholder)</li>
 <li><code>GET /virtualization/virtual-machines/create</code> - criar VMs NetBox a partir de recursos Proxmox (retorna JSON ao completar).</li>
 <li><code>GET /virtualization/virtual-machines/create/stream</code> - variante SSE streaming. Emite eventos <code>step</code> por VM com progresso granular enquanto VMs sao criadas.</li>
+<li><code>GET /virtualization/virtual-machines/{netbox_vm_id}/create</code> - criar uma unica VM pelo ID do NetBox.</li>
+<li><code>GET /virtualization/virtual-machines/{netbox_vm_id}/create/stream</code> - variante SSE streaming para sincronizacao de uma unica VM.</li>
 <li><code>GET /virtualization/virtual-machines/</code></li>
 <li><code>GET /virtualization/virtual-machines/{id}</code></li>
 <li><code>GET /virtualization/virtual-machines/summary/example</code></li>
-<li><code>GET /virtualization/virtual-machines/backups/create</code></li>
-<li><code>GET /virtualization/virtual-machines/backups/all/create</code></li>
-<li><code>GET /virtualization/virtual-machines/backups/all/create/stream</code></li>
+<li><code>GET /virtualization/virtual-machines/interfaces/create</code> - sincroniza interfaces de VMs (JSON).</li>
+<li><code>GET /virtualization/virtual-machines/interfaces/create/stream</code> - variante SSE streaming.</li>
+<li><code>GET /virtualization/virtual-machines/interfaces/ip-address/create</code> - sincroniza IPs de VMs (JSON).</li>
+<li><code>GET /virtualization/virtual-machines/interfaces/ip-address/create/stream</code> - variante SSE streaming.</li>
+<li><code>GET /virtualization/virtual-machines/backups/create</code> - criar backups para node/storage especifico.</li>
+<li><code>GET /virtualization/virtual-machines/backups/all/create</code> - criar backups para todas as VMs.</li>
+<li><code>GET /virtualization/virtual-machines/backups/all/create/stream</code> - variante SSE streaming.</li>
+<li><code>GET /virtualization/virtual-machines/{netbox_vm_id}/backups/create/stream</code> - sincroniza backups de uma VM do NetBox.</li>
 <li><code>GET /virtualization/virtual-machines/snapshots/create</code></li>
 <li><code>GET /virtualization/virtual-machines/snapshots/all/create</code></li>
 <li><code>GET /virtualization/virtual-machines/snapshots/all/create/stream</code></li>
+<li><code>GET /virtualization/virtual-machines/{netbox_vm_id}/snapshots/create/stream</code> - sincroniza snapshots de uma VM do NetBox.</li>
+<li><code>GET /virtualization/virtual-machines/virtual-disks/create</code> - sincroniza discos virtuais (JSON).</li>
+<li><code>GET /virtualization/virtual-machines/virtual-disks/create/stream</code> - variante SSE streaming.</li>
+<li><code>GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream</code> - sincroniza discos de uma VM.</li>
 <li><code>GET /virtualization/virtual-machines/storage/create</code></li>
 <li><code>GET /virtualization/virtual-machines/storage/create/stream</code></li>
 </ul>

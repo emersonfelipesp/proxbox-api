@@ -1191,7 +1191,7 @@
 <h2 id="extensao-de-openapi">Extensao de OpenAPI<a class="headerlink" href="#extensao-de-openapi" title="Permanent link">&para;</a></h2>
 <p><code>proxbox_api/openapi_custom.py</code> substitui a geracao de OpenAPI do FastAPI e embute metadados do OpenAPI Proxmox gerado quando disponivel:</p>
 <ul>
-<li>Arquivo-fonte: <code>proxbox_api/generated/proxmox/openapi.json</code></li>
+<li>Arquivos-fontes: <code>proxbox_api/generated/proxmox/&lt;version-tag&gt;/openapi.json</code> (artefatos versionados; <code>latest</code> e a tag de versao padrao).</li>
 <li>Campos de extensao:</li>
 <li><code>info.x-proxmox-generated-openapi</code></li>
 <li><code>x-proxmox-generated-openapi</code></li>
@@ -1199,7 +1199,7 @@
 <h2 id="ciclo-de-sync">Ciclo de sync<a class="headerlink" href="#ciclo-de-sync" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Endpoints de sync orquestram descoberta no Proxmox e criacao de objetos no NetBox.</li>
-<li>Journal entries e registros de sync-process fornecem rastreabilidade.</li>
+<li>Journal entries fornecem rastreabilidade.</li>
 <li>Endpoints WebSocket e SSE fornecem progresso em tempo real por objeto.</li>
 </ul>
 

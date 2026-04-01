@@ -1191,7 +1191,7 @@
 <h2 id="openapi-extension">OpenAPI extension<a class="headerlink" href="#openapi-extension" title="Permanent link">&para;</a></h2>
 <p><code>proxbox_api/openapi_custom.py</code> overrides FastAPI OpenAPI generation and embeds generated Proxmox OpenAPI metadata when available:</p>
 <ul>
-<li>Source file: <code>proxbox_api/generated/proxmox/openapi.json</code></li>
+<li>Source files: <code>proxbox_api/generated/proxmox/&lt;version-tag&gt;/openapi.json</code> (versioned artifacts; <code>latest</code> is used as the default version tag).</li>
 <li>Extension fields:</li>
 <li><code>info.x-proxmox-generated-openapi</code></li>
 <li><code>x-proxmox-generated-openapi</code></li>

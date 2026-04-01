@@ -1043,7 +1043,7 @@
 </ul>
 <h2 id="local-preview-before-push">Local preview before push<a class="headerlink" href="#local-preview-before-push" title="Permanent link">&para;</a></h2>
 <p><code>bash
-pip install -r requirements-docs.txt
+uv sync --extra docs --group dev
 mkdocs build --strict
 mkdocs serve</code></p>
 
