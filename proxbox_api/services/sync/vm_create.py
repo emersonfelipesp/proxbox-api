@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any
 from datetime import datetime, timezone
+from typing import Any
 
 from proxbox_api.dependencies import NetBoxSessionDep
-from proxbox_api.exception import ProxboxException, VMSyncError
+from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualMachineCreateBody,
 )
+from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -25,8 +26,6 @@ from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
-
 
 # VM role mappings for different VM types
 VM_ROLE_MAPPINGS = {

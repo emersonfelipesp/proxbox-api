@@ -241,7 +241,7 @@ async def get_proxmox_storage(
     logger.debug("Fetching storage inventory for %s Proxmox sessions", len(pxs))
     """
     ### Retrieve the storage information from multiple Proxmox sessions.
-    
+
     """
     result = []
     for proxmox in pxs:

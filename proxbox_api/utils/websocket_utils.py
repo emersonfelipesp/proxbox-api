@@ -220,7 +220,7 @@ async def send_summary(
 
     summary = ", ".join(parts) if parts else "No changes"
 
-    message = f"Summary"
+    message = "Summary"
     if operation:
         message += f" for {operation}"
     message += f": {summary}"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any, Callable, ParamSpec, TypeVar
 
-from proxbox_api.exception import SyncError, VMSyncError, DeviceSyncError
+from proxbox_api.exception import SyncError
 from proxbox_api.logger import logger
 
 P = ParamSpec("P")

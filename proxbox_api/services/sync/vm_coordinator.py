@@ -4,40 +4,19 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
 
 from proxbox_api.cache import global_cache
-from proxbox_api.constants import (
-    DEFAULT_TAG_COLOR,
-    DEFAULT_VM_ROLE,
-)
 from proxbox_api.dependencies import (
     CreateCustomFieldsDep,
     NetBoxSessionDep,
-    ProxmoxSessionsDep,
     ProxboxTagDep,
+    ProxmoxSessionsDep,
 )
-from proxbox_api.exception import VMSyncError
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     rest_list_async,
-    rest_patch_async,
-    rest_reconcile_async,
 )
-from proxbox_api.proxmox_to_netbox.models import (
-    NetBoxDeviceRoleSyncState,
-    NetBoxIpAddressSyncState,
-    NetBoxVirtualDiskSyncState,
-    NetBoxVirtualMachineCreateBody,
-    NetBoxVirtualMachineInterfaceSyncState,
-    NetBoxVlanSyncState,
-    ProxmoxVmConfigInput,
-)
-from proxbox_api.proxmox_to_netbox.normalize import normalize_tag_refs
-from proxbox_api.routes.proxmox import get_vm_config
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
-from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -49,20 +28,6 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
-from proxbox_api.services.sync.storage_links import (
-    find_storage_record,
-    storage_name_from_volume_id,
-)
-from proxbox_api.services.sync.task_history import sync_virtual_machine_task_history
-from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
-from proxbox_api.services.sync.vm_helpers import (
-    best_guest_agent_ip,
-    normalized_mac,
-    relation_id,
-    relation_name,
-    to_mapping,
-)
-from proxbox_api.utils.websocket_utils import send_error, send_progress_update
 
 
 @dataclass
@@ -169,6 +134,7 @@ class VMSyncCoordinator:
     async def _ensure_vm_dependencies(
         self,
         cluster_name: str,
+        node_name: str,
         tag_refs: list[dict],
     ) -> tuple:
         """Ensure all VM dependencies exist (cluster, device, role, etc.)."""
@@ -213,7 +179,7 @@ class VMSyncCoordinator:
         )
         device = await _ensure_device(
             self.context.netbox_session,
-            device_name=resource.get("node"),
+            device_name=node_name,
             cluster_id=getattr(cluster, "id", None),
             device_type_id=getattr(device_type, "id", None),
             role_id=getattr(device_role, "id", None),

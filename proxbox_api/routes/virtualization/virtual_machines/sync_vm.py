@@ -1094,7 +1094,7 @@ async def create_virtual_machines(
 
     try:
         # Process each cluster
-        for cluster in cluster_resources:
+        for cluster in filtered_cluster_resources:
             cluster_name = list(cluster.keys())[0]
             resources = cluster[cluster_name]
             vm_count = len([r for r in resources if r.get("type") in ("qemu", "lxc")])
@@ -1103,7 +1103,7 @@ async def create_virtual_machines(
 
         # Return the created virtual machines.
         result_list = await asyncio.gather(
-            *[_create_cluster_vms(cluster) for cluster in cluster_resources],
+            *[_create_cluster_vms(cluster) for cluster in filtered_cluster_resources],
             return_exceptions=True,
         )
 
