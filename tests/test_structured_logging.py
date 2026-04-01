@@ -98,8 +98,8 @@ class TestLogSyncResult:
         """Test logging successful sync result."""
         log_sync_result("device_sync", success_count=10, failure_count=0, elapsed_seconds=5.5)
 
-        mock_logger.info.assert_called_once()
-        call_args = mock_logger.info.call_args
+        mock_logger.log.assert_called_once()
+        call_args = mock_logger.log.call_args
         assert "completed successfully" in str(call_args)
         assert call_args[1]["extra"]["success_count"] == 10
         assert call_args[1]["extra"]["total"] == 10
