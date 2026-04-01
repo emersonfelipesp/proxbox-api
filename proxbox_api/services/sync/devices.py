@@ -20,6 +20,7 @@ from proxbox_api.services.sync.device_ensure import (
     _wrap_device_phase_error,
 )
 from proxbox_api.utils import return_status_html
+from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
 
 async def create_proxmox_devices(
@@ -52,19 +53,20 @@ async def create_proxmox_devices(
         ProxboxException: If device creation or synchronization fails.
     """
     tag_refs = nested_tag_payload(tag)
-
     nb = netbox_session
 
     total_devices = 0  # Track total devices processed
     successful_devices = 0  # Track successful device creations
     failed_devices = 0  # Track failed device creations
 
-    logger.info("Device Sync Process Started")
+    # Initialize structured logger
+    phase_logger = SyncPhaseLogger("device_sync", cluster_mode="proxmox")
+    phase_logger.log_phase("initialization", "Device sync process starting")
 
     device_list: list[dict[str, Any]] = []
 
     if not clusters_status:
-        logger.info("No cluster status data provided for device sync")
+        phase_logger.log_phase("validation", "No cluster status data provided", level="warning")
         return device_list
 
     try:
@@ -78,12 +80,17 @@ async def create_proxmox_devices(
             if not cluster_status or not cluster_status.node_list:
                 continue
 
-            logger.info(f"🔄 Processing Cluster: {cluster_status.name}")
+            cluster_logger = SyncPhaseLogger("device_sync", cluster=cluster_status.name)
+            cluster_logger.log_phase("processing", f"Processing cluster: {cluster_status.name}")
 
             for node_obj in cluster_status.node_list:
                 device_name = node_obj.name
-
-                logger.info(f"🔄 Processing Device: {device_name}")
+                device_logger = SyncPhaseLogger(
+                    "device_sync",
+                    cluster=cluster_status.name,
+                    device=device_name,
+                )
+                device_logger.log_phase("processing", f"Processing device: {device_name}")
 
                 if use_websocket and websocket:
                     await websocket.send_json(
@@ -169,7 +176,11 @@ async def create_proxmox_devices(
                         except Exception as error:
                             raise _wrap_device_phase_error("device", error) from error
 
-                        logger.info(f"✅ Device created/synced successfully: {device_name}")
+                        device_logger.log_phase_complete(
+                            "creation",
+                            f"Device {device_name} created/synced successfully",
+                            device_id=getattr(netbox_device, "id", "unknown"),
+                        )
 
                     if netbox_device:
                         netbox_device_data = netbox_device.json
@@ -205,6 +216,11 @@ async def create_proxmox_devices(
                         error_msg = (
                             f"Device creation failed for {device_name}. netbox_device is None."
                         )
+                        device_logger.log_phase(
+                            "creation",
+                            error_msg,
+                            level="error",
+                        )
 
                         if use_websocket and websocket:
                             # Handle the case where netbox_device is None
@@ -225,6 +241,7 @@ async def create_proxmox_devices(
                 except Exception as error:
                     failed_devices += 1
                     error_msg = f"Error creating device {device_name}: {str(error)}"
+                    device_logger.log_error("creation", error_msg, error)
                     if isinstance(error, ProxboxException):
                         raise error
                     raise ProxboxException(
