@@ -31,6 +31,26 @@ async def create_proxmox_devices(
     use_websocket: bool = False,
     use_css: bool = False,
 ) -> list[dict[str, Any]]:
+    """Create and synchronize devices from Proxmox cluster nodes to NetBox.
+
+    This function iterates through cluster status objects, extracts node information,
+    and creates corresponding NetBox device records with appropriate metadata.
+
+    Args:
+        netbox_session: NetBox API session for creating/updating devices.
+        clusters_status: List of cluster status objects containing node information.
+        tag: ProxBox tag reference for tagging created objects.
+        websocket: Optional WebSocket connection for streaming progress updates.
+        node: Optional specific node name to filter processing.
+        use_websocket: Whether to send progress updates via WebSocket/SSE.
+        use_css: Whether to include CSS styling in HTML status responses.
+
+    Returns:
+        List of created/synced device records from NetBox as dictionaries.
+
+    Raises:
+        ProxboxException: If device creation or synchronization fails.
+    """
     tag_refs = nested_tag_payload(tag)
 
     nb = netbox_session

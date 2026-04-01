@@ -276,6 +276,29 @@ async def _create_virtual_machine_by_netbox_id(
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
 ):
+    """Create a single virtual machine by its NetBox ID.
+
+    Looks up the NetBox VM record, extracts metadata, filters Proxmox resources
+    for matching VM, and creates/updates the VM in NetBox.
+
+    Args:
+        netbox_vm_id: NetBox virtual machine ID to sync.
+        netbox_session: NetBox API session.
+        pxs: Proxmox session(s).
+        cluster_status: Cluster status objects.
+        cluster_resources: Proxmox cluster resources.
+        custom_fields: Custom field configurations.
+        tag: ProxBox tag reference.
+        websocket: Optional WebSocket for progress updates.
+        use_websocket: Whether to send WebSocket updates.
+        use_guest_agent_interface_name: Use guest-agent interface names if available.
+
+    Returns:
+        List of created/synced VM records from NetBox.
+
+    Raises:
+        HTTPException: If VM not found, missing name, or no matching Proxmox resource.
+    """
     vm_record = netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
     if vm_record is None:
         raise HTTPException(
@@ -393,8 +416,26 @@ async def create_virtual_machines(
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
 ):
-    """
-    Creates a new virtual machine in Netbox.
+    """Create and synchronize virtual machines from Proxmox to NetBox.
+
+    Discovers virtual machines in Proxmox cluster resources and creates or updates
+    corresponding NetBox VM objects with network interfaces, disks, and metadata.
+
+    Args:
+        netbox_session: NetBox API session for creating/updating VMs.
+        pxs: Proxmox session(s) for fetching VM configurations.
+        cluster_status: Cluster status objects containing node and resource information.
+        cluster_resources: Cluster resources from Proxmox (VMs, LXC containers).
+        custom_fields: Custom field configurations for NetBox.
+        tag: ProxBox tag reference for tagging created objects.
+        websocket: Optional WebSocket connection for streaming progress updates.
+        use_css: Whether to include CSS styling in HTML status responses.
+        use_websocket: Whether to send progress updates via WebSocket/SSE.
+        use_guest_agent_interface_name: Use QEMU guest-agent interface names if available.
+        netbox_vm_ids: Comma-separated NetBox VM IDs to filter sync.
+
+    Returns:
+        HTTP response with creation status, or streaming SSE response if using WebSocket.
     """
 
     filtered_cluster_resources = cluster_resources
