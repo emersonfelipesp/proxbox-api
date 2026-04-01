@@ -103,4 +103,4 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
     assert len(reconciled) == 1
     assert reconciled[0][0] == {"vmid": 101, "name": "pre-upgrade", "node": "pve01"}
     assert reconciled[0][1]["virtual_machine"] == 7
-    assert reconciled[0][1]["storage"] == 41
+    assert reconciled[0][1]["proxmox_storage"] == 41
