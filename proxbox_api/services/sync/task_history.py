@@ -19,6 +19,128 @@ from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 _DEFAULT_FETCH_CONCURRENCY = 4
 
 
+def _normalize_text(value: Any) -> str | None:
+    """Normalize text value, handling None, dict, and string types."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("name") or value.get("slug") or value.get("id")
+    text = str(value).strip()
+    return text or None
+
+
+def _find_cluster_session(pxs: list | None, cluster_status: list | None, cluster_name: str | None):
+    """Find Proxmox session for a cluster."""
+    if not pxs or not cluster_status:
+        return None
+
+    for px, cs in zip(pxs, cluster_status or []):
+        if cluster_name:
+            cs_name = getattr(cs, "name", None)
+            if cs_name == cluster_name:
+                return px
+        elif hasattr(cs, "node_list") and cs.node_list:
+            return px
+    return None
+
+
+def _cluster_nodes(cluster_status: list | None, cluster_name: str | None) -> list[str]:
+    """Get node names for a cluster."""
+    if not cluster_status:
+        return []
+
+    for cs in cluster_status:
+        cs_name = getattr(cs, "name", None)
+        if cs_name == cluster_name or not cluster_name:
+            nodes = getattr(cs, "node_list", None)
+            if nodes:
+                return [
+                    getattr(n, "node", None) or getattr(n, "name", None)
+                    for n in nodes
+                    if hasattr(n, "node") or hasattr(n, "name")
+                ]
+    return []
+
+
+def _build_task_payload(
+    virtual_machine_id: int,
+    vm_type: str,
+    task: dict[str, Any],
+    task_status: dict[str, Any],
+    tag_refs: list[dict[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    """Build task history payload from Proxmox task data."""
+    start_time = task.get("starttime")
+    if start_time:
+        try:
+            start_time_str = datetime.fromtimestamp(start_time, timezone.utc).isoformat()
+        except (ValueError, OSError):
+            start_time_str = now.isoformat()
+    else:
+        start_time_str = now.isoformat()
+
+    end_time = task_status.get("endtime")
+    end_time_str = None
+    if end_time:
+        try:
+            end_time_str = datetime.fromtimestamp(end_time, timezone.utc).isoformat()
+        except (ValueError, OSError):
+            pass
+
+    upid = _normalize_text(task.get("upid")) or ""
+    task_id = _normalize_text(task.get("id"))
+    task_type = _normalize_text(task.get("type")) or "unknown"
+    node = _normalize_text(task.get("node")) or ""
+    username = _normalize_text(task.get("user")) or "root@pam"
+
+    description = f"{task_type}"
+    if task_id:
+        description = f"{task_type} {task_id}"
+
+    status = _normalize_text(task_status.get("status")) or "unknown"
+    task_state = _normalize_text(task_status.get("state"))
+    exitstatus = _normalize_text(task_status.get("exitstatus"))
+
+    pid_val = task.get("pid")
+    if pid_val is not None:
+        try:
+            pid = int(pid_val)
+        except (ValueError, TypeError):
+            pid = None
+    else:
+        pid = None
+
+    pstart_val = task.get("pstart")
+    if pstart_val is not None:
+        try:
+            pstart = int(pstart_val)
+        except (ValueError, TypeError):
+            pstart = None
+    else:
+        pstart = None
+
+    return {
+        "virtual_machine": virtual_machine_id,
+        "vm_type": vm_type,
+        "upid": upid,
+        "node": node,
+        "pid": pid,
+        "pstart": pstart,
+        "task_id": task_id,
+        "task_type": task_type,
+        "username": username,
+        "start_time": start_time_str,
+        "end_time": end_time_str,
+        "description": description,
+        "status": status,
+        "task_state": task_state,
+        "exitstatus": exitstatus,
+        "tags": tag_refs,
+        "custom_fields": {},
+    }
+
+
 async def _list_all_vms_with_proxmox_id(
     nb,
     batch_size: int = 500,
