@@ -19,7 +19,7 @@ from proxbox_api.services.sync.storage_links import find_storage_record
 from proxbox_api.services.sync.vm_helpers import best_guest_agent_ip
 
 
-async def sync_vm_interfaces(
+async def sync_vm_interfaces(  # noqa: C901
     nb: NetBoxSessionDep,
     virtual_machine: dict[str, Any],
     vm_config: dict[str, Any],

@@ -279,7 +279,7 @@ async def create_virtual_machine_backups(
     return reconciled
 
 
-async def _create_all_virtual_machine_backups(
+async def _create_all_virtual_machine_backups(  # noqa: C901
     netbox_session,
     pxs,
     cluster_status,

@@ -80,7 +80,7 @@ async def websocket_virtual_machines(
 
 
 @websocket_router.websocket("/ws")
-async def websocket_sync_commands(
+async def websocket_sync_commands(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,

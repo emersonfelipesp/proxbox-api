@@ -233,7 +233,7 @@ async def _list_all_vms_with_proxmox_id(
     return all_vms
 
 
-async def sync_all_virtual_machine_task_histories(
+async def sync_all_virtual_machine_task_histories(  # noqa: C901
     netbox_session: Any,
     pxs: list[Any] | None,
     cluster_status: list[Any] | None,

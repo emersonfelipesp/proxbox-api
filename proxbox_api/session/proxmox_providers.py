@@ -16,7 +16,7 @@ from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox_core import ProxmoxSession
 
 
-async def proxmox_sessions(
+async def proxmox_sessions(  # noqa: C901
     database_session: DatabaseSessionDep,
     source: str = "database",
     name: Annotated[

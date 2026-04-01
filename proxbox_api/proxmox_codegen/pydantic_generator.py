@@ -139,7 +139,7 @@ def _request_schema_for_operation(path: str, operation: dict[str, Any]) -> dict[
     return schema
 
 
-def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:
+def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:  # noqa: C901
     """Generate a Python module with Pydantic v2 schemas for request/response payloads."""
 
     lines: list[str] = [

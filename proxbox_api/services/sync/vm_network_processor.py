@@ -15,7 +15,7 @@ from proxbox_api.proxmox_to_netbox.models import (
 from proxbox_api.services.sync.vm_helpers import normalized_mac
 
 
-async def process_vm_network_interface(
+async def process_vm_network_interface(  # noqa: C901
     nb: NetBoxSessionDep,
     virtual_machine: dict[str, Any],
     interface_name: str,

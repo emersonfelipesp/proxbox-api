@@ -9,7 +9,7 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async
 
 
-async def filter_cluster_resources_by_netbox_vm_ids(
+async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     cluster_resources: list[dict],
     netbox_vm_ids: list[int],

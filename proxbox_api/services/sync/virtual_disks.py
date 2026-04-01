@@ -47,7 +47,7 @@ async def _list_all_vms_with_proxmox_id(
     return all_vms
 
 
-async def create_virtual_disks(
+async def create_virtual_disks(  # noqa: C901
     netbox_session: Any,
     pxs: ProxmoxSessionsDep,
     cluster_status: list[Any] | None,

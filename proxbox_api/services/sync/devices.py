@@ -23,7 +23,7 @@ from proxbox_api.utils import return_status_html
 from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
 
-async def create_proxmox_devices(
+async def create_proxmox_devices(  # noqa: C901
     netbox_session: Any,
     clusters_status: list[Any] | None,
     tag: ProxboxTagDep,

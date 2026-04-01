@@ -178,7 +178,7 @@ def _resolved_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     return schema
 
 
-def _sample_value_for_schema(schema: dict[str, Any] | None, *, seed: str) -> Any:
+def _sample_value_for_schema(schema: dict[str, Any] | None, *, seed: str) -> Any:  # noqa: C901
     schema = _resolved_schema(schema)
     if not schema:
         return {}

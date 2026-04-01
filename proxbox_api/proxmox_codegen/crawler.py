@@ -250,7 +250,7 @@ def _synthesize_raw_sections(method_data: dict[str, Any]) -> list[str]:
     return sections
 
 
-async def _capture_endpoint(
+async def _capture_endpoint(  # noqa: C901
     page: Page, item: dict[str, Any], timeout_ms: int
 ) -> tuple[str, dict[str, Any]] | None:
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -324,7 +324,7 @@ async def _write_checkpoint(checkpoint_path: Path, payload: dict[str, Any]) -> N
     await asyncio.to_thread(checkpoint_path.write_text, serialized, "utf-8")
 
 
-async def _worker(
+async def _worker(  # noqa: C901
     context: BrowserContext,
     queue: asyncio.Queue,
     output: dict[str, dict[str, Any]],

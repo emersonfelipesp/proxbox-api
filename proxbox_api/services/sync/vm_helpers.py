@@ -102,7 +102,7 @@ def best_guest_agent_ip(guest_iface: dict | None) -> str | None:
     return None
 
 
-def filter_cluster_resources_for_vm(
+def filter_cluster_resources_for_vm(  # noqa: C901
     cluster_resources: list[dict],
     *,
     vm_name: str,

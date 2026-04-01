@@ -341,7 +341,7 @@ async def top_level_endpoint(
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
-async def get_vm_config(
+async def get_vm_config(  # noqa: C901
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     name: str = Query(title="Cluster", description="Proxmox Cluster Name", default=None),

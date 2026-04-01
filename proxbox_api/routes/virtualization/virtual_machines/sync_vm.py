@@ -145,7 +145,7 @@ def _relation_id(value: Any) -> int | None:
     return None
 
 
-def _filter_cluster_resources_for_vm(
+def _filter_cluster_resources_for_vm(  # noqa: C901
     cluster_resources: list[dict],
     *,
     vm_name: str,
@@ -201,7 +201,7 @@ def _filter_cluster_resources_for_vm(
     return filtered
 
 
-async def _filter_cluster_resources_by_netbox_vm_ids(
+async def _filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     cluster_resources: list[dict],
     netbox_vm_ids: list[int],
@@ -476,7 +476,7 @@ async def create_test():
 
 
 @router.get("/create")
-async def create_virtual_machines(
+async def create_virtual_machines(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -555,7 +555,7 @@ async def create_virtual_machines(
     except Exception as error:
         logger.warning("Error loading storage records for VM sync: %s", error)
 
-    async def create_vm_task(cluster_name, resource):
+    async def create_vm_task(cluster_name, resource):  # noqa: C901
         undefined_html = return_status_html("undefined", use_css)
 
         websocket_vm_json: dict = {

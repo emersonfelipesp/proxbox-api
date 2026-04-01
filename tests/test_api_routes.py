@@ -763,7 +763,7 @@ def test_create_virtual_machine_by_netbox_id_stream_emits_complete(monkeypatch):
     assert "Virtual machine sync completed." in payload
 
 
-def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):
+def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # noqa: C901
     class _Tag:
         id = 1
 

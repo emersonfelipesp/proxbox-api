@@ -244,7 +244,7 @@ def _mounted_fastapi_path(openapi_path: str, operation: dict[str, Any]) -> str:
     return mounted_path
 
 
-def _build_generated_endpoint(
+def _build_generated_endpoint(  # noqa: C901
     *,
     openapi_path: str,
     method: str,
