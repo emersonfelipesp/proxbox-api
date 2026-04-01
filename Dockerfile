@@ -1,4 +1,4 @@
-# Build dependencies and the app into a virtualenv with uv (install from PyPI).
+# Build dependencies and the app into a virtualenv with uv from the checked-out repo.
 FROM python:3.13-slim-bookworm AS builder
 
 WORKDIR /app
@@ -9,10 +9,13 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Create virtual environment and install proxbox-api from PyPI with dependencies
+# Build from the local repository so the image always matches the checked-out commit.
+COPY README.md pyproject.toml ./
+COPY proxbox_api ./proxbox_api
+
 RUN uv venv --seed /app/.venv && \
     /app/.venv/bin/python -m pip install --upgrade pip && \
-    /app/.venv/bin/pip install 'proxbox-api[playwright]'
+    /app/.venv/bin/pip install '.[playwright]'
 
 # Application tree + venv only (shared by HTTP and HTTPS images).
 FROM python:3.13-slim-bookworm AS runtime-base
