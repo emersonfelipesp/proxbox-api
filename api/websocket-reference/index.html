@@ -672,6 +672,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#message-frame-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Message Frame Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-context-in-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Context in Messages
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry and Recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1020,6 +1070,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#message-frame-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Message Frame Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-context-in-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Context in Messages
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry and Recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1099,6 +1199,30 @@
 <li>WebSocket flows depend on a valid NetBox endpoint and Proxmox sessions.</li>
 <li>Long-running operations may create sync-process records and journal entries in NetBox plugin objects.</li>
 </ul>
+<h2 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
+<p>WebSocket endpoints employ the same error handling and structured logging as HTTP endpoints:</p>
+<h3 id="message-frame-types">Message Frame Types<a class="headerlink" href="#message-frame-types" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>step</code></strong>: Regular progress update with operation context</li>
+<li><strong><code>error</code></strong>: Error occurred during operation - contains error details and operation context</li>
+<li><strong><code>complete</code></strong>: Final status frame with success/failure summary</li>
+</ul>
+<h3 id="error-context-in-messages">Error Context in Messages<a class="headerlink" href="#error-context-in-messages" title="Permanent link">&para;</a></h3>
+<p>All error messages include:</p>
+<ul>
+<li><strong>operation</strong>: The sync operation name (device_sync, vm_sync, etc.)</li>
+<li><strong>phase</strong>: Current operation phase (filtering, creation, validation, etc.)</li>
+<li><strong>step/status</strong>: Current step and status indicator</li>
+<li><strong>error</strong>: Error message or exception class</li>
+<li><strong>detail</strong>: Additional error details for debugging</li>
+</ul>
+<h3 id="retry-and-recovery">Retry and Recovery<a class="headerlink" href="#retry-and-recovery" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Transient network errors trigger automatic retry with exponential backoff</li>
+<li>Permanent errors are reported with full context for debugging</li>
+<li>All operations maintain detailed logs accessible via <code>/logs</code> or NetBox plugin UI</li>
+</ul>
+<p>See <code>docs/development/troubleshooting.md</code> for common error scenarios and recovery steps.</p>
 
 
 

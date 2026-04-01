@@ -814,6 +814,67 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Failure handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#error-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-error-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync Error Hierarchy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-and-resilience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry and Resilience
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structured-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured Logging
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response Handling
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1128,6 +1189,67 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Failure handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#error-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-error-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync Error Hierarchy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-and-resilience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry and Resilience
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structured-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured Logging
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response Handling
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1258,12 +1380,45 @@
 <li>WebSocket and SSE workflows provide interactive/real-time status output.</li>
 </ul>
 <h2 id="failure-handling">Failure handling<a class="headerlink" href="#failure-handling" title="Permanent link">&para;</a></h2>
+<p>Comprehensive error handling is implemented via decorators and validation utilities:</p>
+<h3 id="error-validation">Error Validation<a class="headerlink" href="#error-validation" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Domain errors are raised via <code>ProxboxException</code> and returned as structured JSON by app-level handler.</li>
-<li>Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500.</li>
-<li>Route handlers perform best-effort continuation in certain batch loops.</li>
-<li>In SSE streaming mode, errors are emitted as <code>event: error</code> frames followed by a final <code>event: complete</code> with <code>ok: false</code>.</li>
+<li><strong>NetBox responses</strong> are validated to ensure they contain required fields (e.g., <code>id</code>) before processing</li>
+<li><strong>Proxmox responses</strong> are validated against Pydantic models for type safety</li>
+<li>Invalid responses raise typed exceptions (<code>NetBoxAPIError</code>, <code>ProxmoxAPIError</code>, etc.)</li>
 </ul>
+<h3 id="sync-error-hierarchy">Sync Error Hierarchy<a class="headerlink" href="#sync-error-hierarchy" title="Permanent link">&para;</a></h3>
+<p>Custom exception types provide detailed context:</p>
+<ul>
+<li><code>VMSyncError</code>: Virtual machine sync failures</li>
+<li><code>DeviceSyncError</code>: Node/device sync failures</li>
+<li><code>StorageSyncError</code>: Storage definition failures</li>
+<li><code>NetworkSyncError</code>: Network interface/VLAN failures</li>
+<li>Base: <code>SyncError</code> for generic sync operation failures</li>
+</ul>
+<h3 id="retry-and-resilience">Retry and Resilience<a class="headerlink" href="#retry-and-resilience" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Decorators apply exponential backoff retry logic for transient failures</li>
+<li>Configurable retry counts and backoff intervals</li>
+<li>Failed attempts are logged with context before retry</li>
+<li>Final failures bubble up with full error context</li>
+</ul>
+<h3 id="structured-logging">Structured Logging<a class="headerlink" href="#structured-logging" title="Permanent link">&para;</a></h3>
+<p>All sync operations use structured logging for observability:</p>
+<ul>
+<li><strong>Phase logging</strong>: Each distinct phase (filtering, validation, creation) emits logs with operation and phase context</li>
+<li><strong>Resource logging</strong>: Per-object events are logged with resource ID, type, and status</li>
+<li><strong>Completion logging</strong>: Sync results logged with success/failure counts and elapsed time</li>
+<li><strong>Error logging</strong>: Failures include exception details, stack traces, and full operation context</li>
+</ul>
+<h3 id="response-handling">Response Handling<a class="headerlink" href="#response-handling" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Domain errors are raised via <code>ProxboxException</code> and returned as structured JSON by app-level handler</li>
+<li>Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500</li>
+<li>Route handlers perform best-effort continuation in certain batch loops</li>
+<li>In SSE streaming mode, errors are emitted as <code>event: error</code> frames followed by a final <code>event: complete</code> with <code>ok: false</code></li>
+</ul>
+<p>For details on error handling implementation, see <code>proxbox_api/utils/sync_error_handling.py</code> and <code>proxbox_api/utils/structured_logging.py</code>.</p>
 
 
 

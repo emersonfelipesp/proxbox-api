@@ -767,6 +767,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#error-handling-and-sync-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling and Sync Utilities
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling and Sync Utilities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structured-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured Logging
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decorators-for-resilience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decorators for Resilience
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#proxbox-plugin-config-routes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1276,6 +1326,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#error-handling-and-sync-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling and Sync Utilities
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling and Sync Utilities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structured-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured Logging
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decorators-for-resilience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decorators for Resilience
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#proxbox-plugin-config-routes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1524,6 +1624,29 @@ data: {"step":"device","status":"progress","message":"Processing device pve01","
 <li><code>GET /extras/extras/custom-fields/create</code></li>
 </ul>
 <p>This endpoint creates expected custom fields used by VM synchronization metadata.</p>
+<h2 id="error-handling-and-sync-utilities">Error Handling and Sync Utilities<a class="headerlink" href="#error-handling-and-sync-utilities" title="Permanent link">&para;</a></h2>
+<p>All synchronization endpoints employ comprehensive error handling patterns documented in <code>proxbox_api/utils/sync_error_handling.py</code>:</p>
+<h3 id="response-validation">Response Validation<a class="headerlink" href="#response-validation" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>NetBox responses</strong> are validated to ensure required <code>id</code> field is present</li>
+<li><strong>Proxmox responses</strong> are validated against expected structure and Pydantic models</li>
+<li>Invalid responses raise <code>NetBoxAPIError</code> or <code>ProxmoxAPIError</code> with context</li>
+</ul>
+<h3 id="structured-logging">Structured Logging<a class="headerlink" href="#structured-logging" title="Permanent link">&para;</a></h3>
+<p>Sync operations use structured logging for observability via <code>proxbox_api/utils/structured_logging.py</code>:</p>
+<ul>
+<li><strong>Phase logging</strong>: Each sync phase (e.g., "filtering", "creation") logs with context (operation name, resource counts)</li>
+<li><strong>Resource logging</strong>: Per-resource events include resource ID, type, and status</li>
+<li><strong>Result logging</strong>: Sync completion includes success/failure counts and elapsed time</li>
+<li><strong>Error logging</strong>: Failures include full context and error details</li>
+</ul>
+<h3 id="decorators-for-resilience">Decorators for Resilience<a class="headerlink" href="#decorators-for-resilience" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>@with_sync_error_handling</code></strong>: Wraps sync functions to catch and log errors with context</li>
+<li><strong><code>@with_retry</code></strong>: Implements exponential backoff retry logic for transient failures</li>
+<li><strong><code>@with_async_sync_error_handling</code> / <code>@with_async_retry</code></strong>: Async variants for concurrent operations</li>
+</ul>
+<p>See the sync operation documentation (<code>docs/sync/workflows.md</code>) for detailed execution flow and error recovery patterns.</p>
 <h2 id="proxbox-plugin-config-routes">Proxbox plugin config routes<a class="headerlink" href="#proxbox-plugin-config-routes" title="Permanent link">&para;</a></h2>
 <p>These route handlers exist in <code>proxbox_api/routes/proxbox/__init__.py</code> but are not currently mounted in <code>main.py</code>:</p>
 <ul>
