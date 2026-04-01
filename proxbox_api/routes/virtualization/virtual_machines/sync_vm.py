@@ -276,6 +276,46 @@ async def _filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     return filtered
 
 
+async def _resolve_netbox_virtual_machine_by_proxmox_id(
+    netbox_session: NetBoxSessionDep,
+    proxmox_vm_id: int | str | None,
+) -> dict[str, object] | None:
+    """Resolve the NetBox VM row that corresponds to a Proxmox VM id."""
+    if proxmox_vm_id is None:
+        return None
+
+    try:
+        vmid = int(str(proxmox_vm_id).strip())
+    except (TypeError, ValueError):
+        return None
+
+    try:
+        virtual_machines = await rest_list_async(
+            netbox_session,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": vmid},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve NetBox VM for Proxmox VMID %s: %s",
+            proxmox_vm_id,
+            exc,
+        )
+        return None
+
+    if not virtual_machines:
+        return None
+
+    virtual_machine = virtual_machines[0]
+    if isinstance(virtual_machine, dict):
+        return virtual_machine
+    if hasattr(virtual_machine, "dict"):
+        dumped = virtual_machine.dict()
+        if isinstance(dumped, dict):
+            return dumped
+    return None
+
+
 def _normalized_mac(value: str | None) -> str:
     """Normalize a MAC address to lowercase string.
 
@@ -1171,7 +1211,7 @@ async def create_virtual_machines(  # noqa: C901
     return flattened_results
 
 
-async def create_only_vm_interfaces(
+async def create_only_vm_interfaces(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -1214,7 +1254,7 @@ async def create_only_vm_interfaces(
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
-    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> list[dict]:
+    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
         cluster_name_str = str(cluster_name)
         resource_node = str(resource.get("node", ""))
         vm_type = resource.get("type", "unknown")
@@ -1233,6 +1273,21 @@ async def create_only_vm_interfaces(
         if not vm_record:
             return []
 
+        vmid = resource.get("vmid")
+        if vmid is None:
+            return []
+
+        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(
+            nb, vmid
+        )
+        if not netbox_vm:
+            logger.warning(
+                "Skipping VM interface sync for %s (vmid=%s): NetBox VM not found",
+                vm_name,
+                vmid,
+            )
+            return []
+
         proxmox_session = next(
             (
                 px
@@ -1241,10 +1296,6 @@ async def create_only_vm_interfaces(
             ),
             None,
         )
-
-        vmid = resource.get("vmid")
-        if vmid is None:
-            return []
 
         vm_config: dict[str, object] = {}
         try:
@@ -1321,7 +1372,10 @@ async def create_only_vm_interfaces(
                 try:
                     result = await sync_vm_interface_and_ip(
                         nb=nb,
-                        virtual_machine={"id": None, "name": vm_name},
+                        virtual_machine={
+                            "id": netbox_vm.get("id"),
+                            "name": netbox_vm.get("name") or vm_name,
+                        },
                         interface_name=resolved_name,
                         interface_config=config_dict,
                         guest_iface=guest_iface,
@@ -1403,7 +1457,7 @@ async def create_only_vm_interfaces(
     return results
 
 
-async def create_only_vm_ip_addresses(
+async def create_only_vm_ip_addresses(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -1449,7 +1503,7 @@ async def create_only_vm_ip_addresses(
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
-    async def _sync_vm_ips(cluster_name: str, resource: dict) -> list[dict]:
+    async def _sync_vm_ips(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
         cluster_name_str = str(cluster_name)
         resource_node = str(resource.get("node", ""))
         vm_type = resource.get("type", "unknown")
@@ -1457,6 +1511,17 @@ async def create_only_vm_ip_addresses(
 
         vmid = resource.get("vmid")
         if vmid is None:
+            return []
+
+        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(
+            nb, vmid
+        )
+        if not netbox_vm:
+            logger.warning(
+                "Skipping VM IP sync for %s (vmid=%s): NetBox VM not found",
+                vm_name,
+                vmid,
+            )
             return []
 
         proxmox_session = next(
@@ -1545,7 +1610,10 @@ async def create_only_vm_ip_addresses(
                 try:
                     result = await sync_vm_interface_and_ip(
                         nb=nb,
-                        virtual_machine={"id": None, "name": vm_name},
+                        virtual_machine={
+                            "id": netbox_vm.get("id"),
+                            "name": netbox_vm.get("name") or vm_name,
+                        },
                         interface_name=resolved_name,
                         interface_config=config_dict,
                         guest_iface=guest_iface,
