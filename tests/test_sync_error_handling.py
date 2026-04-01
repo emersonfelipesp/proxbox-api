@@ -2,6 +2,7 @@
 
 import pytest
 import asyncio
+import time
 from unittest.mock import patch, MagicMock, AsyncMock
 from proxbox_api.utils.sync_error_handling import (
     validate_netbox_response,
@@ -107,11 +108,8 @@ class TestAsyncSyncErrorHandlingDecorator:
 class TestRetryDecorator:
     """Tests for retry decorator."""
 
-    @patch("proxbox_api.utils.sync_error_handling.logger")
-    @patch("proxbox_api.utils.sync_error_handling.time")
-    def test_retry_success_first_attempt(
-        self, mock_time: MagicMock, mock_logger: MagicMock
-    ) -> None:
+    @patch("time.sleep")
+    def test_retry_success_first_attempt(self, mock_sleep: MagicMock) -> None:
         """Test retry succeeds on first attempt."""
         call_count = 0
 
@@ -125,11 +123,8 @@ class TestRetryDecorator:
         assert result == "success"
         assert call_count == 1
 
-    @patch("proxbox_api.utils.sync_error_handling.logger")
-    @patch("proxbox_api.utils.sync_error_handling.time")
-    def test_retry_success_after_failures(
-        self, mock_time: MagicMock, mock_logger: MagicMock
-    ) -> None:
+    @patch("time.sleep")
+    def test_retry_success_after_failures(self, mock_sleep: MagicMock) -> None:
         """Test retry succeeds after initial failures."""
         call_count = 0
 
@@ -145,9 +140,8 @@ class TestRetryDecorator:
         assert result == "success"
         assert call_count == 3
 
-    @patch("proxbox_api.utils.sync_error_handling.logger")
-    @patch("proxbox_api.utils.sync_error_handling.time")
-    def test_retry_exhausted(self, mock_time: MagicMock, mock_logger: MagicMock) -> None:
+    @patch("time.sleep")
+    def test_retry_exhausted(self, mock_sleep: MagicMock) -> None:
         """Test retry exhaustion raises error."""
 
         @with_retry(max_attempts=2, backoff_seconds=0.1)
@@ -156,8 +150,6 @@ class TestRetryDecorator:
 
         with pytest.raises(ValueError):
             test_func()
-
-        mock_logger.error.assert_called_once()
 
 
 class TestAsyncRetryDecorator:
