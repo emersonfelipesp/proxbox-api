@@ -49,10 +49,27 @@ jobs:
     name: Docker — build and test only (manual)
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve checkout ref
+        id: checkout_source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          encoded_ref="$(python3 - <<'PY'
+          import os
+          from urllib.parse import quote
+
+          print(quote(os.environ["SOURCE_REF"], safe=""))
+          PY
+          )"
+          sha="$(gh api "repos/${{ github.repository }}/commits/$encoded_ref" --jq .sha)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+          ref: ${{ steps.checkout_source.outputs.sha }}
 
       - name: Validate pyproject version vs tag ref
         id: version
@@ -189,10 +206,27 @@ jobs:
     name: Docker Hub — runtime (nginx + uvicorn)
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve checkout ref
+        id: checkout_source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          encoded_ref="$(python3 - <<'PY'
+          import os
+          from urllib.parse import quote
+
+          print(quote(os.environ["SOURCE_REF"], safe=""))
+          PY
+          )"
+          sha="$(gh api "repos/${{ github.repository }}/commits/$encoded_ref" --jq .sha)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+          ref: ${{ steps.checkout_source.outputs.sha }}
 
       - name: Resolve source revision
         id: source
@@ -292,10 +326,27 @@ jobs:
     name: Docker Hub — mkcert (nginx + HTTPS + uvicorn)
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve checkout ref
+        id: checkout_source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          encoded_ref="$(python3 - <<'PY'
+          import os
+          from urllib.parse import quote
+
+          print(quote(os.environ["SOURCE_REF"], safe=""))
+          PY
+          )"
+          sha="$(gh api "repos/${{ github.repository }}/commits/$encoded_ref" --jq .sha)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+          ref: ${{ steps.checkout_source.outputs.sha }}
 
       - name: Resolve source revision
         id: source
