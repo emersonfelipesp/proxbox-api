@@ -457,7 +457,15 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
     )
     monkeypatch.setattr(
         "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories",
-        lambda **kwargs: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0, "error": "'object' object has no attribute 'client'"}),
+        lambda **kwargs: asyncio.sleep(
+            0,
+            result={
+                "count": 0,
+                "created": 0,
+                "skipped": 0,
+                "error": "'object' object has no attribute 'client'",
+            },
+        ),
     )
 
     body = asyncio.run(
@@ -479,7 +487,12 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
         "virtual_disks": {"count": 2, "created": 2, "updated": 0, "skipped": 0},
         "backups": [{"id": 301, "vmid": "101"}],
         "snapshots": {"count": 1, "created": 1, "skipped": 0},
-        "task_history": {"count": 0, "created": 0, "skipped": 0, "error": "'object' object has no attribute 'client'"},
+        "task_history": {
+            "count": 0,
+            "created": 0,
+            "skipped": 0,
+            "error": "'object' object has no attribute 'client'",
+        },
         "devices_count": 1,
         "storage_count": 1,
         "virtual_machines_count": 1,

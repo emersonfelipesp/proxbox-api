@@ -31,11 +31,7 @@ def is_tag_like(obj: Any) -> TypeGuard[TagLike]:
     Returns:
         True if object has name, slug, and color attributes
     """
-    return (
-        hasattr(obj, "name")
-        and hasattr(obj, "slug")
-        and hasattr(obj, "color")
-    )
+    return hasattr(obj, "name") and hasattr(obj, "slug") and hasattr(obj, "color")
 
 
 def is_proxmox_resource(obj: Any) -> TypeGuard[ProxmoxResource]:
