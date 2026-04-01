@@ -354,12 +354,11 @@ async def get_vm_config(
     If found, it returns the VM Config.
     """
 
-    # Early error return.
-    if not type:
-        return {"message": "VM Type is required. Use 'qemu' or 'lxc'."}
-    else:
-        if type not in ("qemu", "lxc"):
-            return {"message": "Invalid VM Type. Use 'qemu' or 'lxc'."}
+    if type not in ("qemu", "lxc"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid VM Type. Use 'qemu' or 'lxc'.",
+        )
 
     try:
         config = None
@@ -393,8 +392,15 @@ async def get_vm_config(
 
     except ProxboxException:
         raise
-    except Exception:
+    except Exception as error:
+        logger.exception(
+            "Unhandled error while getting VM config for node=%s type=%s vmid=%s",
+            node,
+            type,
+            vmid,
+        )
         raise ProxboxException(
             message="Unknown error getting VM Config. Search parameters probably wrong.",
             detail="Check if the node, type, and vmid are correct.",
+            python_exception=str(error),
         )
