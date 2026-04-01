@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from proxbox_api.proxmox_to_netbox.errors import ProxmoxToNetBoxError
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
     ProxmoxToNetBoxVirtualMachine,
+    ProxmoxVmConfigInput,
+    ProxmoxVmResourceInput,
 )
 from proxbox_api.proxmox_to_netbox.netbox_schema import resolve_netbox_schema_contract
 from proxbox_api.proxmox_to_netbox.proxmox_schema import proxmox_operation_schema
@@ -28,8 +29,8 @@ def _validate_netbox_contract(payload: NetBoxVirtualMachineCreateBody) -> None:
 
 
 def build_virtual_machine_transform(
-    resource: dict[str, Any],
-    config: dict[str, Any] | None,
+    resource: ProxmoxVmResourceInput | dict[str, object],
+    config: ProxmoxVmConfigInput | dict[str, object] | None,
     *,
     cluster_id: int,
     device_id: int | None,

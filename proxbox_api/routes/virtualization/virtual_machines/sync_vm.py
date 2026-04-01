@@ -4,7 +4,6 @@
 import asyncio
 from datetime import datetime, timezone
 from ipaddress import ip_address
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -58,7 +57,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 router = APIRouter()
 
 
-def _to_mapping(value: Any) -> dict[str, Any]:
+def _to_mapping(value: object) -> dict[str, object]:
     """Coerce a value to a dictionary representation.
 
     Attempts multiple serialization strategies in order:
@@ -94,7 +93,7 @@ def _to_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _relation_name(value: Any) -> str | None:
+def _relation_name(value: object) -> str | None:
     """Extract a human-readable name from a relation object or value.
 
     Attempts to extract a name string from various object representations:
@@ -117,7 +116,7 @@ def _relation_name(value: Any) -> str | None:
     return None
 
 
-def _relation_id(value: Any) -> int | None:
+def _relation_id(value: object) -> int | None:
     """Extract a numeric ID from a relation object or value.
 
     Attempts to extract an integer ID from various object representations:
@@ -1170,6 +1169,463 @@ async def create_virtual_machines(  # noqa: C901
         raise ProxboxException(message=error_msg)
 
     return flattened_results
+
+
+async def create_only_vm_interfaces(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+    websocket=None,
+    use_websocket: bool = False,
+    use_guest_agent_interface_name: bool = True,
+    ignore_ipv6_link_local_addresses: bool = True,
+) -> list[dict]:
+    """Sync VM interfaces only (no VM creation) with per-interface progress events.
+
+    Args:
+        netbox_session: NetBox session.
+        pxs: Proxmox sessions.
+        cluster_status: Cluster status from Proxmox.
+        cluster_resources: Filtered cluster resources containing VMs.
+        custom_fields: Custom field configs.
+        tag: Proxbox tag reference.
+        websocket: Optional bridge for SSE events.
+        use_websocket: Whether to emit per-interface events.
+        use_guest_agent_interface_name: Prefer guest-agent interface names.
+        ignore_ipv6_link_local_addresses: Skip IPv6 link-local addresses.
+
+    Returns:
+        List of synced interface records.
+    """
+    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
+
+    nb = netbox_session
+    tag_id = int(getattr(tag, "id", 0) or 0)
+    tag_refs = [
+        {"name": getattr(tag, "name"), "slug": getattr(tag, "slug"), "color": getattr(tag, "color")}
+    ]
+    tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+    now = datetime.now(timezone.utc)
+    results: list[dict] = []
+
+    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> list[dict]:
+        cluster_name_str = str(cluster_name)
+        resource_node = str(resource.get("node", ""))
+        vm_type = resource.get("type", "unknown")
+        vm_name = str(resource.get("name", "")).strip()
+
+        vm_record = None
+        for cluster in cluster_resources:
+            if not isinstance(cluster, dict):
+                continue
+            for c_name, c_resources in cluster.items():
+                for r in c_resources:
+                    if r.get("name", "").strip() == vm_name and r.get("type") == vm_type:
+                        vm_record = r
+                        break
+
+        if not vm_record:
+            return []
+
+        proxmox_session = next(
+            (
+                px
+                for px, cs in zip(pxs, cluster_status)
+                if getattr(cs, "name", None) == cluster_name_str
+            ),
+            None,
+        )
+
+        vmid = resource.get("vmid")
+        if vmid is None:
+            return []
+
+        vm_config: dict[str, object] = {}
+        try:
+            if proxmox_session and resource_node:
+                vm_config = get_vm_config(proxmox_session, resource_node, int(vmid)) or {}
+        except Exception as exc:
+            logger.warning("Could not fetch VM config for %s (vmid=%s): %s", vm_name, vmid, exc)
+
+        guest_agent_interfaces: list[dict[str, object]] = []
+        if vm_type == "qemu" and vm_config.get("agent"):
+            if proxmox_session and resource_node:
+                guest_agent_interfaces = (
+                    get_qemu_guest_agent_network_interfaces(
+                        proxmox_session, resource_node, int(vmid)
+                    )
+                    or []
+                )
+
+        guest_by_name = {
+            str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
+        }
+        guest_by_mac = {
+            _normalized_mac(iface.get("mac_address")): iface
+            for iface in guest_agent_interfaces
+            if _normalized_mac(iface.get("mac_address"))
+        }
+
+        vm_networks: list[dict[str, object]] = []
+        network_id = 0
+        while True:
+            key = f"net{network_id}"
+            raw = vm_config.get(key)
+            if raw is None:
+                break
+            parts = raw.split(",")
+            network_dict = dict(p.split("=", 1) for p in parts if "=" in p)
+            vm_networks.append({key: network_dict})
+            network_id += 1
+
+        interfaces_synced: list[dict] = []
+
+        for network in vm_networks:
+            for iface_name, config_dict in network.items():
+                config_interface_name = (
+                    str(config_dict.get("name", iface_name)).strip() or iface_name
+                )
+                interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
+                guest_iface = None
+                if interface_mac:
+                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                if guest_iface is None:
+                    guest_iface = guest_by_name.get(config_interface_name.lower())
+
+                resolved_name = config_interface_name
+                if use_guest_agent_interface_name and guest_iface:
+                    guest_name = str(guest_iface.get("name") or "").strip()
+                    if guest_name:
+                        resolved_name = guest_name
+
+                if use_websocket and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "vm_interface",
+                            "data": {
+                                "completed": False,
+                                "sync_status": "syncing",
+                                "rowid": resolved_name,
+                                "name": resolved_name,
+                                "vm": vm_name,
+                            },
+                        }
+                    )
+
+                try:
+                    result = await sync_vm_interface_and_ip(
+                        nb=nb,
+                        virtual_machine={"id": None, "name": vm_name},
+                        interface_name=resolved_name,
+                        interface_config=config_dict,
+                        guest_iface=guest_iface,
+                        tag_refs=tag_refs,
+                        use_guest_agent_interface_name=use_guest_agent_interface_name,
+                        now=now,
+                    )
+                    interfaces_synced.append(result)
+
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_interface",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "netbox_id": result.get("id"),
+                                    "mac_address": result.get("mac_address"),
+                                    "ip_address": result.get("ip_address"),
+                                },
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to sync interface %s for VM %s: %s",
+                        resolved_name,
+                        vm_name,
+                        exc,
+                    )
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_interface",
+                                "data": {
+                                    "completed": False,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "error": str(exc),
+                                },
+                            }
+                        )
+
+        return interfaces_synced
+
+    max_concurrency = resolve_vm_sync_concurrency()
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+        async with semaphore:
+            return await _sync_vm_interfaces(cluster_name, resource)
+
+    async def _create_cluster_tasks(cluster: dict) -> list:
+        tasks = []
+        for cluster_name, resources in cluster.items():
+            for resource in resources:
+                if resource.get("type") in ("qemu", "lxc"):
+                    tasks.append(_run_task(cluster_name, resource))
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    try:
+        for cluster in cluster_resources:
+            cluster_results = await _create_cluster_tasks(cluster)
+            for cluster_result in cluster_results:
+                if isinstance(cluster_result, Exception):
+                    continue
+                for result in cluster_result:
+                    if isinstance(result, Exception):
+                        continue
+                    results.append(result)
+    except Exception as exc:
+        logger.warning("Error during VM interfaces sync: %s", exc)
+
+    if use_websocket and websocket:
+        await websocket.send_json({"object": "vm_interface", "end": True})
+
+    return results
+
+
+async def create_only_vm_ip_addresses(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+    websocket=None,
+    use_websocket: bool = False,
+    use_guest_agent_interface_name: bool = True,
+    ignore_ipv6_link_local_addresses: bool = True,
+) -> list[dict]:
+    """Sync VM IP addresses only (depends on interface sync being done first).
+
+    This function calls create_only_vm_interfaces internally to ensure interfaces
+    exist before assigning IP addresses to them.
+
+    Args:
+        netbox_session: NetBox session.
+        pxs: Proxmox sessions.
+        cluster_status: Cluster status from Proxmox.
+        cluster_resources: Filtered cluster resources containing VMs.
+        custom_fields: Custom field configs.
+        tag: Proxbox tag reference.
+        websocket: Optional bridge for SSE events.
+        use_websocket: Whether to emit per-IP events.
+        use_guest_agent_interface_name: Prefer guest-agent interface names.
+        ignore_ipv6_link_local_addresses: Skip IPv6 link-local addresses.
+
+    Returns:
+        List of synced IP address records.
+    """
+    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
+
+    nb = netbox_session
+    tag_refs = [
+        {"name": getattr(tag, "name"), "slug": getattr(tag, "slug"), "color": getattr(tag, "color")}
+    ]
+    tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+    now = datetime.now(timezone.utc)
+    results: list[dict] = []
+
+    async def _sync_vm_ips(cluster_name: str, resource: dict) -> list[dict]:
+        cluster_name_str = str(cluster_name)
+        resource_node = str(resource.get("node", ""))
+        vm_type = resource.get("type", "unknown")
+        vm_name = str(resource.get("name", "")).strip()
+
+        vmid = resource.get("vmid")
+        if vmid is None:
+            return []
+
+        proxmox_session = next(
+            (
+                px
+                for px, cs in zip(pxs, cluster_status)
+                if getattr(cs, "name", None) == cluster_name_str
+            ),
+            None,
+        )
+
+        vm_config: dict[str, object] = {}
+        try:
+            if proxmox_session and resource_node:
+                vm_config = get_vm_config(proxmox_session, resource_node, int(vmid)) or {}
+        except Exception as exc:
+            logger.warning(
+                "Could not fetch VM config for IP sync %s (vmid=%s): %s", vm_name, vmid, exc
+            )
+
+        guest_agent_interfaces: list[dict[str, object]] = []
+        if vm_type == "qemu" and vm_config.get("agent"):
+            if proxmox_session and resource_node:
+                guest_agent_interfaces = (
+                    get_qemu_guest_agent_network_interfaces(
+                        proxmox_session, resource_node, int(vmid)
+                    )
+                    or []
+                )
+
+        guest_by_name = {
+            str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
+        }
+        guest_by_mac = {
+            _normalized_mac(iface.get("mac_address")): iface
+            for iface in guest_agent_interfaces
+            if _normalized_mac(iface.get("mac_address"))
+        }
+
+        vm_networks: list[dict[str, object]] = []
+        network_id = 0
+        while True:
+            key = f"net{network_id}"
+            raw = vm_config.get(key)
+            if raw is None:
+                break
+            parts = raw.split(",")
+            network_dict = dict(p.split("=", 1) for p in parts if "=" in p)
+            vm_networks.append({key: network_dict})
+            network_id += 1
+
+        ips_synced: list[dict] = []
+
+        for network in vm_networks:
+            for iface_name, config_dict in network.items():
+                config_interface_name = (
+                    str(config_dict.get("name", iface_name)).strip() or iface_name
+                )
+                interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
+                guest_iface = None
+                if interface_mac:
+                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                if guest_iface is None:
+                    guest_iface = guest_by_name.get(config_interface_name.lower())
+
+                resolved_name = config_interface_name
+                if use_guest_agent_interface_name and guest_iface:
+                    guest_name = str(guest_iface.get("name") or "").strip()
+                    if guest_name:
+                        resolved_name = guest_name
+
+                if use_websocket and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "vm_ip",
+                            "data": {
+                                "completed": False,
+                                "sync_status": "syncing",
+                                "rowid": resolved_name,
+                                "name": resolved_name,
+                                "vm": vm_name,
+                            },
+                        }
+                    )
+
+                try:
+                    result = await sync_vm_interface_and_ip(
+                        nb=nb,
+                        virtual_machine={"id": None, "name": vm_name},
+                        interface_name=resolved_name,
+                        interface_config=config_dict,
+                        guest_iface=guest_iface,
+                        tag_refs=tag_refs,
+                        use_guest_agent_interface_name=use_guest_agent_interface_name,
+                        now=now,
+                    )
+                    if result.get("ip_id"):
+                        ips_synced.append(
+                            {
+                                "ip_id": result.get("ip_id"),
+                                "address": result.get("ip_address"),
+                                "interface_name": resolved_name,
+                                "interface_id": result.get("id"),
+                                "vm": vm_name,
+                            }
+                        )
+
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_ip",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "ip_id": result.get("ip_id"),
+                                    "address": result.get("ip_address"),
+                                },
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to sync IP for VM %s interface %s: %s",
+                        vm_name,
+                        resolved_name,
+                        exc,
+                    )
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_ip",
+                                "data": {
+                                    "completed": False,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "error": str(exc),
+                                },
+                            }
+                        )
+
+        return ips_synced
+
+    max_concurrency = resolve_vm_sync_concurrency()
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+        async with semaphore:
+            return await _sync_vm_ips(cluster_name, resource)
+
+    async def _create_cluster_tasks(cluster: dict) -> list:
+        tasks = []
+        for cluster_name, resources in cluster.items():
+            for resource in resources:
+                if resource.get("type") in ("qemu", "lxc"):
+                    tasks.append(_run_task(cluster_name, resource))
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    try:
+        for cluster in cluster_resources:
+            cluster_results = await _create_cluster_tasks(cluster)
+            for cluster_result in cluster_results:
+                if isinstance(cluster_result, Exception):
+                    continue
+                for result in cluster_result:
+                    if isinstance(result, Exception):
+                        continue
+                    results.append(result)
+    except Exception as exc:
+        logger.warning("Error during VM IP address sync: %s", exc)
+
+    if use_websocket and websocket:
+        await websocket.send_json({"object": "vm_ip", "end": True})
+
+    return results
 
 
 @router.get("/{netbox_vm_id}/create")

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
-from typing import Any
 
 from proxbox_api.logger import logger
 
 
-def to_mapping(value: Any) -> dict[str, Any]:
+def to_mapping(value: object) -> dict[str, object]:
     """Coerce any value to a dictionary mapping."""
     if isinstance(value, dict):
         return value
@@ -31,7 +30,7 @@ def to_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def relation_name(value: Any) -> str | None:
+def relation_name(value: object) -> str | None:
     """Extract relation name from a value."""
     if isinstance(value, dict):
         for key in ("name", "display", "label", "value"):
@@ -43,7 +42,7 @@ def relation_name(value: Any) -> str | None:
     return None
 
 
-def relation_id(value: Any) -> int | None:
+def relation_id(value: object) -> int | None:
     """Extract relation ID from a value."""
     if isinstance(value, int):
         return value
@@ -64,7 +63,9 @@ def normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def guest_agent_ip_with_prefix(addr: dict, ignore_ipv6_link_local: bool = True) -> str | None:
+def guest_agent_ip_with_prefix(
+    addr: dict[str, object], ignore_ipv6_link_local: bool = True
+) -> str | None:
     """Extract and format guest agent IP with prefix."""
     ip_text = str(addr.get("ip_address") or "").strip()
     if not ip_text:
@@ -84,7 +85,7 @@ def guest_agent_ip_with_prefix(addr: dict, ignore_ipv6_link_local: bool = True) 
 
 
 def best_guest_agent_ip(
-    guest_iface: dict | None, ignore_ipv6_link_local: bool = True
+    guest_iface: dict[str, object] | None, ignore_ipv6_link_local: bool = True
 ) -> str | None:
     """Find the best IP address from guest agent interface data."""
     if not isinstance(guest_iface, dict):
@@ -107,16 +108,16 @@ def best_guest_agent_ip(
 
 
 def filter_cluster_resources_for_vm(  # noqa: C901
-    cluster_resources: list[dict],
+    cluster_resources: list[dict[str, object]],
     *,
     vm_name: str,
     proxmox_vm_id: int | None,
     cluster_name: str | None,
     cluster_id: int | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Filter cluster resources to find matching VM resources."""
     cluster_hint = (cluster_name or "").strip().lower()
-    filtered: list[dict] = []
+    filtered: list[dict[str, object]] = []
     for cluster in cluster_resources:
         if not isinstance(cluster, dict):
             continue

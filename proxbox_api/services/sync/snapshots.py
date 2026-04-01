@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
-from typing import Any
+
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
@@ -34,7 +34,7 @@ from proxbox_api.utils import return_status_html
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
 
 
-async def _load_storage_index(netbox_session: Any) -> dict[tuple[str, str], dict[str, Any]]:
+async def _load_storage_index(netbox_session: object) -> dict[tuple[str, str], dict[str, object]]:
     nb = netbox_session
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
@@ -45,12 +45,12 @@ async def _load_storage_index(netbox_session: Any) -> dict[tuple[str, str], dict
 
 
 async def _resolve_snapshot_storage_record(
-    netbox_session: Any,
+    netbox_session: object,
     *,
     vm_id: int,
     cluster_name: str | None,
-    storage_index: dict[tuple[str, str], dict[str, Any]],
-) -> dict[str, Any] | None:
+    storage_index: dict[tuple[str, str], dict[str, object]],
+) -> dict[str, object] | None:
     nb = netbox_session
     try:
         virtual_disks = await rest_list_async(
@@ -83,12 +83,12 @@ async def _resolve_snapshot_storage_record(
 
 
 async def create_netbox_snapshots(
-    snapshot: Any,
-    netbox_session: Any,
+    snapshot: object,
+    netbox_session: object,
     vmid: str | int,
     node: str,
     storage_record: dict | None = None,
-) -> Any | None:
+) -> object | None:
     """
     Create or update a snapshot in NetBox.
 
@@ -229,18 +229,18 @@ async def _list_all_vms_with_proxmox_id(
 
 
 async def create_virtual_machine_snapshots(  # noqa: C901
-    netbox_session: Any,
+    netbox_session: object,
     pxs: ProxmoxSessionsDep,
-    cluster_status: list[Any] | None,
-    cluster_resources: list[dict[str, Any]] | None = None,
-    tag: Any | None = None,
+    cluster_status: list[object] | None,
+    cluster_resources: list[dict[str, object]] | None = None,
+    tag: object | None = None,
     vmid: int | None = None,
     node: str | None = None,
-    websocket: Any | None = None,
+    websocket: object | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
     fetch_max_concurrency: int | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Sync snapshots for existing Virtual Machines in NetBox.
 

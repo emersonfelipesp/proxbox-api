@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlalchemy.exc import OperationalError
 from sqlmodel import select
@@ -17,9 +17,9 @@ if TYPE_CHECKING:
     from sqlmodel import Session
 
 # Populated by init_database_and_netbox(); used by WebSocket handlers and helpers.
-netbox_session: Any | None = None
+netbox_session: object | None = None
 database_session: Session | None = None
-netbox_endpoints: list[Any] = []
+netbox_endpoints: list[object] = []
 init_ok: bool = False
 last_init_error: str | None = None
 

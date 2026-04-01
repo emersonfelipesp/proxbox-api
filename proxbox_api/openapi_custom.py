@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
@@ -15,11 +14,11 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
 )
 
 
-def _generated_proxmox_openapi() -> dict[str, Any]:
+def _generated_proxmox_openapi() -> dict[str, object]:
     return load_proxmox_generated_openapi(version_tag=DEFAULT_PROXMOX_OPENAPI_TAG)
 
 
-def custom_openapi_builder(app: FastAPI) -> dict[str, Any]:
+def custom_openapi_builder(app: FastAPI) -> dict[str, object]:
     """Build and cache custom OpenAPI schema following FastAPI official override pattern."""
 
     if app.openapi_schema:

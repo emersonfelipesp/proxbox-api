@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from proxbox_api.proxmox_codegen.apidoc_parser import (
@@ -13,6 +12,7 @@ from proxbox_api.proxmox_codegen.apidoc_parser import (
     flatten_api_schema,
     parse_api_schema,
 )
+from proxbox_api.proxmox_codegen.crawler import crawl_proxmox_api_viewer_async
 from proxbox_api.proxmox_codegen.models import GenerationBundle
 from proxbox_api.proxmox_codegen.normalize import normalize_captured_endpoints
 from proxbox_api.proxmox_codegen.openapi_generator import generate_openapi_schema
@@ -74,9 +74,9 @@ def _validate_source_for_version_tag(source_url: str, version_tag: str) -> None:
 
 
 def _merge_capture(
-    viewer_capture: dict[str, Any],
-    apidoc_flattened: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
+    viewer_capture: dict[str, object],
+    apidoc_flattened: dict[str, dict[str, object]],
+) -> dict[str, object]:
     """Merge viewer-captured methods with apidoc fallback when any method is missing."""
 
     merged = {}
@@ -121,10 +121,10 @@ def _merge_capture(
 
 
 def _capture_completeness(
-    merged_capture: dict[str, Any],
-    viewer_capture: dict[str, Any],
-    apidoc_flat: dict[str, Any],
-) -> dict[str, Any]:
+    merged_capture: dict[str, object],
+    viewer_capture: dict[str, object],
+    apidoc_flat: dict[str, object],
+) -> dict[str, object]:
     """Build capture completeness stats for diagnostics and validation."""
 
     merged_paths = set(merged_capture.keys())
@@ -193,8 +193,6 @@ async def generate_proxmox_codegen_bundle_async(
     _validate_source_for_version_tag(source_url=source_url, version_tag=cleaned_version_tag)
 
     if _check_playwright_available():
-        from proxbox_api.proxmox_codegen.crawler import crawl_proxmox_api_viewer_async
-
         viewer_capture = await crawl_proxmox_api_viewer_async(
             url=source_url,
             worker_count=worker_count,
