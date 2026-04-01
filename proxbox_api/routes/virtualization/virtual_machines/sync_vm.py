@@ -45,6 +45,10 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_helpers import (
+    parse_comma_separated_ints,
+    parse_key_value_string,
+)
 from proxbox_api.services.sync.task_history import (
     sync_virtual_machine_task_history,
 )
@@ -152,19 +156,7 @@ def _parse_network_config_entry(raw_value: object) -> dict[str, str]:
     When a non-string value slips through, treat it as absent instead of
     raising an attribute error on `.split()`.
     """
-    if not isinstance(raw_value, str):
-        return {}
-
-    parsed: dict[str, str] = {}
-    for part in (segment.strip() for segment in raw_value.split(",")):
-        if not part or "=" not in part:
-            continue
-        key, value = part.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key:
-            parsed[key] = value
-    return parsed
+    return parse_key_value_string(raw_value)
 
 
 def _parse_vm_networks(vm_config: dict[str, object]) -> list[dict[str, dict[str, str]]]:
@@ -621,12 +613,12 @@ async def create_virtual_machines(  # noqa: C901
     filtered_cluster_resources = cluster_resources
 
     if netbox_vm_ids and isinstance(netbox_vm_ids, str):
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        vm_ids = parse_comma_separated_ints(netbox_vm_ids)
         if vm_ids:
             filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
                 netbox_session=netbox_session,
                 cluster_resources=cluster_resources,
-                netbox_vm_ids=[int(vid) for vid in vm_ids],
+                netbox_vm_ids=vm_ids,
             )
 
     nb = netbox_session
@@ -1804,12 +1796,12 @@ async def create_virtual_machines_stream(
     filtered_cluster_resources = cluster_resources
 
     if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        vm_ids = parse_comma_separated_ints(netbox_vm_ids)
         if vm_ids:
             filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
                 netbox_session=netbox_session,
                 cluster_resources=cluster_resources,
-                netbox_vm_ids=[int(vid) for vid in vm_ids],
+                netbox_vm_ids=vm_ids,
             )
 
     async def event_stream():

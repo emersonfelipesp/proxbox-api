@@ -21,6 +21,7 @@ from proxbox_api.routes.proxmox.cluster import (
 from proxbox_api.services.sync.snapshots import (
     create_virtual_machine_snapshots as sync_snapshots,
 )
+from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
@@ -154,14 +155,11 @@ async def create_all_virtual_machine_snapshots(
     ),
 ):
     vmid_filter = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
-            if proxmox_vmids:
-                vmid_filter = proxmox_vmids[0]
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
+        if proxmox_vmids:
+            vmid_filter = proxmox_vmids[0]
 
     return await _create_all_virtual_machine_snapshots(
         netbox_session=netbox_session,
@@ -225,14 +223,11 @@ async def create_all_virtual_machine_snapshots_stream(
     ),
 ):
     vmid_filter = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
-            if proxmox_vmids:
-                vmid_filter = proxmox_vmids[0]
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
+        if proxmox_vmids:
+            vmid_filter = proxmox_vmids[0]
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
