@@ -112,7 +112,45 @@ The `/ws` websocket endpoint provides interactive sync with the same per-object 
 
 ## Failure handling
 
-- Domain errors are raised via `ProxboxException` and returned as structured JSON by app-level handler.
-- Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500.
-- Route handlers perform best-effort continuation in certain batch loops.
-- In SSE streaming mode, errors are emitted as `event: error` frames followed by a final `event: complete` with `ok: false`.
+Comprehensive error handling is implemented via decorators and validation utilities:
+
+### Error Validation
+
+- **NetBox responses** are validated to ensure they contain required fields (e.g., `id`) before processing
+- **Proxmox responses** are validated against Pydantic models for type safety
+- Invalid responses raise typed exceptions (`NetBoxAPIError`, `ProxmoxAPIError`, etc.)
+
+### Sync Error Hierarchy
+
+Custom exception types provide detailed context:
+
+- `VMSyncError`: Virtual machine sync failures
+- `DeviceSyncError`: Node/device sync failures
+- `StorageSyncError`: Storage definition failures
+- `NetworkSyncError`: Network interface/VLAN failures
+- Base: `SyncError` for generic sync operation failures
+
+### Retry and Resilience
+
+- Decorators apply exponential backoff retry logic for transient failures
+- Configurable retry counts and backoff intervals
+- Failed attempts are logged with context before retry
+- Final failures bubble up with full error context
+
+### Structured Logging
+
+All sync operations use structured logging for observability:
+
+- **Phase logging**: Each distinct phase (filtering, validation, creation) emits logs with operation and phase context
+- **Resource logging**: Per-object events are logged with resource ID, type, and status
+- **Completion logging**: Sync results logged with success/failure counts and elapsed time
+- **Error logging**: Failures include exception details, stack traces, and full operation context
+
+### Response Handling
+
+- Domain errors are raised via `ProxboxException` and returned as structured JSON by app-level handler
+- Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500
+- Route handlers perform best-effort continuation in certain batch loops
+- In SSE streaming mode, errors are emitted as `event: error` frames followed by a final `event: complete` with `ok: false`
+
+For details on error handling implementation, see `proxbox_api/utils/sync_error_handling.py` and `proxbox_api/utils/structured_logging.py`.

@@ -56,3 +56,31 @@ Invalid command behavior:
 
 - WebSocket flows depend on a valid NetBox endpoint and Proxmox sessions.
 - Long-running operations may create sync-process records and journal entries in NetBox plugin objects.
+
+## Error Handling
+
+WebSocket endpoints employ the same error handling and structured logging as HTTP endpoints:
+
+### Message Frame Types
+
+- **`step`**: Regular progress update with operation context
+- **`error`**: Error occurred during operation - contains error details and operation context
+- **`complete`**: Final status frame with success/failure summary
+
+### Error Context in Messages
+
+All error messages include:
+
+- **operation**: The sync operation name (device_sync, vm_sync, etc.)
+- **phase**: Current operation phase (filtering, creation, validation, etc.)
+- **step/status**: Current step and status indicator
+- **error**: Error message or exception class
+- **detail**: Additional error details for debugging
+
+### Retry and Recovery
+
+- Transient network errors trigger automatic retry with exponential backoff
+- Permanent errors are reported with full context for debugging
+- All operations maintain detailed logs accessible via `/logs` or NetBox plugin UI
+
+See `docs/development/troubleshooting.md` for common error scenarios and recovery steps.
