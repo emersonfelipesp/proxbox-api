@@ -119,8 +119,8 @@ async def create_netbox_snapshots(
         if st:
             try:
                 snaptime = datetime.fromtimestamp(st).isoformat()
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError, TypeError) as error:
+                logger.debug("Invalid snapshot snaptime for vmid=%s: %s (%s)", vmid, st, error)
 
         subtype = snapshot.get("type", "qemu")
 

@@ -4,6 +4,7 @@
 import asyncio
 from datetime import datetime, timezone
 from ipaddress import ip_address
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -57,7 +58,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 router = APIRouter()
 
 
-def _to_mapping(value):
+def _to_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if hasattr(value, "serialize"):
@@ -65,14 +66,16 @@ def _to_mapping(value):
             serialized = value.serialize()
             if isinstance(serialized, dict):
                 return serialized
-        except Exception:
+        except Exception as error:
+            logger.debug("serialize() failed while coercing mapping: %s", error)
             return {}
     if hasattr(value, "dict"):
         try:
             dumped = value.dict()
             if isinstance(dumped, dict):
                 return dumped
-        except Exception:
+        except Exception as error:
+            logger.debug("dict() failed while coercing mapping: %s", error)
             return {}
     return {}
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from proxbox_api.logger import logger
+
 
 def to_dict(value: Any) -> dict[str, Any]:
     """Convert netbox-sdk records or plain objects into dictionaries."""
@@ -16,15 +18,15 @@ def to_dict(value: Any) -> dict[str, Any]:
             data = value.serialize()
             if isinstance(data, dict):
                 return data
-        except Exception:
-            pass
+        except Exception as error:
+            logger.debug("Failed to serialize NetBox SDK value to dict: %s", error)
     if hasattr(value, "dict"):
         try:
             data = value.dict()
             if isinstance(data, dict):
                 return data
-        except Exception:
-            pass
+        except Exception as error:
+            logger.debug("Failed to call dict() on NetBox SDK value: %s", error)
     return {}
 
 

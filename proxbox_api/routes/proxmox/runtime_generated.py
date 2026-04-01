@@ -16,6 +16,7 @@ from fastapi import Body, Depends, FastAPI, Path, Query
 
 from proxbox_api.database import get_session
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
@@ -127,7 +128,12 @@ def _read_generated_route_cache() -> dict[str, Any] | None:
 
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as error:
+        logger.warning(
+            "Unable to load generated Proxmox route cache from %s: %s",
+            cache_path,
+            error,
+        )
         return None
 
     if not isinstance(payload, dict):
