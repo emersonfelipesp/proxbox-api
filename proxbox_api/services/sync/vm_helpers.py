@@ -63,6 +63,36 @@ def normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
+def parse_comma_separated_ints(value: object) -> list[int]:
+    """Parse a comma-separated list of ints from any value.
+
+    Non-string values are treated as absent instead of raising on `.split()`.
+    """
+    if not isinstance(value, str):
+        return []
+    result: list[int] = []
+    for item in (part.strip() for part in value.split(",")):
+        if item.isdigit():
+            result.append(int(item))
+    return result
+
+
+def parse_key_value_string(value: object) -> dict[str, str]:
+    """Parse comma-separated `key=value` text into a mapping."""
+    if not isinstance(value, str):
+        return {}
+    parsed: dict[str, str] = {}
+    for part in (segment.strip() for segment in value.split(",")):
+        if not part or "=" not in part:
+            continue
+        key, raw = part.split("=", 1)
+        key = key.strip()
+        raw = raw.strip()
+        if key:
+            parsed[key] = raw
+    return parsed
+
+
 def guest_agent_ip_with_prefix(
     addr: dict[str, object], ignore_ipv6_link_local: bool = True
 ) -> str | None:

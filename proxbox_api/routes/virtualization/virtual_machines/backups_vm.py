@@ -25,6 +25,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
@@ -511,12 +512,9 @@ async def create_all_virtual_machine_backups(
     ),
 ):
     vmid_filter_list = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
 
     return await _create_all_virtual_machine_backups(
         netbox_session=netbox_session,
@@ -584,12 +582,9 @@ async def create_all_virtual_machine_backups_stream(
     ),
 ):
     vmid_filter_list = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
 
     async def event_stream():
         bridge = WebSocketSSEBridge()

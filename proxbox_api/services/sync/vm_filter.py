@@ -5,6 +5,7 @@ from __future__ import annotations
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async
+from proxbox_api.services.sync.vm_helpers import parse_key_value_string
 
 
 async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
@@ -111,17 +112,16 @@ def parse_network_config(vm_config: dict[str, object]) -> list[dict[str, dict[st
         network_info = vm_config.get(network_name)
         if network_info is None:
             break
-        if not isinstance(network_info, str):
-            logger.debug(
-                "Skipping non-string network config %s during parse: %r",
-                network_name,
-                type(network_info).__name__,
-            )
-            network_id += 1
-            continue
         try:
-            net_fields = network_info.split(",")
-            network_dict = dict([field.split("=") for field in net_fields if "=" in field])
+            network_dict = parse_key_value_string(network_info)
+            if not network_dict:
+                logger.debug(
+                    "Skipping non-string or empty network config %s during parse: %r",
+                    network_name,
+                    type(network_info).__name__,
+                )
+                network_id += 1
+                continue
             networks.append({network_name: network_dict})
         except (ValueError, IndexError) as e:
             logger.warning("Failed to parse network config %s: %s", network_name, e)
