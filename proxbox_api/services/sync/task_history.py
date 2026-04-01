@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
 from proxbox_api.services.proxmox_helpers import (
     dump_models,
@@ -19,64 +19,29 @@ from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 _DEFAULT_FETCH_CONCURRENCY = 4
 
 
-def _normalize_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+async def _list_all_vms_with_proxmox_id(
+    nb,
+    batch_size: int = 500,
+) -> list[RestRecord]:
+    """List all VMs from NetBox with pagination handling."""
+    all_vms = []
+    offset = 0
 
+    while True:
+        vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"limit": batch_size, "offset": offset},
+        )
+        if not vms:
+            break
+        all_vms.extend(vms)
 
-def _cluster_nodes(cluster_status: list[Any] | None, cluster_name: str | None) -> list[str]:
-    nodes: list[str] = []
-    for cluster in cluster_status or []:
-        if getattr(cluster, "name", None) != cluster_name:
-            continue
-        for node in getattr(cluster, "node_list", None) or []:
-            node_name = _normalize_text(getattr(node, "name", None))
-            if node_name:
-                nodes.append(node_name)
-        break
-    return nodes
+        if len(vms) < batch_size:
+            break
+        offset += batch_size
 
-
-def _find_cluster_session(
-    pxs: list[Any] | None,
-    cluster_status: list[Any] | None,
-    cluster_name: str | None,
-) -> Any | None:
-    for px, cluster in zip(pxs, cluster_status or []):
-        if getattr(cluster, "name", None) == cluster_name:
-            return px
-    return None
-
-
-def _build_task_payload(
-    *,
-    virtual_machine_id: int,
-    vm_type: str,
-    task: dict[str, Any],
-    task_status: dict[str, Any],
-    tag_refs: list[dict[str, Any]],
-    now: datetime,
-) -> dict[str, Any]:
-    return {
-        "virtual_machine": virtual_machine_id,
-        "vm_type": vm_type,
-        "upid": task_status.get("upid") or task.get("upid"),
-        "node": task_status.get("node") or task.get("node"),
-        "pid": task_status.get("pid") or task.get("pid"),
-        "pstart": task_status.get("pstart") or task.get("pstart"),
-        "task_id": task_status.get("id") or task.get("id"),
-        "task_type": task_status.get("type") or task.get("type"),
-        "username": task_status.get("user") or task.get("user"),
-        "start_time": task_status.get("starttime") or task.get("starttime"),
-        "end_time": task.get("endtime"),
-        "status": task_status.get("exitstatus") or task_status.get("status") or task.get("status"),
-        "task_state": task_status.get("status") or task.get("status"),
-        "exitstatus": task_status.get("exitstatus"),
-        "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
-    }
+    return all_vms
 
 
 async def sync_all_virtual_machine_task_histories(
@@ -89,7 +54,6 @@ async def sync_all_virtual_machine_task_histories(
     fetch_max_concurrency: int | None = None,
 ) -> dict[str, Any]:
     """Sync task history for all Virtual Machines in NetBox."""
-    from proxbox_api.netbox_rest import rest_list_async
 
     nb = netbox_session
     if tag_refs is None:
@@ -97,7 +61,7 @@ async def sync_all_virtual_machine_task_histories(
     normalized_tags = [tag for tag in tag_refs if tag.get("name") and tag.get("slug")]
 
     try:
-        vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
+        vms = await _list_all_vms_with_proxmox_id(nb)
     except Exception as e:
         logger.error(f"Error fetching VMs from NetBox for task history sync: {e}")
         return {"count": 0, "created": 0, "skipped": 0, "error": str(e)}

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
 from proxbox_api.routes.proxmox import get_vm_config
 from proxbox_api.services.sync.storage_links import (
@@ -16,6 +16,31 @@ from proxbox_api.services.sync.storage_links import (
 from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid, normalize_vmid
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
+
+
+async def _list_all_vms_with_proxmox_id(
+    nb,
+    batch_size: int = 500,
+) -> list[RestRecord]:
+    """List all VMs from NetBox with pagination handling."""
+    all_vms = []
+    offset = 0
+
+    while True:
+        vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"limit": batch_size, "offset": offset},
+        )
+        if not vms:
+            break
+        all_vms.extend(vms)
+
+        if len(vms) < batch_size:
+            break
+        offset += batch_size
+
+    return all_vms
 
 
 async def create_virtual_disks(
@@ -67,10 +92,7 @@ async def create_virtual_disks(
                 query={"id": netbox_vm_id},
             )
         else:
-            vms = await rest_list_async(
-                nb,
-                "/api/virtualization/virtual-machines/",
-            )
+            vms = await _list_all_vms_with_proxmox_id(nb)
     except Exception as e:
         logger.error(f"Error fetching VMs from NetBox: {e}")
         if use_websocket and websocket:
