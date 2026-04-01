@@ -6,14 +6,28 @@ name: Docker images
 on:
   workflow_call:
     inputs:
-      checkout_ref:
-        description: Git ref to build (release tag); empty uses github.sha
+      source_ref:
+        description: Branch, tag, or SHA to build
         type: string
         required: false
         default: ""
+      mode:
+        description: >-
+          build-and-test-only — amd64 build + in-container tests, no Docker Hub.
+          publish — build, smoke-test, and push runtime + mkcert images.
+        type: string
+        required: false
+        default: publish
+    outputs:
+      runtime_image_ref:
+        description: Runtime image ref for the exact source revision built by this workflow
+        value: ${{ jobs.docker-runtime.outputs.runtime_image_ref }}
+      mkcert_image_ref:
+        description: Mkcert image ref for the exact source revision built by this workflow
+        value: ${{ jobs.docker-mkcert.outputs.mkcert_image_ref }}
   workflow_dispatch:
     inputs:
-      git_ref:
+      source_ref:
         description: Branch, tag, or SHA to build
         type: string
         required: true
@@ -38,19 +52,19 @@ env:
 jobs:
   # Sequential local test (manual); no registry login or push.
   docker-manual:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'build-and-test-only'
+    if: inputs.mode == 'build-and-test-only'
     name: Docker — build and test only (manual)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
 
       - name: Validate pyproject version vs tag ref
         id: version
         env:
-          GIT_REF: ${{ inputs.git_ref }}
+          GIT_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
         run: |
           python3 <<'PY'
           import os
@@ -178,14 +192,20 @@ jobs:
           exit 1
 
   docker-runtime:
-    if: github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
+    if: inputs.mode == 'publish'
     name: Docker Hub — runtime (nginx + uvicorn)
     runs-on: ubuntu-latest
+    outputs:
+      runtime_image_ref: ${{ steps.refs.outputs.runtime_image_ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.sha) || github.sha }}
+          ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+
+      - name: Resolve source revision
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -205,7 +225,7 @@ jobs:
       - name: Resolve image version from pyproject
         id: version
         env:
-          GIT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name) || github.ref_name }}
+          GIT_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.ref_name }}
         run: |
           python3 <<'PY'
           import os
@@ -227,25 +247,6 @@ jobs:
       - name: Keep image tag in env
         run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
 
-      - name: Create Docker test script
-        run: |
-          cat <<'EOF' > /tmp/docker-tests.sh
-          #!/bin/sh
-          set -eux
-          # tests/ is bind-mounted read-only; keep bytecode out of the tree
-          export PYTHONPYCACHEPREFIX=/tmp/pycache
-          mkdir -p "$PYTHONPYCACHEPREFIX"
-          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
-          uv sync --frozen --extra test --group dev
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run python -m compileall proxbox_api scripts tests
-          uv run python -c "import proxbox_api.main"
-          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
-          EOF
-          chmod +x /tmp/docker-tests.sh
-
       - name: Build amd64 image for pre-release tests
         uses: docker/build-push-action@v6
         with:
@@ -258,17 +259,6 @@ jobs:
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime
 
-      - name: Extract metadata (labels, etc.)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: emersonfelipesp/proxbox-api
-          tags: |
-            type=raw,value=${{ steps.version.outputs.tag }}
-            type=raw,value=latest
-            type=ref,event=pr
-            type=sha
-
       - name: Build and push Docker image (runtime)
         uses: docker/build-push-action@v6
         with:
@@ -276,15 +266,18 @@ jobs:
           target: runtime
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }},emersonfelipesp/proxbox-api:latest,emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime
+
+      - name: Publish output refs
+        id: refs
+        run: echo "runtime_image_ref=emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test pushed runtime images
         run: |
           set -eux
-          for TAG in "${{ env.IMAGE_TAG }}" latest; do
+          for TAG in "${{ env.IMAGE_TAG }}" latest "sha-${{ steps.source.outputs.sha }}"; do
             NAME=$(printf 'proxbox-smoke-%s' "$TAG" | tr '.:' '-')
             docker rm -f "$NAME" 2>/dev/null || true
             docker run -d --name "$NAME" \
@@ -308,14 +301,20 @@ jobs:
           done
 
   docker-mkcert:
-    if: github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
+    if: inputs.mode == 'publish'
     name: Docker Hub — mkcert (nginx + HTTPS + uvicorn)
     runs-on: ubuntu-latest
+    outputs:
+      mkcert_image_ref: ${{ steps.refs.outputs.mkcert_image_ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.sha) || github.sha }}
+          ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+
+      - name: Resolve source revision
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -335,7 +334,7 @@ jobs:
       - name: Resolve image version from pyproject
         id: version
         env:
-          GIT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event_name == 'workflow_call' && (inputs.checkout_ref != '' && inputs.checkout_ref || github.ref_name) || github.ref_name }}
+          GIT_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.ref_name }}
         run: |
           python3 <<'PY'
           import os
@@ -356,25 +355,6 @@ jobs:
 
       - name: Keep image tag in env
         run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
-
-      - name: Create Docker test script
-        run: |
-          cat <<'EOF' > /tmp/docker-tests.sh
-          #!/bin/sh
-          set -eux
-          # tests/ is bind-mounted read-only; keep bytecode out of the tree
-          export PYTHONPYCACHEPREFIX=/tmp/pycache
-          mkdir -p "$PYTHONPYCACHEPREFIX"
-          export PROXBOX_SKIP_NETBOX_BOOTSTRAP=1
-          uv sync --frozen --extra test --group dev
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run python -m compileall proxbox_api scripts tests
-          uv run python -c "import proxbox_api.main"
-          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
-          EOF
-          chmod +x /tmp/docker-tests.sh
 
       - name: Build amd64 mkcert image for pre-release tests
         uses: docker/build-push-action@v6
@@ -414,14 +394,18 @@ jobs:
           target: mkcert
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert,emersonfelipesp/proxbox-api:latest-mkcert
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-mkcert,emersonfelipesp/proxbox-api:latest-mkcert,emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}-mkcert
           cache-from: type=gha,scope=mkcert
           cache-to: type=gha,mode=max,scope=mkcert
+
+      - name: Publish output refs
+        id: refs
+        run: echo "mkcert_image_ref=emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}-mkcert" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test pushed mkcert images
         run: |
           set -eux
-          for TAG in "${{ env.IMAGE_TAG }}-mkcert" latest-mkcert; do
+          for TAG in "${{ env.IMAGE_TAG }}-mkcert" latest-mkcert "sha-${{ steps.source.outputs.sha }}-mkcert"; do
             NAME=$(printf 'proxbox-smoke-%s' "$TAG" | tr '.:' '-')
             docker rm -f "$NAME" 2>/dev/null || true
             docker run -d --name "$NAME" \
