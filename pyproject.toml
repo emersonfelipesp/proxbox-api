@@ -7,7 +7,7 @@ include = ["proxbox_api*"]
 
 [project]
 name = "proxbox_api"
-version = "0.0.4"
+version = "0.0.5"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
