@@ -164,7 +164,13 @@ async def sync_interface_individual(
                     existing[0].serialize() if hasattr(existing[0], "serialize") else None
                 )
 
-        vm_dep: dict[str, object] = {"object_type": "vm", "vmid": vmid}
+        vm_dep: dict[str, object] = {
+            "object_type": "vm",
+            "vmid": vmid,
+            "cluster_name": getattr(px, "name", None),
+            "node": node,
+            "type": vm_type,
+        }
         return {
             "object_type": "interface",
             "action": "dry_run",
@@ -262,6 +268,11 @@ async def sync_interface_individual(
         if vm_id:
             interface_payload["virtual_machine"] = vm_id
 
+        existing_interfaces = await rest_list_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            query={"virtual_machine_id": vm_id, "name": resolved_name},
+        )
         interface_record = await rest_reconcile_async(
             nb,
             "/api/virtualization/interfaces/",
@@ -286,7 +297,7 @@ async def sync_interface_individual(
         netbox_object = (
             interface_record.serialize() if hasattr(interface_record, "serialize") else None
         )
-        action = "created" if getattr(interface_record, "id", None) else "updated"
+        action = "updated" if existing_interfaces else "created"
 
         return {
             "object_type": "interface",
@@ -294,7 +305,16 @@ async def sync_interface_individual(
             "proxmox_resource": proxmox_resource,
             "netbox_object": netbox_object,
             "dry_run": False,
-            "dependencies_synced": [{"object_type": "vm", "vmid": vmid, "action": action}],
+            "dependencies_synced": [
+                {
+                    "object_type": "vm",
+                    "vmid": vmid,
+                    "cluster_name": getattr(px, "name", None),
+                    "node": node,
+                    "type": vm_type,
+                    "action": action,
+                }
+            ],
             "error": None,
         }
 

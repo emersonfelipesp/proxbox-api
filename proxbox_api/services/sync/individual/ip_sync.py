@@ -85,9 +85,24 @@ async def sync_ip_individual(
                 existing_ips[0].serialize() if hasattr(existing_ips[0], "serialize") else None
             )
 
-        vm_dep: dict[str, object] = {"object_type": "vm", "vmid": vmid}
+        vm_dep: dict[str, object] = {
+            "object_type": "vm",
+            "vmid": vmid,
+            "cluster_name": getattr(px, "name", None),
+            "node": node,
+            "type": vm_type,
+        }
         iface_dep: dict[str, object] | None = (
-            {"object_type": "interface", "name": resolved_interface} if resolved_interface else None
+            {
+                "object_type": "interface",
+                "name": resolved_interface,
+                "cluster_name": getattr(px, "name", None),
+                "node": node,
+                "type": vm_type,
+                "vmid": vmid,
+            }
+            if resolved_interface
+            else None
         )
         deps = [vm_dep]
         if iface_dep:
@@ -176,6 +191,11 @@ async def sync_ip_individual(
             ip_payload["assigned_object_type"] = "virtualization.vminterface"
             ip_payload["assigned_object_id"] = interface_id
 
+        existing_ips = await rest_list_async(
+            nb,
+            "/api/ipam/ip-addresses/",
+            query={"address": ip_address.split("/")[0]},
+        )
         ip_record = await rest_reconcile_async(
             nb,
             "/api/ipam/ip-addresses/",
@@ -192,12 +212,29 @@ async def sync_ip_individual(
         )
 
         netbox_object = ip_record.serialize() if hasattr(ip_record, "serialize") else None
-        action = "created" if getattr(ip_record, "id", None) else "updated"
+        action = "updated" if existing_ips else "created"
 
-        dependencies: list[dict] = [{"object_type": "vm", "vmid": vmid, "action": action}]
+        dependencies: list[dict] = [
+            {
+                "object_type": "vm",
+                "vmid": vmid,
+                "cluster_name": getattr(px, "name", None),
+                "node": node,
+                "type": vm_type,
+                "action": action,
+            }
+        ]
         if resolved_interface:
             dependencies.append(
-                {"object_type": "interface", "name": resolved_interface, "action": action}
+                {
+                    "object_type": "interface",
+                    "name": resolved_interface,
+                    "cluster_name": getattr(px, "name", None),
+                    "node": node,
+                    "type": vm_type,
+                    "vmid": vmid,
+                    "action": action,
+                }
             )
 
         return {
