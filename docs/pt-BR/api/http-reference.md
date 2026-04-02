@@ -7,10 +7,9 @@ Para schemas completos de requisicao/resposta, use OpenAPI em runtime em `/docs`
 ## Root e utilitarios
 
 - `GET /` - Metadados do servico e links.
+- `GET /version` - Versao do servico backend para invalidacao de cache externa.
 - `GET /cache` - Inspecao do snapshot da cache em memoria.
 - `GET /clear-cache` - Limpar cache em memoria.
-- `GET /sync-processes` - Listar registros de processos de sincronizacao da API do plugin NetBox.
-- `POST /sync-processes` - Criar um registro de processo de sincronizacao na API do plugin NetBox.
 
 ## Rotas NetBox (`/netbox`)
 
@@ -110,7 +109,8 @@ Normalizacao de parametros de caminho:
 - `GET /dcim/devices/create` - criar dispositivos NetBox a partir de nodes Proxmox (retorna JSON ao completar).
 - `GET /dcim/devices/create/stream` - variante SSE streaming. Emite eventos `step` por dispositivo com progresso granular enquanto dispositivos sao criados.
 - `GET /dcim/devices/{node}/interfaces/create`
-- `GET /dcim/devices/interfaces/create`
+- `GET /dcim/devices/interfaces/create` - sincroniza interfaces de todos os nodes em todos os clusters.
+- `GET /dcim/devices/interfaces/create/stream` - variante SSE streaming para sincronizacao de interfaces de todos os nodes.
 
 ## Rotas de Virtualizacao (`/virtualization`)
 
@@ -118,15 +118,26 @@ Normalizacao de parametros de caminho:
 - `GET /virtualization/clusters/create` (placeholder)
 - `GET /virtualization/virtual-machines/create` - criar VMs NetBox a partir de recursos Proxmox (retorna JSON ao completar).
 - `GET /virtualization/virtual-machines/create/stream` - variante SSE streaming. Emite eventos `step` por VM com progresso granular enquanto VMs sao criadas.
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/create` - criar uma unica VM pelo ID do NetBox.
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/create/stream` - variante SSE streaming para sincronizacao de uma unica VM.
 - `GET /virtualization/virtual-machines/`
 - `GET /virtualization/virtual-machines/{id}`
 - `GET /virtualization/virtual-machines/summary/example`
-- `GET /virtualization/virtual-machines/backups/create`
-- `GET /virtualization/virtual-machines/backups/all/create`
-- `GET /virtualization/virtual-machines/backups/all/create/stream`
+- `GET /virtualization/virtual-machines/interfaces/create` - sincroniza interfaces de VMs (JSON).
+- `GET /virtualization/virtual-machines/interfaces/create/stream` - variante SSE streaming.
+- `GET /virtualization/virtual-machines/interfaces/ip-address/create` - sincroniza IPs de VMs (JSON).
+- `GET /virtualization/virtual-machines/interfaces/ip-address/create/stream` - variante SSE streaming.
+- `GET /virtualization/virtual-machines/backups/create` - criar backups para node/storage especifico.
+- `GET /virtualization/virtual-machines/backups/all/create` - criar backups para todas as VMs.
+- `GET /virtualization/virtual-machines/backups/all/create/stream` - variante SSE streaming.
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/backups/create/stream` - sincroniza backups de uma VM do NetBox.
 - `GET /virtualization/virtual-machines/snapshots/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/snapshots/create/stream` - sincroniza snapshots de uma VM do NetBox.
+- `GET /virtualization/virtual-machines/virtual-disks/create` - sincroniza discos virtuais (JSON).
+- `GET /virtualization/virtual-machines/virtual-disks/create/stream` - variante SSE streaming.
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream` - sincroniza discos de uma VM.
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
 

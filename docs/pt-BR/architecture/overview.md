@@ -48,7 +48,7 @@
 
 `proxbox_api/openapi_custom.py` substitui a geracao de OpenAPI do FastAPI e embute metadados do OpenAPI Proxmox gerado quando disponivel:
 
-- Arquivo-fonte: `proxbox_api/generated/proxmox/openapi.json`
+- Arquivos-fontes: `proxbox_api/generated/proxmox/<version-tag>/openapi.json` (artefatos versionados; `latest` e a tag de versao padrao).
 - Campos de extensao:
   - `info.x-proxmox-generated-openapi`
   - `x-proxmox-generated-openapi`
@@ -56,5 +56,5 @@
 ## Ciclo de sync
 
 - Endpoints de sync orquestram descoberta no Proxmox e criacao de objetos no NetBox.
-- Journal entries e registros de sync-process fornecem rastreabilidade.
+- Journal entries fornecem rastreabilidade.
 - Endpoints WebSocket e SSE fornecem progresso em tempo real por objeto.

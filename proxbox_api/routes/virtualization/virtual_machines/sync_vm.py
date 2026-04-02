@@ -2,9 +2,9 @@
 
 # FastAPI Imports
 import asyncio
+import inspect
 from datetime import datetime, timezone
 from ipaddress import ip_address
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -51,6 +51,10 @@ from proxbox_api.services.sync.task_history import (
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
+from proxbox_api.services.sync.vm_helpers import (
+    parse_comma_separated_ints,
+    parse_key_value_string,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
@@ -58,7 +62,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 router = APIRouter()
 
 
-def _to_mapping(value: Any) -> dict[str, Any]:
+def _to_mapping(value: object) -> dict[str, object]:
     """Coerce a value to a dictionary representation.
 
     Attempts multiple serialization strategies in order:
@@ -94,7 +98,7 @@ def _to_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _relation_name(value: Any) -> str | None:
+def _relation_name(value: object) -> str | None:
     """Extract a human-readable name from a relation object or value.
 
     Attempts to extract a name string from various object representations:
@@ -117,7 +121,7 @@ def _relation_name(value: Any) -> str | None:
     return None
 
 
-def _relation_id(value: Any) -> int | None:
+def _relation_id(value: object) -> int | None:
     """Extract a numeric ID from a relation object or value.
 
     Attempts to extract an integer ID from various object representations:
@@ -143,6 +147,32 @@ def _relation_id(value: Any) -> int | None:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+def _parse_network_config_entry(raw_value: object) -> dict[str, str]:
+    """Parse a Proxmox `netX` config entry into a key/value mapping.
+
+    Proxmox returns these values as comma-separated `key=value` pairs.
+    When a non-string value slips through, treat it as absent instead of
+    raising an attribute error on `.split()`.
+    """
+    return parse_key_value_string(raw_value)
+
+
+def _parse_vm_networks(vm_config: dict[str, object]) -> list[dict[str, dict[str, str]]]:
+    """Extract and parse `net0`, `net1`, ... entries from a VM config."""
+    networks: list[dict[str, dict[str, str]]] = []
+    network_id = 0
+    while True:
+        network_name = f"net{network_id}"
+        raw = vm_config.get(network_name)
+        if raw is None:
+            break
+        network_dict = _parse_network_config_entry(raw)
+        if network_dict:
+            networks.append({network_name: network_dict})
+        network_id += 1
+    return networks
 
 
 def _filter_cluster_resources_for_vm(  # noqa: C901
@@ -277,6 +307,46 @@ async def _filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     return filtered
 
 
+async def _resolve_netbox_virtual_machine_by_proxmox_id(
+    netbox_session: NetBoxSessionDep,
+    proxmox_vm_id: int | str | None,
+) -> dict[str, object] | None:
+    """Resolve the NetBox VM row that corresponds to a Proxmox VM id."""
+    if proxmox_vm_id is None:
+        return None
+
+    try:
+        vmid = int(str(proxmox_vm_id).strip())
+    except (TypeError, ValueError):
+        return None
+
+    try:
+        virtual_machines = await rest_list_async(
+            netbox_session,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": vmid},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve NetBox VM for Proxmox VMID %s: %s",
+            proxmox_vm_id,
+            exc,
+        )
+        return None
+
+    if not virtual_machines:
+        return None
+
+    virtual_machine = virtual_machines[0]
+    if isinstance(virtual_machine, dict):
+        return virtual_machine
+    if hasattr(virtual_machine, "dict"):
+        dumped = virtual_machine.dict()
+        if isinstance(dumped, dict):
+            return dumped
+    return None
+
+
 def _normalized_mac(value: str | None) -> str:
     """Normalize a MAC address to lowercase string.
 
@@ -353,6 +423,254 @@ def _best_guest_agent_ip(
     return None
 
 
+async def _create_vm_interface_parallel(
+    nb,
+    virtual_machine: dict,
+    interface_name: str,
+    interface_config: dict,
+    guest_iface: dict | None,
+    tag_refs: list[dict],
+    use_guest_agent_interface_name: bool,
+    ignore_ipv6_link_local_addresses: bool,
+    now: datetime,
+) -> dict:
+    """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
+
+    Returns a dict with 'interface' (the created interface), 'ip' (the created IP or None),
+    and 'first_ip_id' (first IP id found, for setting VM primary_ip).
+    """
+    vm_id = virtual_machine.get("id")
+    result: dict = {"interface": None, "ip": None, "first_ip_id": None}
+
+    bridge: dict = {}
+    bridge_name = interface_config.get("bridge")
+    if bridge_name and vm_id:
+        bridge = await rest_reconcile_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            lookup={
+                "virtual_machine_id": vm_id,
+                "name": bridge_name,
+            },
+            payload={
+                "name": bridge_name,
+                "virtual_machine": vm_id,
+                "type": "bridge",
+                "tags": tag_refs,
+                "custom_fields": {"proxmox_last_updated": now.isoformat()},
+            },
+            schema=NetBoxVirtualMachineInterfaceSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "virtual_machine": record.get("virtual_machine"),
+                "type": record.get("type"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        if not isinstance(bridge, dict):
+            bridge = getattr(bridge, "dict", lambda: {})()
+
+    vlan_nb_id: int | None = None
+    vlan_tag_raw = interface_config.get("tag")
+    if vlan_tag_raw is not None:
+        try:
+            vlan_tag = int(vlan_tag_raw)
+            vlan_record = await rest_reconcile_async(
+                nb,
+                "/api/ipam/vlans/",
+                lookup={"vid": vlan_tag},
+                payload={
+                    "vid": vlan_tag,
+                    "name": f"VLAN {vlan_tag}",
+                    "status": "active",
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                schema=NetBoxVlanSyncState,
+                current_normalizer=lambda record: {
+                    "vid": record.get("vid"),
+                    "name": record.get("name"),
+                    "status": record.get("status"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            )
+            vlan_nb_id = (
+                vlan_record.get("id")
+                if isinstance(vlan_record, dict)
+                else getattr(vlan_record, "id", None)
+            )
+        except Exception as vlan_exc:
+            logger.warning(
+                "Failed to create/sync VLAN tag=%s for interface %s: %s",
+                vlan_tag_raw,
+                interface_name,
+                vlan_exc,
+            )
+
+    mac_address = interface_config.get("virtio") or interface_config.get("hwaddr")
+    resolved_name = interface_name
+    if use_guest_agent_interface_name and guest_iface:
+        guest_name = str(guest_iface.get("name") or "").strip()
+        if guest_name:
+            resolved_name = guest_name
+            guest_mac = guest_iface.get("mac_address")
+            if guest_mac and not mac_address:
+                mac_address = _normalized_mac(guest_mac)
+
+    payload: dict = {
+        "name": resolved_name,
+        "enabled": True,
+        "bridge": bridge.get("id") if bridge else None,
+        "mac_address": mac_address,
+        "untagged_vlan": vlan_nb_id,
+        "mode": "access" if vlan_nb_id is not None else None,
+        "tags": tag_refs,
+        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+    }
+    if vm_id:
+        payload["virtual_machine"] = vm_id
+
+    lookup: dict = {"name": resolved_name}
+    if vm_id:
+        lookup["virtual_machine_id"] = vm_id
+
+    vm_interface = await rest_reconcile_async(
+        nb,
+        "/api/virtualization/interfaces/",
+        lookup=lookup,
+        payload=payload,
+        schema=NetBoxVirtualMachineInterfaceSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "virtual_machine": record.get("virtual_machine"),
+            "enabled": record.get("enabled"),
+            "bridge": record.get("bridge"),
+            "mac_address": record.get("mac_address"),
+            "type": record.get("type"),
+            "description": record.get("description"),
+            "untagged_vlan": record.get("untagged_vlan"),
+            "mode": record.get("mode"),
+            "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
+        },
+    )
+    if not isinstance(vm_interface, dict):
+        vm_interface = getattr(vm_interface, "dict", lambda: {})()
+
+    interface_id = (
+        vm_interface.get("id")
+        if isinstance(vm_interface, dict)
+        else getattr(vm_interface, "id", None)
+    )
+    result["interface"] = vm_interface
+
+    interface_ip: str | None = None
+    if guest_iface:
+        interface_ip = _best_guest_agent_ip(guest_iface, ignore_ipv6_link_local_addresses)
+    if not interface_ip:
+        interface_ip = interface_config.get("ip")
+
+    if interface_ip and interface_ip != "dhcp" and interface_id is not None:
+        try:
+            ip_record = await rest_reconcile_async(
+                nb,
+                "/api/ipam/ip-addresses/",
+                lookup={"address": interface_ip},
+                payload={
+                    "address": interface_ip,
+                    "assigned_object_type": "virtualization.vminterface",
+                    "assigned_object_id": interface_id,
+                    "status": "active",
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                schema=NetBoxIpAddressSyncState,
+                current_normalizer=lambda record: {
+                    "address": record.get("address"),
+                    "assigned_object_type": record.get("assigned_object_type"),
+                    "assigned_object_id": record.get("assigned_object_id"),
+                    "status": record.get("status"),
+                    "tags": record.get("tags"),
+                },
+            )
+            ip_id = (
+                ip_record.get("id")
+                if isinstance(ip_record, dict)
+                else getattr(ip_record, "id", None)
+            )
+            result["ip"] = {"id": ip_id, "address": interface_ip}
+            result["first_ip_id"] = ip_id
+        except Exception as ip_exc:
+            logger.warning(
+                "Failed to create IP %s for VM interface %s: %s",
+                interface_ip,
+                interface_name,
+                ip_exc,
+            )
+
+    return result
+
+
+async def _create_vm_disk_parallel(
+    nb,
+    virtual_machine: dict,
+    disk_entry,
+    cluster_name: str,
+    storage_index: dict,
+    tag_refs: list[dict],
+    now: datetime,
+) -> dict | None:
+    """Create a single VM disk.
+
+    Returns the created disk record or None on failure.
+    """
+    storage_name = disk_entry.storage_name or storage_name_from_volume_id(disk_entry.storage)
+    storage_record = find_storage_record(
+        storage_index,
+        cluster_name=cluster_name,
+        storage_name=storage_name,
+    )
+    try:
+        disk = await rest_reconcile_async(
+            nb,
+            "/api/virtualization/virtual-disks/",
+            lookup={
+                "virtual_machine_id": virtual_machine.get("id"),
+                "name": disk_entry.name,
+            },
+            payload={
+                "virtual_machine": virtual_machine.get("id"),
+                "name": disk_entry.name,
+                "size": disk_entry.size,
+                "storage": storage_record.get("id") if storage_record else None,
+                "description": disk_entry.description,
+                "tags": tag_refs,
+                "custom_fields": {"proxmox_last_updated": now.isoformat()},
+            },
+            schema=NetBoxVirtualDiskSyncState,
+            current_normalizer=lambda record: {
+                "virtual_machine": record.get("virtual_machine"),
+                "name": record.get("name"),
+                "size": record.get("size"),
+                "storage": record.get("storage"),
+                "description": record.get("description"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        return disk
+    except Exception as exc:
+        logger.warning(
+            "Failed to create disk %s for VM %s: %s",
+            disk_entry.name,
+            virtual_machine.get("name"),
+            exc,
+        )
+        return None
+
+
 async def _create_virtual_machine_by_netbox_id(
     *,
     netbox_vm_id: int,
@@ -371,6 +689,8 @@ async def _create_virtual_machine_by_netbox_id(
 
     Looks up the NetBox VM record, extracts metadata, filters Proxmox resources
     for matching VM, and creates/updates the VM in NetBox.
+    The delegated VM bundle also reconciles interfaces, IP addresses, disks,
+    and task history for the targeted VM.
 
     Args:
         netbox_vm_id: NetBox virtual machine ID to sync.
@@ -495,6 +815,7 @@ async def create_virtual_machines(  # noqa: C901
     websocket=None,
     use_css: bool = False,
     use_websocket: bool = False,
+    sync_vm_network: bool = True,
     use_guest_agent_interface_name: bool = Query(
         default=True,
         title="Use Guest Agent Interface Name",
@@ -532,6 +853,7 @@ async def create_virtual_machines(  # noqa: C901
         websocket: Optional WebSocket connection for streaming progress updates.
         use_css: Whether to include CSS styling in HTML status responses.
         use_websocket: Whether to send progress updates via WebSocket/SSE.
+        sync_vm_network: When False, skip VM interface and IP reconciliation in this pass.
         use_guest_agent_interface_name: Use QEMU guest-agent interface names if available.
         netbox_vm_ids: Comma-separated NetBox VM IDs to filter sync.
         ignore_ipv6_link_local_addresses: Ignore IPv6 link-local addresses when selecting IPs.
@@ -543,12 +865,12 @@ async def create_virtual_machines(  # noqa: C901
     filtered_cluster_resources = cluster_resources
 
     if netbox_vm_ids and isinstance(netbox_vm_ids, str):
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        vm_ids = parse_comma_separated_ints(netbox_vm_ids)
         if vm_ids:
             filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
                 netbox_session=netbox_session,
                 cluster_resources=cluster_resources,
-                netbox_vm_ids=[int(vid) for vid in vm_ids],
+                netbox_vm_ids=vm_ids,
             )
 
     nb = netbox_session
@@ -618,13 +940,16 @@ async def create_virtual_machines(  # noqa: C901
         }
 
         vm_type = resource.get("type", "unknown")
-        vm_config = await get_vm_config(
+        vm_config_result = get_vm_config(
             pxs=pxs,
             cluster_status=cluster_status,
             node=resource.get("node"),
             type=vm_type,
             vmid=resource.get("vmid"),
         )
+        if inspect.isawaitable(vm_config_result):
+            vm_config_result = await vm_config_result
+        vm_config = vm_config_result
 
         if vm_config is None:
             vm_config = {}
@@ -762,7 +1087,7 @@ async def create_virtual_machines(  # noqa: C901
         # Create VM interfaces
         netbox_vm_interfaces = []
         first_ip_id: int | None = None
-        if virtual_machine and vm_config:
+        if virtual_machine and vm_config and sync_vm_network:
             guest_agent_interfaces: list[dict] = []
             if vm_type == "qemu" and vm_config_obj.qemu_agent_enabled:
                 proxmox_session = next(
@@ -796,20 +1121,10 @@ async def create_virtual_machines(  # noqa: C901
                 if _normalized_mac(iface.get("mac_address"))
             }
 
-            vm_networks = []
-            network_id = 0
-            while True:
-                network_name = f"net{network_id}"
-                vm_network_info = vm_config.get(network_name, None)
-                if vm_network_info is not None:
-                    net_fields = vm_network_info.split(",")
-                    network_dict = dict([field.split("=") for field in net_fields])
-                    vm_networks.append({network_name: network_dict})
-                    network_id += 1
-                else:
-                    break
+            vm_networks = _parse_vm_networks(vm_config)
 
             if vm_networks:
+                interface_tasks = []
                 for network in vm_networks:
                     for interface_name, value in network.items():
                         config_interface_name = (
@@ -826,191 +1141,46 @@ async def create_virtual_machines(  # noqa: C901
                             guest_name = str(guest_iface.get("name") or "").strip()
                             if guest_name:
                                 resolved_interface_name = guest_name
-                        bridge_name = value.get("bridge", None)
-                        bridge = {}
-                        if bridge_name:
-                            bridge = await rest_reconcile_async(
-                                nb,
-                                "/api/virtualization/interfaces/",
-                                lookup={
-                                    "virtual_machine_id": virtual_machine.get("id"),
-                                    "name": bridge_name,
-                                },
-                                payload={
-                                    "name": bridge_name,
-                                    "virtual_machine": virtual_machine.get("id"),
-                                    "type": "bridge",
-                                    "description": f"Bridge interface of Device {resource.get('node')}.",
-                                    "tags": tag_refs,
-                                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                                },
-                                schema=NetBoxVirtualMachineInterfaceSyncState,
-                                current_normalizer=lambda record: {
-                                    "name": record.get("name"),
-                                    "virtual_machine": record.get("virtual_machine"),
-                                    "type": record.get("type"),
-                                    "description": record.get("description"),
-                                    "bridge": record.get("bridge"),
-                                    "enabled": record.get("enabled"),
-                                    "mac_address": record.get("mac_address"),
-                                    "untagged_vlan": record.get("untagged_vlan"),
-                                    "mode": record.get("mode"),
-                                    "tags": record.get("tags"),
-                                    "custom_fields": record.get("custom_fields"),
-                                },
+
+                        interface_tasks.append(
+                            _create_vm_interface_parallel(
+                                nb=nb,
+                                virtual_machine=virtual_machine,
+                                interface_name=resolved_interface_name,
+                                interface_config=value,
+                                guest_iface=guest_iface,
+                                tag_refs=tag_refs,
+                                use_guest_agent_interface_name=use_guest_agent_interface_name,
+                                ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                                now=now,
                             )
-
-                        if not isinstance(bridge, dict):
-                            bridge = bridge.dict()
-
-                        # Resolve VLAN tag from Proxmox network config (e.g. tag=100)
-                        vlan_nb_id: int | None = None
-                        vlan_tag_raw = value.get("tag")
-                        if vlan_tag_raw is not None:
-                            try:
-                                vlan_tag = int(vlan_tag_raw)
-                                vlan_record = await rest_reconcile_async(
-                                    nb,
-                                    "/api/ipam/vlans/",
-                                    lookup={"vid": vlan_tag},
-                                    payload={
-                                        "vid": vlan_tag,
-                                        "name": f"VLAN {vlan_tag}",
-                                        "status": "active",
-                                        "tags": tag_refs,
-                                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                                    },
-                                    schema=NetBoxVlanSyncState,
-                                    current_normalizer=lambda record: {
-                                        "vid": record.get("vid"),
-                                        "name": record.get("name"),
-                                        "status": record.get("status"),
-                                        "tags": record.get("tags"),
-                                        "custom_fields": record.get("custom_fields"),
-                                    },
-                                )
-                                vlan_nb_id = (
-                                    vlan_record.get("id")
-                                    if isinstance(vlan_record, dict)
-                                    else getattr(vlan_record, "id", None)
-                                )
-                            except Exception as vlan_exc:
-                                logger.warning(
-                                    "Failed to create/sync VLAN tag=%s for VM %s interface %s: %s",
-                                    vlan_tag_raw,
-                                    resource.get("name"),
-                                    resolved_interface_name,
-                                    vlan_exc,
-                                )
-
-                        vm_interface = await rest_reconcile_async(
-                            nb,
-                            "/api/virtualization/interfaces/",
-                            lookup={
-                                "virtual_machine_id": virtual_machine.get("id"),
-                                "name": resolved_interface_name,
-                            },
-                            payload={
-                                "virtual_machine": virtual_machine.get("id"),
-                                "name": resolved_interface_name,
-                                "enabled": True,
-                                "bridge": bridge.get("id", None),
-                                "mac_address": value.get("virtio", value.get("hwaddr", None)),
-                                "untagged_vlan": vlan_nb_id,
-                                "mode": "access" if vlan_nb_id is not None else None,
-                                "tags": tag_refs,
-                                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                            },
-                            schema=NetBoxVirtualMachineInterfaceSyncState,
-                            current_normalizer=lambda record: {
-                                "name": record.get("name"),
-                                "virtual_machine": record.get("virtual_machine"),
-                                "enabled": record.get("enabled"),
-                                "bridge": record.get("bridge"),
-                                "mac_address": record.get("mac_address"),
-                                "type": record.get("type"),
-                                "description": record.get("description"),
-                                "untagged_vlan": record.get("untagged_vlan"),
-                                "mode": record.get("mode"),
-                                "tags": record.get("tags"),
-                                "custom_fields": record.get("custom_fields"),
-                            },
                         )
 
-                        if not isinstance(vm_interface, dict):
-                            vm_interface = vm_interface.dict()
+                interface_results = await asyncio.gather(*interface_tasks, return_exceptions=True)
+                for result in interface_results:
+                    if isinstance(result, Exception):
+                        logger.warning("Interface creation failed: %s", result)
+                        continue
+                    if result.get("interface"):
+                        netbox_vm_interfaces.append(result["interface"])
+                    ip_id = result.get("first_ip_id")
+                    if ip_id and first_ip_id is None:
+                        first_ip_id = ip_id
 
-                        netbox_vm_interfaces.append(vm_interface)
-
-                        interface_ip = _best_guest_agent_ip(
-                            guest_iface, ignore_ipv6_link_local_addresses
-                        ) or value.get("ip", None)
-                        if interface_ip and interface_ip != "dhcp":
-                            ip_record = await rest_reconcile_async(
-                                nb,
-                                "/api/ipam/ip-addresses/",
-                                lookup={"address": interface_ip},
-                                payload={
-                                    "address": interface_ip,
-                                    "assigned_object_type": "virtualization.vminterface",
-                                    "assigned_object_id": vm_interface.get("id"),
-                                    "status": "active",
-                                    "tags": tag_refs,
-                                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                                },
-                                schema=NetBoxIpAddressSyncState,
-                                current_normalizer=lambda record: {
-                                    "address": record.get("address"),
-                                    "assigned_object_type": record.get("assigned_object_type"),
-                                    "assigned_object_id": record.get("assigned_object_id"),
-                                    "status": record.get("status"),
-                                    "tags": record.get("tags"),
-                                    "custom_fields": record.get("custom_fields"),
-                                },
-                            )
-                            if first_ip_id is None:
-                                first_ip_id = (
-                                    ip_record.get("id")
-                                    if isinstance(ip_record, dict)
-                                    else getattr(ip_record, "id", None)
-                                )
-
-        for disk_entry in vm_config_obj.disks:
-            storage_name = disk_entry.storage_name or storage_name_from_volume_id(
-                disk_entry.storage
-            )
-            storage_record = find_storage_record(
-                storage_index,
-                cluster_name=cluster_name,
-                storage_name=storage_name,
-            )
-            await rest_reconcile_async(
-                nb,
-                "/api/virtualization/virtual-disks/",
-                lookup={
-                    "virtual_machine_id": virtual_machine.get("id"),
-                    "name": disk_entry.name,
-                },
-                payload={
-                    "virtual_machine": virtual_machine.get("id"),
-                    "name": disk_entry.name,
-                    "size": disk_entry.size,
-                    "storage": storage_record.get("id") if storage_record else None,
-                    "description": disk_entry.description,
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
-                schema=NetBoxVirtualDiskSyncState,
-                current_normalizer=lambda record: {
-                    "virtual_machine": record.get("virtual_machine"),
-                    "name": record.get("name"),
-                    "size": record.get("size"),
-                    "storage": record.get("storage"),
-                    "description": record.get("description"),
-                    "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
-                },
-            )
+            disk_tasks = [
+                _create_vm_disk_parallel(
+                    nb=nb,
+                    virtual_machine=virtual_machine,
+                    disk_entry=disk_entry,
+                    cluster_name=cluster_name,
+                    storage_index=storage_index,
+                    tag_refs=tag_refs,
+                    now=now,
+                )
+                for disk_entry in vm_config_obj.disks
+            ]
+            if disk_tasks:
+                await asyncio.gather(*disk_tasks, return_exceptions=True)
 
         # Set primary IP only when NetBox has no primary IP yet (user choice is preserved)
         vm_id = virtual_machine.get("id")
@@ -1172,6 +1342,506 @@ async def create_virtual_machines(  # noqa: C901
     return flattened_results
 
 
+async def create_only_vm_interfaces(  # noqa: C901
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+    websocket=None,
+    use_websocket: bool = False,
+    use_guest_agent_interface_name: bool = True,
+    ignore_ipv6_link_local_addresses: bool = True,
+) -> list[dict]:
+    """Sync VM interfaces only (no VM creation) with per-interface progress events.
+
+    Args:
+        netbox_session: NetBox session.
+        pxs: Proxmox sessions.
+        cluster_status: Cluster status from Proxmox.
+        cluster_resources: Filtered cluster resources containing VMs.
+        custom_fields: Custom field configs.
+        tag: Proxbox tag reference.
+        websocket: Optional bridge for SSE events.
+        use_websocket: Whether to emit per-interface events.
+        use_guest_agent_interface_name: Prefer guest-agent interface names.
+        ignore_ipv6_link_local_addresses: Skip IPv6 link-local addresses.
+
+    Returns:
+        List of synced interface records.
+    """
+    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
+
+    nb = netbox_session
+    tag_refs = [
+        {
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+        }
+    ]
+    tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+    now = datetime.now(timezone.utc)
+    results: list[dict] = []
+
+    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
+        cluster_name_str = str(cluster_name)
+        resource_node = str(resource.get("node", ""))
+        vm_type = resource.get("type", "unknown")
+        vm_name = str(resource.get("name", "")).strip()
+
+        vm_record = None
+        for cluster in cluster_resources:
+            if not isinstance(cluster, dict):
+                continue
+            for c_name, c_resources in cluster.items():
+                for r in c_resources:
+                    if r.get("name", "").strip() == vm_name and r.get("type") == vm_type:
+                        vm_record = r
+                        break
+
+        if not vm_record:
+            return []
+
+        vmid = resource.get("vmid")
+        if vmid is None:
+            return []
+
+        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
+        if not netbox_vm:
+            logger.warning(
+                "Skipping VM interface sync for %s (vmid=%s): NetBox VM not found",
+                vm_name,
+                vmid,
+            )
+            return []
+
+        proxmox_session = next(
+            (
+                px
+                for px, cs in zip(pxs, cluster_status)
+                if getattr(cs, "name", None) == cluster_name_str
+            ),
+            None,
+        )
+
+        vm_config: dict[str, object] = {}
+        try:
+            if proxmox_session and resource_node:
+                vm_config_result = get_vm_config(
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    node=resource_node,
+                    type=vm_type,
+                    vmid=int(vmid),
+                )
+                if inspect.isawaitable(vm_config_result):
+                    vm_config_result = await vm_config_result
+                vm_config = vm_config_result or {}
+        except Exception as exc:
+            logger.warning("Could not fetch VM config for %s (vmid=%s): %s", vm_name, vmid, exc)
+
+        guest_agent_interfaces: list[dict[str, object]] = []
+        if vm_type == "qemu" and vm_config.get("agent"):
+            if proxmox_session and resource_node:
+                guest_agent_interfaces = (
+                    get_qemu_guest_agent_network_interfaces(
+                        proxmox_session, resource_node, int(vmid)
+                    )
+                    or []
+                )
+
+        guest_by_name = {
+            str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
+        }
+        guest_by_mac = {
+            _normalized_mac(iface.get("mac_address")): iface
+            for iface in guest_agent_interfaces
+            if _normalized_mac(iface.get("mac_address"))
+        }
+
+        vm_networks = _parse_vm_networks(vm_config)
+
+        interfaces_synced: list[dict] = []
+
+        for network in vm_networks:
+            for iface_name, config_dict in network.items():
+                config_interface_name = (
+                    str(config_dict.get("name", iface_name)).strip() or iface_name
+                )
+                interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
+                guest_iface = None
+                if interface_mac:
+                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                if guest_iface is None:
+                    guest_iface = guest_by_name.get(config_interface_name.lower())
+
+                resolved_name = config_interface_name
+                if use_guest_agent_interface_name and guest_iface:
+                    guest_name = str(guest_iface.get("name") or "").strip()
+                    if guest_name:
+                        resolved_name = guest_name
+
+                if use_websocket and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "vm_interface",
+                            "data": {
+                                "completed": False,
+                                "sync_status": "syncing",
+                                "rowid": resolved_name,
+                                "name": resolved_name,
+                                "vm": vm_name,
+                            },
+                        }
+                    )
+
+                try:
+                    result = await sync_vm_interface_and_ip(
+                        nb=nb,
+                        virtual_machine={
+                            "id": netbox_vm.get("id"),
+                            "name": netbox_vm.get("name") or vm_name,
+                        },
+                        interface_name=resolved_name,
+                        interface_config=config_dict,
+                        guest_iface=guest_iface,
+                        tag_refs=tag_refs,
+                        use_guest_agent_interface_name=use_guest_agent_interface_name,
+                        create_ip=False,
+                        now=now,
+                    )
+                    interfaces_synced.append(result)
+
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_interface",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "netbox_id": result.get("id"),
+                                    "mac_address": result.get("mac_address"),
+                                    "ip_address": result.get("ip_address"),
+                                },
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to sync interface %s for VM %s: %s",
+                        resolved_name,
+                        vm_name,
+                        exc,
+                    )
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_interface",
+                                "data": {
+                                    "completed": False,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "error": str(exc),
+                                },
+                            }
+                        )
+
+        return interfaces_synced
+
+    max_concurrency = resolve_vm_sync_concurrency()
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+        async with semaphore:
+            return await _sync_vm_interfaces(cluster_name, resource)
+
+    async def _create_cluster_tasks(cluster: dict) -> list:
+        tasks = []
+        for cluster_name, resources in cluster.items():
+            for resource in resources:
+                if resource.get("type") in ("qemu", "lxc"):
+                    tasks.append(_run_task(cluster_name, resource))
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    try:
+        for cluster in cluster_resources:
+            cluster_results = await _create_cluster_tasks(cluster)
+            for cluster_result in cluster_results:
+                if isinstance(cluster_result, Exception):
+                    continue
+                for result in cluster_result:
+                    if isinstance(result, Exception):
+                        continue
+                    results.append(result)
+    except Exception as exc:
+        logger.warning("Error during VM interfaces sync: %s", exc)
+
+    if use_websocket and websocket:
+        await websocket.send_json({"object": "vm_interface", "end": True})
+
+    return results
+
+
+async def create_only_vm_ip_addresses(  # noqa: C901
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+    cluster_status: ClusterStatusDep,
+    cluster_resources: ClusterResourcesDep,
+    custom_fields: CreateCustomFieldsDep,
+    tag: ProxboxTagDep,
+    websocket=None,
+    use_websocket: bool = False,
+    use_guest_agent_interface_name: bool = True,
+    ignore_ipv6_link_local_addresses: bool = True,
+) -> list[dict]:
+    """Sync VM IP addresses and primary IP assignment.
+
+    This function resolves the existing VM interfaces created by the interface
+    sync stage, assigns the best discovered IPs to them, and promotes the first
+    IP to primary IP when available.
+
+    Args:
+        netbox_session: NetBox session.
+        pxs: Proxmox sessions.
+        cluster_status: Cluster status from Proxmox.
+        cluster_resources: Filtered cluster resources containing VMs.
+        custom_fields: Custom field configs.
+        tag: Proxbox tag reference.
+        websocket: Optional bridge for SSE events.
+        use_websocket: Whether to emit per-IP events.
+        use_guest_agent_interface_name: Prefer guest-agent interface names.
+        ignore_ipv6_link_local_addresses: Skip IPv6 link-local addresses.
+
+    Returns:
+        List of synced IP address records.
+    """
+    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
+    from proxbox_api.services.sync.vm_network import set_primary_ip
+
+    nb = netbox_session
+    tag_refs = [
+        {
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+        }
+    ]
+    tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+    now = datetime.now(timezone.utc)
+    results: list[dict] = []
+
+    async def _sync_vm_ips(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
+        cluster_name_str = str(cluster_name)
+        resource_node = str(resource.get("node", ""))
+        vm_type = resource.get("type", "unknown")
+        vm_name = str(resource.get("name", "")).strip()
+
+        vmid = resource.get("vmid")
+        if vmid is None:
+            return []
+
+        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
+        if not netbox_vm:
+            logger.warning(
+                "Skipping VM IP sync for %s (vmid=%s): NetBox VM not found",
+                vm_name,
+                vmid,
+            )
+            return []
+
+        proxmox_session = next(
+            (
+                px
+                for px, cs in zip(pxs, cluster_status)
+                if getattr(cs, "name", None) == cluster_name_str
+            ),
+            None,
+        )
+
+        vm_config: dict[str, object] = {}
+        try:
+            if proxmox_session and resource_node:
+                vm_config_result = get_vm_config(
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    node=resource_node,
+                    type=vm_type,
+                    vmid=int(vmid),
+                )
+                if inspect.isawaitable(vm_config_result):
+                    vm_config_result = await vm_config_result
+                vm_config = vm_config_result or {}
+        except Exception as exc:
+            logger.warning(
+                "Could not fetch VM config for IP sync %s (vmid=%s): %s", vm_name, vmid, exc
+            )
+
+        guest_agent_interfaces: list[dict[str, object]] = []
+        if vm_type == "qemu" and vm_config.get("agent"):
+            if proxmox_session and resource_node:
+                guest_agent_interfaces = (
+                    get_qemu_guest_agent_network_interfaces(
+                        proxmox_session, resource_node, int(vmid)
+                    )
+                    or []
+                )
+
+        guest_by_name = {
+            str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
+        }
+        guest_by_mac = {
+            _normalized_mac(iface.get("mac_address")): iface
+            for iface in guest_agent_interfaces
+            if _normalized_mac(iface.get("mac_address"))
+        }
+
+        vm_networks = _parse_vm_networks(vm_config)
+
+        ips_synced: list[dict] = []
+        first_ip_id: int | None = None
+
+        for network in vm_networks:
+            for iface_name, config_dict in network.items():
+                config_interface_name = (
+                    str(config_dict.get("name", iface_name)).strip() or iface_name
+                )
+                interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
+                guest_iface = None
+                if interface_mac:
+                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                if guest_iface is None:
+                    guest_iface = guest_by_name.get(config_interface_name.lower())
+
+                resolved_name = config_interface_name
+                if use_guest_agent_interface_name and guest_iface:
+                    guest_name = str(guest_iface.get("name") or "").strip()
+                    if guest_name:
+                        resolved_name = guest_name
+
+                if use_websocket and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "vm_ip",
+                            "data": {
+                                "completed": False,
+                                "sync_status": "syncing",
+                                "rowid": resolved_name,
+                                "name": resolved_name,
+                                "vm": vm_name,
+                            },
+                        }
+                    )
+
+                try:
+                    result = await sync_vm_interface_and_ip(
+                        nb=nb,
+                        virtual_machine={
+                            "id": netbox_vm.get("id"),
+                            "name": netbox_vm.get("name") or vm_name,
+                        },
+                        interface_name=resolved_name,
+                        interface_config=config_dict,
+                        guest_iface=guest_iface,
+                        tag_refs=tag_refs,
+                        use_guest_agent_interface_name=use_guest_agent_interface_name,
+                        create_interface=False,
+                        now=now,
+                    )
+                    if result.get("ip_id"):
+                        if first_ip_id is None:
+                            first_ip_id = result.get("ip_id")
+                        ips_synced.append(
+                            {
+                                "ip_id": result.get("ip_id"),
+                                "address": result.get("ip_address"),
+                                "interface_name": resolved_name,
+                                "interface_id": result.get("id"),
+                                "vm": vm_name,
+                            }
+                        )
+
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_ip",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "ip_id": result.get("ip_id"),
+                                    "address": result.get("ip_address"),
+                                },
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to sync IP for VM %s interface %s: %s",
+                        vm_name,
+                        resolved_name,
+                        exc,
+                    )
+                    if use_websocket and websocket:
+                        await websocket.send_json(
+                            {
+                                "object": "vm_ip",
+                                "data": {
+                                    "completed": False,
+                                    "rowid": resolved_name,
+                                    "name": resolved_name,
+                                    "vm": vm_name,
+                                    "error": str(exc),
+                                },
+                            }
+                        )
+
+        if first_ip_id is not None:
+            await set_primary_ip(
+                nb=nb,
+                virtual_machine=netbox_vm,
+                primary_ip_id=first_ip_id,
+            )
+
+        return ips_synced
+
+    max_concurrency = resolve_vm_sync_concurrency()
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+        async with semaphore:
+            return await _sync_vm_ips(cluster_name, resource)
+
+    async def _create_cluster_tasks(cluster: dict) -> list:
+        tasks = []
+        for cluster_name, resources in cluster.items():
+            for resource in resources:
+                if resource.get("type") in ("qemu", "lxc"):
+                    tasks.append(_run_task(cluster_name, resource))
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    try:
+        for cluster in cluster_resources:
+            cluster_results = await _create_cluster_tasks(cluster)
+            for cluster_result in cluster_results:
+                if isinstance(cluster_result, Exception):
+                    continue
+                for result in cluster_result:
+                    if isinstance(result, Exception):
+                        continue
+                    results.append(result)
+    except Exception as exc:
+        logger.warning("Error during VM IP address sync: %s", exc)
+
+    if use_websocket and websocket:
+        await websocket.send_json({"object": "vm_ip", "end": True})
+
+    return results
+
+
 @router.get("/{netbox_vm_id}/create")
 async def create_virtual_machine_by_netbox_id(
     netbox_vm_id: int,
@@ -1244,12 +1914,12 @@ async def create_virtual_machines_stream(
     filtered_cluster_resources = cluster_resources
 
     if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
+        vm_ids = parse_comma_separated_ints(netbox_vm_ids)
         if vm_ids:
             filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
                 netbox_session=netbox_session,
                 cluster_resources=cluster_resources,
-                netbox_vm_ids=[int(vid) for vid in vm_ids],
+                netbox_vm_ids=vm_ids,
             )
 
     async def event_stream():

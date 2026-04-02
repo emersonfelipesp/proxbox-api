@@ -4,7 +4,7 @@
 
 Schemas for NetBox DCIM payloads used by synchronization endpoints.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: NetBox DCIM schema models used by API payloads.
 

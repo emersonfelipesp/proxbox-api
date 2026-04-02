@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from functools import wraps
-from typing import Any, Callable, ParamSpec, TypeVar
+from typing import Callable, ParamSpec, TypeVar
 
 from proxbox_api.exception import (
     NetBoxAPIError,
@@ -17,7 +17,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def validate_netbox_response(response: Any, operation: str) -> Any:
+def validate_netbox_response(response: object, operation: str) -> object:
     """Validate a NetBox response and raise typed error if invalid.
 
     Args:
@@ -45,7 +45,7 @@ def validate_netbox_response(response: Any, operation: str) -> Any:
     return response
 
 
-def validate_proxmox_response(response: Any, operation: str, node: str | None = None) -> Any:
+def validate_proxmox_response(response: object, operation: str, node: str | None = None) -> object:
     """Validate a Proxmox response and raise typed error if invalid.
 
     Args:
@@ -256,7 +256,7 @@ class EarlyReturnContext:
     async def __aenter__(self) -> EarlyReturnContext:
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> bool:
         if self.should_return:
             logger.info(f"{self.operation}: {self.return_message}")
             return True

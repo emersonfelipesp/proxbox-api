@@ -21,6 +21,7 @@ from proxbox_api.routes.proxmox.cluster import (
 from proxbox_api.services.sync.snapshots import (
     create_virtual_machine_snapshots as sync_snapshots,
 )
+from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
@@ -37,6 +38,7 @@ async def _create_all_virtual_machine_snapshots(
     websocket=None,
     use_websocket=False,
     vmid_filter: int | None = None,
+    delete_nonexistent_snapshot: bool = False,
 ):
     """Internal function that handles snapshot sync with optional websocket support.
 
@@ -66,6 +68,7 @@ async def _create_all_virtual_machine_snapshots(
             use_css=False,
             fetch_max_concurrency=fetch_max_concurrency,
             vmid=vmid_filter,
+            delete_nonexistent_snapshot=delete_nonexistent_snapshot,
         )
 
         if result:
@@ -152,16 +155,20 @@ async def create_all_virtual_machine_snapshots(
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
+    delete_nonexistent_snapshot: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Snapshot",
+            description="If true, deletes snapshots that exist in NetBox but not in Proxmox.",
+        ),
+    ] = False,
 ):
     vmid_filter = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
-            if proxmox_vmids:
-                vmid_filter = proxmox_vmids[0]
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
+        if proxmox_vmids:
+            vmid_filter = proxmox_vmids[0]
 
     return await _create_all_virtual_machine_snapshots(
         netbox_session=netbox_session,
@@ -171,6 +178,7 @@ async def create_all_virtual_machine_snapshots(
         tag=tag,
         fetch_max_concurrency=fetch_max_concurrency,
         vmid_filter=vmid_filter,
+        delete_nonexistent_snapshot=delete_nonexistent_snapshot,
     )
 
 
@@ -223,16 +231,20 @@ async def create_all_virtual_machine_snapshots_stream(
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
+    delete_nonexistent_snapshot: Annotated[
+        bool,
+        Query(
+            title="Delete Nonexistent Snapshot",
+            description="If true, deletes snapshots that exist in NetBox but not in Proxmox.",
+        ),
+    ] = False,
 ):
     vmid_filter = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
-            if proxmox_vmids:
-                vmid_filter = proxmox_vmids[0]
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
+        if proxmox_vmids:
+            vmid_filter = proxmox_vmids[0]
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -249,6 +261,7 @@ async def create_all_virtual_machine_snapshots_stream(
                     vmid_filter=vmid_filter,
                     websocket=bridge,
                     use_websocket=True,
+                    delete_nonexistent_snapshot=delete_nonexistent_snapshot,
                 )
             finally:
                 await bridge.close()

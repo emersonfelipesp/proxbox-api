@@ -4,6 +4,10 @@ import asyncio
 from types import SimpleNamespace
 
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
+from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
+    create_only_vm_interfaces,
+    create_only_vm_ip_addresses,
+)
 
 
 def _vm_sync_inputs(vm_config: dict):
@@ -456,3 +460,123 @@ def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
     )
     assert len(result) == 1
     assert ip_payloads and ip_payloads[0]["address"] == "fe80::1/64"
+
+
+def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    captured_vm_ids: list[int | None] = []
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return data["vm_config"]
+
+    async def _fake_sync_vm_interface_and_ip(**kwargs):
+        assert kwargs["create_ip"] is False
+        captured_vm_ids.append(kwargs["virtual_machine"].get("id"))
+        return {"id": 66, "ip_id": 77, "ip_address": "10.0.0.50/24"}
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        _fake_get_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.sync_vm_interface_and_ip",
+        _fake_sync_vm_interface_and_ip,
+    )
+
+    result = asyncio.run(
+        create_only_vm_interfaces(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert result == [{"id": 66, "ip_id": 77, "ip_address": "10.0.0.50/24"}]
+    assert captured_vm_ids == [55]
+
+
+def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+        }
+    )
+    captured_vm_ids: list[int | None] = []
+    primary_ip_calls: list[dict] = []
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return data["vm_config"]
+
+    async def _fake_sync_vm_interface_and_ip(**kwargs):
+        assert kwargs["create_interface"] is False
+        captured_vm_ids.append(kwargs["virtual_machine"].get("id"))
+        return {"id": 66, "ip_id": 77, "ip_address": "10.0.0.20/24"}
+
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        _fake_get_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.sync_vm_interface_and_ip",
+        _fake_sync_vm_interface_and_ip,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_network.set_primary_ip",
+        _fake_set_primary_ip,
+    )
+
+    result = asyncio.run(
+        create_only_vm_ip_addresses(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert result == [
+        {
+            "ip_id": 77,
+            "address": "10.0.0.20/24",
+            "interface_name": "net0",
+            "interface_id": 66,
+            "vm": "vm01",
+        }
+    ]
+    assert captured_vm_ids == [55]
+    assert primary_ip_calls == [{"nb": data["netbox_session"], "virtual_machine": {"id": 55, "name": "vm01"}, "primary_ip_id": 77}]

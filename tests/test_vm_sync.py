@@ -6,6 +6,10 @@ from proxbox_api.proxmox_to_netbox.errors import ProxmoxToNetBoxError
 from proxbox_api.proxmox_to_netbox.mappers.virtual_machine import (
     map_proxmox_vm_to_netbox_vm_body,
 )
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxInterfaceSyncState,
+    NetBoxVirtualMachineInterfaceSyncState,
+)
 from proxbox_api.proxmox_to_netbox.normalize import build_virtual_machine_transform
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
@@ -117,3 +121,28 @@ def test_build_virtual_machine_transform_requires_generated_proxmox_operation(mo
             role_id=None,
             tag_ids=[],
         )
+
+
+def test_virtual_machine_interface_state_accepts_choice_object_mode():
+    state = NetBoxVirtualMachineInterfaceSyncState.model_validate(
+        {
+            "virtual_machine": 1,
+            "name": "net0",
+            "mode": {"value": "access", "label": "Access"},
+        }
+    )
+
+    assert state.mode == "access"
+
+
+def test_interface_state_accepts_choice_object_mode():
+    state = NetBoxInterfaceSyncState.model_validate(
+        {
+            "device": 1,
+            "name": "eth0",
+            "type": "other",
+            "mode": {"value": "access", "label": "Access"},
+        }
+    )
+
+    assert state.mode == "access"

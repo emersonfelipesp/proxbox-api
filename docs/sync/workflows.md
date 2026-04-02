@@ -10,14 +10,16 @@ HTTP endpoint:
 
 High-level sequence:
 
-1. Create NetBox sync-process record.
-2. Sync Proxmox nodes into NetBox devices.
-3. Sync Proxmox storages into NetBox plugin storage records.
-4. Sync Proxmox virtual machines into NetBox VMs.
+1. Sync Proxmox nodes into NetBox devices.
+2. Sync Proxmox storages into NetBox plugin storage records.
+3. Sync Proxmox virtual machines into NetBox VMs.
+4. Sync task history records.
 5. Sync virtual disks for discovered VMs.
 6. Sync VM backups.
 7. Sync VM snapshots.
-8. Mark sync-process as completed and store runtime.
+8. Sync node interfaces and IP addresses.
+9. Sync VM interfaces.
+10. Sync VM IP addresses and primary IP assignment.
 
 ## Virtual machine sync flow
 
@@ -33,6 +35,7 @@ Core behavior:
 - Creates dependencies (cluster, device, role) as needed.
 - Creates VM interfaces and IP addresses when possible.
 - Writes journal entries for auditability.
+- In `Full Update`, VM creation skips network writes so the dedicated VM interface/IP stages own that work.
 
 ## Backup sync flow
 

@@ -4,9 +4,16 @@
 
 Top-level route namespace package for FastAPI router modules.
 
-## Modules and Responsibilities
+## Current Subpackages
 
-- `__init__.py`: Route package namespace for proxbox_api endpoints.
+- `admin/`: HTML admin dashboard for NetBox endpoint records.
+- `dcim/`: Device, interface, VLAN, and IP sync routes.
+- `extras/`: NetBox extras and custom field routes.
+- `netbox/`: NetBox endpoint CRUD and plugin configuration routes.
+- `proxbox/`: Proxbox plugin configuration routes.
+- `proxbox/clusters/`: Cluster-specific Proxbox routes.
+- `proxmox/`: Proxmox session, storage, node, and generated viewer routes.
+- `virtualization/`: VM and cluster bootstrap routes.
 
 ## Key Data Flow and Dependencies
 

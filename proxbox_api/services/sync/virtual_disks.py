@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
@@ -48,17 +48,17 @@ async def _list_all_vms_with_proxmox_id(
 
 
 async def create_virtual_disks(  # noqa: C901
-    netbox_session: Any,
+    netbox_session: object,
     pxs: ProxmoxSessionsDep,
-    cluster_status: list[Any] | None,
-    cluster_resources: list[dict[str, Any]] | None = None,
-    tag: Any | None = None,
-    websocket: Any | None = None,
+    cluster_status: list[object] | None,
+    cluster_resources: list[dict[str, object]] | None = None,
+    tag: object | None = None,
+    websocket: object | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
     netbox_vm_id: int | None = None,
     netbox_vm_ids: list[int] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Sync virtual disks for existing Virtual Machines in NetBox.
 

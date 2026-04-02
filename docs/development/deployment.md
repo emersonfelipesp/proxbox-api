@@ -22,7 +22,7 @@ Behavior:
 ## Local preview before push
 
 ```bash
-pip install -r requirements-docs.txt
+uv sync --extra docs --group dev
 mkdocs build --strict
 mkdocs serve
 ```

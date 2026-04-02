@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -20,7 +21,11 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
-from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState, NetBoxSiteSyncState
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxDeviceSyncState,
+    NetBoxSiteSyncState,
+    NetBoxTaskHistorySyncState,
+)
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.services.proxmox_helpers import (
@@ -657,6 +662,133 @@ def test_rest_reconcile_async_patches_only_schema_detected_changes():
     ]
 
 
+def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
+    expected_pstart = datetime.fromtimestamp(3001, timezone.utc).isoformat()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/plugins/proxbox/task-history/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [
+                        {
+                            "id": 55,
+                            "url": "https://netbox.local/api/plugins/proxbox/task-history/55/",
+                            "virtual_machine": {"id": 144, "name": "vm-144"},
+                            "vm_type": "qemu",
+                            "upid": "UPID:pve01:1",
+                            "node": "pve01",
+                            "pid": 1001,
+                            "pstart": expected_pstart,
+                            "task_id": "144",
+                            "task_type": "qmstart",
+                            "username": "root@pam",
+                            "start_time": "2024-03-09T17:16:10Z",
+                            "end_time": "2024-03-09T17:16:20Z",
+                            "description": "VM 144 - Start",
+                            "status": "running",
+                            "task_state": "running",
+                            "exitstatus": None,
+                            "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                            "custom_fields": {},
+                        }
+                    ],
+                },
+            ),
+            ("PATCH", "/api/plugins/proxbox/task-history/55/"): (
+                200,
+                {
+                    "id": 55,
+                    "url": "https://netbox.local/api/plugins/proxbox/task-history/55/",
+                    "virtual_machine": {"id": 144, "name": "vm-144"},
+                    "vm_type": "qemu",
+                    "upid": "UPID:pve01:1",
+                    "node": "pve01",
+                    "pid": 1001,
+                    "pstart": expected_pstart,
+                    "task_id": "144",
+                    "task_type": "qmstart",
+                    "username": "root@pam",
+                    "start_time": "2024-03-09T17:16:10Z",
+                    "end_time": "2024-03-09T17:16:20Z",
+                    "description": "VM 144 - Start",
+                    "status": "OK",
+                    "task_state": "stopped",
+                    "exitstatus": "OK",
+                    "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                    "custom_fields": {},
+                },
+            ),
+        }
+    )
+
+    updated = asyncio.run(
+        rest_reconcile_async(
+            session,
+            "/api/plugins/proxbox/task-history/",
+            lookup={"upid": "UPID:pve01:1"},
+            payload={
+                "virtual_machine": 144,
+                "vm_type": "qemu",
+                "upid": "UPID:pve01:1",
+                "node": "pve01",
+                "pid": 1001,
+                "pstart": expected_pstart,
+                "task_id": "144",
+                "task_type": "qmstart",
+                "username": "root@pam",
+                "start_time": "2024-03-09T17:16:10Z",
+                "end_time": "2024-03-09T17:16:20Z",
+                "description": "VM 144 - Start",
+                "status": "OK",
+                "task_state": "stopped",
+                "exitstatus": "OK",
+                "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                "custom_fields": {},
+            },
+            schema=NetBoxTaskHistorySyncState,
+            current_normalizer=lambda record: {
+                "virtual_machine": record.get("virtual_machine"),
+                "vm_type": record.get("vm_type"),
+                "upid": record.get("upid"),
+                "node": record.get("node"),
+                "pid": record.get("pid"),
+                "pstart": record.get("pstart"),
+                "task_id": record.get("task_id"),
+                "task_type": record.get("task_type"),
+                "username": record.get("username"),
+                "start_time": record.get("start_time"),
+                "end_time": record.get("end_time"),
+                "description": record.get("description"),
+                "status": record.get("status"),
+                "task_state": record.get("task_state"),
+                "exitstatus": record.get("exitstatus"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+            patchable_fields={"status", "task_state", "exitstatus"},
+        )
+    )
+
+    assert updated.id == 55
+    assert session.client.calls == [
+        (
+            "GET",
+            "/api/plugins/proxbox/task-history/",
+            {"upid": "UPID:pve01:1", "limit": 2},
+            None,
+            True,
+        ),
+        (
+            "PATCH",
+            "/api/plugins/proxbox/task-history/55/",
+            None,
+            {"status": "OK", "task_state": "stopped", "exitstatus": "OK"},
+            True,
+        ),
+    ]
+
+
 def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
     site_queries = {"count": 0}
 
@@ -1251,7 +1383,10 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device():
             200,
             {"id": 51, "name": "pve01", "site": manual_site_id},
         ),
-        ("POST", "/api/dcim/sites/"): (201, {"id": proxbox_site_id, "name": "Proxmox Default Site - lab"}),
+        ("POST", "/api/dcim/sites/"): (
+            201,
+            {"id": proxbox_site_id, "name": "Proxmox Default Site - lab"},
+        ),
         ("POST", "/api/dcim/manufacturers/"): (201, {"id": 13, "name": "Proxmox"}),
         ("POST", "/api/dcim/device-types/"): (201, {"id": 14, "model": "Proxmox Generic Device"}),
         ("POST", "/api/dcim/device-roles/"): (201, {"id": 15, "name": "Proxmox Node"}),

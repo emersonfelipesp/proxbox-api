@@ -4,9 +4,9 @@
 
 Virtualization route namespace and high-level endpoints.
 
-## Modules and Responsibilities
+## Current Files
 
-- `__init__.py`: Virtualization route namespace and placeholder endpoints.
+- `__init__.py`: Virtualization route namespace. The `cluster-types/create` and `clusters/create` endpoints are stubs that return HTTP 501.
 
 ## Key Data Flow and Dependencies
 

@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
 
 
-def _to_serializable(obj: Any) -> Any:
+
+def _to_serializable(obj: object) -> object:
     """Recursively convert RestRecord and similar objects to JSON-serializable dicts."""
     if isinstance(obj, dict):
         return {k: _to_serializable(v) for k, v in obj.items()}
@@ -21,7 +21,7 @@ def _to_serializable(obj: Any) -> Any:
     return obj
 
 
-def sse_event(event: str, data: Any) -> str:
+def sse_event(event: str, data: object) -> str:
     """Serialize one SSE frame."""
     return f"event: {event}\ndata: {json.dumps(_to_serializable(data))}\n\n"
 
@@ -30,9 +30,9 @@ class WebSocketSSEBridge:
     """Compatibility bridge that turns websocket-like JSON payloads into SSE frames."""
 
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[str, dict[str, object]] | None] = asyncio.Queue()
 
-    async def send_json(self, payload: dict[str, Any]) -> None:
+    async def send_json(self, payload: dict[str, object]) -> None:
         """Support sync services that call ``await websocket.send_json(...)``."""
         object_name = str(payload.get("object") or "sync")
         row_id = self._extract_row_id(payload)
@@ -49,7 +49,7 @@ class WebSocketSSEBridge:
             },
         )
 
-    async def emit(self, event: str, data: dict[str, Any]) -> None:
+    async def emit(self, event: str, data: dict[str, object]) -> None:
         await self._queue.put((event, data))
 
     async def close(self) -> None:
@@ -64,7 +64,7 @@ class WebSocketSSEBridge:
             yield sse_event(event, data)
 
     @staticmethod
-    def _extract_row_id(payload: dict[str, Any]) -> str | None:
+    def _extract_row_id(payload: dict[str, object]) -> str | None:
         data = payload.get("data")
         if isinstance(data, dict):
             row_id = data.get("rowid") or data.get("name")
@@ -73,7 +73,7 @@ class WebSocketSSEBridge:
         return None
 
     @staticmethod
-    def _extract_status(payload: dict[str, Any]) -> str:
+    def _extract_status(payload: dict[str, object]) -> str:
         data = payload.get("data")
         if payload.get("end") is True:
             return "completed"
@@ -88,7 +88,7 @@ class WebSocketSSEBridge:
     @staticmethod
     def _build_message(
         object_name: str,
-        payload: dict[str, Any],
+        payload: dict[str, object],
         row_id: str | None,
         status: str,
     ) -> str:

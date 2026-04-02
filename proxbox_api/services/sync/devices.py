@@ -1,6 +1,6 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends
 
@@ -24,14 +24,14 @@ from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
 
 async def create_proxmox_devices(  # noqa: C901
-    netbox_session: Any,
-    clusters_status: list[Any] | None,
+    netbox_session: object,
+    clusters_status: list[object] | None,
     tag: ProxboxTagDep,
-    websocket: Any | None = None,
+    websocket: object | None = None,
     node: str | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Create and synchronize devices from Proxmox cluster nodes to NetBox.
 
     This function iterates through cluster status objects, extracts node information,
@@ -63,7 +63,7 @@ async def create_proxmox_devices(  # noqa: C901
     phase_logger = SyncPhaseLogger("device_sync", cluster_mode="proxmox")
     phase_logger.log_phase("initialization", "Device sync process starting")
 
-    device_list: list[dict[str, Any]] = []
+    device_list: list[dict[str, object]] = []
 
     if not clusters_status:
         phase_logger.log_phase("validation", "No cluster status data provided", level="warning")

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
 
-def _normalize_text(value: Any) -> str | None:
+
+def _normalize_text(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, dict):
@@ -15,7 +15,7 @@ def _normalize_text(value: Any) -> str | None:
     return text or None
 
 
-def _record_to_dict(record: Any) -> dict[str, Any]:
+def _record_to_dict(record: object) -> dict[str, object]:
     if hasattr(record, "serialize"):
         return record.serialize()
     if isinstance(record, dict):
@@ -23,16 +23,16 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
     return dict(record)
 
 
-def _cluster_name(value: Any) -> str | None:
+def _cluster_name(value: object) -> str | None:
     if isinstance(value, dict):
         # Cluster is now a nested object with id, name, etc.
         value = value.get("name") or value.get("slug") or value.get("id")
     return _normalize_text(value)
 
 
-def build_storage_index(records: Iterable[Any]) -> dict[tuple[str, str], dict[str, Any]]:
+def build_storage_index(records: Iterable[object]) -> dict[tuple[str, str], dict[str, object]]:
     """Create a lookup index keyed by (cluster, storage_name)."""
-    index: dict[tuple[str, str], dict[str, Any]] = {}
+    index: dict[tuple[str, str], dict[str, object]] = {}
     for record in records:
         data = _record_to_dict(record)
         cluster = _cluster_name(data.get("cluster"))
@@ -44,11 +44,11 @@ def build_storage_index(records: Iterable[Any]) -> dict[tuple[str, str], dict[st
 
 
 def find_storage_record(
-    storage_index: dict[tuple[str, str], dict[str, Any]],
+    storage_index: dict[tuple[str, str], dict[str, object]],
     *,
     cluster_name: str | None,
     storage_name: str | None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """Return the matching storage record, preferring the cluster-specific match."""
     cluster = _normalize_text(cluster_name)
     name = _normalize_text(storage_name)
@@ -70,7 +70,7 @@ def find_storage_record(
     return None
 
 
-def storage_name_from_volume_id(volume_id: Any) -> str | None:
+def storage_name_from_volume_id(volume_id: object) -> str | None:
     """Extract the storage prefix from a Proxmox volume id."""
     text = _normalize_text(volume_id)
     if not text:

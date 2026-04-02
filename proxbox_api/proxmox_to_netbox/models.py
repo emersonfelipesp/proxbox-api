@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -17,7 +17,7 @@ from pydantic import (
 from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
 
 
-def _as_bool(value: Any) -> bool:
+def _as_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -27,7 +27,7 @@ def _as_bool(value: Any) -> bool:
     return False
 
 
-def _mb_from_bytes(value: Any) -> int:
+def _mb_from_bytes(value: object) -> int:
     try:
         as_int = int(value)
     except (TypeError, ValueError):
@@ -37,19 +37,25 @@ def _mb_from_bytes(value: Any) -> int:
     return as_int // 1_000_000
 
 
-def _relation_id(value: Any) -> Any:
+def _relation_id(value: object) -> object:
     if isinstance(value, dict):
         return value.get("id")
     return value
 
 
-def _status_value(value: Any) -> Any:
+def _status_value(value: object) -> object:
     if isinstance(value, dict):
         return value.get("value") or value.get("label")
     return value
 
 
-def _task_action_label(value: Any) -> str:
+def _choice_value(value: object) -> object:
+    if isinstance(value, dict):
+        return value.get("value") or value.get("label")
+    return value
+
+
+def _task_action_label(value: object) -> str:
     text = str(value or "").strip()
     if not text:
         return "Task"
@@ -62,7 +68,7 @@ def _task_action_label(value: Any) -> str:
     return text.title() or "Task"
 
 
-def _task_datetime(value: Any) -> datetime | None:
+def _task_datetime(value: object) -> datetime | None:
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
@@ -84,10 +90,10 @@ def _task_datetime(value: Any) -> datetime | None:
     return value
 
 
-def _normalized_tag_list(value: Any) -> list[dict[str, Any]]:
+def _normalized_tag_list(value: object) -> list[dict[str, object]]:
     if value is None:
         return []
-    normalized: list[dict[str, Any]] = []
+    normalized: list[dict[str, object]] = []
     for item in value:
         if isinstance(item, dict):
             normalized.append(item)
@@ -110,7 +116,7 @@ class NetBoxTagRef(BaseModel):
 
     @field_validator("name", "slug", "color", mode="before")
     @classmethod
-    def normalize_text(cls, value: Any) -> Any:
+    def normalize_text(cls, value: object) -> object:
         if value is None:
             return value
         text = str(value).strip()
@@ -131,11 +137,11 @@ class NetBoxNamedSlugTaggedState(BaseModel):
     name: str
     slug: str
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
@@ -158,7 +164,7 @@ class NetBoxSiteSyncState(NetBoxNamedSlugTaggedState):
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> str:
+    def normalize_status(cls, value: object) -> str:
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
 
@@ -170,16 +176,16 @@ class NetBoxClusterSyncState(BaseModel):
     type: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("type", mode="before")
     @classmethod
-    def normalize_type(cls, value: Any) -> Any:
+    def normalize_type(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
@@ -190,16 +196,16 @@ class NetBoxDeviceTypeSyncState(BaseModel):
     slug: str
     manufacturer: int | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("manufacturer", mode="before")
     @classmethod
-    def normalize_manufacturer(cls, value: Any) -> Any:
+    def normalize_manufacturer(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
@@ -230,7 +236,7 @@ class NetBoxCustomFieldSyncState(BaseModel):
         mode="before",
     )
     @classmethod
-    def normalize_text(cls, value: Any) -> Any:
+    def normalize_text(cls, value: object) -> object:
         if value is None:
             return value
         text = str(value).strip()
@@ -238,12 +244,12 @@ class NetBoxCustomFieldSyncState(BaseModel):
 
     @field_validator("weight", "search_weight", mode="before")
     @classmethod
-    def normalize_int(cls, value: Any) -> int:
+    def normalize_int(cls, value: object) -> int:
         return int(value or 0)
 
     @field_validator("object_types", mode="before")
     @classmethod
-    def normalize_object_types(cls, value: Any) -> list[str]:
+    def normalize_object_types(cls, value: object) -> list[str]:
         if value is None:
             return []
         items = [str(item).strip() for item in value if str(item).strip()]
@@ -260,22 +266,30 @@ class NetBoxInterfaceSyncState(BaseModel):
     untagged_vlan: int | None = None
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("device", "untagged_vlan", mode="before")
     @classmethod
-    def normalize_device(cls, value: Any) -> Any:
+    def normalize_device(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> str:
+    def normalize_status(cls, value: object) -> str:
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
 
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, value: object) -> object:
+        normalized = _choice_value(value)
+        if normalized in (None, ""):
+            return None
+        return str(normalized).strip() or None
+
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
@@ -292,16 +306,24 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     untagged_vlan: int | None = None
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("virtual_machine", "bridge", "untagged_vlan", mode="before")
     @classmethod
-    def normalize_relations(cls, value: Any) -> Any:
+    def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, value: object) -> object:
+        normalized = _choice_value(value)
+        if normalized in (None, ""):
+            return None
+        return str(normalized).strip() or None
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
@@ -313,22 +335,22 @@ class NetBoxIpAddressSyncState(BaseModel):
     assigned_object_id: int | None = None
     status: str = "active"
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("assigned_object_id", mode="before")
     @classmethod
-    def normalize_assigned_object_id(cls, value: Any) -> Any:
+    def normalize_assigned_object_id(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> str:
+    def normalize_status(cls, value: object) -> str:
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return NetBoxNamedSlugTaggedState.normalize_tags(value)
 
 
@@ -339,24 +361,24 @@ class NetBoxVlanSyncState(BaseModel):
     name: str
     status: str = "active"
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> str:
+    def normalize_status(cls, value: object) -> str:
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
 class NetBoxBackupSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    storage: int | None = None
+    proxmox_storage: int | None = None
     virtual_machine: int
     subtype: str | None = None
     creation_time: str | None = None
@@ -371,18 +393,23 @@ class NetBoxBackupSyncState(BaseModel):
 
     @field_validator("virtual_machine", mode="before")
     @classmethod
-    def normalize_virtual_machine(cls, value: Any) -> Any:
+    def normalize_virtual_machine(cls, value: object) -> object:
         return _relation_id(value)
 
-    @field_validator("storage", mode="before")
+    @field_validator("proxmox_storage", mode="before")
     @classmethod
-    def normalize_storage(cls, value: Any) -> Any:
+    def normalize_proxmox_storage(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
+
+    @field_validator("subtype", "format", "verification_state", mode="before")
+    @classmethod
+    def normalize_choice_fields(cls, value: object) -> object:
+        return _choice_value(value)
 
 
 class NetBoxSnapshotSyncState(BaseModel):
@@ -401,17 +428,17 @@ class NetBoxSnapshotSyncState(BaseModel):
 
     @field_validator("virtual_machine", mode="before")
     @classmethod
-    def normalize_virtual_machine(cls, value: Any) -> Any:
+    def normalize_virtual_machine(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("proxmox_storage", mode="before")
     @classmethod
-    def normalize_proxmox_storage(cls, value: Any) -> Any:
+    def normalize_proxmox_storage(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> str:
+    def normalize_status(cls, value: object) -> str:
         text = str(value or "active").strip().lower()
         return text if text in ("active", "stale") else "active"
 
@@ -424,7 +451,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
     upid: str
     node: str
     pid: int | None = None
-    pstart: int | None = None
+    pstart: str | None = None
     task_id: str | None = None
     task_type: str
     username: str
@@ -435,7 +462,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
     task_state: str | None = None
     exitstatus: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator(
         "virtual_machine",
@@ -444,7 +471,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
         mode="before",
     )
     @classmethod
-    def normalize_relations(cls, value: Any) -> Any:
+    def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator(
@@ -460,15 +487,15 @@ class NetBoxTaskHistorySyncState(BaseModel):
         mode="before",
     )
     @classmethod
-    def normalize_text(cls, value: Any) -> Any:
+    def normalize_text(cls, value: object) -> object:
         if value is None:
             return value
         text = str(value).strip()
         return text or None
 
-    @field_validator("start_time", "end_time", mode="before")
+    @field_validator("pstart", "start_time", "end_time", mode="before")
     @classmethod
-    def normalize_datetimes(cls, value: Any) -> Any:
+    def normalize_datetimes(cls, value: object) -> object:
         normalized = _task_datetime(value)
         if normalized is None:
             return None
@@ -478,7 +505,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
     @model_validator(mode="after")
@@ -511,21 +538,21 @@ class NetBoxVirtualDiskSyncState(BaseModel):
     storage: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("virtual_machine", mode="before")
     @classmethod
-    def normalize_virtual_machine(cls, value: Any) -> Any:
+    def normalize_virtual_machine(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("storage", mode="before")
     @classmethod
-    def normalize_storage(cls, value: Any) -> Any:
+    def normalize_storage(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
@@ -545,7 +572,7 @@ class NetBoxStorageSyncState(BaseModel):
 
     @field_validator("cluster", mode="before")
     @classmethod
-    def normalize_cluster(cls, value: Any) -> int:
+    def normalize_cluster(cls, value: object) -> int:
         """Ensure cluster is an integer ID."""
         relation_id = _relation_id(value)
         if relation_id is None:
@@ -557,7 +584,7 @@ class NetBoxStorageSyncState(BaseModel):
 
     @field_validator("backups", mode="before")
     @classmethod
-    def normalize_backups(cls, value: Any) -> list[int]:
+    def normalize_backups(cls, value: object) -> list[int]:
         if value is None:
             return []
         if not isinstance(value, (list, tuple, set)):
@@ -575,7 +602,7 @@ class NetBoxStorageSyncState(BaseModel):
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
 
@@ -595,7 +622,7 @@ class ProxmoxVmResourceInput(BaseModel):
 
     @field_validator("type", mode="before")
     @classmethod
-    def normalize_type(cls, value: Any) -> str:
+    def normalize_type(cls, value: object) -> str:
         text = str(value or "unknown").strip().lower()
         if text in {"qemu", "lxc"}:
             return text
@@ -660,12 +687,12 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     memory: int = 0
     disk: int = 0
     tags: list[int] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
     description: str | None = None
 
     @field_validator("vcpus", "memory", "disk", mode="before")
     @classmethod
-    def coerce_nullable_vm_ints(cls, value: Any) -> int:
+    def coerce_nullable_vm_ints(cls, value: object) -> int:
         if value is None:
             return 0
         try:
@@ -675,7 +702,7 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> str:
+    def normalize_status(cls, value: object) -> str:
         mapping = {
             "running": "active",
             "online": "active",
@@ -690,7 +717,7 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
 
     @field_validator("cluster", "device", "role", mode="before")
     @classmethod
-    def normalize_relations(cls, value: Any) -> Any:
+    def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
 
     @model_validator(mode="after")
@@ -705,7 +732,7 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[int]:
+    def normalize_tags(cls, value: object) -> list[int]:
         if value is None:
             return []
         normalized: list[int] = []
@@ -732,22 +759,22 @@ class NetBoxDeviceSyncState(BaseModel):
     site: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("status", mode="before")
     @classmethod
-    def normalize_status(cls, value: Any) -> str:
+    def normalize_status(cls, value: object) -> str:
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
 
     @field_validator("cluster", "device_type", "role", "site", mode="before")
     @classmethod
-    def normalize_relations(cls, value: Any) -> Any:
+    def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
 
     @field_validator("tags", mode="before")
     @classmethod
-    def normalize_tags(cls, value: Any) -> list[dict[str, Any]]:
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
 
     @model_validator(mode="after")
@@ -774,7 +801,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
 
     @computed_field(return_type=dict)
     @property
-    def vm_custom_fields(self) -> dict[str, Any]:
+    def vm_custom_fields(self) -> dict[str, object]:
         vm_type = self.resource.type if self.resource.type in {"qemu", "lxc"} else "unknown"
         fields = {
             "proxmox_vm_id": self.resource.vmid,

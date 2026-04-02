@@ -4,13 +4,15 @@
 
 Service layer package namespace for reusable business workflows.
 
-## Modules and Responsibilities
+## Current Modules
 
-- `__init__.py`: Service layer package namespace for proxbox_api.
+- `__init__.py`: Service package namespace.
+- `proxmox_helpers.py`: Shared Proxmox helper functions used by route orchestration.
+- `sync/`: Sync workflows for clusters, devices, virtual machines, storage, backups, and task history.
 
 ## Key Data Flow and Dependencies
 
-- routes import sync services from services/sync during orchestration.
+- Routes import sync services from `services/sync` during orchestration.
 
 ## Extension Guidance
 

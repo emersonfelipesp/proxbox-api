@@ -1,9 +1,9 @@
 """NetBox extras schema models such as tags."""
 
-from pydantic import BaseModel
+from proxbox_api.schemas._base import ProxboxBaseModel
 
 
-class TagSchema(BaseModel):
+class TagSchema(ProxboxBaseModel):
     name: str
     slug: str
     color: str

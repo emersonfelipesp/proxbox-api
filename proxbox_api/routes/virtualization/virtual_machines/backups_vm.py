@@ -25,11 +25,12 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
-_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
+_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
 
 
 def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
@@ -69,6 +70,7 @@ async def create_netbox_backups(
     *,
     cluster_name: str | None = None,
     storage_index: dict[tuple[str, str], dict] | None = None,
+    vm_cache: dict[int, dict | None] | None = None,
 ):
     nb = netbox_session
     vmid_log: str | int | None = None
@@ -81,13 +83,18 @@ async def create_netbox_backups(
         if not vmid:
             return None
 
-        # Get the virtual machine on NetBox by the VM ID using custom field filter
-        vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": int(vmid)},
-        )
-        virtual_machine = vms[0] if vms else None
+        vmid_int = int(vmid)
+        virtual_machine = vm_cache.get(vmid_int) if vm_cache is not None else None
+        if virtual_machine is None:
+            # Get the virtual machine on NetBox by the VM ID using custom field filter
+            vms = await rest_list_async(
+                nb,
+                "/api/virtualization/virtual-machines/",
+                query={"cf_proxmox_vm_id": vmid_int},
+            )
+            virtual_machine = vms[0] if vms else None
+            if vm_cache is not None:
+                vm_cache[vmid_int] = virtual_machine
 
         if not virtual_machine:
             return None
@@ -113,7 +120,7 @@ async def create_netbox_backups(
             creation_time = datetime.fromtimestamp(ctime).isoformat()
 
         backup_payload = {
-            "storage": storage_record.get("id") if storage_record else None,
+            "proxmox_storage": storage_record.get("id") if storage_record else None,
             "virtual_machine": virtual_machine.get("id"),
             "subtype": backup.get("subtype"),
             "creation_time": creation_time,
@@ -133,7 +140,7 @@ async def create_netbox_backups(
             payload=backup_payload,
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
-                "storage": _relation_id_or_none(record.get("storage")),
+                "proxmox_storage": _relation_id_or_none(record.get("proxmox_storage")),
                 "virtual_machine": _relation_id_or_none(record.get("virtual_machine")),
                 "subtype": record.get("subtype"),
                 "creation_time": record.get("creation_time"),
@@ -196,6 +203,7 @@ async def get_node_backups(
     vmid: str | None = None,
 ) -> tuple[list, set[str]]:
     nb = netbox_session
+    vm_cache: dict[int, dict | None] = {}
     """
     Get backups for a specific node and storage.
 
@@ -220,6 +228,14 @@ async def get_node_backups(
                             )
                         )
 
+                        if vmid is not None:
+                            filtered_vmid = str(vmid).strip()
+                            backups = [
+                                backup
+                                for backup in backups
+                                if str(backup.get("vmid", "")).strip() == filtered_vmid
+                            ]
+
                         volids = _volids_from_proxmox_storage_backup_items(backups)
                         tasks = [
                             create_netbox_backups(
@@ -227,6 +243,7 @@ async def get_node_backups(
                                 nb,
                                 cluster_name=cluster_name,
                                 storage_index=storage_index,
+                                vm_cache=vm_cache,
                             )
                             for backup in backups
                             if backup.get("content") == "backup"
@@ -301,6 +318,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
     deleted_count = 0
     backup_sync_ok = False
     storage_index = await _load_storage_index(nb)
+    vm_cache: dict[int, dict | None] = {}
 
     try:
         if use_websocket and websocket:
@@ -338,17 +356,25 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                         )
                     )
                 )
-            volids = _volids_from_proxmox_storage_backup_items(backups)
-            tasks = [
-                create_netbox_backups(
-                    backup,
-                    nb,
-                    cluster_name=cluster_name,
-                    storage_index=storage_index,
-                )
-                for backup in backups
-                if backup.get("content") == "backup"
-            ]
+                if vmid_filter is not None:
+                    filtered_vmid = str(vmid_filter).strip()
+                    backups = [
+                        backup
+                        for backup in backups
+                        if str(backup.get("vmid", "")).strip() == filtered_vmid
+                    ]
+                volids = _volids_from_proxmox_storage_backup_items(backups)
+                tasks = [
+                    create_netbox_backups(
+                        backup,
+                        nb,
+                        cluster_name=cluster_name,
+                        storage_index=storage_index,
+                        vm_cache=vm_cache,
+                    )
+                    for backup in backups
+                    if backup.get("content") == "backup"
+                ]
             return tasks, volids
 
         for proxmox, cluster in zip(pxs, cluster_status):
@@ -511,12 +537,9 @@ async def create_all_virtual_machine_backups(
     ),
 ):
     vmid_filter_list = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
 
     return await _create_all_virtual_machine_backups(
         netbox_session=netbox_session,
@@ -584,12 +607,9 @@ async def create_all_virtual_machine_backups_stream(
     ),
 ):
     vmid_filter_list = None
-    if netbox_vm_ids:
-        vm_ids = [vid.strip() for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(
-                netbox_session, [int(vid) for vid in vm_ids]
-            )
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
 
     async def event_stream():
         bridge = WebSocketSSEBridge()

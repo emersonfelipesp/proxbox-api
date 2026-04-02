@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from proxbox_api.services.sync.task_history import sync_virtual_machine_task_history
@@ -10,8 +11,17 @@ from proxbox_api.services.sync.task_history import sync_virtual_machine_task_his
 
 def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeypatch):
     reconciled: list[tuple[dict, dict]] = []
+    expected_pstart = datetime.fromtimestamp(2222, timezone.utc).isoformat()
 
-    async def _fake_rest_reconcile(_nb, _path, lookup, payload, schema, current_normalizer):
+    async def _fake_rest_reconcile(
+        _nb,
+        _path,
+        lookup,
+        payload,
+        schema,
+        current_normalizer,
+        patchable_fields=None,
+    ):
         desired_model = schema.model_validate(payload)
         reconciled.append(
             (
@@ -19,6 +29,14 @@ def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeyp
                 desired_model.model_dump(mode="python", by_alias=True, exclude_none=True),
             )
         )
+        assert patchable_fields == {
+            "end_time",
+            "status",
+            "task_state",
+            "exitstatus",
+            "tags",
+            "custom_fields",
+        }
 
         class _Record:
             id = 1
@@ -98,3 +116,4 @@ def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeyp
     assert reconciled[0][1]["status"] == "OK"
     assert reconciled[0][1]["vm_type"] == "lxc"
     assert reconciled[0][1]["start_time"].startswith("2024-03")
+    assert reconciled[0][1]["pstart"] == expected_pstart

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
@@ -21,14 +20,14 @@ from proxbox_api.services.sync.vm_helpers import best_guest_agent_ip
 
 async def sync_vm_interfaces(  # noqa: C901
     nb: NetBoxSessionDep,
-    virtual_machine: dict[str, Any],
-    vm_config: dict[str, Any],
-    guest_agent_interfaces: list[dict],
-    network_configs: list[dict],
-    tag_refs: list[dict],
+    virtual_machine: dict[str, object],
+    vm_config: dict[str, object],
+    guest_agent_interfaces: list[dict[str, object]],
+    network_configs: list[dict[str, object]],
+    tag_refs: list[dict[str, object]],
     use_guest_agent_interface_name: bool = True,
     now: datetime | None = None,
-) -> tuple[list[dict], int | None]:
+) -> tuple[list[dict[str, object]], int | None]:
     """Synchronize VM interfaces and IP addresses.
 
     Args:
@@ -51,7 +50,7 @@ async def sync_vm_interfaces(  # noqa: C901
     if not vm_id:
         raise ProxboxException(message="Virtual machine missing ID")
 
-    netbox_vm_interfaces = []
+    netbox_vm_interfaces: list[dict[str, object]] = []
     first_ip_id: int | None = None
 
     from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
@@ -234,11 +233,11 @@ async def sync_vm_interfaces(  # noqa: C901
 
 async def sync_vm_disks(
     nb: NetBoxSessionDep,
-    virtual_machine: dict[str, Any],
-    disk_entries: list,
-    storage_index: dict[tuple[str, str], dict],
+    virtual_machine: dict[str, object],
+    disk_entries: list[object],
+    storage_index: dict[tuple[str, str], dict[str, object]],
     cluster_name: str,
-    tag_refs: list[dict],
+    tag_refs: list[dict[str, object]],
     now: datetime | None = None,
 ) -> int:
     """Synchronize VM disks.
@@ -310,7 +309,7 @@ async def sync_vm_disks(
 
 async def set_primary_ip(
     nb: NetBoxSessionDep,
-    virtual_machine: dict[str, Any],
+    virtual_machine: dict[str, object],
     primary_ip_id: int | None,
 ) -> bool:
     """Set the primary IPv4 address for a VM if not already set.

@@ -4,13 +4,15 @@
 
 Namespace package for NetBox-oriented enum groups.
 
-## Modules and Responsibilities
+## Current Modules
 
 - `__init__.py`: Enum namespace for NetBox-related choices.
+- `dcim/`: DCIM status and choice enums.
+- `virtualization/`: Virtualization cluster status enums.
 
 ## Key Data Flow and Dependencies
 
-- Subpackages provide DCIM and virtualization status enumerations consumed by schemas.
+- Subpackages provide enum values consumed by schemas.
 
 ## Extension Guidance
 

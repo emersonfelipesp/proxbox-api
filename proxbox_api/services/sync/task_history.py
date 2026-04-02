@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
-from typing import Any
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
@@ -16,10 +16,21 @@ from proxbox_api.services.proxmox_helpers import (
 )
 from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 
-_DEFAULT_FETCH_CONCURRENCY = 4
+_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "4")))
+_DEFAULT_VM_SYNC_CONCURRENCY = max(1, int(os.getenv("PROXBOX_NETBOX_WRITE_CONCURRENCY", "4")))
+_TASK_HISTORY_PATCHABLE_FIELDS = frozenset(
+    {
+        "end_time",
+        "status",
+        "task_state",
+        "exitstatus",
+        "tags",
+        "custom_fields",
+    }
+)
 
 
-def _normalize_text(value: Any) -> str | None:
+def _normalize_text(value: object) -> str | None:
     """Normalize text value, handling None, dict, and string types."""
     if value is None:
         return None
@@ -129,11 +140,11 @@ def _cluster_nodes(cluster_status: list | None, cluster_name: str | None) -> lis
 def _build_task_payload(
     virtual_machine_id: int,
     vm_type: str,
-    task: dict[str, Any],
-    task_status: dict[str, Any],
-    tag_refs: list[dict[str, Any]],
+    task: dict[str, object],
+    task_status: dict[str, object],
+    tag_refs: list[dict[str, object]],
     now: datetime,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build task history payload from Proxmox task data."""
     start_time = task.get("starttime")
     if start_time:
@@ -181,7 +192,7 @@ def _build_task_payload(
     pstart_val = task.get("pstart")
     if pstart_val is not None:
         try:
-            pstart = int(pstart_val)
+            pstart = datetime.fromtimestamp(int(pstart_val), timezone.utc).isoformat()
         except (ValueError, TypeError):
             pstart = None
     else:
@@ -233,15 +244,71 @@ async def _list_all_vms_with_proxmox_id(
     return all_vms
 
 
+async def _sync_single_vm_task_history(
+    vm: object,
+    nb,
+    pxs: list | None,
+    cluster_status: list | None,
+    normalized_tags: list[dict],
+) -> tuple[int, int]:
+    """Sync task history for a single VM. Returns (reconciled_count, skipped)."""
+    reconciled = 0
+    skipped = 0
+
+    proxmox_vmid = extract_proxmox_vmid(vm)
+    vm_name = vm.get("name", "unknown")
+    vm_id = vm.get("id")
+
+    if not proxmox_vmid:
+        return (0, 1)
+
+    proxmox_type = vm.get("type", "qemu")
+    if proxmox_type not in ("qemu", "lxc"):
+        proxmox_type = "qemu"
+
+    cluster_name = None
+    if vm.get("cluster"):
+        cluster_name = (
+            vm.get("cluster").get("name") if isinstance(vm.get("cluster"), dict) else None
+        )
+
+    if not cluster_name:
+        for cs in cluster_status or []:
+            if hasattr(cs, "node_list") and cs.node_list:
+                cluster_name = getattr(cs, "name", None)
+                break
+
+    try:
+        reconciled = await sync_virtual_machine_task_history(
+            netbox_session=nb,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            virtual_machine_id=int(vm_id),
+            vm_type=proxmox_type,
+            cluster_name=cluster_name,
+            tag_refs=normalized_tags,
+        )
+    except Exception as e:
+        logger.warning(
+            "Error syncing task history for VM %s (vmid=%s): %s",
+            vm_name,
+            proxmox_vmid,
+            e,
+        )
+        return (0, 1)
+
+    return (reconciled, 0)
+
+
 async def sync_all_virtual_machine_task_histories(  # noqa: C901
-    netbox_session: Any,
-    pxs: list[Any] | None,
-    cluster_status: list[Any] | None,
-    tag_refs: list[dict[str, Any]] | None = None,
-    websocket: Any | None = None,
+    netbox_session: object,
+    pxs: list[object] | None,
+    cluster_status: list[object] | None,
+    tag_refs: list[dict[str, object]] | None = None,
+    websocket: object | None = None,
     use_websocket: bool = False,
     fetch_max_concurrency: int | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Sync task history for all Virtual Machines in NetBox."""
 
     nb = netbox_session
@@ -276,63 +343,43 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
             }
         )
 
-    for vm in vms_with_proxmox_id:
-        proxmox_vmid = extract_proxmox_vmid(vm)
-        vm_name = vm.get("name", "unknown")
-        vm_id = vm.get("id")
+    vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
 
-        if not proxmox_vmid:
-            skipped += 1
-            continue
-
-        proxmox_type = vm.get("type", "qemu")
-        if proxmox_type not in ("qemu", "lxc"):
-            proxmox_type = "qemu"
-
-        cluster_name = None
-        if vm.get("cluster"):
-            cluster_name = (
-                vm.get("cluster").get("name") if isinstance(vm.get("cluster"), dict) else None
-            )
-
-        if not cluster_name:
-            for cs in cluster_status or []:
-                if hasattr(cs, "node_list") and cs.node_list:
-                    cluster_name = getattr(cs, "name", None)
-                    break
-
-        try:
-            reconciled = await sync_virtual_machine_task_history(
-                netbox_session=nb,
+    async def _sync_vm_with_semaphore(vm):
+        async with vm_sync_semaphore:
+            return await _sync_single_vm_task_history(
+                vm=vm,
+                nb=nb,
                 pxs=pxs,
                 cluster_status=cluster_status,
-                virtual_machine_id=int(vm_id),
-                vm_type=proxmox_type,
-                cluster_name=cluster_name,
-                tag_refs=normalized_tags,
+                normalized_tags=normalized_tags,
             )
-            total_reconciled += reconciled
-        except Exception as e:
-            logger.warning(
-                "Error syncing task history for VM %s (vmid=%s): %s",
-                vm_name,
-                proxmox_vmid,
-                e,
-            )
+
+    sync_tasks = [_sync_vm_with_semaphore(vm) for vm in vms_with_proxmox_id]
+    results = await asyncio.gather(*sync_tasks, return_exceptions=True)
+
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning("Task history sync task failed: %s", result)
             skipped += 1
+        else:
+            reconciled_count, skipped_count = result
+            total_reconciled += reconciled_count
+            skipped += skipped_count
 
         if use_websocket and websocket:
-            await websocket.send_json(
-                {
-                    "object": "task_history",
-                    "type": "sync",
-                    "data": {
-                        "name": vm_name,
-                        "vmid": proxmox_vmid,
-                        "reconciled": reconciled,
-                    },
-                }
-            )
+            vm_name = "unknown"
+            if not isinstance(result, Exception) and hasattr(result, "__iter__"):
+                try:
+                    vm_name = (
+                        vms_with_proxmox_id[
+                            len([r for r in results if not isinstance(r, Exception)])
+                        ].get("name", "unknown")
+                        if result
+                        else "unknown"
+                    )
+                except (IndexError, TypeError):
+                    pass
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "task_history", "end": True})
@@ -351,14 +398,14 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
 
 async def sync_virtual_machine_task_history(
     *,
-    netbox_session: Any,
-    pxs: list[Any] | None,
-    cluster_status: list[Any] | None,
+    netbox_session: object,
+    pxs: list[object] | None,
+    cluster_status: list[object] | None,
     virtual_machine_id: int,
     vm_type: str,
     cluster_name: str | None,
-    tag_refs: list[dict[str, Any]] | None = None,
-    websocket: Any | None = None,
+    tag_refs: list[dict[str, object]] | None = None,
+    websocket: object | None = None,
     use_websocket: bool = False,
     fetch_max_concurrency: int | None = None,
 ) -> int:
@@ -469,6 +516,7 @@ async def sync_virtual_machine_task_history(
                         "tags": record.get("tags"),
                         "custom_fields": record.get("custom_fields"),
                     },
+                    patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
                 )
                 reconciled += 1
             except Exception as error:

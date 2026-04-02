@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any
+from collections.abc import Awaitable
 
 
-def run_coroutine_blocking(coro: Any) -> Any:
+def run_coroutine_blocking(coro: Awaitable[object]) -> object:
     """Execute ``coro`` to completion and return its result.
 
     If called from a thread with a running loop, runs the coroutine in a
@@ -25,7 +25,7 @@ def run_coroutine_blocking(coro: Any) -> Any:
     except RuntimeError:
         return asyncio.run(coro)
 
-    result: dict[str, Any] = {"value": None, "error": None}
+    result: dict[str, object] = {"value": None, "error": None}
 
     def _runner() -> None:
         try:

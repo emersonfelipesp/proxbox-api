@@ -1,12 +1,40 @@
 """Virtualization schema models and VM configuration validator."""
 
-import re
-from typing import Any
+from __future__ import annotations
 
-from pydantic import BaseModel, model_validator
+import re
+
+from pydantic import BaseModel, ConfigDict, computed_field, model_validator
+
+from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry, parse_vm_config_disks
+
+
+def _normalize_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _parse_key_value_string(value: object) -> dict[str, str]:
+    if not isinstance(value, str):
+        return {}
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    parsed: dict[str, str] = {}
+    for part in parts:
+        if "=" not in part:
+            continue
+        key, raw = part.split("=", 1)
+        key = key.strip()
+        raw = raw.strip()
+        if key:
+            parsed[key] = raw
+    return parsed
 
 
 class VMConfig(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
     parent: str | None = None
     digest: str | None = None
     swap: int | None = None
@@ -36,19 +64,41 @@ class VMConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def validate_dynamic_keys(cls, values: dict[str, Any]) -> dict[str, Any]:
+    def validate_dynamic_keys(cls, values: object) -> object:
         # Validate dynamic keys (e.g. scsi0, net0, etc.).
-        if values:
+        if isinstance(values, dict):
             for key in values.keys():
                 if (
                     not re.match(r"^(scsi|net|ide|unused|smbios)\d+$", key)
                     and key not in cls.model_fields
                 ):
                     raise ValueError(f"Invalid key: {key}")
-            return values
+        return values
 
-    class Config:
-        extra = "allow"
+    @computed_field(return_type=list[ProxmoxDiskEntry])
+    @property
+    def disks(self) -> list[ProxmoxDiskEntry]:
+        """Parsed disk entries from raw VM config."""
+
+        return parse_vm_config_disks(self.model_extra or {})
+
+    @computed_field(return_type=list[dict[str, object]])
+    @property
+    def networks(self) -> list[dict[str, object]]:
+        """Parsed network configuration entries from raw VM config."""
+
+        networks: list[dict[str, object]] = []
+        index = 0
+        while True:
+            key = f"net{index}"
+            raw_value = (self.model_extra or {}).get(key)
+            if raw_value is None:
+                break
+            parsed = _parse_key_value_string(raw_value)
+            if parsed:
+                networks.append({key: parsed})
+            index += 1
+        return networks
 
 
 class CPU(BaseModel):

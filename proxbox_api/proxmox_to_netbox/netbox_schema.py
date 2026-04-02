@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -39,7 +38,7 @@ def _extract_netbox_endpoint_from_db() -> NetBoxEndpoint | None:
         return None
 
 
-def fetch_live_netbox_openapi(timeout: int = 20) -> dict[str, Any] | None:
+def fetch_live_netbox_openapi(timeout: int = 20) -> dict[str, object] | None:
     """Fetch live NetBox OpenAPI from configured endpoint using known schema URLs."""
 
     endpoint = _extract_netbox_endpoint_from_db()
@@ -67,7 +66,7 @@ def fetch_live_netbox_openapi(timeout: int = 20) -> dict[str, Any] | None:
     return None
 
 
-def save_netbox_openapi_cache(document: dict[str, Any]) -> None:
+def save_netbox_openapi_cache(document: dict[str, object]) -> None:
     """Persist fetched NetBox OpenAPI document to local cache."""
 
     path = netbox_openapi_cache_path()
@@ -75,7 +74,7 @@ def save_netbox_openapi_cache(document: dict[str, Any]) -> None:
     path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def load_netbox_openapi_cache() -> dict[str, Any] | None:
+def load_netbox_openapi_cache() -> dict[str, object] | None:
     """Load cached NetBox OpenAPI from disk if present."""
 
     path = netbox_openapi_cache_path()
@@ -88,7 +87,7 @@ def load_netbox_openapi_cache() -> dict[str, Any] | None:
         return None
 
 
-def netbox_virtual_machine_fallback_contract() -> dict[str, Any]:
+def netbox_virtual_machine_fallback_contract() -> dict[str, object]:
     """Return conservative fallback contract derived from NetBox REST docs."""
 
     return {
@@ -108,7 +107,7 @@ def netbox_virtual_machine_fallback_contract() -> dict[str, Any]:
     }
 
 
-def resolve_netbox_schema_contract() -> dict[str, Any]:
+def resolve_netbox_schema_contract() -> dict[str, object]:
     """Resolve NetBox schema contract from live OpenAPI, cache, or fallback docs."""
 
     live = fetch_live_netbox_openapi()
