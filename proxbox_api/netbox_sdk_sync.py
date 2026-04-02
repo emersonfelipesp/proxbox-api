@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncIterable, AsyncIterator
-from typing import Any
 
 from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 
 
-def _collect_async_iter(it: AsyncIterator[Any]) -> list[Any]:
-    async def _collect() -> list[Any]:
+def _collect_async_iter(it: AsyncIterator[object]) -> list[object]:
+    async def _collect() -> list[object]:
         result = []
         async for item in it:
             result.append(item)
@@ -19,7 +18,7 @@ def _collect_async_iter(it: AsyncIterator[Any]) -> list[Any]:
     return run_coroutine_blocking(_collect())
 
 
-def _wrap(value: Any) -> Any:
+def _wrap(value: object) -> object:
     if inspect.iscoroutine(value):
         return _wrap(run_coroutine_blocking(value))
     if isinstance(value, list):
@@ -38,20 +37,20 @@ def _wrap(value: Any) -> Any:
 class SyncProxy:
     """Proxy that exposes async facade objects with sync call behavior."""
 
-    def __init__(self, obj: Any) -> None:
+    def __init__(self, obj: object) -> None:
         object.__setattr__(self, "_obj", obj)
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         attr = getattr(object.__getattribute__(self, "_obj"), name)
         if callable(attr):
 
-            def _call(*args: Any, **kwargs: Any) -> Any:
+            def _call(*args: object, **kwargs: object) -> object:
                 return _wrap(attr(*args, **kwargs))
 
             return _call
         return _wrap(attr)
 
-    def __setattr__(self, name: str, value: Any) -> None:
+    def __setattr__(self, name: str, value: object) -> None:
         setattr(object.__getattribute__(self, "_obj"), name, value)
 
     def __iter__(self):
@@ -63,7 +62,7 @@ class SyncProxy:
     def __bool__(self) -> bool:
         return bool(object.__getattribute__(self, "_obj"))
 
-    def dict(self) -> dict[str, Any]:
+    def dict(self) -> dict[str, object]:
         obj = object.__getattribute__(self, "_obj")
         if hasattr(obj, "serialize"):
             return obj.serialize()
@@ -72,8 +71,8 @@ class SyncProxy:
         return {}
 
     @property
-    def json(self) -> dict[str, Any]:
+    def json(self) -> dict[str, object]:
         return self.dict()
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         return self.dict().get(key, default)

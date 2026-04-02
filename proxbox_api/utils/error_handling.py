@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import wraps
-from typing import Any, Callable, ParamSpec, TypeVar
+from typing import Callable, ParamSpec, TypeVar
 
 from proxbox_api.exception import SyncError
 from proxbox_api.logger import logger
@@ -55,7 +55,7 @@ def handle_sync_error(
     return decorator
 
 
-def early_return_if_none(value: Any, message: str) -> None:
+def early_return_if_none(value: object, message: str) -> None:
     """Helper to raise error and exit early if value is None."""
     if value is None:
         raise ValueError(message)
@@ -74,7 +74,7 @@ def early_return_if_invalid_id(value: int | None, message: str) -> int:
     return value
 
 
-def safe_getattr(obj: Any, attr: str, default: Any = None, raise_on_none: bool = False) -> Any:
+def safe_getattr(obj: object, attr: str, default: object = None, raise_on_none: bool = False) -> object:
     """Safely get attribute with optional early return on None.
 
     Args:

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator
+from pydantic import ConfigDict, computed_field, field_validator
+
+from proxbox_api.schemas._base import ProxboxBaseModel
 
 DISK_KEY_PATTERN = re.compile(r"^(scsi|ide|sata|virto|mp)\d+$")
 UNUSED_DISK_PATTERN = re.compile(r"^unused\d+$")
@@ -57,7 +58,7 @@ def parse_disk_entry(key: str, raw_value: str) -> ProxmoxDiskEntry | None:
     parts = raw_value.split(",")
     storage_info = parts[0] if parts else ""
 
-    disk_info: dict[str, Any] = {"name": key, "storage": storage_info}
+    disk_info: dict[str, object] = {"name": key, "storage": storage_info}
 
     for part in parts[1:]:
         if "=" in part:
@@ -68,7 +69,8 @@ def parse_disk_entry(key: str, raw_value: str) -> ProxmoxDiskEntry | None:
     if size_mb <= 0:
         return None
 
-    storage_name = disk_info.get("storage", "").split(":")[0] if disk_info.get("storage") else ""
+    storage_value = str(disk_info.get("storage") or "")
+    storage_name = storage_value.split(":")[0] if storage_value else ""
     format_val = disk_info.get("format")
 
     description_parts = []
@@ -89,7 +91,7 @@ def parse_disk_entry(key: str, raw_value: str) -> ProxmoxDiskEntry | None:
     )
 
 
-def parse_vm_config_disks(vm_config: dict[str, Any]) -> list[ProxmoxDiskEntry]:
+def parse_vm_config_disks(vm_config: dict[str, object]) -> list[ProxmoxDiskEntry]:
     """Parse all disk entries from Proxmox VM config.
 
     Args:
@@ -108,7 +110,7 @@ def parse_vm_config_disks(vm_config: dict[str, Any]) -> list[ProxmoxDiskEntry]:
     return disks
 
 
-class ProxmoxDiskEntry(BaseModel):
+class ProxmoxDiskEntry(ProxboxBaseModel):
     """Parsed disk entry from Proxmox VM config (e.g., scsi0, ide0, sata0).
 
     All parsing and normalization happens in this schema - no logic in normalize.py.
@@ -126,12 +128,12 @@ class ProxmoxDiskEntry(BaseModel):
 
     @field_validator("name", "raw_value", mode="before")
     @classmethod
-    def validate_strings(cls, v: Any) -> str:
+    def validate_strings(cls, v: object) -> str:
         return str(v)
 
     @field_validator("size", mode="before")
     @classmethod
-    def parse_size(cls, v: Any) -> int:
+    def parse_size(cls, v: object) -> int:
         if isinstance(v, int):
             return v
         return size_str_to_mb(str(v))

@@ -4,13 +4,13 @@
 
 DCIM-specific status enumerations for NetBox schema validation.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: DCIM status options used by NetBox schema models.
 
 ## Key Data Flow and Dependencies
 
-- schemas/netbox/dcim imports StatusOptions to constrain site and DCIM object status fields.
+- `schemas/netbox/dcim` imports `StatusOptions` to constrain site and DCIM object status fields.
 
 ## Extension Guidance
 

@@ -147,6 +147,7 @@ async def cluster_resources(
     - **list:** A list of dictionaries containing the Proxmox cluster resources.
     """
 
+    resource_type = type if isinstance(type, str) else None
     json_response = []
 
     for px in pxs:
@@ -154,7 +155,7 @@ async def cluster_resources(
             {
                 px.name: [
                     resource.model_dump(mode="python", by_alias=True, exclude_none=True)
-                    for resource in get_typed_cluster_resources(px, resource_type=type)
+                    for resource in get_typed_cluster_resources(px, resource_type=resource_type)
                 ]
             }
         )

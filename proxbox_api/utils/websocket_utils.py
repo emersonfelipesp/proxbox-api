@@ -1,7 +1,5 @@
 """WebSocket messaging utilities for standardized communication."""
 
-from typing import Any
-
 from fastapi import WebSocket
 
 from proxbox_api.logger import logger
@@ -32,7 +30,7 @@ async def send_progress_update(
         return
 
     try:
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "message": message,
             "level": level,
         }

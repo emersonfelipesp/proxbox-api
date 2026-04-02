@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
 
 from proxbox_api.proxmox_codegen.models import HTTP_METHODS, NormalizedOperation
 from proxbox_api.proxmox_codegen.utils import extract_path_params, slugify_identifier
 
 
-def _is_optional(value: Any) -> bool:
+def _is_optional(value: object) -> bool:
     """Return True when Proxmox optional marker denotes optional fields."""
 
     if isinstance(value, bool):
@@ -21,7 +20,7 @@ def _is_optional(value: Any) -> bool:
     return False
 
 
-def _to_bool(value: Any) -> bool:
+def _to_bool(value: object) -> bool:
     """Convert common Proxmox truthy/falsy markers to bool."""
 
     if isinstance(value, bool):
@@ -37,7 +36,7 @@ def _to_bool(value: Any) -> bool:
     return bool(value)
 
 
-def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:  # noqa: C901
+def _normalize_schema(schema: dict[str, object] | None) -> dict[str, object] | None:  # noqa: C901
     """Normalize Proxmox method parameter/returns schema to JSON-schema compatible form."""
 
     if schema is None:
@@ -82,7 +81,7 @@ def _operation_id(path: str, method: str) -> str:
     return slugify_identifier(f"{method.lower()}_{path_token}")
 
 
-def _compose_operation_description(method_data: dict[str, Any]) -> str | None:
+def _compose_operation_description(method_data: dict[str, object]) -> str | None:
     """Build Markdown operation description from viewer Description and Usage sections."""
 
     viewer_description = method_data.get("viewer_description")
@@ -107,8 +106,8 @@ def _compose_operation_description(method_data: dict[str, Any]) -> str | None:
     return "\n\n".join(parts)
 
 
-def _build_path_params(path: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+def _build_path_params(path: str, parameters: dict[str, object]) -> list[dict[str, object]]:
+    out: list[dict[str, object]] = []
     for param in extract_path_params(path):
         pdef = {}
         if isinstance(parameters.get("properties"), dict):
@@ -137,10 +136,10 @@ def _build_path_params(path: str, parameters: dict[str, Any]) -> list[dict[str, 
 
 def _build_query_params(
     path: str,
-    parameters: dict[str, Any],
-) -> list[dict[str, Any]]:
+    parameters: dict[str, object],
+) -> list[dict[str, object]]:
     path_param_names = set(extract_path_params(path))
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, object]] = []
     properties = parameters.get("properties", {}) if isinstance(parameters, dict) else {}
     if not isinstance(properties, dict):
         return out
@@ -171,7 +170,7 @@ def _build_query_params(
 
 
 def normalize_captured_endpoints(
-    endpoint_map: dict[str, dict[str, Any]],
+    endpoint_map: dict[str, dict[str, object]],
 ) -> list[NormalizedOperation]:
     """Convert capture endpoint map into normalized operation list."""
 

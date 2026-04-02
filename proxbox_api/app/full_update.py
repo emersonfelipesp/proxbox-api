@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.routes.dcim import create_all_device_interfaces
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
@@ -26,6 +27,10 @@ from proxbox_api.routes.virtualization.virtual_machines.snapshots_vm import (
 )
 from proxbox_api.routes.virtualization.virtual_machines.storages_vm import (
     create_storages,
+)
+from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
+    create_only_vm_interfaces,
+    create_only_vm_ip_addresses,
 )
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.task_history import (
@@ -67,6 +72,9 @@ async def full_update_sync(  # noqa: C901
     sync_task_history: dict = {}
     sync_backups: list = []
     sync_snapshots: dict = {}
+    sync_node_interfaces: list = []
+    sync_vm_interfaces: list = []
+    sync_vm_ip_addresses: list = []
 
     tag_refs = [
         {
@@ -119,6 +127,7 @@ async def full_update_sync(  # noqa: C901
             custom_fields=custom_fields,
             tag=tag,
             use_websocket=False,
+            sync_vm_network=False,
         )
     except ProxboxException:
         raise
@@ -200,6 +209,60 @@ async def full_update_sync(  # noqa: C901
             python_exception=str(error),
         ) from error
 
+    try:
+        sync_node_interfaces = await create_all_device_interfaces(
+            netbox_session=netbox_session,
+            tag=tag,
+            clusters_status=cluster_status,
+            use_websocket=False,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing node interfaces during full-update")
+        raise ProxboxException(
+            message="Error while syncing node interfaces.",
+            python_exception=str(error),
+        ) from error
+
+    try:
+        sync_vm_interfaces = await create_only_vm_interfaces(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=custom_fields,
+            tag=tag,
+            use_websocket=False,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing VM interfaces during full-update")
+        raise ProxboxException(
+            message="Error while syncing VM interfaces.",
+            python_exception=str(error),
+        ) from error
+
+    try:
+        sync_vm_ip_addresses = await create_only_vm_ip_addresses(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=custom_fields,
+            tag=tag,
+            use_websocket=False,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing VM IP addresses during full-update")
+        raise ProxboxException(
+            message="Error while syncing VM IP addresses.",
+            python_exception=str(error),
+        ) from error
+
     return {
         "status": "completed",
         "devices": sync_nodes,
@@ -209,6 +272,9 @@ async def full_update_sync(  # noqa: C901
         "task_history": sync_task_history,
         "backups": sync_backups,
         "snapshots": sync_snapshots,
+        "node_interfaces": sync_node_interfaces,
+        "vm_interfaces": sync_vm_interfaces,
+        "vm_ip_addresses": sync_vm_ip_addresses,
         "devices_count": len(sync_nodes),
         "storage_count": len(sync_storage),
         "virtual_machines_count": len(sync_vms),
@@ -216,6 +282,9 @@ async def full_update_sync(  # noqa: C901
         "task_history_count": _result_count(sync_task_history),
         "backups_count": len(sync_backups),
         "snapshots_count": _result_count(sync_snapshots),
+        "node_interfaces_count": len(sync_node_interfaces),
+        "vm_interfaces_count": len(sync_vm_interfaces),
+        "vm_ip_addresses_count": len(sync_vm_ip_addresses),
     }
 
 
@@ -237,6 +306,9 @@ async def full_update_sync_stream(  # noqa: C901
         sync_task_history: dict = {}
         sync_backups: list = []
         sync_snapshots: dict = {}
+        sync_node_interfaces: list = []
+        sync_vm_interfaces: list = []
+        sync_vm_ip_addresses: list = []
         devices_bridge = WebSocketSSEBridge()
         storage_bridge = WebSocketSSEBridge()
         vm_bridge = WebSocketSSEBridge()
@@ -244,6 +316,9 @@ async def full_update_sync_stream(  # noqa: C901
         task_history_bridge = WebSocketSSEBridge()
         backups_bridge = WebSocketSSEBridge()
         snapshots_bridge = WebSocketSSEBridge()
+        node_interfaces_bridge = WebSocketSSEBridge()
+        vm_interfaces_bridge = WebSocketSSEBridge()
+        vm_ip_addresses_bridge = WebSocketSSEBridge()
 
         tag_refs = [
             {
@@ -357,6 +432,7 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=vm_bridge,
                         use_websocket=True,
+                        sync_vm_network=False,
                     )
                 finally:
                     await vm_bridge.close()
@@ -532,6 +608,120 @@ async def full_update_sync_stream(  # noqa: C901
             )
 
             yield sse_event(
+                "step",
+                {
+                    "step": "node-interfaces",
+                    "status": "started",
+                    "message": "Starting node interfaces synchronization.",
+                },
+            )
+
+            async def _run_node_interfaces_sync():
+                try:
+                    return await create_all_device_interfaces(
+                        netbox_session=netbox_session,
+                        tag=tag,
+                        clusters_status=cluster_status,
+                        websocket=node_interfaces_bridge,
+                        use_websocket=True,
+                    )
+                finally:
+                    await node_interfaces_bridge.close()
+
+            node_interfaces_task = asyncio.create_task(_run_node_interfaces_sync())
+            async for frame in node_interfaces_bridge.iter_sse():
+                yield frame
+            sync_node_interfaces = await node_interfaces_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "node-interfaces",
+                    "status": "completed",
+                    "message": "Node interfaces synchronization finished.",
+                    "result": {"count": len(sync_node_interfaces)},
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "vm-interfaces",
+                    "status": "started",
+                    "message": "Starting VM interfaces synchronization.",
+                },
+            )
+
+            async def _run_vm_interfaces_sync():
+                try:
+                    return await create_only_vm_interfaces(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        cluster_resources=cluster_resources,
+                        custom_fields=custom_fields,
+                        tag=tag,
+                        websocket=vm_interfaces_bridge,
+                        use_websocket=True,
+                    )
+                finally:
+                    await vm_interfaces_bridge.close()
+
+            vm_interfaces_task = asyncio.create_task(_run_vm_interfaces_sync())
+            async for frame in vm_interfaces_bridge.iter_sse():
+                yield frame
+            sync_vm_interfaces = await vm_interfaces_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "vm-interfaces",
+                    "status": "completed",
+                    "message": "VM interfaces synchronization finished.",
+                    "result": {"count": len(sync_vm_interfaces)},
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "vm-ip-addresses",
+                    "status": "started",
+                    "message": "Starting VM IP address synchronization.",
+                },
+            )
+
+            async def _run_vm_ip_addresses_sync():
+                try:
+                    return await create_only_vm_ip_addresses(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                        cluster_status=cluster_status,
+                        cluster_resources=cluster_resources,
+                        custom_fields=custom_fields,
+                        tag=tag,
+                        websocket=vm_ip_addresses_bridge,
+                        use_websocket=True,
+                    )
+                finally:
+                    await vm_ip_addresses_bridge.close()
+
+            vm_ip_addresses_task = asyncio.create_task(_run_vm_ip_addresses_sync())
+            async for frame in vm_ip_addresses_bridge.iter_sse():
+                yield frame
+            sync_vm_ip_addresses = await vm_ip_addresses_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "vm-ip-addresses",
+                    "status": "completed",
+                    "message": "VM IP address synchronization finished.",
+                    "result": {"count": len(sync_vm_ip_addresses)},
+                },
+            )
+
+            yield sse_event(
                 "complete",
                 {
                     "ok": True,
@@ -544,6 +734,9 @@ async def full_update_sync_stream(  # noqa: C901
                         "task_history": sync_task_history,
                         "backups": sync_backups,
                         "snapshots": sync_snapshots,
+                        "node_interfaces": sync_node_interfaces,
+                        "vm_interfaces": sync_vm_interfaces,
+                        "vm_ip_addresses": sync_vm_ip_addresses,
                         "devices_count": len(sync_nodes),
                         "storage_count": len(sync_storage),
                         "virtual_machines_count": len(sync_vms),
@@ -551,6 +744,9 @@ async def full_update_sync_stream(  # noqa: C901
                         "task_history_count": _result_count(sync_task_history),
                         "backups_count": len(sync_backups),
                         "snapshots_count": _result_count(sync_snapshots),
+                        "node_interfaces_count": len(sync_node_interfaces),
+                        "vm_interfaces_count": len(sync_vm_interfaces),
+                        "vm_ip_addresses_count": len(sync_vm_ip_addresses),
                     },
                 },
             )

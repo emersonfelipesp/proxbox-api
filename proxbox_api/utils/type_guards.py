@@ -1,11 +1,11 @@
 """Type guard functions for runtime type checking and validation."""
 
-from typing import Any, TypeGuard
+from typing import TypeGuard
 
 from proxbox_api.types.protocols import NetBoxRecord, ProxmoxResource, TagLike
 
 
-def is_netbox_record(obj: Any) -> TypeGuard[NetBoxRecord]:
+def is_netbox_record(obj: object) -> TypeGuard[NetBoxRecord]:
     """Check if an object conforms to the NetBoxRecord protocol.
 
     Args:
@@ -22,7 +22,7 @@ def is_netbox_record(obj: Any) -> TypeGuard[NetBoxRecord]:
     )
 
 
-def is_tag_like(obj: Any) -> TypeGuard[TagLike]:
+def is_tag_like(obj: object) -> TypeGuard[TagLike]:
     """Check if an object conforms to the TagLike protocol.
 
     Args:
@@ -34,7 +34,7 @@ def is_tag_like(obj: Any) -> TypeGuard[TagLike]:
     return hasattr(obj, "name") and hasattr(obj, "slug") and hasattr(obj, "color")
 
 
-def is_proxmox_resource(obj: Any) -> TypeGuard[ProxmoxResource]:
+def is_proxmox_resource(obj: object) -> TypeGuard[ProxmoxResource]:
     """Check if an object conforms to the ProxmoxResource protocol.
 
     Args:
@@ -46,7 +46,7 @@ def is_proxmox_resource(obj: Any) -> TypeGuard[ProxmoxResource]:
     return hasattr(obj, "get") and hasattr(obj, "__getitem__")
 
 
-def is_valid_id(value: Any) -> TypeGuard[int]:
+def is_valid_id(value: object) -> TypeGuard[int]:
     """Check if a value is a valid positive integer ID.
 
     Args:
@@ -114,7 +114,7 @@ def is_valid_slug(value: str) -> bool:
     return bool(re.match(pattern, value))
 
 
-def has_required_fields(obj: dict[str, Any], *fields: str) -> bool:
+def has_required_fields(obj: dict[str, object], *fields: str) -> bool:
     """Check if a dictionary has all required fields with non-None values.
 
     Args:
@@ -127,7 +127,7 @@ def has_required_fields(obj: dict[str, Any], *fields: str) -> bool:
     return all(obj.get(field) is not None for field in fields)
 
 
-def safe_dict_get(obj: Any, key: str, default: Any = None) -> Any:
+def safe_dict_get(obj: object, key: str, default: object = None) -> object:
     """Safely get a value from a dict-like object.
 
     Args:

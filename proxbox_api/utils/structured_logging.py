@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from proxbox_api.logger import get_operation_context, logger
 
 
@@ -20,7 +18,7 @@ class SyncPhaseLogger:
         phase_logger.log_phase_complete("creation", created_count=5)
     """
 
-    def __init__(self, operation: str, **context: Any) -> None:
+    def __init__(self, operation: str, **context: object) -> None:
         """Initialize sync phase logger.
 
         Args:
@@ -35,7 +33,7 @@ class SyncPhaseLogger:
         phase: str,
         message: str,
         level: str = "info",
-        **extra: Any,
+        **extra: object,
     ) -> None:
         """Log the start of a phase with context.
 
@@ -53,7 +51,7 @@ class SyncPhaseLogger:
         phase: str,
         message: str = "Phase completed",
         level: str = "info",
-        **metrics: Any,
+        **metrics: object,
     ) -> None:
         """Log the completion of a phase with metrics.
 
@@ -73,7 +71,7 @@ class SyncPhaseLogger:
         resource_id: str | int,
         message: str,
         level: str = "debug",
-        **extra: Any,
+        **extra: object,
     ) -> None:
         """Log an event related to a specific resource.
 
@@ -99,7 +97,7 @@ class SyncPhaseLogger:
         phase: str,
         message: str,
         error: Exception,
-        **context_data: Any,
+        **context_data: object,
     ) -> None:
         """Log an error with full context and exception details.
 
@@ -117,7 +115,7 @@ class SyncPhaseLogger:
         }
         logger.error(f"[{phase}] {message}: {error}", exc_info=True, extra=context)
 
-    def _log(self, level: str, message: str, context: dict[str, Any]) -> None:
+    def _log(self, level: str, message: str, context: dict[str, object]) -> None:
         """Internal logging method.
 
         Args:
@@ -129,7 +127,7 @@ class SyncPhaseLogger:
         log_func(message, extra=context)
 
 
-def log_sync_operation(operation: str, **context: Any) -> None:
+def log_sync_operation(operation: str, **context: object) -> None:
     """Log the start of a sync operation with context.
 
     Args:
@@ -145,7 +143,7 @@ def log_sync_result(
     success_count: int,
     failure_count: int,
     elapsed_seconds: float = 0.0,
-    **extra: Any,
+    **extra: object,
 ) -> None:
     """Log the result of a sync operation with counts.
 
@@ -173,7 +171,7 @@ def log_sync_result(
     )
 
 
-def get_current_sync_context() -> dict[str, Any]:
+def get_current_sync_context() -> dict[str, object]:
     """Get the current operation context.
 
     Returns:

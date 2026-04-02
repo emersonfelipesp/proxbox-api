@@ -1,32 +1,28 @@
-# E2E Testing Module
+# proxbox_api/e2e Directory Guide
 
-End-to-end tests using Playwright to authenticate with NetBox demo and sync mock Proxmox data.
+## Purpose
 
-## Overview
+Playwright-based helpers for NetBox demo authentication, shared e2e test data, and mock Proxmox fixtures.
 
-- **Authentication**: Async Playwright auth for NetBox demo (`demo_auth.py`)
-- **Session**: `DemoSessionBuilder` for creating authenticated sessions with e2e tag
-- **Fixtures**: Mock Proxmox API data for testing sync logic
-- **Tests**: Device, VM, and backup sync e2e tests
+## Current Files
 
-## Key Files
-
-- `proxbox_api/e2e/demo_auth.py` - Playwright auth flow
-- `proxbox_api/e2e/session.py` - Session builder and tag management
-- `proxbox_api/e2e/fixtures/proxmox_mock.py` - Mock Proxmox classes
-- `proxbox_api/e2e/fixtures/test_data.py` - Test data constants
-- `tests/e2e/` - E2E test suite
+- `demo_auth.py`: Async demo.netbox.dev login and token provisioning with explicit browser and dependency errors.
+- `session.py`: Session bootstrap helpers for e2e tests and the shared `proxbox e2e testing` tag.
+- `fixtures/proxmox_mock.py`: Mock Proxmox clusters, nodes, VMs, and storage fixtures.
+- `fixtures/test_data.py`: Reusable constants, env-driven demo config, and unique resource helpers.
+- `fixtures/__init__.py`: Fixture package namespace.
+- `tests/e2e/`: Repository test suite that consumes these helpers.
 
 ## Running Tests
 
 ```bash
-# Install Playwright browsers (first time)
+# Install Playwright browsers the first time
 playwright install chromium
 
 # Run e2e tests with parallel execution
 pytest tests/e2e/ -n auto
 
-# Run specific test
+# Run a specific auth smoke test
 pytest tests/e2e/test_demo_auth.py -v
 ```
 
@@ -37,7 +33,9 @@ pytest tests/e2e/test_demo_auth.py -v
 | `PROXBOX_E2E_DEMO_URL` | `https://demo.netbox.dev` | NetBox demo URL |
 | `PROXBOX_E2E_TIMEOUT` | `60` | Timeout in seconds |
 | `PROXBOX_E2E_HEADLESS` | `true` | Run browser headless |
+| `PROXBOX_E2E_USERNAME` | generated | Optional shared demo username |
+| `PROXBOX_E2E_PASSWORD` | generated | Optional shared demo password |
 
 ## E2E Tag
 
-All synced objects are tagged with `proxbox e2e testing` (color: `4caf50`, slug: `proxbox-e2e-testing`).
+All synced objects are tagged with `proxbox e2e testing` (color `4caf50`, slug `proxbox-e2e-testing`).

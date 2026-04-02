@@ -4,7 +4,7 @@
 
 Schemas for NetBox virtualization objects like clusters and cluster types.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: NetBox virtualization schema models for clusters and types.
 

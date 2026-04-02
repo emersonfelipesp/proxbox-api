@@ -81,6 +81,6 @@ All error messages include:
 
 - Transient network errors trigger automatic retry with exponential backoff
 - Permanent errors are reported with full context for debugging
-- All operations maintain detailed logs accessible via `/logs` or NetBox plugin UI
+- All operations maintain detailed logs accessible via the NetBox plugin UI
 
 See `docs/development/troubleshooting.md` for common error scenarios and recovery steps.

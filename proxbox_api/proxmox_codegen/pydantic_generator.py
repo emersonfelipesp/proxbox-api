@@ -3,25 +3,25 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
 
 from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, slugify_identifier
 
 
-def _resolved_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+def _resolved_schema(schema: dict[str, object] | None) -> dict[str, object] | None:
     if not isinstance(schema, dict):
         return None
-    if isinstance(schema.get("oneOf"), list) and schema["oneOf"]:
-        first = schema["oneOf"][0]
+    one_of = schema.get("oneOf")
+    if isinstance(one_of, list) and one_of:
+        first = one_of[0]
         if isinstance(first, dict):
             return first
     return schema
 
 
-def _python_type(schema: dict[str, Any] | None) -> str:
+def _python_type(schema: dict[str, object] | None) -> str:
     schema = _resolved_schema(schema)
     if not isinstance(schema, dict):
-        return "Any"
+        return "object"
     schema_type = schema.get("type")
     if schema_type == "null":
         return "None"
@@ -37,11 +37,11 @@ def _python_type(schema: dict[str, Any] | None) -> str:
         item_type = _python_type(schema.get("items", {}))
         return f"list[{item_type}]"
     if schema_type == "object":
-        return "dict[str, Any]"
-    return "Any"
+        return "dict[str, object]"
+    return "object"
 
 
-def _generate_object_model(model_name: str, schema: dict[str, Any]) -> str:
+def _generate_object_model(model_name: str, schema: dict[str, object]) -> str:
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
     required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
 
@@ -70,7 +70,7 @@ def _generate_object_model(model_name: str, schema: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _generate_root_model(model_name: str, schema: dict[str, Any]) -> str:
+def _generate_root_model(model_name: str, schema: dict[str, object]) -> str:
     field_type = _python_type(schema)
     description = schema.get("description")
     description_expr = (
@@ -84,7 +84,7 @@ def _generate_root_model(model_name: str, schema: dict[str, Any]) -> str:
     )
 
 
-def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> list[str]:
+def _generate_model_from_schema(model_name: str, schema: dict[str, object]) -> list[str]:
     schema = _resolved_schema(schema) or {}
     if (
         schema.get("type") == "array"
@@ -111,7 +111,7 @@ def _generate_model_from_schema(model_name: str, schema: dict[str, Any]) -> list
     return [_generate_root_model(model_name, schema)]
 
 
-def _request_schema_for_operation(path: str, operation: dict[str, Any]) -> dict[str, Any] | None:
+def _request_schema_for_operation(path: str, operation: dict[str, object]) -> dict[str, object] | None:
     """Return request-body schema excluding path parameters for runtime proxy models."""
 
     request_schema = (
@@ -139,15 +139,13 @@ def _request_schema_for_operation(path: str, operation: dict[str, Any]) -> dict[
     return schema
 
 
-def generate_pydantic_models_from_openapi(openapi: dict[str, Any]) -> str:  # noqa: C901
+def generate_pydantic_models_from_openapi(openapi: dict[str, object]) -> str:  # noqa: C901
     """Generate a Python module with Pydantic v2 schemas for request/response payloads."""
 
     lines: list[str] = [
         '"""Generated Pydantic v2 schemas from Proxmox OpenAPI output."""',
         "",
         "from __future__ import annotations",
-        "",
-        "from typing import Any",
         "",
         "from pydantic import BaseModel, ConfigDict, Field, RootModel",
         "",

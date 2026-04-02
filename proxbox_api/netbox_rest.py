@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import AsyncIterable, AsyncIterator
-from typing import Any
 from urllib.parse import urlsplit
 
 from netbox_sdk.client import ApiResponse
@@ -19,13 +18,13 @@ from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.utils.retry import _is_transient_netbox_error
 
 
-def _unwrap_api(nb: Any) -> Any:
+def _unwrap_api(nb: object) -> object:
     if isinstance(nb, SyncProxy):
         return object.__getattribute__(nb, "_obj")
     return nb
 
 
-def _wrap_sync(value: Any) -> Any:
+def _wrap_sync(value: object) -> object:
     if inspect.iscoroutine(value):
         return _wrap_sync(run_coroutine_blocking(value))
     if isinstance(value, list):
@@ -41,8 +40,8 @@ def _wrap_sync(value: Any) -> Any:
     return value
 
 
-def _collect_async_iter(it: Any) -> list[Any]:
-    async def _collect() -> list[Any]:
+def _collect_async_iter(it: object) -> list[object]:
+    async def _collect() -> list[object]:
         return [item async for item in it]
 
     return run_coroutine_blocking(_collect())
@@ -57,12 +56,12 @@ def _normalize_path(path: str) -> str:
     return normalized
 
 
-def _detail_path(list_path: str, record_id: Any) -> str:
+def _detail_path(list_path: str, record_id: object) -> str:
     list_path = _normalize_path(list_path)
     return f"{list_path}{record_id}/"
 
 
-def _extract_payload(response: ApiResponse) -> Any:
+def _extract_payload(response: ApiResponse) -> object:
     if response.status < 200 or response.status >= 300:
         detail = response.text
         try:
@@ -111,7 +110,7 @@ def _handle_netbox_error(error: Exception, operation: str) -> None:
     ) from error
 
 
-def _is_duplicate_error(detail: Any) -> bool:
+def _is_duplicate_error(detail: object) -> bool:
     if isinstance(detail, dict):
         return any(_is_duplicate_error(value) for value in detail.values())
     if isinstance(detail, list):
@@ -121,13 +120,13 @@ def _is_duplicate_error(detail: Any) -> bool:
 
 
 def _candidate_reuse_lookups(
-    lookup: dict[str, Any],
-    payload: dict[str, Any],
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    seen: set[tuple[tuple[str, Any], ...]] = set()
+    lookup: dict[str, object],
+    payload: dict[str, object],
+) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    seen: set[tuple[tuple[str, object], ...]] = set()
 
-    def _add(candidate: dict[str, Any]) -> None:
+    def _add(candidate: dict[str, object]) -> None:
         normalized = {key: value for key, value in candidate.items() if value not in (None, "")}
         if not normalized:
             return
@@ -156,14 +155,14 @@ def _candidate_reuse_lookups(
 class RestRecord:
     """Minimal mutable record wrapper for direct NetBox REST resources."""
 
-    def __init__(self, api: Any, list_path: str, values: dict[str, Any]) -> None:
+    def __init__(self, api: object, list_path: str, values: dict[str, object]) -> None:
         object.__setattr__(self, "_api", api)
         object.__setattr__(self, "_list_path", _normalize_path(list_path))
         object.__setattr__(self, "_data", dict(values))
         object.__setattr__(self, "_dirty_fields", set())
 
     @property
-    def id(self) -> Any:
+    def id(self) -> object:
         return self._data.get("id")
 
     @property
@@ -181,25 +180,25 @@ class RestRecord:
             raise ProxboxException(message="Cannot resolve detail path for unsaved NetBox record")
         return _detail_path(self._list_path, self.id)
 
-    def serialize(self) -> dict[str, Any]:
+    def serialize(self) -> dict[str, object]:
         return dict(self._data)
 
-    def dict(self) -> dict[str, Any]:
+    def dict(self) -> dict[str, object]:
         return self.serialize()
 
     @property
-    def json(self) -> dict[str, Any]:
+    def json(self) -> dict[str, object]:
         return self.serialize()
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         return self._data.get(key, default)
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         if name in self._data:
             return self._data[name]
         raise AttributeError(name)
 
-    def __setattr__(self, name: str, value: Any) -> None:
+    def __setattr__(self, name: str, value: object) -> None:
         if name in {"_api", "_list_path", "_data", "_dirty_fields"}:
             object.__setattr__(self, name, value)
         else:
@@ -256,7 +255,7 @@ class RestRecord:
 
 
 async def rest_list_async(
-    nb: Any, path: str, *, query: dict[str, Any] | None = None
+    nb: object, path: str, *, query: dict[str, object] | None = None
 ) -> list[RestRecord]:
     api = _unwrap_api(nb)
     try:
@@ -286,15 +285,15 @@ async def rest_list_async(
     ]
 
 
-def rest_list(nb: Any, path: str, *, query: dict[str, Any] | None = None) -> list[Any]:
+def rest_list(nb: object, path: str, *, query: dict[str, object] | None = None) -> list[object]:
     return _wrap_sync(run_coroutine_blocking(rest_list_async(nb, path, query=query)))
 
 
 async def rest_first_async(
-    nb: Any,
+    nb: object,
     path: str,
     *,
-    query: dict[str, Any] | None = None,
+    query: dict[str, object] | None = None,
 ) -> RestRecord | None:
     records = await rest_list_async(nb, path, query=query)
     if not records:
@@ -302,7 +301,7 @@ async def rest_first_async(
     return records[0]
 
 
-async def rest_create_async(nb: Any, path: str, payload: dict[str, Any]) -> RestRecord:
+async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -> RestRecord:
     api = _unwrap_api(nb)
     try:
         response = await api.client.request("POST", _normalize_path(path), payload=payload)
@@ -323,16 +322,16 @@ async def rest_create_async(nb: Any, path: str, payload: dict[str, Any]) -> Rest
     return RestRecord(api, path, body)
 
 
-def rest_create(nb: Any, path: str, payload: dict[str, Any]) -> Any:
+def rest_create(nb: object, path: str, payload: dict[str, object]) -> object:
     return _wrap_sync(run_coroutine_blocking(rest_create_async(nb, path, payload)))
 
 
 async def rest_ensure_async(
-    nb: Any,
+    nb: object,
     path: str,
     *,
-    lookup: dict[str, Any],
-    payload: dict[str, Any],
+    lookup: dict[str, object],
+    payload: dict[str, object],
 ) -> RestRecord:
     for candidate in _candidate_reuse_lookups(lookup, payload):
         existing = await rest_first_async(
@@ -358,13 +357,14 @@ async def rest_ensure_async(
 
 
 async def rest_reconcile_async(  # noqa: C901
-    nb: Any,
+    nb: object,
     path: str,
     *,
-    lookup: dict[str, Any],
-    payload: dict[str, Any],
+    lookup: dict[str, object],
+    payload: dict[str, object],
     schema: type[BaseModel],
     current_normalizer,
+    patchable_fields: set[str] | frozenset[str] | None = None,
 ) -> RestRecord:
     desired_model = schema.model_validate(payload)
     desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
@@ -417,6 +417,9 @@ async def rest_reconcile_async(  # noqa: C901
             for key, value in desired_payload.items()
             if current_payload.get(key) != value
         }
+        if patchable_fields is not None:
+            allowed = {str(field) for field in patchable_fields}
+            patch_payload = {key: value for key, value in patch_payload.items() if key in allowed}
         if patch_payload:
             for field, value in patch_payload.items():
                 setattr(existing_record, field, value)
@@ -441,11 +444,11 @@ async def rest_reconcile_async(  # noqa: C901
 
 
 async def rest_patch_async(
-    nb: Any,
+    nb: object,
     path: str,
     record_id: int,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
+    payload: dict[str, object],
+) -> dict[str, object]:
     """PATCH a single NetBox record by ID with the given fields."""
     api = _unwrap_api(nb)
     response = await api.client.request("PATCH", _detail_path(path, record_id), payload=payload)
@@ -453,26 +456,27 @@ async def rest_patch_async(
 
 
 def rest_ensure(
-    nb: Any,
+    nb: object,
     path: str,
     *,
-    lookup: dict[str, Any],
-    payload: dict[str, Any],
-) -> Any:
+    lookup: dict[str, object],
+    payload: dict[str, object],
+) -> object:
     return _wrap_sync(
         run_coroutine_blocking(rest_ensure_async(nb, path, lookup=lookup, payload=payload))
     )
 
 
 def rest_reconcile(
-    nb: Any,
+    nb: object,
     path: str,
     *,
-    lookup: dict[str, Any],
-    payload: dict[str, Any],
+    lookup: dict[str, object],
+    payload: dict[str, object],
     schema: type[BaseModel],
     current_normalizer,
-) -> Any:
+    patchable_fields: set[str] | frozenset[str] | None = None,
+) -> object:
     return _wrap_sync(
         run_coroutine_blocking(
             rest_reconcile_async(
@@ -482,12 +486,13 @@ def rest_reconcile(
                 payload=payload,
                 schema=schema,
                 current_normalizer=current_normalizer,
+                patchable_fields=patchable_fields,
             )
         )
     )
 
 
-def nested_tag_payload(tag: Any) -> list[dict[str, Any]]:
+def nested_tag_payload(tag: object) -> list[dict[str, object]]:
     slug = getattr(tag, "slug", None)
     name = getattr(tag, "name", None)
     color = getattr(tag, "color", None)
@@ -504,7 +509,7 @@ def nested_tag_payload(tag: Any) -> list[dict[str, Any]]:
 
 
 async def ensure_tag_async(
-    nb: Any,
+    nb: object,
     *,
     name: str,
     slug: str,

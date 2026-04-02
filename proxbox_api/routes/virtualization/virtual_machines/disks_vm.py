@@ -19,6 +19,7 @@ from proxbox_api.routes.proxmox.cluster import (
 from proxbox_api.services.sync.virtual_disks import (
     create_virtual_disks as sync_virtual_disks,
 )
+from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
@@ -48,10 +49,9 @@ async def create_virtual_disks(
     configuration from Proxmox, and creates/updates Virtual Disk objects.
     """
     netbox_vm_id_list = None
-    if netbox_vm_ids:
-        vm_ids = [int(vid.strip()) for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            netbox_vm_id_list = vm_ids
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        netbox_vm_id_list = vm_ids
 
     result = await sync_virtual_disks(
         netbox_session=netbox_session,
@@ -81,10 +81,9 @@ async def create_virtual_disks_stream(
     ),
 ):
     netbox_vm_id_list = None
-    if netbox_vm_ids:
-        vm_ids = [int(vid.strip()) for vid in netbox_vm_ids.split(",") if vid.strip().isdigit()]
-        if vm_ids:
-            netbox_vm_id_list = vm_ids
+    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
+    if vm_ids:
+        netbox_vm_id_list = vm_ids
 
     async def event_stream():
         bridge = WebSocketSSEBridge()

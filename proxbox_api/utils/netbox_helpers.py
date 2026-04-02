@@ -1,11 +1,9 @@
 """NetBox-specific utility functions to eliminate code duplication."""
 
-from typing import Any
-
 from proxbox_api.types.protocols import NetBoxRecord, TagLike
 
 
-def get_safe_id(obj: Any, default: int | None = 0) -> int | None:
+def get_safe_id(obj: object, default: int | None = 0) -> int | None:
     """Safely extract ID from an object, with fallback.
 
     Replaces the pattern: int(getattr(obj, "id", 0) or 0)
@@ -27,7 +25,7 @@ def get_safe_id(obj: Any, default: int | None = 0) -> int | None:
     return int(obj_id)
 
 
-def get_safe_attr(obj: Any, attr: str, default: Any = None) -> Any:
+def get_safe_attr(obj: object, attr: str, default: object = None) -> object:
     """Safely extract attribute from an object.
 
     Args:
@@ -78,7 +76,7 @@ def build_tag_refs(tags: list[TagLike] | None) -> list[dict[str, str]]:
     return tag_refs
 
 
-def _relation_id(value: Any) -> dict[str, int] | None:
+def _relation_id(value: object) -> dict[str, int] | None:
     """Extract relation ID from a value.
 
     Args:
@@ -108,7 +106,7 @@ def _relation_id(value: Any) -> dict[str, int] | None:
         return None
 
 
-def _relation_name(value: Any) -> dict[str, str] | None:
+def _relation_name(value: object) -> dict[str, str] | None:
     """Extract relation name from a value.
 
     Args:
@@ -139,9 +137,9 @@ def _relation_name(value: Any) -> dict[str, str] | None:
 
 
 def normalize_record_to_dict(
-    record: NetBoxRecord | dict[str, Any] | None,
+    record: NetBoxRecord | dict[str, object] | None,
     fields: list[str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Normalize a NetBox record to a dictionary.
 
     Args:
@@ -171,7 +169,7 @@ def normalize_record_to_dict(
     return result
 
 
-def extract_ids(objects: list[Any] | None) -> list[int]:
+def extract_ids(objects: list[object] | None) -> list[int]:
     """Extract IDs from a list of objects.
 
     Args:

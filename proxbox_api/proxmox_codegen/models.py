@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, Field
 
 HTTP_METHODS = ("GET", "POST", "PUT", "DELETE")
@@ -18,9 +16,9 @@ class RawMethodCapture(BaseModel):
     description: str | None = None
     viewer_description: str | None = None
     viewer_usage: str | None = None
-    parameters: dict[str, Any] | None = None
-    returns: dict[str, Any] | None = None
-    permissions: dict[str, Any] | None = None
+    parameters: dict[str, object] | None = None
+    returns: dict[str, object] | None = None
+    permissions: dict[str, object] | None = None
     allowtoken: int | str | None = None
     protected: int | str | None = None
     unstable: int | str | None = None
@@ -45,11 +43,11 @@ class NormalizedOperation(BaseModel):
     operation_id: str
     summary: str | None = None
     description: str | None = None
-    path_params: list[dict[str, Any]] = Field(default_factory=list)
-    query_params: list[dict[str, Any]] = Field(default_factory=list)
-    request_body_schema: dict[str, Any] | None = None
-    response_schema: dict[str, Any] | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+    path_params: list[dict[str, object]] = Field(default_factory=list)
+    query_params: list[dict[str, object]] = Field(default_factory=list)
+    request_body_schema: dict[str, object] | None = None
+    response_schema: dict[str, object] | None = None
+    extra: dict[str, object] = Field(default_factory=dict)
 
 
 class GenerationBundle(BaseModel):
@@ -60,6 +58,6 @@ class GenerationBundle(BaseModel):
     generated_at: str
     endpoint_count: int
     operation_count: int
-    capture: dict[str, Any]
-    openapi: dict[str, Any]
+    capture: dict[str, object]
+    openapi: dict[str, object]
     pydantic_models_code: str

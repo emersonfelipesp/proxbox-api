@@ -4,13 +4,13 @@
 
 Schemas modeling Proxmox VM config and aggregated VM summaries.
 
-## Modules and Responsibilities
+## Current Files
 
 - `__init__.py`: Virtualization schema models and VM configuration validator.
 
 ## Key Data Flow and Dependencies
 
-- VMConfig supports dynamic keys from Proxmox config responses.
+- `VMConfig` supports dynamic keys from Proxmox config responses.
 - Summary models support API response examples and future reporting endpoints.
 
 ## Extension Guidance
