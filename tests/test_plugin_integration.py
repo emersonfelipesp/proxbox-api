@@ -67,6 +67,18 @@ class TestPluginAPIPath:
             assert resp.status_code != 404
 
     @pytest.mark.asyncio
+    async def test_storage_create_stream_path_matches_static_route(self, client_with_fake_netbox):
+        """Storage stream route should not be shadowed by the per-VM dynamic route."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            async with client.stream(
+                "GET", "/virtualization/virtual-machines/storage/create/stream"
+            ) as resp:
+                assert resp.status_code != 422
+
+    @pytest.mark.asyncio
     async def test_virtual_disks_create_path_exists(self, client_with_fake_netbox):
         """Plugin expects /virtualization/virtual-machines/virtual-disks/create endpoint."""
         async with AsyncClient(
@@ -75,6 +87,20 @@ class TestPluginAPIPath:
         ) as client:
             resp = await client.get("/virtualization/virtual-machines/virtual-disks/create")
             assert resp.status_code != 404
+
+    @pytest.mark.asyncio
+    async def test_virtual_disks_create_stream_path_matches_static_route(
+        self, client_with_fake_netbox
+    ):
+        """Virtual disk stream route should not be shadowed by the per-VM dynamic route."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            async with client.stream(
+                "GET", "/virtualization/virtual-machines/virtual-disks/create/stream"
+            ) as resp:
+                assert resp.status_code != 422
 
     @pytest.mark.asyncio
     async def test_full_update_path_exists(self, client_with_fake_netbox):
