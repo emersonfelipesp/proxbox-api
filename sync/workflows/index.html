@@ -1294,7 +1294,8 @@
 <li>Sync VM backups.</li>
 <li>Sync VM snapshots.</li>
 <li>Sync node interfaces and IP addresses.</li>
-<li>Sync VM interfaces and IP addresses.</li>
+<li>Sync VM interfaces.</li>
+<li>Sync VM IP addresses and primary IP assignment.</li>
 </ol>
 <h2 id="virtual-machine-sync-flow">Virtual machine sync flow<a class="headerlink" href="#virtual-machine-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Primary endpoint:</p>
@@ -1309,6 +1310,7 @@
 <li>Creates dependencies (cluster, device, role) as needed.</li>
 <li>Creates VM interfaces and IP addresses when possible.</li>
 <li>Writes journal entries for auditability.</li>
+<li>In <code>Full Update</code>, VM creation skips network writes so the dedicated VM interface/IP stages own that work.</li>
 </ul>
 <h2 id="backup-sync-flow">Backup sync flow<a class="headerlink" href="#backup-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>

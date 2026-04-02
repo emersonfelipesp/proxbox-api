@@ -1083,13 +1083,15 @@
 <li>Sincroniza backups de VMs.</li>
 <li>Sincroniza snapshots de VMs.</li>
 <li>Sincroniza interfaces e IPs dos nodes.</li>
-<li>Sincroniza interfaces e IPs das VMs.</li>
+<li>Sincroniza interfaces das VMs.</li>
+<li>Sincroniza IPs das VMs e a atribuicao do IP primario.</li>
 </ol>
 <h2 id="sync-de-vms">Sync de VMs<a class="headerlink" href="#sync-de-vms" title="Permanent link">&para;</a></h2>
 <p>Endpoint principal:</p>
 <ul>
 <li><code>GET /virtualization/virtual-machines/create</code></li>
 </ul>
+<p>No <code>Full Update</code>, a criacao de VMs pula as escritas de rede para que as etapas dedicadas de interfaces e IPs assumam essa responsabilidade.</p>
 <h2 id="sync-de-backups">Sync de backups<a class="headerlink" href="#sync-de-backups" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /virtualization/virtual-machines/backups/create</code></li>
