@@ -10,13 +10,14 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
 from proxbox_api.services.proxmox_helpers import (
-    get_qemu_guest_agent_network_interfaces,
     get_vm_config_individual,
+    get_vm_resource_individual,
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
+from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
 
 
-async def _mb_from_bytes(value: object) -> int:
+def _mb_from_bytes(value: object) -> int:
     """Convert bytes to megabytes."""
     try:
         as_int = int(value)
@@ -144,15 +145,16 @@ async def sync_vm_individual(
     except Exception:
         proxmox_config = {}
 
-    proxmox_resource: dict[str, object] = {
+    proxmox_resource = get_vm_resource_individual(px, node, vm_type, vmid) or {}
+    proxmox_resource = {
         "vmid": vmid,
-        "name": f"vm-{vmid}",
-        "node": node,
-        "type": vm_type,
-        "status": "unknown",
-        "maxcpu": 0,
-        "maxmem": 0,
-        "maxdisk": 0,
+        "name": proxmox_resource.get("name") or f"vm-{vmid}",
+        "node": proxmox_resource.get("node") or node,
+        "type": proxmox_resource.get("type") or vm_type,
+        "status": proxmox_resource.get("status") or "unknown",
+        "maxcpu": proxmox_resource.get("maxcpu") or 0,
+        "maxmem": proxmox_resource.get("maxmem") or 0,
+        "maxdisk": proxmox_resource.get("maxdisk") or 0,
         "config": proxmox_config,
         "proxmox_last_updated": now.isoformat(),
     }
@@ -167,8 +169,16 @@ async def sync_vm_individual(
         if existing:
             netbox_object = existing[0].serialize() if hasattr(existing[0], "serialize") else None
 
-        cluster_dep: dict[str, object] = {"object_type": "cluster", "name": cluster_name}
-        node_dep: dict[str, object] = {"object_type": "node", "name": node}
+        cluster_dep: dict[str, object] = {
+            "object_type": "cluster",
+            "name": cluster_name,
+            "cluster_name": cluster_name,
+        }
+        node_dep: dict[str, object] = {
+            "object_type": "node",
+            "name": node,
+            "cluster_name": cluster_name,
+        }
         return {
             "object_type": "vm",
             "action": "dry_run",
@@ -204,6 +214,11 @@ async def sync_vm_individual(
             tag_ids=tag_ids,
             last_updated=now,
         )
+        existing_vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
+        )
 
         virtual_machine = await rest_reconcile_async(
             nb,
@@ -232,11 +247,21 @@ async def sync_vm_individual(
         netbox_object = (
             virtual_machine.serialize() if hasattr(virtual_machine, "serialize") else None
         )
-        action = "created" if getattr(virtual_machine, "id", None) else "updated"
+        action = "updated" if existing_vms else "created"
 
         dependencies: list[dict] = [
-            {"object_type": "cluster", "name": cluster_name, "action": action},
-            {"object_type": "node", "name": node, "action": action},
+            {
+                "object_type": "cluster",
+                "name": cluster_name,
+                "cluster_name": cluster_name,
+                "action": action,
+            },
+            {
+                "object_type": "node",
+                "name": node,
+                "cluster_name": cluster_name,
+                "action": action,
+            },
         ]
 
         return {
@@ -297,29 +322,65 @@ async def sync_vm_with_related(
     related_results: list[dict] = []
     related_dependencies: list[dict] = []
 
-    tasks_to_gather: list = []
+    tasks_to_gather: list[tuple[str, object]] = []
 
-    if sync_interfaces and vm_type == "qemu":
+    if sync_interfaces:
         try:
-            guest_interfaces = get_qemu_guest_agent_network_interfaces(px, node, vmid)
-            _interface_names = [
-                iface.get("name") for iface in guest_interfaces if iface.get("name")
-            ]
+            vm_config = get_vm_config_individual(px, node, vm_type, vmid)
         except Exception:
-            _interface_names = ["net0"]
+            vm_config = {}
+        interface_names = sorted(
+            key
+            for key in vm_config
+            if isinstance(key, str) and key.startswith("net") and not key.startswith("nets")
+        )
+        if not interface_names and vm_type == "qemu":
+            interface_names = ["net0"]
+        for interface_name in interface_names:
+            tasks_to_gather.append(
+                (
+                    "interface",
+                    sync_interface_individual(
+                        nb,
+                        px,
+                        tag,
+                        node,
+                        vm_type,
+                        vmid,
+                        interface_name,
+                        auto_create_vm=False,
+                        dry_run=dry_run,
+                    ),
+                )
+            )
 
     if sync_task_history:
         tasks_to_gather.append(
-            sync_task_history_individual(
-                nb, px, tag, node, vm_type, vmid, upid=None, auto_create_vm=False, dry_run=dry_run
+            (
+                "task_history",
+                sync_task_history_individual(
+                    nb,
+                    px,
+                    tag,
+                    node,
+                    vm_type,
+                    vmid,
+                    upid=None,
+                    auto_create_vm=False,
+                    cluster_name=cluster_name,
+                    dry_run=dry_run,
+                ),
             )
         )
 
     if tasks_to_gather:
-        results = await asyncio.gather(*tasks_to_gather, return_exceptions=True)
-        for i, result in enumerate(results):
+        results = await asyncio.gather(
+            *(coroutine for _kind, coroutine in tasks_to_gather),
+            return_exceptions=True,
+        )
+        for (kind, _coroutine), result in zip(tasks_to_gather, results, strict=False):
             if isinstance(result, Exception):
-                related_results.append({"object_type": "task_history", "error": str(result)})
+                related_results.append({"object_type": kind, "error": str(result)})
             else:
                 related_results.append(result)
                 if isinstance(result, dict):

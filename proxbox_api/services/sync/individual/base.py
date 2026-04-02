@@ -240,7 +240,7 @@ class BaseIndividualSyncService:
         cluster_name: str,
         node_name: str,
         vm_type: str,
-    ) -> tuple[object, object, object, object, object, object]:
+    ) -> tuple[object, object, object, object, object, object, object, object]:
         """Get or create all VM dependencies.
 
         Args:
@@ -249,7 +249,7 @@ class BaseIndividualSyncService:
             vm_type: 'qemu' or 'lxc'.
 
         Returns:
-            Tuple of (cluster, cluster_type, manufacturer, device_type, device_role, site, device).
+            Tuple of (cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role).
         """
         from proxbox_api.services.sync.device_ensure import (
             _ensure_cluster_type,

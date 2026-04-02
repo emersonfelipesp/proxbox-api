@@ -168,10 +168,15 @@ async def sync_backup_individual(
             "tags": tag_refs,
         }
 
+        existing_backups = await rest_list_async(
+            nb,
+            "/api/plugins/proxbox/backups/",
+            query={"vmid": str(vmid), "volume_id": volid},
+        )
         backup_record = await rest_reconcile_async(
             nb,
             "/api/plugins/proxbox/backups/",
-            lookup={"volume_id": volid},
+            lookup={"vmid": str(vmid), "volume_id": volid},
             payload=backup_payload,
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
@@ -187,7 +192,7 @@ async def sync_backup_individual(
         )
 
         netbox_object = backup_record.serialize() if hasattr(backup_record, "serialize") else None
-        action = "created" if getattr(backup_record, "id", None) else "updated"
+        action = "updated" if existing_backups else "created"
 
         return {
             "object_type": "backup",
