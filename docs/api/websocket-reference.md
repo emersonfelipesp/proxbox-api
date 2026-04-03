@@ -11,7 +11,7 @@ Endpoint:
 Behavior:
 
 - Accepts connection.
-- Sends incremental message counter every 2 seconds.
+- Sends an incremental message counter every 2 seconds.
 
 Use case:
 
@@ -27,7 +27,7 @@ Behavior:
 
 - Accepts connection and sends welcome text.
 - Triggers VM synchronization workflow (`create_virtual_machines`).
-- Emits JSON progress events while VM sync runs (when websocket mode is enabled in flow).
+- Emits JSON progress events while VM sync runs when websocket mode is enabled in the flow.
 
 Use case:
 
@@ -46,7 +46,7 @@ Behavior:
   - `Full Update Sync`
   - `Sync Nodes`
   - `Sync Virtual Machines`
-- Runs corresponding sync tasks and streams status messages.
+- Runs the corresponding sync tasks and streams status messages.
 
 Invalid command behavior:
 
@@ -56,6 +56,7 @@ Invalid command behavior:
 
 - WebSocket flows depend on a valid NetBox endpoint and Proxmox sessions.
 - Long-running operations may create sync-process records and journal entries in NetBox plugin objects.
+- Progress payloads are normalized into `step`, `error`, and `complete` message frames by the shared streaming bridge used across HTTP and WebSocket transports.
 
 ## Error Handling
 

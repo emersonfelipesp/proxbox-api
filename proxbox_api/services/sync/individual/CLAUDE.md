@@ -19,6 +19,7 @@ Per-object synchronization services that sync individual objects from Proxmox to
 - `virtual_disk_sync.py`: `sync_virtual_disk_individual()` for a single virtual disk.
 - `backup_sync.py`: `sync_backup_individual()` for a single backup.
 - `snapshot_sync.py`: `sync_snapshot_individual()` for a single snapshot.
+- `replication_sync.py`: `sync_replication_individual()` for a single replication job.
 
 ## Key Design Rules
 

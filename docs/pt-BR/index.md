@@ -6,11 +6,19 @@ Esta documentacao cobre instalacao, configuracao, arquitetura, referencias de AP
 
 ## O que este servico faz
 
-- Armazena dados locais de bootstrap para conexoes NetBox e Proxmox em SQLite.
-- Expoe APIs REST para gerenciamento de endpoints NetBox e Proxmox.
-- Expoe endpoints de dados Proxmox e orquestracao de sincronizacao.
-- Fornece endpoints WebSocket e SSE streaming para feedback de sincronizacao em tempo real.
-- Inclui extensao OpenAPI gerada para contratos do API viewer do Proxmox.
+- Armazena dados locais de bootstrap em SQLite para conexoes NetBox e Proxmox.
+- Expoe APIs REST para gerenciamento de endpoints, verificacao de status e rotas geradas dinamicamente do contrato Proxmox.
+- Expoe endpoints de descoberta e orquestracao de sync do Proxmox, alem de sync individual por objeto.
+- Fornece endpoints WebSocket e SSE para feedback de sincronizacao em tempo real.
+- Inclui extensao OpenAPI gerada para os contratos do API viewer do Proxmox.
+
+## Principais capacidades
+
+- Bootstrap do endpoint NetBox com suporte a token v1 e v2.
+- CRUD de endpoints Proxmox com senha ou par de token.
+- Coleta de dados de cluster, node, storage, VM, backup, snapshot e replication.
+- Sincronizacao de VM, interfaces, IPs, discos, storages e backups para o NetBox.
+- Inspecao de logs do admin, cache e fluxo full-update.
 
 ## Idioma
 

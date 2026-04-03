@@ -11,7 +11,7 @@ Endpoint:
 Comportamento:
 
 - Aceita conexao.
-- Envia contador incremental de mensagem a cada 2 segundos.
+- Envia um contador incremental de mensagens a cada 2 segundos.
 
 Uso:
 
@@ -26,8 +26,8 @@ Endpoint:
 Comportamento:
 
 - Aceita conexao e envia texto de boas-vindas.
-- Dispara fluxo de sincronizacao de VMs (`create_virtual_machines`).
-- Emite eventos JSON de progresso enquanto o sync de VMs executa (quando o modo websocket esta ativo no fluxo).
+- Dispara o fluxo de sincronizacao de VMs (`create_virtual_machines`).
+- Emite eventos JSON de progresso enquanto o sync de VMs executa, quando o modo websocket esta ativo no fluxo.
 
 Uso:
 
@@ -46,7 +46,7 @@ Comportamento:
   - `Full Update Sync`
   - `Sync Nodes`
   - `Sync Virtual Machines`
-- Executa tarefas de sync correspondentes e envia mensagens de status.
+- Executa as tarefas de sync correspondentes e envia mensagens de status.
 
 Comando invalido:
 
@@ -56,3 +56,4 @@ Comando invalido:
 
 - Fluxos WebSocket dependem de endpoint NetBox valido e sessoes Proxmox disponiveis.
 - Operacoes longas criam journal entries em objetos do plugin NetBox para auditabilidade.
+- Os payloads de progresso sao normalizados pelo mesmo bridge usado pelo SSE, produzindo frames `step`, `error` e `complete`.

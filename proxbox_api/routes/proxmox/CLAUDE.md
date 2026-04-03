@@ -2,23 +2,25 @@
 
 ## Purpose
 
-Endpoints that expose Proxmox sessions, cluster data, nodes, storage, and generated viewer routes.
+Endpoints that expose Proxmox sessions, cluster data, node data, viewer generation, and generated live routes.
 
 ## Current Files
 
-- `__init__.py`: Proxmox route handlers for sessions, storage, and VM config.
+- `__init__.py`: Proxmox route handlers for sessions, storage, top-level resource access, and typed VM config helpers.
 - `cluster.py`: Proxmox cluster endpoints and cluster response schemas.
-- `endpoints.py`: Proxmox endpoint listing and resource helpers.
+- `endpoints.py`: Proxmox endpoint CRUD handlers.
 - `nodes.py`: Proxmox node endpoints and node interface response schemas.
-- `runtime_generated.py`: runtime-generated route registration helpers.
-- `viewer_codegen.py`: runtime endpoints to generate and return Proxmox OpenAPI and Pydantic artifacts.
+- `replication.py`: Proxmox cluster replication endpoints.
+- `runtime_generated.py`: runtime-generated route registration helpers and cache management.
+- `viewer_codegen.py`: runtime endpoints to generate and return Proxmox OpenAPI, Pydantic, and live-route artifacts.
 
 ## How These Routes Work
 
 - The package uses `ProxmoxSessionsDep` from `session/proxmox.py` for authenticated access.
 - Route modules expose typed response schemas and dependency aliases for client-facing API calls.
 - Viewer codegen endpoints delegate generation to `proxbox_api.proxmox_codegen`.
-- Runtime-generated routes are mounted during application lifespan and should stay aligned with the generated artifact tree.
+- Runtime-generated routes are mounted during application lifespan and also cached to disk so they can be restored on reload.
+- Generated routes are served under `/proxmox/api2/{version_tag}` with `/proxmox/api2/*` kept as the `latest` alias.
 
 ## Extension Guidance
 

@@ -11,7 +11,8 @@ Endpoints exposing Proxbox plugin configuration and settings views.
 ## How These Routes Work
 
 - These handlers read plugin configuration from NetBox and map it into local Pydantic schemas.
-- They are part of the configuration path that lets the backend discover Proxmox endpoint data.
+- They expose `/netbox/plugins-config`, `/netbox/default-settings`, and `/settings`.
+- They are not mounted by `create_app()` at the moment, so the routes remain opt-in.
 
 ## Extension Guidance
 

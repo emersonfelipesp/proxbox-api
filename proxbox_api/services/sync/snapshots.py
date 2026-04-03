@@ -180,7 +180,9 @@ async def create_netbox_snapshots(
         return netbox_snapshot
 
     except Exception as error:
-        logger.error(f"Error creating NetBox snapshot for VM {vmid}: {error}")
+        error_detail = getattr(error, "detail", str(error))
+        error_msg = f"{type(error).__name__}: {error_detail}"
+        logger.error(f"Error creating NetBox snapshot for VM {vmid}: {error_msg}")
         return None
 
 

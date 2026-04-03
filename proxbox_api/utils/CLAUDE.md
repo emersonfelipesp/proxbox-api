@@ -19,8 +19,9 @@ Utility helpers shared across synchronization workflows.
 
 ## How These Utilities Are Used
 
-- `streaming.py` is consumed by `app/full_update.py`, `routes/dcim/`, and `routes/virtualization/virtual_machines/` to produce SSE responses.
+- `streaming.py` is consumed by `app/full_update.py`, `app/websockets.py`, `routes/dcim/`, and `routes/virtualization/virtual_machines/` to produce SSE responses and bridge websocket-style progress events.
 - `return_status_html` is used by virtualization sync routes and services when they need compact HTML status output.
+- `retry.py` and `sync_error_handling.py` provide the retry and error-wrapping behavior used by sync services.
 - `websocket_utils.py` and `structured_logging.py` support the shared progress-reporting path across stream transports.
 
 ## Extension Guidance

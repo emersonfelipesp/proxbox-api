@@ -6,7 +6,7 @@ Endpoints that synchronize and expose DCIM entities in NetBox.
 
 ## Current Files
 
-- `__init__.py`: DCIM route handlers for device, interface, VLAN, and IP synchronization.
+- `__init__.py`: DCIM route handlers for device discovery, device creation, interface creation, VLAN/IP reconciliation, and SSE stream variants.
 
 ## How These Routes Work
 
