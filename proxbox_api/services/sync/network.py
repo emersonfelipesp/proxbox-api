@@ -255,7 +255,7 @@ async def _reconcile_vm_interface_record(
             "/api/virtualization/interfaces/",
             query={
                 "name": bridge_name,
-                "virtual_machine_id": "empty",
+                "virtual_machine_id": "",
                 "limit": 1,
             },
         )
