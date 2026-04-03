@@ -28,6 +28,20 @@ async def get_backend_logs(
             description="Return error-related logs regardless of level",
         ),
     ] = False,
+    newer_than_id: Annotated[
+        int | None,
+        Query(
+            title="Newer Than ID",
+            description="Only return logs with an ID greater than this entry ID",
+        ),
+    ] = None,
+    older_than_id: Annotated[
+        int | None,
+        Query(
+            title="Older Than ID",
+            description="Only return logs with an ID less than this entry ID",
+        ),
+    ] = None,
     limit: Annotated[
         int,
         Query(
@@ -68,6 +82,7 @@ async def get_backend_logs(
     Filtering:
     - By level: Returns logs at the specified level
     - By errors_only: Returns error-related logs regardless of level
+    - By newer_than_id / older_than_id: Return logs relative to an entry ID cursor
     - By since: Returns only logs after the specified timestamp
     - By operation_id: Returns only logs for a specific sync operation
 
@@ -87,6 +102,8 @@ async def get_backend_logs(
     result = get_logs(
         level=level,
         errors_only=errors_only,
+        newer_than_id=newer_than_id,
+        older_than_id=older_than_id,
         limit=limit,
         offset=offset,
         since=since,

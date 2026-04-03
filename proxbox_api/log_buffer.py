@@ -92,6 +92,25 @@ _ERROR_MESSAGE_RE = re.compile(
 )
 
 
+def _entry_sort_key(entry: BufferedLogEntry) -> int:
+    """Return a numeric sort key for a buffered log entry."""
+    try:
+        return int(entry.id)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _parse_cursor_id(value: int | str | None) -> int | None:
+    """Parse a cursor ID from query input."""
+    if value is None:
+        return None
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _entry_is_error_related(entry: BufferedLogEntry) -> bool:
     """Return True when a log entry looks error-related."""
     if entry.level in {LogLevel.ERROR, LogLevel.CRITICAL}:
@@ -168,6 +187,8 @@ class LogBufferHandler(logging.Handler):
         self,
         level: LogLevel | str | None = None,
         errors_only: bool = False,
+        newer_than_id: int | str | None = None,
+        older_than_id: int | str | None = None,
         limit: int = 200,
         offset: int = 0,
         since: datetime | None = None,
@@ -178,6 +199,8 @@ class LogBufferHandler(logging.Handler):
         Args:
             level: Exact log level to include (DEBUG, INFO, WARNING, ERROR, CRITICAL)
             errors_only: Return only error-related logs, regardless of level
+            newer_than_id: Return only logs with an ID greater than this entry ID
+            older_than_id: Return only logs with an ID less than this entry ID
             limit: Maximum number of entries to return (default 200, max 5000)
             offset: Number of entries to skip (for pagination)
             since: Only return logs after this timestamp
@@ -198,9 +221,21 @@ class LogBufferHandler(logging.Handler):
         with self._lock:
             logs = list(self.buffer)
 
+        logs.sort(key=_entry_sort_key, reverse=True)
+
         filtered_logs: list[BufferedLogEntry] = []
+        newer_than_key = _parse_cursor_id(newer_than_id)
+        older_than_key = _parse_cursor_id(older_than_id)
 
         for entry in logs:
+            entry_key = _entry_sort_key(entry)
+
+            if newer_than_key is not None and entry_key <= newer_than_key:
+                continue
+
+            if older_than_key is not None and entry_key >= older_than_key:
+                continue
+
             if not errors_only and level_filter and entry.level != level_filter:
                 continue
 
@@ -223,9 +258,11 @@ class LogBufferHandler(logging.Handler):
 
         has_more = end_idx < total
 
-        active_filters: dict[str, str | bool | None] = {
+        active_filters: dict[str, str | int | bool | None] = {
             "level": level_filter.value if level_filter else None,
             "errors_only": True if errors_only else None,
+            "newer_than_id": newer_than_id,
+            "older_than_id": older_than_id,
             "operation_id": operation_id,
             "since": since.isoformat() if since else None,
         }
@@ -276,6 +313,8 @@ def clear_log_buffer() -> None:
 def get_logs(
     level: LogLevel | str | None = None,
     errors_only: bool = False,
+    newer_than_id: int | str | None = None,
+    older_than_id: int | str | None = None,
     limit: int = 200,
     offset: int = 0,
     since: datetime | None = None,
@@ -286,6 +325,8 @@ def get_logs(
     Args:
         level: Exact log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         errors_only: Return only error-related logs, regardless of level
+        newer_than_id: Return only logs newer than the given entry ID
+        older_than_id: Return only logs older than the given entry ID
         limit: Max entries to return
         offset: Pagination offset
         since: Only logs after this timestamp
@@ -297,6 +338,8 @@ def get_logs(
     return get_log_buffer().get_logs(
         level=level,
         errors_only=errors_only,
+        newer_than_id=newer_than_id,
+        older_than_id=older_than_id,
         limit=limit,
         offset=offset,
         since=since,

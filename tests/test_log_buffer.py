@@ -89,13 +89,30 @@ def test_get_logs_filters_by_exact_level_and_operation_id():
     assert info_only["total"] == 1
 
     op_only = handler.get_logs(operation_id="op-1")
-    assert [log["message"] for log in op_only["logs"]] == ["debug", "info"]
+    assert [log["message"] for log in op_only["logs"]] == ["info", "debug"]
     assert op_only["total"] == 2
 
     combined = handler.get_logs(level="WARNING", operation_id="op-2")
     assert [log["level"] for log in combined["logs"]] == ["WARNING"]
     assert combined["active_filters"]["level"] == "WARNING"
     assert combined["active_filters"]["operation_id"] == "op-2"
+
+
+def test_get_logs_returns_newest_entries_first_and_supports_id_cursors():
+    handler = LogBufferHandler()
+
+    handler.emit(_make_record(logging.DEBUG, "debug"))
+    handler.emit(_make_record(logging.INFO, "info"))
+    handler.emit(_make_record(logging.WARNING, "warning"))
+
+    newest_first = handler.get_logs(limit=2)
+    assert [log["message"] for log in newest_first["logs"]] == ["warning", "info"]
+
+    older_than_warning = handler.get_logs(older_than_id="3", limit=2)
+    assert [log["message"] for log in older_than_warning["logs"]] == ["info", "debug"]
+
+    newer_than_debug = handler.get_logs(newer_than_id="1", limit=2)
+    assert [log["message"] for log in newer_than_debug["logs"]] == ["warning", "info"]
 
 
 def test_get_logs_errors_only_includes_error_related_logs_across_levels():
@@ -114,15 +131,15 @@ def test_get_logs_errors_only_includes_error_related_logs_across_levels():
     errors_only = handler.get_logs(errors_only=True)
 
     assert [log["message"] for log in errors_only["logs"]] == [
-        "Failed to load NetBox endpoint",
-        "retrying after failure",
-        "unexpected error",
         "traceback entry",
+        "unexpected error",
+        "retrying after failure",
+        "Failed to load NetBox endpoint",
     ]
     assert [log["level"] for log in errors_only["logs"]] == [
         "INFO",
-        "WARNING",
         "ERROR",
+        "WARNING",
         "INFO",
     ]
     assert errors_only["active_filters"]["errors_only"] is True
