@@ -25,9 +25,9 @@ router = APIRouter()
 # Include read_vm first so its static routes (e.g., /interfaces/create) are matched
 # before sync_vm's dynamic routes (e.g., /{netbox_vm_id}/create)
 router.include_router(read_vm.router)
-router.include_router(sync_vm.router)
-router.include_router(disks_vm.router)
 router.include_router(storages_vm.router)
+router.include_router(disks_vm.router)
+router.include_router(sync_vm.router)
 router.include_router(backups_vm.router)
 router.include_router(snapshots_vm.router)
 
