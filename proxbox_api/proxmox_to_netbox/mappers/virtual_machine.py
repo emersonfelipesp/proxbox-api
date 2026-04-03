@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from proxbox_api.proxmox_to_netbox.normalize import build_virtual_machine_transform
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput, ProxmoxVmResourceInput
+from proxbox_api.proxmox_to_netbox.normalize import build_virtual_machine_transform
 
 
 def map_proxmox_vm_to_netbox_vm_body(

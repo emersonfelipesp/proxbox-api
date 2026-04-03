@@ -71,7 +71,6 @@ async def sync_all_backup_routines(
                 )
 
                 if existing:
-                    record = existing[0]
                     await rest_reconcile_async(
                         nb,
                         "/api/plugins/proxbox/backup-routines/",

@@ -3,8 +3,8 @@
 from fastapi import APIRouter, Query
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
-from proxbox_api.services.sync.individual.replication_sync import sync_replication_individual
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
+from proxbox_api.services.sync.individual.replication_sync import sync_replication_individual
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -16,7 +16,9 @@ async def sync_replication(
     pxs: ProxmoxSessionsDep,
     tag: ProxboxTagDep,
     cluster_name: str = Query(..., title="Cluster Name", description="Name of the cluster"),
-    replication_id: str = Query(..., title="Replication ID", description="Replication job ID (e.g., '100-1')"),
+    replication_id: str = Query(
+        ..., title="Replication ID", description="Replication job ID (e.g., '100-1')"
+    ),
     auto_create_vm: bool = Query(default=True, title="Auto Create VM"),
     dry_run: bool = Query(default=False, title="Dry Run"),
 ):

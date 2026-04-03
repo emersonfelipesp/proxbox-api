@@ -1207,7 +1207,9 @@ def test_cluster_replication_reports_partial_failures():
     class _FakeReplicationSession:
         def __init__(self, name: str, payload=None, error: Exception | None = None):
             self.name = name
-            self.session = SimpleNamespace(cluster=_FakeClusterAccessor(payload=payload, error=error))
+            self.session = SimpleNamespace(
+                cluster=_FakeClusterAccessor(payload=payload, error=error)
+            )
 
     sessions = [
         _FakeReplicationSession(

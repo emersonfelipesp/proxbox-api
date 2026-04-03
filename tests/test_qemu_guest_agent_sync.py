@@ -579,4 +579,10 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
         }
     ]
     assert captured_vm_ids == [55]
-    assert primary_ip_calls == [{"nb": data["netbox_session"], "virtual_machine": {"id": 55, "name": "vm01"}, "primary_ip_id": 77}]
+    assert primary_ip_calls == [
+        {
+            "nb": data["netbox_session"],
+            "virtual_machine": {"id": 55, "name": "vm01"},
+            "primary_ip_id": 77,
+        }
+    ]

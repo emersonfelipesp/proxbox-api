@@ -8,7 +8,57 @@ from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxIpAddressSyncState
 from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
-from proxbox_api.services.sync.individual.helpers import build_ip_lookup_key
+from proxbox_api.services.sync.individual.helpers import (
+    build_ip_lookup_key,
+    build_sync_response,
+    ensure_vm_record,
+    get_serialized_first_record,
+    resolve_guest_interface_by_ip,
+)
+
+
+async def _resolve_interface_id(
+    nb: object,
+    px: object,
+    tag: object,
+    *,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    resolved_interface: str | None,
+    auto_create_interface: bool,
+) -> int | None:
+    if not resolved_interface:
+        return None
+
+    existing_ifaces = await rest_list_async(
+        nb,
+        "/api/virtualization/interfaces/",
+        query={"virtual_machine_id": vmid, "name": resolved_interface},
+    )
+    if existing_ifaces:
+        return getattr(existing_ifaces[0], "id", None)
+
+    if not auto_create_interface:
+        return None
+
+    from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+
+    iface_result = await sync_interface_individual(
+        nb,
+        px,
+        tag,
+        node,
+        vm_type,
+        vmid,
+        resolved_interface,
+        auto_create_vm=False,
+        dry_run=False,
+    )
+    netbox_object = iface_result.get("netbox_object")
+    if isinstance(netbox_object, dict):
+        return netbox_object.get("id")
+    return None
 
 
 async def sync_ip_individual(
@@ -53,16 +103,9 @@ async def sync_ip_individual(
         except Exception:
             pass
 
-    resolved_interface = interface_name
-    if guest_interfaces and not interface_name:
-        for iface in guest_interfaces:
-            for addr in iface.get("ip_addresses") or []:
-                addr_ip = str(addr.get("ip_address") or "").strip()
-                addr_ip_clean = addr_ip.split("/")[0] if "/" in addr_ip else addr_ip
-                ip_address_clean = ip_address.split("/")[0] if "/" in ip_address else ip_address
-                if addr_ip_clean == ip_address_clean:
-                    resolved_interface = str(iface.get("name") or "").strip()
-                    break
+    resolved_interface = interface_name or (
+        resolve_guest_interface_by_ip(guest_interfaces, ip_address) if guest_interfaces else None
+    )
 
     proxmox_resource: dict[str, object] = {
         "vmid": vmid,
@@ -74,111 +117,85 @@ async def sync_ip_individual(
     }
 
     if dry_run:
-        existing_ips = await rest_list_async(
+        netbox_object = await get_serialized_first_record(
             nb,
             "/api/ipam/ip-addresses/",
             query={"address": ip_address.split("/")[0]},
         )
-        netbox_object = None
-        if existing_ips:
-            netbox_object = (
-                existing_ips[0].serialize() if hasattr(existing_ips[0], "serialize") else None
-            )
-
-        vm_dep: dict[str, object] = {
-            "object_type": "vm",
-            "vmid": vmid,
-            "cluster_name": getattr(px, "name", None),
-            "node": node,
-            "type": vm_type,
-        }
-        iface_dep: dict[str, object] | None = (
+        dependencies = [
             {
-                "object_type": "interface",
-                "name": resolved_interface,
+                "object_type": "vm",
+                "vmid": vmid,
                 "cluster_name": getattr(px, "name", None),
                 "node": node,
                 "type": vm_type,
-                "vmid": vmid,
             }
-            if resolved_interface
-            else None
-        )
-        deps = [vm_dep]
-        if iface_dep:
-            deps.append(iface_dep)
+        ]
+        if resolved_interface:
+            dependencies.append(
+                {
+                    "object_type": "interface",
+                    "name": resolved_interface,
+                    "cluster_name": getattr(px, "name", None),
+                    "node": node,
+                    "type": vm_type,
+                    "vmid": vmid,
+                }
+            )
 
-        return {
-            "object_type": "ip_address",
-            "action": "dry_run",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": True,
-            "dependencies_synced": deps,
-            "error": None,
-        }
+        return build_sync_response(
+            object_type="ip_address",
+            action="dry_run",
+            proxmox_resource=proxmox_resource,
+            netbox_object=netbox_object,
+            dry_run=True,
+            dependencies_synced=dependencies,
+            error=None,
+        )
 
     try:
-        existing_vms = await rest_list_async(
+        vm_record, vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type=vm_type,
+            auto_create_vm=auto_create_vm,
         )
-        if not existing_vms:
-            if auto_create_vm:
-                from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
-
-                cluster_name = getattr(px, "name", "unknown")
-                await sync_vm_individual(
-                    nb, px, tag, cluster_name, node, vm_type, vmid, dry_run=False
-                )
-                existing_vms = await rest_list_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    query={"cf_proxmox_vm_id": vmid},
-                )
-            else:
-                return {
-                    "object_type": "ip_address",
-                    "action": "error",
-                    "proxmox_resource": proxmox_resource,
-                    "netbox_object": None,
-                    "dry_run": False,
-                    "dependencies_synced": [],
-                    "error": f"VM with vmid={vmid} not found in NetBox",
-                }
-
-        vm_record = existing_vms[0]
-        vm_id = getattr(vm_record, "id", None)
-
-        interface_id: int | None = None
-        if resolved_interface:
-            existing_ifaces = await rest_list_async(
-                nb,
-                "/api/virtualization/interfaces/",
-                query={"virtual_machine_id": vm_id, "name": resolved_interface},
+        if vm_error:
+            return build_sync_response(
+                object_type="ip_address",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=vm_error,
             )
-            if existing_ifaces:
-                interface_id = getattr(existing_ifaces[0], "id", None)
 
-            if not interface_id and auto_create_interface:
-                from proxbox_api.services.sync.individual.interface_sync import (
-                    sync_interface_individual,
-                )
+        vm_id = getattr(vm_record, "id", None)
+        if vm_id is None:
+            return build_sync_response(
+                object_type="ip_address",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=f"Could not resolve VM ID for vmid={vmid}",
+            )
 
-                iface_result = await sync_interface_individual(
-                    nb,
-                    px,
-                    tag,
-                    node,
-                    vm_type,
-                    vmid,
-                    resolved_interface,
-                    auto_create_vm=False,
-                    dry_run=False,
-                )
-                if iface_result.get("netbox_object"):
-                    interface_id = iface_result["netbox_object"].get("id")
+        interface_id = await _resolve_interface_id(
+            nb,
+            px,
+            tag,
+            node=node,
+            vm_type=vm_type,
+            vmid=vmid,
+            resolved_interface=resolved_interface,
+            auto_create_interface=auto_create_interface,
+        )
 
         ip_payload: dict[str, object] = {
             "address": ip_address,
@@ -237,23 +254,23 @@ async def sync_ip_individual(
                 }
             )
 
-        return {
-            "object_type": "ip_address",
-            "action": action,
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": False,
-            "dependencies_synced": dependencies,
-            "error": None,
-        }
+        return build_sync_response(
+            object_type="ip_address",
+            action=action,
+            proxmox_resource=proxmox_resource,
+            netbox_object=netbox_object,
+            dry_run=False,
+            dependencies_synced=dependencies,
+            error=None,
+        )
 
     except Exception as error:
-        return {
-            "object_type": "ip_address",
-            "action": "error",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": None,
-            "dry_run": False,
-            "dependencies_synced": [],
-            "error": str(error),
-        }
+        return build_sync_response(
+            object_type="ip_address",
+            action="error",
+            proxmox_resource=proxmox_resource,
+            netbox_object=None,
+            dry_run=False,
+            dependencies_synced=[],
+            error=str(error),
+        )

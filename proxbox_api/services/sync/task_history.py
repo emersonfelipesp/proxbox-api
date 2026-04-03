@@ -253,8 +253,6 @@ async def _sync_single_vm_task_history(
 ) -> tuple[int, int]:
     """Sync task history for a single VM. Returns (reconciled_count, skipped)."""
     reconciled = 0
-    skipped = 0
-
     proxmox_vmid = extract_proxmox_vmid(vm)
     vm_name = vm.get("name", "unknown")
     vm_id = vm.get("id")
@@ -366,20 +364,6 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
             reconciled_count, skipped_count = result
             total_reconciled += reconciled_count
             skipped += skipped_count
-
-        if use_websocket and websocket:
-            vm_name = "unknown"
-            if not isinstance(result, Exception) and hasattr(result, "__iter__"):
-                try:
-                    vm_name = (
-                        vms_with_proxmox_id[
-                            len([r for r in results if not isinstance(r, Exception)])
-                        ].get("name", "unknown")
-                        if result
-                        else "unknown"
-                    )
-                except (IndexError, TypeError):
-                    pass
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "task_history", "end": True})

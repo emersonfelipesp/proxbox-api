@@ -17,7 +17,6 @@ from proxbox_api.netbox_compat import VirtualMachine
 from proxbox_api.netbox_rest import rest_list_async, rest_patch_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
-    NetBoxIpAddressSyncState,
     NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineCreateBody,
     NetBoxVirtualMachineInterfaceSyncState,
@@ -39,6 +38,10 @@ from proxbox_api.services.sync.devices import (
 )
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
+)
+from proxbox_api.services.sync.network import (
+    _resolve_vm_interface_identity,
+    _resolve_vm_interface_ip,
 )
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -511,15 +514,12 @@ async def _create_vm_interface_parallel(
                 vlan_exc,
             )
 
-    mac_address = interface_config.get("virtio") or interface_config.get("hwaddr")
-    resolved_name = interface_name
-    if use_guest_agent_interface_name and guest_iface:
-        guest_name = str(guest_iface.get("name") or "").strip()
-        if guest_name:
-            resolved_name = guest_name
-            guest_mac = guest_iface.get("mac_address")
-            if guest_mac and not mac_address:
-                mac_address = _normalized_mac(guest_mac)
+    resolved_name, mac_address = _resolve_vm_interface_identity(
+        interface_name,
+        interface_config,
+        guest_iface,
+        use_guest_agent_interface_name,
+    )
 
     payload: dict = {
         "name": resolved_name,
@@ -568,49 +568,19 @@ async def _create_vm_interface_parallel(
     )
     result["interface"] = vm_interface
 
-    interface_ip: str | None = None
-    if guest_iface:
-        interface_ip = _best_guest_agent_ip(guest_iface, ignore_ipv6_link_local_addresses)
-    if not interface_ip:
-        interface_ip = interface_config.get("ip")
-
-    if interface_ip and interface_ip != "dhcp" and interface_id is not None:
-        try:
-            ip_record = await rest_reconcile_async(
-                nb,
-                "/api/ipam/ip-addresses/",
-                lookup={"address": interface_ip},
-                payload={
-                    "address": interface_ip,
-                    "assigned_object_type": "virtualization.vminterface",
-                    "assigned_object_id": interface_id,
-                    "status": "active",
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
-                schema=NetBoxIpAddressSyncState,
-                current_normalizer=lambda record: {
-                    "address": record.get("address"),
-                    "assigned_object_type": record.get("assigned_object_type"),
-                    "assigned_object_id": record.get("assigned_object_id"),
-                    "status": record.get("status"),
-                    "tags": record.get("tags"),
-                },
-            )
-            ip_id = (
-                ip_record.get("id")
-                if isinstance(ip_record, dict)
-                else getattr(ip_record, "id", None)
-            )
-            result["ip"] = {"id": ip_id, "address": interface_ip}
-            result["first_ip_id"] = ip_id
-        except Exception as ip_exc:
-            logger.warning(
-                "Failed to create IP %s for VM interface %s: %s",
-                interface_ip,
-                interface_name,
-                ip_exc,
-            )
+    ip_id, interface_ip = await _resolve_vm_interface_ip(
+        nb,
+        interface_config,
+        guest_iface,
+        tag_refs,
+        interface_id=interface_id,
+        interface_name=interface_name,
+        now=now,
+        create_ip=True,
+    )
+    if interface_ip and interface_ip != "dhcp":
+        result["ip"] = {"id": ip_id, "address": interface_ip}
+        result["first_ip_id"] = ip_id
 
     return result
 

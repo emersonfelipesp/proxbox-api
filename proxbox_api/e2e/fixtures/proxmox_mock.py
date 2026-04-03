@@ -10,7 +10,6 @@ import time
 from dataclasses import dataclass, field
 
 
-
 @dataclass
 class MockProxmoxNode:
     """Represents a Proxmox node in the API."""

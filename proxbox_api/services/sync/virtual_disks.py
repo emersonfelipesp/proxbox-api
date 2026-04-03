@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-
-
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput

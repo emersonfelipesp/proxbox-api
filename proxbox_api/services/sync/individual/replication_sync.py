@@ -8,6 +8,63 @@ from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxReplicationSyncState
 from proxbox_api.services.proxmox_helpers import get_cluster_replication
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
+from proxbox_api.services.sync.individual.helpers import (
+    build_sync_response,
+    ensure_vm_record,
+    get_serialized_first_record,
+)
+
+
+async def _resolve_node_id(nb: object, node_name: str | None) -> int | None:
+    if not node_name:
+        return None
+
+    existing_nodes = await rest_list_async(
+        nb,
+        "/api/plugins/proxbox/nodes/",
+        query={"name": node_name},
+    )
+    if existing_nodes:
+        return getattr(existing_nodes[0], "id", None)
+    return None
+
+
+async def _build_replication_dry_run_result(
+    nb: object,
+    px: object,
+    tag: object,
+    *,
+    guest_vmid: int,
+    replication_id: str,
+    proxmox_resource: dict[str, object],
+) -> dict:
+    vm_record, _ = await ensure_vm_record(
+        nb,
+        px,
+        tag,
+        vmid=guest_vmid,
+        node=None,
+        vm_type="qemu",
+        auto_create_vm=False,
+    )
+    vm_id = getattr(vm_record, "id", None) if vm_record is not None else None
+    netbox_object = None
+    if vm_id:
+        netbox_object = await get_serialized_first_record(
+            nb,
+            "/api/plugins/proxbox/replications/",
+            query={"replication_id": replication_id},
+        )
+
+    return build_sync_response(
+        object_type="replication",
+        action="dry_run",
+        proxmox_resource=proxmox_resource,
+        netbox_object=netbox_object,
+        dry_run=True,
+        dependencies_synced=[{"object_type": "vm", "vmid": guest_vmid}],
+        error=None,
+    )
 
 
 async def sync_replication_individual(
@@ -76,89 +133,50 @@ async def sync_replication_individual(
     }
 
     if dry_run:
-        existing_vms = await rest_list_async(
+        return await _build_replication_dry_run_result(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": guest_vmid},
+            px,
+            tag,
+            guest_vmid=guest_vmid,
+            replication_id=replication_id,
+            proxmox_resource=proxmox_resource,
         )
-        netbox_object = None
-        if existing_vms:
-            vm_id = getattr(existing_vms[0], "id", None)
-            if vm_id:
-                existing = await rest_list_async(
-                    nb,
-                    "/api/plugins/proxbox/replications/",
-                    query={"replication_id": replication_id},
-                )
-                if existing:
-                    netbox_object = (
-                        existing[0].serialize() if hasattr(existing[0], "serialize") else None
-                    )
-
-        vm_dep: dict[str, object] = {"object_type": "vm", "vmid": guest_vmid}
-        return {
-            "object_type": "replication",
-            "action": "dry_run",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": True,
-            "dependencies_synced": [vm_dep],
-            "error": None,
-        }
 
     try:
-        existing_vms = await rest_list_async(
+        vm_record, vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": guest_vmid},
+            px,
+            tag,
+            vmid=guest_vmid,
+            node=None,
+            vm_type="qemu",
+            auto_create_vm=auto_create_vm,
         )
-        if not existing_vms:
-            if auto_create_vm:
-                from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
+        if vm_error:
+            return build_sync_response(
+                object_type="replication",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=vm_error,
+            )
 
-                cluster_name = getattr(px, "name", "unknown")
-                await sync_vm_individual(
-                    nb, px, tag, cluster_name, None, "qemu", guest_vmid, dry_run=False
-                )
-                existing_vms = await rest_list_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    query={"cf_proxmox_vm_id": guest_vmid},
-                )
-            else:
-                return {
-                    "object_type": "replication",
-                    "action": "error",
-                    "proxmox_resource": proxmox_resource,
-                    "netbox_object": None,
-                    "dry_run": False,
-                    "dependencies_synced": [],
-                    "error": f"VM with vmid={guest_vmid} not found in NetBox",
-                }
-
-        vm_record = existing_vms[0]
         vm_id = getattr(vm_record, "id", None)
         if vm_id is None:
-            return {
-                "object_type": "replication",
-                "action": "error",
-                "proxmox_resource": proxmox_resource,
-                "netbox_object": None,
-                "dry_run": False,
-                "dependencies_synced": [],
-                "error": f"Could not resolve VM ID for vmid={guest_vmid}",
-            }
+            return build_sync_response(
+                object_type="replication",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=f"Could not resolve VM ID for vmid={guest_vmid}",
+            )
 
         node_name = target_replication.get("target")
-        node_id = None
-        if node_name:
-            existing_nodes = await rest_list_async(
-                nb,
-                "/api/plugins/proxbox/nodes/",
-                query={"name": node_name},
-            )
-            if existing_nodes:
-                node_id = getattr(existing_nodes[0], "id", None)
+        node_id = await _resolve_node_id(nb, node_name)
 
         replication_payload: dict[str, object] = {
             "virtual_machine": vm_id,
@@ -207,31 +225,27 @@ async def sync_replication_individual(
         )
 
         netbox_object = (
-            replication_record.serialize()
-            if hasattr(replication_record, "serialize")
-            else None
+            replication_record.serialize() if hasattr(replication_record, "serialize") else None
         )
         action = "updated" if existing_replications else "created"
 
-        return {
-            "object_type": "replication",
-            "action": action,
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": False,
-            "dependencies_synced": [
-                {"object_type": "vm", "vmid": guest_vmid, "action": action},
-            ],
-            "error": None,
-        }
+        return build_sync_response(
+            object_type="replication",
+            action=action,
+            proxmox_resource=proxmox_resource,
+            netbox_object=netbox_object,
+            dry_run=False,
+            dependencies_synced=[{"object_type": "vm", "vmid": guest_vmid, "action": action}],
+            error=None,
+        )
 
     except Exception as error:
-        return {
-            "object_type": "replication",
-            "action": "error",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": None,
-            "dry_run": False,
-            "dependencies_synced": [],
-            "error": str(error),
-        }
+        return build_sync_response(
+            object_type="replication",
+            action="error",
+            proxmox_resource=proxmox_resource,
+            netbox_object=None,
+            dry_run=False,
+            dependencies_synced=[],
+            error=str(error),
+        )
