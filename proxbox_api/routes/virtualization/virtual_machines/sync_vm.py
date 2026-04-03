@@ -14,7 +14,12 @@ from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import VirtualMachine
-from proxbox_api.netbox_rest import rest_list_async, rest_patch_async, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    rest_first_async,
+    rest_list_async,
+    rest_patch_async,
+    rest_reconcile_async,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualDiskSyncState,
@@ -450,29 +455,56 @@ async def _create_vm_interface_parallel(
     bridge: dict = {}
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id:
-        bridge = await rest_reconcile_async(
+        existing_bridge = await rest_first_async(
             nb,
             "/api/virtualization/interfaces/",
-            lookup={
-                "name": bridge_name,
-            },
-            payload={
-                "name": bridge_name,
-                "virtual_machine": vm_id,
-                "type": "bridge",
-                "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-            },
-            schema=NetBoxVirtualMachineInterfaceSyncState,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "virtual_machine": record.get("virtual_machine"),
-                "type": record.get("type"),
-                "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
-            },
+            query={"name": bridge_name, "virtual_machine_id": vm_id},
         )
-        if not isinstance(bridge, dict):
+        if existing_bridge:
+            bridge = (
+                existing_bridge.serialize()
+                if hasattr(existing_bridge, "serialize")
+                else dict(existing_bridge)
+            )
+        else:
+            other_bridge = await rest_first_async(
+                nb,
+                "/api/virtualization/interfaces/",
+                query={"name": bridge_name},
+            )
+            if other_bridge:
+                other_vm_id = getattr(other_bridge, "virtual_machine", None)
+                if other_vm_id and other_vm_id != vm_id:
+                    logger.info(
+                        "Bridge %s already assigned to VM id=%s, creating new interface for VM id=%s",
+                        bridge_name,
+                        other_vm_id,
+                        vm_id,
+                    )
+                    bridge_name = f"{bridge_name}-{vm_id}"
+            bridge = await rest_reconcile_async(
+                nb,
+                "/api/virtualization/interfaces/",
+                lookup={"name": bridge_name},
+                payload={
+                    "name": bridge_name,
+                    "virtual_machine": vm_id,
+                    "type": "bridge",
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                schema=NetBoxVirtualMachineInterfaceSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "virtual_machine": record.get("virtual_machine"),
+                    "type": record.get("type"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            )
+            if not isinstance(bridge, dict):
+                bridge = getattr(bridge, "dict", lambda: {})()
+        if bridge and not isinstance(bridge, dict):
             bridge = getattr(bridge, "dict", lambda: {})()
 
     vlan_nb_id: int | None = None
