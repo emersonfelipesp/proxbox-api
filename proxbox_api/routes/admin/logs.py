@@ -21,6 +21,13 @@ async def get_backend_logs(
             description=("Filter logs by exact level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"),
         ),
     ] = None,
+    errors_only: Annotated[
+        bool,
+        Query(
+            title="Errors Only",
+            description="Return error-related logs regardless of level",
+        ),
+    ] = False,
     limit: Annotated[
         int,
         Query(
@@ -60,6 +67,7 @@ async def get_backend_logs(
 
     Filtering:
     - By level: Returns logs at the specified level
+    - By errors_only: Returns error-related logs regardless of level
     - By since: Returns only logs after the specified timestamp
     - By operation_id: Returns only logs for a specific sync operation
 
@@ -78,6 +86,7 @@ async def get_backend_logs(
 
     result = get_logs(
         level=level,
+        errors_only=errors_only,
         limit=limit,
         offset=offset,
         since=since,

@@ -22,6 +22,7 @@ async def test_backend_logs_view_normalizes_timestamp_and_passes_exact_level(mon
             "has_more": False,
             "active_filters": {
                 "level": kwargs.get("level").value if kwargs.get("level") else None,
+                "errors_only": kwargs.get("errors_only"),
                 "operation_id": kwargs.get("operation_id"),
                 "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
             },
@@ -39,13 +40,42 @@ async def test_backend_logs_view_normalizes_timestamp_and_passes_exact_level(mon
     )
 
     assert captured["level"] == LogLevel.INFO
+    assert captured["errors_only"] is False
     assert captured["limit"] == 10
     assert captured["offset"] == 3
     assert captured["operation_id"] == "op-123"
     assert captured["since"].tzinfo == timezone.utc
     assert result["active_filters"]["level"] == "INFO"
+    assert result["active_filters"]["errors_only"] is None
     assert result["active_filters"]["operation_id"] == "op-123"
     assert result["active_filters"]["since"].endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_backend_logs_view_forwards_errors_only_filter(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_get_logs(**kwargs):
+        captured.update(kwargs)
+        return {
+            "logs": [],
+            "total": 0,
+            "has_more": False,
+            "active_filters": {
+                "level": kwargs.get("level").value if kwargs.get("level") else None,
+                "errors_only": kwargs.get("errors_only"),
+                "operation_id": kwargs.get("operation_id"),
+                "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
+            },
+        }
+
+    monkeypatch.setattr(admin_logs, "get_logs", fake_get_logs)
+
+    result = await admin_logs.get_backend_logs(errors_only=True)
+
+    assert captured["errors_only"] is True
+    assert captured["level"] is None
+    assert result["active_filters"]["errors_only"] is True
 
 
 @pytest.mark.asyncio
