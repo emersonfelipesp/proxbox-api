@@ -327,10 +327,12 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
             query={"cf_proxmox_vm_id": vmid},
         )
     except Exception as exc:
+        error_detail = getattr(exc, "detail", str(exc))
+        error_msg = f"{type(exc).__name__}: {error_detail}"
         logger.warning(
             "Could not resolve NetBox VM for Proxmox VMID %s: %s",
             proxmox_vm_id,
-            exc,
+            error_msg,
         )
         return None
 
@@ -1536,11 +1538,13 @@ async def create_only_vm_interfaces(  # noqa: C901
                             }
                         )
                 except Exception as exc:
+                    error_detail = getattr(exc, "detail", str(exc))
+                    error_msg = f"{type(exc).__name__}: {error_detail}"
                     logger.warning(
                         "Failed to sync interface %s for VM %s: %s",
                         resolved_name,
                         vm_name,
-                        exc,
+                        error_msg,
                     )
                     if use_websocket and websocket:
                         await websocket.send_json(
