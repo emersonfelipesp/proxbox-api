@@ -50,7 +50,7 @@ def _task_action_label(value: str | None) -> str:
     return text.title() or "Task"
 
 
-async def sync_task_history_individual(
+async def sync_task_history_individual(  # noqa: C901
     nb: object,
     px: object,
     tag: object,
@@ -58,6 +58,7 @@ async def sync_task_history_individual(
     vm_type: str,
     vmid: int,
     upid: str | None = None,
+    cluster_name: str | None = None,
     auto_create_vm: bool = True,
     dry_run: bool = False,
 ) -> dict:
@@ -170,9 +171,15 @@ async def sync_task_history_individual(
             if auto_create_vm:
                 from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
 
-                cluster_name = getattr(px, "name", "unknown")
                 await sync_vm_individual(
-                    nb, px, tag, cluster_name, node, vm_type, vmid, dry_run=False
+                    nb,
+                    px,
+                    tag,
+                    cluster_name or getattr(px, "name", "unknown"),
+                    node,
+                    vm_type,
+                    vmid,
+                    dry_run=False,
                 )
                 existing_vms = await rest_list_async(
                     nb,
@@ -206,6 +213,11 @@ async def sync_task_history_individual(
         nb_task_payload["virtual_machine"] = vm_id
 
         journal_entry_name = f"proxmox-{vmid}-{target_task.get('upid', '')}"
+        existing_journal_entries = await rest_list_async(
+            nb,
+            "/api/extras/journal-entries/",
+            query={"name": journal_entry_name},
+        )
         journal_record = await rest_reconcile_async(
             nb,
             "/api/extras/journal-entries/",
@@ -233,7 +245,7 @@ async def sync_task_history_individual(
         )
 
         netbox_object = journal_record.serialize() if hasattr(journal_record, "serialize") else None
-        action = "created" if getattr(journal_record, "id", None) else "updated"
+        action = "updated" if existing_journal_entries else "created"
 
         return {
             "object_type": "task_history",

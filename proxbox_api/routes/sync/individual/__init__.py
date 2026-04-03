@@ -9,6 +9,7 @@ from proxbox_api.routes.sync.individual import (
     disk,
     interface,
     ip,
+    replication,
     snapshot,
     storage,
     task_history,
@@ -27,3 +28,4 @@ router.include_router(disk.router, tags=["sync / individual / disk"])
 router.include_router(storage.router, tags=["sync / individual / storage"])
 router.include_router(snapshot.router, tags=["sync / individual / snapshot"])
 router.include_router(task_history.router, tags=["sync / individual / task-history"])
+router.include_router(replication.router, tags=["sync / individual / replication"])

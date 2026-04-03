@@ -50,6 +50,17 @@ def get_cluster_resources(
     )
 
 
+def get_cluster_replication(
+    session: ProxmoxSession,
+) -> list[dict[str, object]]:
+    """Get cluster replication jobs from Proxmox."""
+    try:
+        result = session.session("cluster/replication").get()
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
 def get_vm_config(
     session: ProxmoxSession,
     node: str,

@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from proxbox_api.log_buffer import LogLevel
+from proxbox_api.main import app
+from proxbox_api.routes.admin import logs as admin_logs
+
+
+@pytest.mark.asyncio
+async def test_backend_logs_view_normalizes_timestamp_and_passes_exact_level(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_get_logs(**kwargs):
+        captured.update(kwargs)
+        return {
+            "logs": [],
+            "total": 0,
+            "has_more": False,
+            "active_filters": {
+                "level": kwargs.get("level").value if kwargs.get("level") else None,
+                "operation_id": kwargs.get("operation_id"),
+                "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
+            },
+        }
+
+    monkeypatch.setattr(admin_logs, "get_logs", fake_get_logs)
+
+    since = datetime(2026, 4, 3, 1, 2, 3)
+    result = await admin_logs.get_backend_logs(
+        level=LogLevel.INFO,
+        limit=10,
+        offset=3,
+        since=since,
+        operation_id="op-123",
+    )
+
+    assert captured["level"] == LogLevel.INFO
+    assert captured["limit"] == 10
+    assert captured["offset"] == 3
+    assert captured["operation_id"] == "op-123"
+    assert captured["since"].tzinfo == timezone.utc
+    assert result["active_filters"]["level"] == "INFO"
+    assert result["active_filters"]["operation_id"] == "op-123"
+    assert result["active_filters"]["since"].endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_backend_logs_route_rejects_invalid_level():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/admin/logs?level=bogus")
+
+    assert response.status_code == 422

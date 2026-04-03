@@ -606,6 +606,91 @@ class NetBoxStorageSyncState(BaseModel):
         return _normalized_tag_list(value)
 
 
+class NetBoxReplicationSyncState(BaseModel):
+    """Validated NetBox replication sync body/state used for create and diff operations."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    proxmox_node: int | None = None
+    replication_id: str
+    guest: int
+    target: str
+    job_type: str = "local"
+    schedule: str = "*/15"
+    rate: float | None = None
+    comment: str | None = None
+    disable: bool = False
+    source: str | None = None
+    jobnum: int
+    remove_job: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("virtual_machine", "proxmox_node", mode="before")
+    @classmethod
+    def normalize_relations(cls, value: object) -> object:
+        return _relation_id(value)
+
+    @field_validator("guest", "jobnum", mode="before")
+    @classmethod
+    def normalize_ints(cls, value: object) -> object:
+        relation_id = _relation_id(value)
+        if relation_id in (None, ""):
+            return relation_id
+        try:
+            return int(relation_id)
+        except (TypeError, ValueError):
+            return relation_id
+
+    @field_validator("rate", mode="before")
+    @classmethod
+    def normalize_rate(cls, value: object) -> object:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+
+    @field_validator(
+        "job_type",
+        "schedule",
+        "comment",
+        "source",
+        "remove_job",
+        mode="before",
+    )
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("disable", mode="before")
+    @classmethod
+    def normalize_disable(cls, value: object) -> bool:
+        return _as_bool(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
+        return _normalized_tag_list(value)
+
+    @model_validator(mode="after")
+    def validate_required_relations(self):
+        if self.virtual_machine <= 0:
+            raise ValueError("virtual_machine must be a positive NetBox object id")
+        if self.proxmox_node is not None and self.proxmox_node <= 0:
+            raise ValueError("proxmox_node must be positive when provided")
+        if self.guest <= 0:
+            raise ValueError("guest must be a positive VM ID")
+        if self.jobnum <= 0:
+            raise ValueError("jobnum must be a positive job identifier")
+        return self
+
+
 class ProxmoxVmResourceInput(BaseModel):
     """Raw Proxmox VM resource payload from cluster resources endpoint."""
 
