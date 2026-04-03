@@ -533,7 +533,13 @@ async def rest_patch_async(
     semaphore = _get_netbox_semaphore()
 
     async def _do_request() -> dict[str, object]:
-        response = await api.client.request("PATCH", _detail_path(path, record_id), payload=payload)
+        try:
+            response = await api.client.request(
+                "PATCH", _detail_path(path, record_id), payload=payload
+            )
+        except Exception as e:
+            _handle_netbox_error(e, f"patch {path}")
+            raise  # Early return via exception
         return _extract_payload(response)
 
     # Retry loop with semaphore and exponential backoff for transient errors
