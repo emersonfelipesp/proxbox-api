@@ -111,7 +111,9 @@ def _generate_model_from_schema(model_name: str, schema: dict[str, object]) -> l
     return [_generate_root_model(model_name, schema)]
 
 
-def _request_schema_for_operation(path: str, operation: dict[str, object]) -> dict[str, object] | None:
+def _request_schema_for_operation(
+    path: str, operation: dict[str, object]
+) -> dict[str, object] | None:
     """Return request-body schema excluding path parameters for runtime proxy models."""
 
     request_schema = (

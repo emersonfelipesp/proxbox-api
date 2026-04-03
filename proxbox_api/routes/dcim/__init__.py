@@ -284,6 +284,137 @@ async def create_proxmox_device_interfaces(
 ProxboxCreateDeviceInterfacesDep = Annotated[list[dict], Depends(create_proxmox_device_interfaces)]
 
 
+async def _emit_node_interface_event(websocket, use_websocket: bool, payload: dict) -> None:
+    """Send a node interface websocket event when streaming is enabled."""
+    if use_websocket and websocket:
+        await websocket.send_json(payload)
+
+
+async def _sync_node_interfaces_for_node(
+    netbox_session: NetBoxAsyncSessionDep,
+    tag_refs: list[dict[str, object]],
+    node_obj,
+    websocket=None,
+    use_websocket: bool = False,
+) -> list[dict]:
+    """Sync all interfaces for a single node and emit optional websocket updates."""
+    from proxbox_api.services.sync.network import sync_node_interface_and_ip
+
+    results: list[dict] = []
+    node_name = node_obj.name
+
+    await _emit_node_interface_event(
+        websocket,
+        use_websocket,
+        {
+            "object": "node_interface",
+            "data": {
+                "completed": False,
+                "sync_status": "syncing",
+                "rowid": node_name,
+                "name": node_name,
+            },
+        },
+    )
+
+    try:
+        node_networks = node_obj.network or []
+    except Exception:
+        node_networks = []
+
+    if not node_networks:
+        await _emit_node_interface_event(
+            websocket,
+            use_websocket,
+            {
+                "object": "node_interface",
+                "data": {
+                    "completed": True,
+                    "rowid": node_name,
+                    "name": node_name,
+                    "warning": "No network interfaces found",
+                },
+            },
+        )
+        return results
+
+    device_record: dict = {"id": getattr(node_obj, "id", None), "name": node_name}
+    for iface_data in node_networks:
+        iface_name = str(getattr(iface_data, "iface", "") or "")
+        if not iface_name:
+            continue
+
+        try:
+            result = await sync_node_interface_and_ip(
+                nb=netbox_session,
+                device=device_record,
+                interface_name=iface_name,
+                interface_config={
+                    "type": getattr(iface_data, "type", "other"),
+                    "cidr": getattr(iface_data, "cidr", None),
+                    "address": getattr(iface_data, "address", None),
+                    "vlan_id": getattr(iface_data, "vlan_id", None),
+                    "bridge": getattr(iface_data, "iface", None),
+                },
+                tag_refs=tag_refs,
+            )
+            results.append(result)
+
+            await _emit_node_interface_event(
+                websocket,
+                use_websocket,
+                {
+                    "object": "interface",
+                    "data": {
+                        "completed": True,
+                        "rowid": iface_name,
+                        "name": iface_name,
+                        "netbox_id": result.get("id"),
+                        "device": node_name,
+                        "ip_address": result.get("ip_address"),
+                    },
+                },
+            )
+        except Exception as exc:
+            error_detail = getattr(exc, "detail", str(exc))
+            error_msg = f"{type(exc).__name__}: {error_detail}"
+            logger.warning(
+                "Failed to sync interface %s on node %s: %s",
+                iface_name,
+                node_name,
+                error_msg,
+            )
+            await _emit_node_interface_event(
+                websocket,
+                use_websocket,
+                {
+                    "object": "interface",
+                    "data": {
+                        "completed": False,
+                        "rowid": iface_name,
+                        "name": iface_name,
+                        "error": str(exc),
+                    },
+                },
+            )
+
+    await _emit_node_interface_event(
+        websocket,
+        use_websocket,
+        {
+            "object": "node_interface",
+            "data": {
+                "completed": True,
+                "rowid": node_name,
+                "name": node_name,
+                "count": len(results),
+            },
+        },
+    )
+
+    return results
+
+
 async def create_all_device_interfaces(
     netbox_session: NetBoxAsyncSessionDep,
     tag: ProxboxTagDep,
@@ -303,8 +434,6 @@ async def create_all_device_interfaces(
     Returns:
         List of all synced interface records.
     """
-    from proxbox_api.services.sync.network import sync_node_interface_and_ip
-
     tag_refs = nested_tag_payload(tag)
     all_results: list[dict] = []
 
@@ -316,111 +445,15 @@ async def create_all_device_interfaces(
             continue
 
         for node_obj in cluster_status.node_list:
-            node_name = node_obj.name
-
-            if use_websocket and websocket:
-                await websocket.send_json(
-                    {
-                        "object": "node_interface",
-                        "data": {
-                            "completed": False,
-                            "sync_status": "syncing",
-                            "rowid": node_name,
-                            "name": node_name,
-                        },
-                    }
+            all_results.extend(
+                await _sync_node_interfaces_for_node(
+                    netbox_session,
+                    tag_refs,
+                    node_obj,
+                    websocket=websocket,
+                    use_websocket=use_websocket,
                 )
-
-            try:
-                node_networks = node_obj.network or []
-            except Exception:
-                node_networks = []
-
-            if not node_networks:
-                if use_websocket and websocket:
-                    await websocket.send_json(
-                        {
-                            "object": "node_interface",
-                            "data": {
-                                "completed": True,
-                                "rowid": node_name,
-                                "name": node_name,
-                                "warning": "No network interfaces found",
-                            },
-                        }
-                    )
-                continue
-
-            device_record: dict = {"id": getattr(node_obj, "id", None), "name": node_name}
-
-            for iface_data in node_networks:
-                iface_name = str(getattr(iface_data, "iface", "") or "")
-                if not iface_name:
-                    continue
-
-                try:
-                    result = await sync_node_interface_and_ip(
-                        nb=netbox_session,
-                        device=device_record,
-                        interface_name=iface_name,
-                        interface_config={
-                            "type": getattr(iface_data, "type", "other"),
-                            "cidr": getattr(iface_data, "cidr", None),
-                            "address": getattr(iface_data, "address", None),
-                            "vlan_id": getattr(iface_data, "vlan_id", None),
-                            "bridge": getattr(iface_data, "iface", None),
-                        },
-                        tag_refs=tag_refs,
-                    )
-                    all_results.append(result)
-
-                    if use_websocket and websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "interface",
-                                "data": {
-                                    "completed": True,
-                                    "rowid": iface_name,
-                                    "name": iface_name,
-                                    "netbox_id": result.get("id"),
-                                    "device": node_name,
-                                    "ip_address": result.get("ip_address"),
-                                },
-                            }
-                        )
-                except Exception as exc:
-                    error_detail = getattr(exc, "detail", str(exc))
-                    error_msg = f"{type(exc).__name__}: {error_detail}"
-                    logger.warning(
-                        "Failed to sync interface %s on node %s: %s",
-                        iface_name,
-                        node_name,
-                        error_msg,
-                    )
-                    if use_websocket and websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "interface",
-                                "data": {
-                                    "completed": False,
-                                    "rowid": iface_name,
-                                    "name": iface_name,
-                                    "error": str(exc),
-                                },
-                            }
-                        )
-
-            if use_websocket and websocket:
-                await websocket.send_json(
-                    {
-                        "object": "node_interface",
-                        "data": {
-                            "completed": True,
-                            "rowid": node_name,
-                            "name": node_name,
-                        },
-                    }
-                )
+            )
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "node_interface", "end": True})

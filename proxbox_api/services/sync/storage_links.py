@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 
-
 def _normalize_text(value: object) -> str | None:
     if value is None:
         return None

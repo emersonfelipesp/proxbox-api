@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_rest import rest_list_async
 
 
 def normalize_mac(value: str | None) -> str:
@@ -120,6 +121,51 @@ def build_ip_lookup_key(ip_address: str) -> dict[str, str]:
     return {"address": address}
 
 
+def resolve_guest_interface(
+    guest_interfaces: list[dict],
+    interface_name: str,
+    mac_address: str | None = None,
+) -> tuple[dict | None, str, str | None]:
+    """Resolve a guest interface by name or MAC and normalize its display name."""
+    resolved_name = interface_name
+    guest_iface: dict | None = None
+    if guest_interfaces:
+        guest_by_name = {
+            str(iface.get("name", "")).strip().lower(): iface for iface in guest_interfaces
+        }
+        guest_by_mac = {
+            normalize_mac(iface.get("mac_address")): iface
+            for iface in guest_interfaces
+            if normalize_mac(iface.get("mac_address"))
+        }
+        guest_iface = guest_by_name.get(interface_name.lower())
+        if guest_iface is None and mac_address:
+            guest_iface = guest_by_mac.get(normalize_mac(mac_address))
+        if guest_iface:
+            guest_name = str(guest_iface.get("name") or "").strip()
+            if guest_name:
+                resolved_name = guest_name
+                guest_mac = guest_iface.get("mac_address")
+                if guest_mac and not mac_address:
+                    mac_address = normalize_mac(guest_mac)
+    return guest_iface, resolved_name, mac_address
+
+
+def resolve_guest_interface_by_ip(
+    guest_interfaces: list[dict],
+    ip_address: str,
+) -> str | None:
+    """Find the guest interface name that owns a given IP address."""
+    ip_address_clean = ip_address.split("/")[0] if "/" in ip_address else ip_address
+    for iface in guest_interfaces:
+        for addr in iface.get("ip_addresses") or []:
+            addr_ip = str(addr.get("ip_address") or "").strip()
+            addr_ip_clean = addr_ip.split("/")[0] if "/" in addr_ip else addr_ip
+            if addr_ip_clean == ip_address_clean:
+                return str(iface.get("name") or "").strip() or None
+    return None
+
+
 def parse_key_value_string(raw_value: object) -> dict[str, str]:
     """Parse a Proxmox `netX` or `virtio` config entry into a key/value mapping.
 
@@ -164,6 +210,121 @@ def parse_disk_config_entry(raw_value: object) -> dict[str, str]:
         elif index == 0 and part.strip():
             result["volume"] = part.strip()
     return result
+
+
+def extract_net_interface_config(vm_config: dict[str, object]) -> dict[str, dict[str, str]]:
+    """Extract parsed netX interface entries from a VM config payload."""
+    net_config: dict[str, dict[str, str]] = {}
+    for key, value in vm_config.items():
+        if key.startswith("net") and not key.startswith("nets"):
+            config_entry = parse_key_value_string(value)
+            if config_entry:
+                net_config[key] = config_entry
+    return net_config
+
+
+def serialize_record(record: object) -> dict[str, object] | None:
+    """Serialize a NetBox record-like object into a plain dictionary."""
+    if isinstance(record, dict):
+        return record
+    if hasattr(record, "serialize"):
+        try:
+            serialized = record.serialize()
+        except Exception:
+            serialized = None
+        if isinstance(serialized, dict):
+            return serialized
+    if hasattr(record, "dict"):
+        try:
+            dumped = record.dict()
+        except Exception:
+            dumped = None
+        if isinstance(dumped, dict):
+            return dumped
+    return None
+
+
+async def get_first_record(
+    nb: object,
+    endpoint: str,
+    query: dict[str, object],
+) -> object | None:
+    """Return the first NetBox record for a query, or None."""
+    records = await rest_list_async(nb, endpoint, query=query)
+    if records:
+        return records[0]
+    return None
+
+
+async def get_serialized_first_record(
+    nb: object,
+    endpoint: str,
+    query: dict[str, object],
+) -> dict[str, object] | None:
+    """Return the first NetBox record for a query as a dict, if any."""
+    record = await get_first_record(nb, endpoint, query)
+    if record is None:
+        return None
+    return serialize_record(record)
+
+
+async def ensure_vm_record(
+    nb: object,
+    px: object,
+    tag: object,
+    *,
+    vmid: int,
+    node: str | None,
+    vm_type: str,
+    auto_create_vm: bool,
+) -> tuple[object | None, str | None]:
+    """Resolve the NetBox VM record for a Proxmox VM ID, creating it if requested."""
+    existing_vms = await rest_list_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        query={"cf_proxmox_vm_id": vmid},
+    )
+    if existing_vms:
+        return existing_vms[0], None
+
+    if not auto_create_vm:
+        return None, f"VM with vmid={vmid} not found in NetBox"
+
+    from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
+
+    cluster_name = getattr(px, "name", "unknown")
+    await sync_vm_individual(nb, px, tag, cluster_name, node, vm_type, vmid, dry_run=False)
+    existing_vms = await rest_list_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        query={"cf_proxmox_vm_id": vmid},
+    )
+    if existing_vms:
+        return existing_vms[0], None
+
+    return None, f"VM with vmid={vmid} could not be created in NetBox"
+
+
+def build_sync_response(
+    *,
+    object_type: str,
+    action: str,
+    proxmox_resource: dict[str, object],
+    netbox_object: dict[str, object] | None,
+    dry_run: bool,
+    dependencies_synced: list[dict[str, object]],
+    error: str | None,
+) -> dict[str, object]:
+    """Build the standard individual-sync response payload."""
+    return {
+        "object_type": object_type,
+        "action": action,
+        "proxmox_resource": proxmox_resource,
+        "netbox_object": netbox_object,
+        "dry_run": dry_run,
+        "dependencies_synced": dependencies_synced,
+        "error": error,
+    }
 
 
 def storage_name_from_volume_id(volume_id: str | None) -> str | None:

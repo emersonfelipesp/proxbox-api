@@ -74,7 +74,9 @@ def early_return_if_invalid_id(value: int | None, message: str) -> int:
     return value
 
 
-def safe_getattr(obj: object, attr: str, default: object = None, raise_on_none: bool = False) -> object:
+def safe_getattr(
+    obj: object, attr: str, default: object = None, raise_on_none: bool = False
+) -> object:
     """Safely get attribute with optional early return on None.
 
     Args:

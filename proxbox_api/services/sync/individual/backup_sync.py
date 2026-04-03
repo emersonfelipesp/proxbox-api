@@ -8,6 +8,42 @@ from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxBackupSyncState
 from proxbox_api.services.proxmox_helpers import get_vm_backups_individual
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
+from proxbox_api.services.sync.individual.helpers import (
+    build_sync_response,
+    ensure_vm_record,
+    get_first_record,
+    get_serialized_first_record,
+)
+
+
+async def _resolve_storage_id(
+    nb: object,
+    px: object,
+    tag: object,
+    storage: str,
+    *,
+    auto_create_storage: bool,
+) -> int | None:
+    if auto_create_storage:
+        from proxbox_api.services.sync.individual.storage_sync import sync_storage_individual
+
+        cluster_name = getattr(px, "name", "unknown")
+        storage_result = await sync_storage_individual(
+            nb, px, tag, cluster_name, storage, dry_run=False
+        )
+        netbox_object = storage_result.get("netbox_object")
+        if isinstance(netbox_object, dict):
+            return netbox_object.get("id")
+        return None
+
+    existing_storage = await rest_list_async(
+        nb,
+        "/api/plugins/proxbox/storage/",
+        query={"name": storage},
+    )
+    if existing_storage:
+        return getattr(existing_storage[0], "id", None)
+    return None
 
 
 async def sync_backup_individual(
@@ -64,98 +100,72 @@ async def sync_backup_individual(
     }
 
     if dry_run:
-        existing_vms = await rest_list_async(
+        netbox_object = None
+        vm_record = await get_first_record(
             nb,
             "/api/virtualization/virtual-machines/",
             query={"cf_proxmox_vm_id": vmid},
         )
-        netbox_object = None
-        if existing_vms:
-            vm_id = getattr(existing_vms[0], "id", None)
-            if vm_id:
-                existing = await rest_list_async(
-                    nb,
-                    "/api/plugins/proxbox/backups/",
-                    query={"vmid": str(vmid), "volume_id": volid},
-                )
-                if existing:
-                    netbox_object = (
-                        existing[0].serialize() if hasattr(existing[0], "serialize") else None
-                    )
+        if vm_record is not None:
+            netbox_object = await get_serialized_first_record(
+                nb,
+                "/api/plugins/proxbox/backups/",
+                query={"vmid": str(vmid), "volume_id": volid},
+            )
 
-        vm_dep: dict[str, object] = {"object_type": "vm", "vmid": vmid}
-        storage_dep: dict[str, object] = {"object_type": "storage", "name": storage}
-        return {
-            "object_type": "backup",
-            "action": "dry_run",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": True,
-            "dependencies_synced": [vm_dep, storage_dep],
-            "error": None,
-        }
+        return build_sync_response(
+            object_type="backup",
+            action="dry_run",
+            proxmox_resource=proxmox_resource,
+            netbox_object=netbox_object,
+            dry_run=True,
+            dependencies_synced=[
+                {"object_type": "vm", "vmid": vmid},
+                {"object_type": "storage", "name": storage},
+            ],
+            error=None,
+        )
 
     try:
-        existing_vms = await rest_list_async(
+        vm_record, vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type="qemu",
+            auto_create_vm=auto_create_vm,
         )
-        if not existing_vms:
-            if auto_create_vm:
-                from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
+        if vm_error:
+            return build_sync_response(
+                object_type="backup",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=vm_error,
+            )
 
-                cluster_name = getattr(px, "name", "unknown")
-                await sync_vm_individual(
-                    nb, px, tag, cluster_name, node, "qemu", vmid, dry_run=False
-                )
-                existing_vms = await rest_list_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    query={"cf_proxmox_vm_id": vmid},
-                )
-            else:
-                return {
-                    "object_type": "backup",
-                    "action": "error",
-                    "proxmox_resource": proxmox_resource,
-                    "netbox_object": None,
-                    "dry_run": False,
-                    "dependencies_synced": [],
-                    "error": f"VM with vmid={vmid} not found in NetBox",
-                }
-
-        vm_record = existing_vms[0]
         vm_id = getattr(vm_record, "id", None)
         if vm_id is None:
-            return {
-                "object_type": "backup",
-                "action": "error",
-                "proxmox_resource": proxmox_resource,
-                "netbox_object": None,
-                "dry_run": False,
-                "dependencies_synced": [],
-                "error": f"Could not resolve VM ID for vmid={vmid}",
-            }
-
-        storage_id: int | None = None
-        if auto_create_storage:
-            from proxbox_api.services.sync.individual.storage_sync import sync_storage_individual
-
-            cluster_name = getattr(px, "name", "unknown")
-            storage_result = await sync_storage_individual(
-                nb, px, tag, cluster_name, storage, dry_run=False
+            return build_sync_response(
+                object_type="backup",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=f"Could not resolve VM ID for vmid={vmid}",
             )
-            if storage_result.get("netbox_object"):
-                storage_id = storage_result["netbox_object"].get("id")
-        else:
-            existing_storage = await rest_list_async(
-                nb,
-                "/api/plugins/proxbox/storage/",
-                query={"name": storage},
-            )
-            if existing_storage:
-                storage_id = getattr(existing_storage[0], "id", None)
+
+        storage_id = await _resolve_storage_id(
+            nb,
+            px,
+            tag,
+            storage,
+            auto_create_storage=auto_create_storage,
+        )
 
         backup_payload: dict[str, object] = {
             "virtual_machine": vm_id,
@@ -194,26 +204,26 @@ async def sync_backup_individual(
         netbox_object = backup_record.serialize() if hasattr(backup_record, "serialize") else None
         action = "updated" if existing_backups else "created"
 
-        return {
-            "object_type": "backup",
-            "action": action,
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": False,
-            "dependencies_synced": [
+        return build_sync_response(
+            object_type="backup",
+            action=action,
+            proxmox_resource=proxmox_resource,
+            netbox_object=netbox_object,
+            dry_run=False,
+            dependencies_synced=[
                 {"object_type": "vm", "vmid": vmid, "action": action},
                 {"object_type": "storage", "name": storage, "action": action},
             ],
-            "error": None,
-        }
+            error=None,
+        )
 
     except Exception as error:
-        return {
-            "object_type": "backup",
-            "action": "error",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": None,
-            "dry_run": False,
-            "dependencies_synced": [],
-            "error": str(error),
-        }
+        return build_sync_response(
+            object_type="backup",
+            action="error",
+            proxmox_resource=proxmox_resource,
+            netbox_object=None,
+            dry_run=False,
+            dependencies_synced=[],
+            error=str(error),
+        )

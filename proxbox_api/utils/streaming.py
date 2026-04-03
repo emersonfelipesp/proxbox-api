@@ -7,7 +7,6 @@ import json
 from collections.abc import AsyncIterator
 
 
-
 def _to_serializable(obj: object) -> object:
     """Recursively convert RestRecord and similar objects to JSON-serializable dicts."""
     if isinstance(obj, dict):

@@ -114,9 +114,7 @@ class LogBufferHandler(logging.Handler):
             level = LogLevel.from_python(record.levelno)
             timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
-            operation_id = getattr(record, "operation_id", None) or getattr(
-                record, "uuid", None
-            )
+            operation_id = getattr(record, "operation_id", None) or getattr(record, "uuid", None)
             operation = getattr(record, "operation", None)
             phase = getattr(record, "phase", None)
             resource_type = getattr(record, "resource_type", None)
