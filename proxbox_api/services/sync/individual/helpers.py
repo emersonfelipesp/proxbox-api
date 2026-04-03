@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from proxbox_api.exception import ProxboxException
+
 
 def normalize_mac(value: str | None) -> str:
     """Normalize a MAC address to lowercase string.
@@ -33,6 +35,38 @@ def resolve_proxmox_session(
         if px_name and px_name.lower() == cluster_name.lower():
             return px
     return None
+
+
+def resolve_proxmox_session_for_request(
+    px_list: list[object],
+    cluster_name: str | None,
+    *,
+    resource_name: str,
+) -> object:
+    """Resolve a target Proxmox session for request handlers.
+
+    Single-session deployments continue to work without an explicit cluster name.
+    Multi-session deployments must provide a cluster name so the request is not
+    bound to whichever session happens to be first in the list.
+    """
+
+    target_cluster = (cluster_name or "").strip()
+    if target_cluster:
+        px = resolve_proxmox_session(px_list, target_cluster)
+        if px is not None:
+            return px
+        raise ProxboxException(
+            message=f"No Proxmox session found for cluster: {target_cluster}",
+            detail=f"Unable to resolve {resource_name} request to a Proxmox session.",
+        )
+
+    if len(px_list) == 1:
+        return px_list[0]
+
+    raise ProxboxException(
+        message=f"Multiple Proxmox sessions configured; provide cluster_name for {resource_name}.",
+        detail="The requested cluster cannot be inferred when more than one Proxmox session is configured.",
+    )
 
 
 def build_interface_lookup_key(

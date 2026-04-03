@@ -8,7 +8,7 @@ from proxmoxer.core import ResourceException
 from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
-from proxbox_api.logger import logger
+from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session_for_request
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -91,37 +91,49 @@ async def get_node_network(
     node: Annotated[
         str, Path(title="Proxmox Node", description="Proxmox Node Name (ex. 'pve01').")
     ],
+    cluster_name: Annotated[
+        str | None,
+        Query(
+            title="Cluster Name",
+            description="Optional cluster name to disambiguate multi-session deployments.",
+        ),
+    ] = None,
     type: Annotated[
         InterfaceTypeChoices, Query(title="Network Type", description="Network Type (ex. 'eth0').")
     ] = None,
 ) -> ProxmoxNodeInterfaceSchemaList:
-    for px in pxs:
-        interfaces = []
-        try:
-            if type:
-                node_networks = px.session(f"/nodes/{node}/network").get(type=type)
-            else:
-                node_networks = px.session(f"/nodes/{node}/network").get()
-        except ResourceException as error:
-            raise ProxboxException(
-                message="Error getting node network interfaces from Proxmox",
-                python_exception=str(error),
-            )
+    px = resolve_proxmox_session_for_request(
+        pxs,
+        cluster_name,
+        resource_name="node network",
+    )
 
-        for interface in node_networks:
-            vlan_id = interface.get("vlan-id")
-            if vlan_id:
-                interface.pop("vlan-id")
-                interface["vlan_id"] = vlan_id
+    interfaces = []
+    try:
+        if type:
+            node_networks = px.session(f"/nodes/{node}/network").get(type=type)
+        else:
+            node_networks = px.session(f"/nodes/{node}/network").get()
+    except ResourceException as error:
+        raise ProxboxException(
+            message="Error getting node network interfaces from Proxmox",
+            python_exception=str(error),
+        )
 
-            vlan_raw_device = interface.get("vlan-raw-device")
-            if vlan_raw_device:
-                interface.pop("vlan-raw-device")
-                interface["vlan_raw_device"] = vlan_raw_device
+    for interface in node_networks:
+        vlan_id = interface.get("vlan-id")
+        if vlan_id:
+            interface.pop("vlan-id")
+            interface["vlan_id"] = vlan_id
 
-            interfaces.append(ProxmoxNodeInterfaceSchema(**interface))
+        vlan_raw_device = interface.get("vlan-raw-device")
+        if vlan_raw_device:
+            interface.pop("vlan-raw-device")
+            interface["vlan_raw_device"] = vlan_raw_device
 
-        return ProxmoxNodeInterfaceSchemaList(interfaces)
+        interfaces.append(ProxmoxNodeInterfaceSchema(**interface))
+
+    return ProxmoxNodeInterfaceSchemaList(interfaces)
 
 
 ProxmoxNodeInterfacesDep = Annotated[ProxmoxNodeInterfaceSchemaList, Depends(get_node_network)]
@@ -133,14 +145,26 @@ async def node_qemu(
     node: Annotated[
         str, Path(title="Proxmox Node", description="Proxmox Node name (ex. 'pve01').")
     ],
+    cluster_name: Annotated[
+        str | None,
+        Query(
+            title="Cluster Name",
+            description="Optional cluster name to disambiguate multi-session deployments.",
+        ),
+    ] = None,
 ):
-    json_result = []
+    px = resolve_proxmox_session_for_request(
+        pxs,
+        cluster_name,
+        resource_name="node qemu list",
+    )
 
-    for px in pxs:
-        try:
-            json_result.append({px.name: px.session(f"/nodes/{node}/qemu").get()})
-        except ResourceException as error:
-            logger.warning("Error fetching qemu list for node '%s' on %s: %s", node, px.name, error)
-            continue
+    try:
+        json_result = px.session(f"/nodes/{node}/qemu").get()
+    except ResourceException as error:
+        raise ProxboxException(
+            message="Error fetching qemu list for node from Proxmox",
+            python_exception=str(error),
+        )
 
-    return json_result
+    return [{px.name: json_result}]
