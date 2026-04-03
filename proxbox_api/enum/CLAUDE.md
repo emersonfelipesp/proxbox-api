@@ -2,18 +2,21 @@
 
 ## Purpose
 
-Central enum definitions for Proxmox path options and API value constraints.
+Central enum definitions for Proxmox path options and NetBox value constraints.
 
 ## Current Modules
 
-- `proxmox.py`: Enum definitions for Proxmox API path and mode choices.
+- `proxmox.py`: Proxmox API path and mode choices.
 - `netbox/`: NetBox-specific enum groups.
 
-## Key Data Flow and Dependencies
+## How These Enums Are Used
 
-- Route and schema modules import enums to validate query and path values.
+- Route modules import enums for query and path validation.
+- Schema modules use enums to keep outgoing payloads aligned with upstream API choices.
+- The values are serialized across REST, SSE, and WebSocket payloads, so the enum contracts should remain stable.
 
 ## Extension Guidance
 
-- Add new enum members in a backward-compatible way and keep names stable.
-- Use `str` Enum where values are serialized in API responses.
+- Add new members in a backward-compatible way.
+- Keep names and values stable once they are used in external payloads.
+- Use `str` enums whenever the values are sent to clients or upstream APIs.

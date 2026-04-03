@@ -2,61 +2,61 @@
 
 ## Purpose
 
-Per-object synchronization services that sync individual objects from Proxmox to NetBox using targeted API calls with specific path/query parameters. This package provides standalone sync functionality independent from bulk sync mechanisms.
+Per-object synchronization services that sync individual objects from Proxmox to NetBox using targeted API calls with specific path and query parameters. This package provides standalone sync functionality independent from bulk sync mechanisms.
 
 ## Current Modules
 
-- `__init__.py`: Package exports for all individual sync functions.
-- `base.py`: `BaseIndividualSyncService` class with reusable helper methods for dependency creation (cluster, manufacturer, device type, device role, site, device, VM).
-- `helpers.py`: Utility functions including `normalize_mac()`, `resolve_proxmox_session()`, `build_interface_lookup_key()`, `build_disk_lookup_key()`, `build_ip_lookup_key()`, `parse_key_value_string()`, `parse_disk_config_entry()`, `storage_name_from_volume_id()`.
-- `cluster_sync.py`: `sync_cluster_individual()` - sync a single cluster.
-- `device_sync.py`: `sync_node_individual()` - sync a single node/device (depends on Cluster).
-- `vm_sync.py`: `sync_vm_individual()` and `sync_vm_with_related()` - sync a single VM (depends on Cluster, auto-creates all VM prerequisites).
-- `interface_sync.py`: `sync_interface_individual()` - sync a single interface (depends on VM, auto-creates VM).
-- `ip_sync.py`: `sync_ip_individual()` - sync a single IP address (depends on Interface/VM).
-- `task_history_sync.py`: `sync_task_history_individual()` - sync task history for a VM.
-- `storage_sync.py`: `sync_storage_individual()` - sync a single storage (depends on Cluster).
-- `virtual_disk_sync.py`: `sync_virtual_disk_individual()` - sync a single virtual disk (depends on VM, Storage).
-- `backup_sync.py`: `sync_backup_individual()` - sync a single backup (depends on VM, Storage).
-- `snapshot_sync.py`: `sync_snapshot_individual()` - sync a single snapshot (depends on VM).
+- `__init__.py`: package exports for all individual sync functions.
+- `base.py`: `BaseIndividualSyncService` with reusable helper methods for dependency creation.
+- `helpers.py`: utility functions such as `normalize_mac()`, `resolve_proxmox_session()`, lookup-key builders, and Proxmox config parsers.
+- `cluster_sync.py`: `sync_cluster_individual()` for a single cluster.
+- `device_sync.py`: `sync_node_individual()` for a single node or device.
+- `vm_sync.py`: `sync_vm_individual()` and `sync_vm_with_related()` for a single VM.
+- `interface_sync.py`: `sync_interface_individual()` for a single interface.
+- `ip_sync.py`: `sync_ip_individual()` for a single IP address.
+- `task_history_sync.py`: `sync_task_history_individual()` for VM task history.
+- `storage_sync.py`: `sync_storage_individual()` for a single storage.
+- `virtual_disk_sync.py`: `sync_virtual_disk_individual()` for a single virtual disk.
+- `backup_sync.py`: `sync_backup_individual()` for a single backup.
+- `snapshot_sync.py`: `sync_snapshot_individual()` for a single snapshot.
 
-## Key Design Principles
+## Key Design Rules
 
-1. **Write-only**: Operations are create/update only (no delete).
-2. **Dry-run support**: All sync functions accept a `dry_run` parameter that returns what would be synced without making changes.
-3. **Dependency display**: Dry-run responses include `dependencies_synced` list showing what would be created/updated.
-4. **Auto-create dependencies**: If a dependency doesn't exist, it is auto-created rather than returning an error.
-5. **Targeted API calls**: Uses specific Proxmox endpoints (e.g., `/nodes/{node}/{type}/{vmid}/config`) rather than bulk fetching.
+1. Write-only operations are create or update only.
+2. All sync functions support `dry_run`.
+3. Dry runs should report `dependencies_synced`.
+4. Missing dependencies should be created automatically instead of failing early.
+5. Use targeted Proxmox endpoints rather than broad bulk fetches.
 
 ## Dependency Order
 
-The sync dependency order is:
-1. Cluster
-2. Nodes (depend on Cluster)
-3. Virtual Machines (depend on Cluster and Node)
-4. Interfaces and Task History (in parallel, depend on VM)
-5. Storage (depends on Cluster)
-6. Virtual Disks, Backups, and Snapshots (in parallel, depend on VM and Storage)
+1. Cluster.
+2. Nodes, which depend on cluster data.
+3. Virtual machines, which depend on cluster and node data.
+4. Interfaces and task history in parallel, which depend on VMs.
+5. Storage, which depends on cluster data.
+6. Virtual disks, backups, and snapshots in parallel, which depend on VMs and storage.
 
-## Response Format
+## Response Shape
 
-All sync functions return a dict with this structure:
+All sync functions return a dict with these keys:
+
 ```python
 {
-    "object_type": str,           # e.g., "vm", "interface", "cluster"
-    "action": str,                # "created", "updated", "dry_run", "error"
-    "proxmox_resource": dict,     # The Proxmox data that was/would be synced
-    "netbox_object": dict|None,   # The NetBox object after sync (or None in dry-run)
-    "dry_run": bool,              # True if this was a dry-run
-    "dependencies_synced": list,  # List of dependencies that were synced
-    "error": str|None,            # Error message if action was "error"
+    "object_type": str,
+    "action": str,
+    "proxmox_resource": dict,
+    "netbox_object": dict | None,
+    "dry_run": bool,
+    "dependencies_synced": list,
+    "error": str | None,
 }
 ```
 
 ## Extension Guidance
 
-- When adding new sync functions, follow the pattern of existing functions in this package.
+- Follow the existing module pattern when adding new sync functions.
 - Use `BaseIndividualSyncService` for common dependency creation logic.
 - Use `rest_reconcile_async()` for find-or-create patterns with NetBox.
-- Use `asyncio.gather(*tasks, return_exceptions=True)` for parallel operations with common dependencies.
-- Keep functions focused on single-object sync; use `sync_vm_with_related()` for coordinating multiple related syncs.
+- Use `asyncio.gather(..., return_exceptions=True)` for parallel operations with shared dependencies.
+- Keep functions focused on a single object type; use `sync_vm_with_related()` for coordinated VM workflows.

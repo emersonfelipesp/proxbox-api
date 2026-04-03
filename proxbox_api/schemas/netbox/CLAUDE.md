@@ -6,15 +6,19 @@ Schemas representing NetBox connection and configuration data.
 
 ## Current Modules
 
-- `__init__.py`: Schemas for NetBox session settings and connection details.
+- `__init__.py`: schemas for NetBox session settings and connection details.
 - `dcim/`: NetBox DCIM payload schemas.
-- `extras/`: NetBox extras payload schemas such as tags.
+- `extras/`: NetBox extras payload schemas such as tags and custom metadata.
 - `virtualization/`: NetBox virtualization payload schemas.
 
-## Key Data Flow and Dependencies
+## How These Schemas Flow
 
-- Used by plugin configuration routes and dependency setup routines.
+- Plugin configuration routes use these models to validate endpoint records and client settings.
+- Sync services use them to shape outgoing NetBox create and update payloads.
+- Nested schema packages keep the resource-specific contracts separated by NetBox domain.
 
 ## Extension Guidance
 
-- Avoid embedding runtime logic in schemas; keep them declarative.
+- Keep the models declarative and validation-focused.
+- Avoid putting request orchestration or network calls in schema modules.
+- Mirror upstream NetBox field constraints as closely as possible.

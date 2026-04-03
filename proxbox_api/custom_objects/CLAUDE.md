@@ -2,17 +2,19 @@
 
 ## Purpose
 
-Namespace reserved for custom NetBox object wrappers and plugin-specific entity helpers.
+Reserved namespace for custom NetBox object wrappers and plugin-specific entity helpers.
 
 ## Current Files
 
-- `__init__.py`: Package marker; there are no active Python modules here yet.
+- `__init__.py`: package marker only; there are no active Python modules here yet.
 
-## Key Data Flow and Dependencies
+## Current Role in the App
 
-- This directory is reserved for future custom object wrappers. The sync audit trail currently uses NetBox journal entries instead.
+- The repository currently relies on standard NetBox models and journal entries for sync tracking.
+- This package is available for future wrappers when the backend needs a custom abstraction that does not belong in `schemas/` or `services/`.
 
 ## Extension Guidance
 
-- Keep schema and API metadata aligned with the NetBox plugin model names.
-- Prefer additive schema changes to preserve compatibility with existing records.
+- Keep wrapper names aligned with NetBox plugin and model names.
+- Prefer additive changes so existing payloads and records keep working.
+- Add a scoped guide only if this package starts containing real implementation modules.

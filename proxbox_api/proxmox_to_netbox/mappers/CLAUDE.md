@@ -6,12 +6,20 @@ Contains domain-specific mapping modules from Proxmox raw objects to NetBox payl
 
 ## Current Files
 
-- `__init__.py`: Mapper package namespace.
-- `virtual_machine.py`: Maps Proxmox VM resource and config data into NetBox VM create payloads.
-- `interfaces.py`: Interface mapping extension point.
+- `__init__.py`: mapper package namespace.
+- `virtual_machine.py`: maps Proxmox VM resource and config data into NetBox VM create payloads.
+- `interfaces.py`: interface mapping extension point.
 - `ipam.py`: IPAM mapping extension point.
+
+## How These Mappers Flow
+
+- Schemas in `proxmox_to_netbox/models.py` produce normalized input values.
+- Mapper modules turn those normalized values into NetBox request dictionaries.
+- Route and service code should only call the mapper entry points, not duplicate mapping logic.
 
 ## Extension Guidance
 
-- Keep mapper functions thin and delegate validation to the Pydantic schemas in `models.py`.
-- Preserve deterministic field order and omit unknown data only when the NetBox contract requires it.
+- Keep mapper functions thin and delegate validation to the Pydantic schemas.
+- Preserve deterministic field order.
+- Omit unknown data only when the NetBox contract requires it.
+- Add mapper-specific tests when a new NetBox object type is introduced.
