@@ -15,10 +15,12 @@ router = APIRouter()
 @router.get("/logs")
 async def get_backend_logs(
     level: Annotated[
-        str | None,
+        LogLevel | None,
         Query(
-            title="Minimum Log Level",
-            description="Filter logs by minimum level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+            title="Exact Log Level",
+            description=(
+                "Filter logs by exact level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
+            ),
         ),
     ] = None,
     limit: Annotated[
@@ -59,7 +61,7 @@ async def get_backend_logs(
     Logs are stored in a circular buffer (max 10,000 entries) and are lost on restart.
 
     Filtering:
-    - By level: Returns logs at or above the specified level
+    - By level: Returns logs at the specified level
     - By since: Returns only logs after the specified timestamp
     - By operation_id: Returns only logs for a specific sync operation
 
@@ -73,12 +75,6 @@ async def get_backend_logs(
         - has_more: Whether more logs exist beyond the current page
         - active_filters: Object showing which filters are currently applied
     """
-    if level:
-        try:
-            LogLevel.from_string(level)
-        except ValueError:
-            level = None
-
     if since and since.tzinfo is None:
         since = since.replace(tzinfo=timezone.utc)
 
