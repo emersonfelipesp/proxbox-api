@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput, ProxmoxVmResourceInput
 from proxbox_api.proxmox_to_netbox.mappers.virtual_machine import (
     map_proxmox_vm_to_netbox_vm_body,
 )
+from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput, ProxmoxVmResourceInput
 
 
 def build_netbox_virtual_machine_payload(

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import re
 
-
 from pydantic import BaseModel, ConfigDict, RootModel
 
 from proxbox_api.netbox_sdk_helpers import ensure_record, to_dict

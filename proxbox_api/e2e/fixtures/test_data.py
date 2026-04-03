@@ -10,7 +10,6 @@ import secrets
 import string
 import time
 
-
 E2E_TAG_NAME = "proxbox e2e testing"
 E2E_TAG_SLUG = "proxbox-e2e-testing"
 E2E_TAG_COLOR = "4caf50"

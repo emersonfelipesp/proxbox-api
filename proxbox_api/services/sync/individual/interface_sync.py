@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
@@ -16,8 +16,12 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.helpers import (
     build_interface_lookup_key,
-    normalize_mac,
-    parse_key_value_string,
+    build_sync_response,
+    ensure_vm_record,
+    extract_net_interface_config,
+    get_first_record,
+    get_serialized_first_record,
+    resolve_guest_interface,
 )
 
 
@@ -51,6 +55,55 @@ def _best_guest_agent_ip(
             return f"{parsed.compressed}/{prefix}"
         return parsed.compressed
     return None
+
+
+async def _resolve_vlan_id(
+    nb: object,
+    tag_refs: list[dict[str, object]],
+    vlan_tag_raw: object,
+    *,
+    now: datetime,
+    interface_name: str,
+) -> int | None:
+    if vlan_tag_raw is None:
+        return None
+    try:
+        vlan_tag = int(vlan_tag_raw)
+        vlan_record = await rest_reconcile_async(
+            nb,
+            "/api/ipam/vlans/",
+            lookup={"vid": vlan_tag},
+            payload={
+                "vid": vlan_tag,
+                "name": f"VLAN {vlan_tag}",
+                "status": "active",
+                "tags": tag_refs,
+                "custom_fields": {"proxmox_last_updated": now.isoformat()},
+            },
+            schema=NetBoxVlanSyncState,
+            current_normalizer=lambda record: {
+                "vid": record.get("vid"),
+                "name": record.get("name"),
+                "status": record.get("status"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        return (
+            vlan_record.get("id")
+            if isinstance(vlan_record, dict)
+            else getattr(vlan_record, "id", None)
+        )
+    except Exception as vlan_exc:
+        from proxbox_api.logger import logger
+
+        logger.warning(
+            "Failed to create/sync VLAN tag=%s for interface %s: %s",
+            vlan_tag_raw,
+            interface_name,
+            vlan_exc,
+        )
+        return None
 
 
 async def sync_interface_individual(
@@ -96,39 +149,18 @@ async def sync_interface_individual(
         except Exception:
             pass
 
-    net_config: dict[str, str] = {}
-    for key, value in vm_config.items():
-        if key.startswith("net") and not key.startswith("nets"):
-            config_entry = parse_key_value_string(value)
-            if config_entry:
-                net_config[key] = config_entry
+    net_config = extract_net_interface_config(vm_config)
 
     target_config = net_config.get(interface_name, {})
     mac_address = target_config.get("virtio") or target_config.get("hwaddr")
     bridge = target_config.get("bridge")
     vlan_tag_raw = target_config.get("tag")
 
-    resolved_name = interface_name
-    guest_iface = None
-    if guest_interfaces:
-        guest_by_name = {
-            str(iface.get("name", "")).strip().lower(): iface for iface in guest_interfaces
-        }
-        guest_by_mac = {
-            normalize_mac(iface.get("mac_address")): iface
-            for iface in guest_interfaces
-            if normalize_mac(iface.get("mac_address"))
-        }
-        guest_iface = guest_by_name.get(interface_name.lower())
-        if guest_iface is None and mac_address:
-            guest_iface = guest_by_mac.get(normalize_mac(mac_address))
-        if guest_iface:
-            guest_name = str(guest_iface.get("name") or "").strip()
-            if guest_name:
-                resolved_name = guest_name
-                guest_mac = guest_iface.get("mac_address")
-                if guest_mac and not mac_address:
-                    mac_address = normalize_mac(guest_mac)
+    guest_iface, resolved_name, mac_address = resolve_guest_interface(
+        guest_interfaces,
+        interface_name,
+        mac_address,
+    )
 
     proxmox_resource: dict[str, object] = {
         "vmid": vmid,
@@ -143,114 +175,81 @@ async def sync_interface_individual(
     }
 
     if dry_run:
-        existing_vms = await rest_list_async(
+        vm_record, _ = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type=vm_type,
+            auto_create_vm=False,
         )
-        vm_id = None
-        if existing_vms:
-            vm_id = getattr(existing_vms[0], "id", None)
-
+        vm_id = getattr(vm_record, "id", None) if vm_record is not None else None
         netbox_object = None
         if vm_id:
-            existing = await rest_list_async(
+            netbox_object = await get_serialized_first_record(
                 nb,
                 "/api/virtualization/interfaces/",
                 query={"virtual_machine_id": vm_id, "name": resolved_name},
             )
-            if existing:
-                netbox_object = (
-                    existing[0].serialize() if hasattr(existing[0], "serialize") else None
-                )
-
-        vm_dep: dict[str, object] = {
-            "object_type": "vm",
-            "vmid": vmid,
-            "cluster_name": getattr(px, "name", None),
-            "node": node,
-            "type": vm_type,
-        }
-        return {
-            "object_type": "interface",
-            "action": "dry_run",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": True,
-            "dependencies_synced": [vm_dep],
-            "error": None,
-        }
+        return build_sync_response(
+            object_type="interface",
+            action="dry_run",
+            proxmox_resource=proxmox_resource,
+            netbox_object=netbox_object,
+            dry_run=True,
+            dependencies_synced=[
+                {
+                    "object_type": "vm",
+                    "vmid": vmid,
+                    "cluster_name": getattr(px, "name", None),
+                    "node": node,
+                    "type": vm_type,
+                }
+            ],
+            error=None,
+        )
 
     try:
-        existing_vms = await rest_list_async(
+        vm_record, vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type=vm_type,
+            auto_create_vm=auto_create_vm,
         )
-        if not existing_vms:
-            if auto_create_vm:
-                from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
+        if vm_error:
+            return build_sync_response(
+                object_type="interface",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=vm_error,
+            )
 
-                cluster_name = getattr(px, "name", "unknown")
-                await sync_vm_individual(
-                    nb, px, tag, cluster_name, node, vm_type, vmid, dry_run=False
-                )
-                existing_vms = await rest_list_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    query={"cf_proxmox_vm_id": vmid},
-                )
-            else:
-                return {
-                    "object_type": "interface",
-                    "action": "error",
-                    "proxmox_resource": proxmox_resource,
-                    "netbox_object": None,
-                    "dry_run": False,
-                    "dependencies_synced": [],
-                    "error": f"VM with vmid={vmid} not found in NetBox and auto_create_vm=False",
-                }
-
-        vm_record = existing_vms[0]
         vm_id = getattr(vm_record, "id", None)
         if vm_id is None:
-            return {
-                "object_type": "interface",
-                "action": "error",
-                "proxmox_resource": proxmox_resource,
-                "netbox_object": None,
-                "dry_run": False,
-                "dependencies_synced": [],
-                "error": f"Could not resolve VM ID for vmid={vmid}",
-            }
+            return build_sync_response(
+                object_type="interface",
+                action="error",
+                proxmox_resource=proxmox_resource,
+                netbox_object=None,
+                dry_run=False,
+                dependencies_synced=[],
+                error=f"Could not resolve VM ID for vmid={vmid}",
+            )
 
-        vlan_nb_id: int | None = None
-        if vlan_tag_raw is not None:
-            try:
-                vlan_tag = int(vlan_tag_raw)
-                vlan_record = await rest_reconcile_async(
-                    nb,
-                    "/api/ipam/vlans/",
-                    lookup={"vid": vlan_tag},
-                    payload={
-                        "vid": vlan_tag,
-                        "name": f"VLAN {vlan_tag}",
-                        "status": "active",
-                        "tags": tag_refs,
-                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                    },
-                    schema=NetBoxVlanSyncState,
-                    current_normalizer=lambda record: {
-                        "vid": record.get("vid"),
-                        "name": record.get("name"),
-                        "status": record.get("status"),
-                        "tags": record.get("tags"),
-                        "custom_fields": record.get("custom_fields"),
-                    },
-                )
-                vlan_nb_id = getattr(vlan_record, "id", None) if vlan_record else None
-            except Exception:
-                pass
+        vlan_nb_id = await _resolve_vlan_id(
+            nb,
+            tag_refs,
+            vlan_tag_raw,
+            now=now,
+            interface_name=interface_name,
+        )
 
         bridge_id: int | None = None
 
@@ -268,7 +267,7 @@ async def sync_interface_individual(
         if vm_id:
             interface_payload["virtual_machine"] = vm_id
 
-        existing_interfaces = await rest_list_async(
+        existing_interface = await get_first_record(
             nb,
             "/api/virtualization/interfaces/",
             query={"virtual_machine_id": vm_id, "name": resolved_name},
@@ -297,15 +296,15 @@ async def sync_interface_individual(
         netbox_object = (
             interface_record.serialize() if hasattr(interface_record, "serialize") else None
         )
-        action = "updated" if existing_interfaces else "created"
+        action = "updated" if existing_interface else "created"
 
-        return {
-            "object_type": "interface",
-            "action": action,
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": False,
-            "dependencies_synced": [
+        return build_sync_response(
+            object_type="interface",
+            action=action,
+            proxmox_resource=proxmox_resource,
+            netbox_object=netbox_object,
+            dry_run=False,
+            dependencies_synced=[
                 {
                     "object_type": "vm",
                     "vmid": vmid,
@@ -315,16 +314,16 @@ async def sync_interface_individual(
                     "action": action,
                 }
             ],
-            "error": None,
-        }
+            error=None,
+        )
 
     except Exception as error:
-        return {
-            "object_type": "interface",
-            "action": "error",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": None,
-            "dry_run": False,
-            "dependencies_synced": [],
-            "error": str(error),
-        }
+        return build_sync_response(
+            object_type="interface",
+            action="error",
+            proxmox_resource=proxmox_resource,
+            netbox_object=None,
+            dry_run=False,
+            dependencies_synced=[],
+            error=str(error),
+        )

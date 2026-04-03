@@ -18,9 +18,7 @@ async def get_backend_logs(
         LogLevel | None,
         Query(
             title="Exact Log Level",
-            description=(
-                "Filter logs by exact level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
-            ),
+            description=("Filter logs by exact level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"),
         ),
     ] = None,
     limit: Annotated[

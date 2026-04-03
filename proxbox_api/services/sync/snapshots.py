@@ -206,6 +206,124 @@ async def process_snapshots_batch(snapshot_tasks: list, batch_size: int = 10) ->
     return results, failures
 
 
+def _resolve_snapshot_node_from_resources(
+    vmid: int,
+    cluster_resources: list[dict[str, object]] | None,
+) -> tuple[str | None, str | None]:
+    """Resolve node and cluster from cluster resource listings."""
+    if not cluster_resources:
+        return None, None
+
+    for cluster in cluster_resources:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_items = list(cluster.items())
+        if not cluster_items:
+            continue
+        cluster_key, resources = cluster_items[0]
+        if not isinstance(resources, list):
+            continue
+        for resource in resources:
+            if normalize_vmid(resource.get("vmid")) == vmid:
+                return resource.get("node"), cluster_key
+    return None, None
+
+
+def _resolve_snapshot_node_from_status(
+    node: str | None,
+    cluster_status: list | None,
+) -> tuple[str | None, str | None]:
+    """Fallback node resolution from cluster status."""
+    if not cluster_status:
+        return node, None
+
+    node_name = node
+    cluster_name = None
+    if not node_name:
+        for cs in cluster_status:
+            if hasattr(cs, "node_list") and cs.node_list:
+                return cs.node_list[0].name, getattr(cs, "name", None)
+
+    if node_name:
+        for cs in cluster_status:
+            if getattr(cs, "node_list", None):
+                if any(node_item.name == node_name for node_item in cs.node_list):
+                    cluster_name = getattr(cs, "name", None)
+                    break
+    return node_name, cluster_name
+
+
+def _resolve_snapshot_node_context(
+    vmid: int,
+    node: str | None,
+    cluster_status: list | None,
+    cluster_resources: list[dict[str, object]] | None,
+) -> tuple[str | None, str | None]:
+    """Resolve the node and cluster name for a VM snapshot sync."""
+    node_name, cluster_name = _resolve_snapshot_node_from_resources(
+        vmid,
+        cluster_resources,
+    )
+    if node_name:
+        return node_name, cluster_name
+    return _resolve_snapshot_node_from_status(node, cluster_status)
+
+
+async def _collect_snapshot_tasks_for_vm(
+    pxs: list,
+    *,
+    node_name: str,
+    proxmox_type: str,
+    vmid: int,
+    fetch_semaphore: asyncio.Semaphore,
+    nb,
+    storage_record: dict | None,
+) -> tuple[list, set[str]]:
+    """Fetch snapshots from all Proxmox sessions and build NetBox reconcile tasks."""
+    snapshot_tasks = []
+    proxmox_snapshot_names: set[str] = set()
+
+    async def _fetch_snapshots_for_endpoint(proxmox):
+        async with fetch_semaphore:
+            return await asyncio.to_thread(
+                lambda: get_vm_snapshots(
+                    session=proxmox.session,
+                    node=node_name,
+                    vm_type=proxmox_type,
+                    vmid=int(vmid),
+                )
+            )
+
+    snapshot_results = await asyncio.gather(
+        *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],
+        return_exceptions=True,
+    )
+    for result in snapshot_results:
+        if isinstance(result, Exception):
+            logger.warning(
+                "Error getting snapshots for VM %s on node %s: %s",
+                vmid,
+                node_name,
+                result,
+            )
+            continue
+        for snapshot in result:
+            snap_name = snapshot.get("name")
+            if snap_name:
+                proxmox_snapshot_names.add(snap_name)
+                snapshot_tasks.append(
+                    create_netbox_snapshots(
+                        snapshot,
+                        nb,
+                        vmid,
+                        node_name,
+                        storage_record=storage_record,
+                    )
+                )
+
+    return snapshot_tasks, proxmox_snapshot_names
+
+
 async def _sync_single_vm_snapshots(
     vm: object,
     nb,
@@ -226,6 +344,7 @@ async def _sync_single_vm_snapshots(
     created = 0
     updated = 0
     skipped = 0
+    proxmox_snapshot_names: set[str] = set()
 
     vmid = extract_proxmox_vmid(vm)
     vm_name = vm.get("name", "unknown")
@@ -252,33 +371,12 @@ async def _sync_single_vm_snapshots(
         if proxmox_type not in ("qemu", "lxc"):
             proxmox_type = "qemu"
 
-        node_name = node
-        cluster_name = None
-
-        if not node_name and cluster_resources:
-            for cluster in cluster_resources:
-                if not isinstance(cluster, dict):
-                    continue
-                cluster_items = list(cluster.items())
-                if not cluster_items:
-                    continue
-                cluster_key, resources = cluster_items[0]
-                if not isinstance(resources, list):
-                    continue
-                for resource in resources:
-                    if normalize_vmid(resource.get("vmid")) == vmid:
-                        node_name = resource.get("node")
-                        cluster_name = cluster_key
-                        break
-                if node_name:
-                    break
-
-        if not node_name:
-            for cs in cluster_status:
-                if hasattr(cs, "node_list") and cs.node_list:
-                    node_name = cs.node_list[0].name
-                    cluster_name = getattr(cs, "name", None)
-                    break
+        node_name, cluster_name = _resolve_snapshot_node_context(
+            vmid,
+            node,
+            cluster_status,
+            cluster_resources,
+        )
 
         if not node_name:
             logger.warning(
@@ -301,13 +399,6 @@ async def _sync_single_vm_snapshots(
                 )
             return (0, 0, 1, set())
 
-        if not cluster_name:
-            for cs in cluster_status:
-                if getattr(cs, "node_list", None):
-                    if any(node_item.name == node_name for node_item in cs.node_list):
-                        cluster_name = getattr(cs, "name", None)
-                        break
-
         storage_record = await _resolve_snapshot_storage_record(
             nb,
             vm_id=int(vmid),
@@ -315,46 +406,15 @@ async def _sync_single_vm_snapshots(
             storage_index=storage_index,
         )
 
-        snapshot_tasks = []
-        proxmox_snapshot_names = set()
-
-        async def _fetch_snapshots_for_endpoint(proxmox):
-            async with fetch_semaphore:
-                return await asyncio.to_thread(
-                    lambda: get_vm_snapshots(
-                        session=proxmox.session,
-                        node=node_name,
-                        vm_type=proxmox_type,
-                        vmid=int(vmid),
-                    )
-                )
-
-        snapshot_results = await asyncio.gather(
-            *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],
-            return_exceptions=True,
+        snapshot_tasks, proxmox_snapshot_names = await _collect_snapshot_tasks_for_vm(
+            pxs,
+            node_name=node_name,
+            proxmox_type=proxmox_type,
+            vmid=vmid,
+            fetch_semaphore=fetch_semaphore,
+            nb=nb,
+            storage_record=storage_record,
         )
-        for result in snapshot_results:
-            if isinstance(result, Exception):
-                logger.warning(
-                    "Error getting snapshots for VM %s on node %s: %s",
-                    vmid,
-                    node_name,
-                    result,
-                )
-                continue
-            for snapshot in result:
-                snap_name = snapshot.get("name")
-                if snap_name:
-                    proxmox_snapshot_names.add(snap_name)
-                    snapshot_tasks.append(
-                        create_netbox_snapshots(
-                            snapshot,
-                            nb,
-                            vmid,
-                            node_name,
-                            storage_record=storage_record,
-                        )
-                    )
 
         if snapshot_tasks:
             results, failures = await process_snapshots_batch(snapshot_tasks)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
@@ -186,7 +185,9 @@ async def _ensure_device_role(nb: object, *, tag_refs: list[dict[str, object]]) 
     )
 
 
-async def _ensure_site(nb: object, *, cluster_name: str, tag_refs: list[dict[str, object]]) -> object:
+async def _ensure_site(
+    nb: object, *, cluster_name: str, tag_refs: list[dict[str, object]]
+) -> object:
     site_name = f"Proxmox Default Site - {cluster_name}"
     site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
     return await rest_reconcile_async(

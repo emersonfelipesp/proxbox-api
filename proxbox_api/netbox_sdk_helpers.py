@@ -81,7 +81,9 @@ def _candidate_reuse_lookups(
     return candidates
 
 
-async def ensure_record(endpoint: object, lookup: dict[str, object], payload: dict[str, object]) -> object:
+async def ensure_record(
+    endpoint: object, lookup: dict[str, object], payload: dict[str, object]
+) -> object:
     """Get a record by lookup fields or create it when missing."""
     for candidate in _candidate_reuse_lookups(lookup, payload):
         record = await endpoint.get(**candidate)
