@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import traceback
 from collections import deque
@@ -85,6 +86,23 @@ class LogBufferConfig:
     max_limit: int = 5000
 
 
+_ERROR_MESSAGE_RE = re.compile(
+    r"\b(error|failed|failure|exception|traceback|fatal|critical)\b",
+    re.IGNORECASE,
+)
+
+
+def _entry_is_error_related(entry: BufferedLogEntry) -> bool:
+    """Return True when a log entry looks error-related."""
+    if entry.level in {LogLevel.ERROR, LogLevel.CRITICAL}:
+        return True
+
+    if entry.expandable and entry.expandable.get("traceback"):
+        return True
+
+    return bool(_ERROR_MESSAGE_RE.search(entry.message))
+
+
 class LogBufferHandler(logging.Handler):
     """Custom logging handler that stores records in a thread-safe deque."""
 
@@ -149,6 +167,7 @@ class LogBufferHandler(logging.Handler):
     def get_logs(
         self,
         level: LogLevel | str | None = None,
+        errors_only: bool = False,
         limit: int = 200,
         offset: int = 0,
         since: datetime | None = None,
@@ -158,6 +177,7 @@ class LogBufferHandler(logging.Handler):
 
         Args:
             level: Exact log level to include (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+            errors_only: Return only error-related logs, regardless of level
             limit: Maximum number of entries to return (default 200, max 5000)
             offset: Number of entries to skip (for pagination)
             since: Only return logs after this timestamp
@@ -181,13 +201,16 @@ class LogBufferHandler(logging.Handler):
         filtered_logs: list[BufferedLogEntry] = []
 
         for entry in logs:
-            if level_filter and entry.level != level_filter:
+            if not errors_only and level_filter and entry.level != level_filter:
                 continue
 
             if since and entry.timestamp <= since:
                 continue
 
             if operation_id and entry.operation_id != operation_id:
+                continue
+
+            if errors_only and not _entry_is_error_related(entry):
                 continue
 
             filtered_logs.append(entry)
@@ -200,8 +223,9 @@ class LogBufferHandler(logging.Handler):
 
         has_more = end_idx < total
 
-        active_filters: dict[str, str | None] = {
+        active_filters: dict[str, str | bool | None] = {
             "level": level_filter.value if level_filter else None,
+            "errors_only": True if errors_only else None,
             "operation_id": operation_id,
             "since": since.isoformat() if since else None,
         }
@@ -251,6 +275,7 @@ def clear_log_buffer() -> None:
 
 def get_logs(
     level: LogLevel | str | None = None,
+    errors_only: bool = False,
     limit: int = 200,
     offset: int = 0,
     since: datetime | None = None,
@@ -260,6 +285,7 @@ def get_logs(
 
     Args:
         level: Exact log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        errors_only: Return only error-related logs, regardless of level
         limit: Max entries to return
         offset: Pagination offset
         since: Only logs after this timestamp
@@ -270,6 +296,7 @@ def get_logs(
     """
     return get_log_buffer().get_logs(
         level=level,
+        errors_only=errors_only,
         limit=limit,
         offset=offset,
         since=since,

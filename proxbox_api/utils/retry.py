@@ -49,6 +49,12 @@ def _is_transient_netbox_error(error: Exception) -> bool:
         "name or service not known",
         "no route to host",
         "network is unreachable",
+        "connection slots are reserved",
+        "remaining connection slots",
+        "too many connections",
+        "database unavailable",
+        "psycopg2.errors",
+        "operationalerror",
     ]
     return any(indicator in error_str for indicator in transient_indicators)
 

@@ -98,6 +98,36 @@ def test_get_logs_filters_by_exact_level_and_operation_id():
     assert combined["active_filters"]["operation_id"] == "op-2"
 
 
+def test_get_logs_errors_only_includes_error_related_logs_across_levels():
+    handler = LogBufferHandler()
+
+    handler.emit(_make_record(logging.INFO, "sync started"))
+    handler.emit(_make_record(logging.INFO, "Failed to load NetBox endpoint"))
+    handler.emit(_make_record(logging.WARNING, "retrying after failure"))
+    handler.emit(_make_record(logging.ERROR, "unexpected error"))
+
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        handler.emit(_make_record(logging.INFO, "traceback entry", exc_info=sys.exc_info()))
+
+    errors_only = handler.get_logs(errors_only=True)
+
+    assert [log["message"] for log in errors_only["logs"]] == [
+        "Failed to load NetBox endpoint",
+        "retrying after failure",
+        "unexpected error",
+        "traceback entry",
+    ]
+    assert [log["level"] for log in errors_only["logs"]] == [
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "INFO",
+    ]
+    assert errors_only["active_filters"]["errors_only"] is True
+
+
 def test_configure_buffer_logger_is_idempotent():
     logger = logging.getLogger("proxbox.test.log-buffer")
     original_handlers = list(logger.handlers)

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import os
 from collections.abc import AsyncIterable, AsyncIterator
 from urllib.parse import urlsplit
 
@@ -16,6 +18,28 @@ from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.utils.retry import _is_transient_netbox_error
+
+
+def _resolve_netbox_max_concurrent() -> int:
+    """Resolve max concurrent NetBox requests from environment."""
+    raw = os.environ.get("PROXBOX_NETBOX_MAX_CONCURRENT", "").strip()
+    if not raw:
+        return 5
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 5
+
+
+_netbox_request_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_netbox_semaphore() -> asyncio.Semaphore:
+    """Get or create the global NetBox request semaphore."""
+    global _netbox_request_semaphore
+    if _netbox_request_semaphore is None:
+        _netbox_request_semaphore = asyncio.Semaphore(_resolve_netbox_max_concurrent())
+    return _netbox_request_semaphore
 
 
 def _unwrap_api(nb: object) -> object:
@@ -258,31 +282,59 @@ async def rest_list_async(
     nb: object, path: str, *, query: dict[str, object] | None = None
 ) -> list[RestRecord]:
     api = _unwrap_api(nb)
-    try:
-        response = await api.client.request("GET", _normalize_path(path), query=query)
-    except Exception as e:
-        _handle_netbox_error(e, f"list {path}")
-        raise  # Early return via exception
+    semaphore = _get_netbox_semaphore()
 
-    try:
-        payload = _extract_payload(response)
-    except ProxboxException:
-        raise
-    except Exception as e:
-        _handle_netbox_error(e, f"parse list {path}")
-        raise  # Early return via exception
+    async def _do_request() -> list[RestRecord]:
+        try:
+            response = await api.client.request("GET", _normalize_path(path), query=query)
+        except Exception as e:
+            _handle_netbox_error(e, f"list {path}")
+            raise  # Early return via exception
 
-    if isinstance(payload, dict):
-        results = payload.get("results", [])
-    elif isinstance(payload, list):
-        results = payload
-    else:
-        raise ProxboxException(message="NetBox REST list response was not JSON array/object")
-    if not isinstance(results, list):
-        raise ProxboxException(message="NetBox REST list response missing results list")
-    return [
-        RestRecord(api, path, item if isinstance(item, dict) else to_dict(item)) for item in results
-    ]
+        try:
+            payload = _extract_payload(response)
+        except ProxboxException:
+            raise
+        except Exception as e:
+            _handle_netbox_error(e, f"parse list {path}")
+            raise  # Early return via exception
+
+        if isinstance(payload, dict):
+            results = payload.get("results", [])
+        elif isinstance(payload, list):
+            results = payload
+        else:
+            raise ProxboxException(message="NetBox REST list response was not JSON array/object")
+        if not isinstance(results, list):
+            raise ProxboxException(message="NetBox REST list response missing results list")
+        return [
+            RestRecord(api, path, item if isinstance(item, dict) else to_dict(item))
+            for item in results
+        ]
+
+    # Retry loop with semaphore and exponential backoff for transient errors
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "3")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "1.0"))
+
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                return await _do_request()
+            except Exception as e:
+                if attempt == max_retries or not _is_transient_netbox_error(e):
+                    raise
+                delay = base_delay * (2**attempt)
+                logger.warning(
+                    "NetBox request failed (attempt %s/%s), retrying in %ss: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    str(e)[:200],
+                )
+                await asyncio.sleep(delay)
+
+    # Should not reach here, but satisfy type checker
+    return await _do_request()
 
 
 def rest_list(nb: object, path: str, *, query: dict[str, object] | None = None) -> list[object]:
@@ -303,23 +355,50 @@ async def rest_first_async(
 
 async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -> RestRecord:
     api = _unwrap_api(nb)
-    try:
-        response = await api.client.request("POST", _normalize_path(path), payload=payload)
-    except Exception as e:
-        _handle_netbox_error(e, f"create {path}")
-        raise  # Early return via exception
+    semaphore = _get_netbox_semaphore()
 
-    try:
-        body = _extract_payload(response)
-    except ProxboxException:
-        raise
-    except Exception as e:
-        _handle_netbox_error(e, f"parse create {path}")
-        raise  # Early return via exception
+    async def _do_request() -> RestRecord:
+        try:
+            response = await api.client.request("POST", _normalize_path(path), payload=payload)
+        except Exception as e:
+            _handle_netbox_error(e, f"create {path}")
+            raise  # Early return via exception
 
-    if not isinstance(body, dict):
-        raise ProxboxException(message="NetBox REST create response was not a JSON object")
-    return RestRecord(api, path, body)
+        try:
+            body = _extract_payload(response)
+        except ProxboxException:
+            raise
+        except Exception as e:
+            _handle_netbox_error(e, f"parse create {path}")
+            raise  # Early return via exception
+
+        if not isinstance(body, dict):
+            raise ProxboxException(message="NetBox REST create response was not a JSON object")
+        return RestRecord(api, path, body)
+
+    # Retry loop with semaphore and exponential backoff for transient errors
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "3")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "1.0"))
+
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                return await _do_request()
+            except Exception as e:
+                if attempt == max_retries or not _is_transient_netbox_error(e):
+                    raise
+                delay = base_delay * (2**attempt)
+                logger.warning(
+                    "NetBox create failed (attempt %s/%s), retrying in %ss: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    str(e)[:200],
+                )
+                await asyncio.sleep(delay)
+
+    # Should not reach here
+    return await _do_request()
 
 
 def rest_create(nb: object, path: str, payload: dict[str, object]) -> object:
@@ -451,8 +530,35 @@ async def rest_patch_async(
 ) -> dict[str, object]:
     """PATCH a single NetBox record by ID with the given fields."""
     api = _unwrap_api(nb)
-    response = await api.client.request("PATCH", _detail_path(path, record_id), payload=payload)
-    return _extract_payload(response)
+    semaphore = _get_netbox_semaphore()
+
+    async def _do_request() -> dict[str, object]:
+        response = await api.client.request("PATCH", _detail_path(path, record_id), payload=payload)
+        return _extract_payload(response)
+
+    # Retry loop with semaphore and exponential backoff for transient errors
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "3")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "1.0"))
+
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                return await _do_request()
+            except Exception as e:
+                if attempt == max_retries or not _is_transient_netbox_error(e):
+                    raise
+                delay = base_delay * (2**attempt)
+                logger.warning(
+                    "NetBox patch failed (attempt %s/%s), retrying in %ss: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    str(e)[:200],
+                )
+                await asyncio.sleep(delay)
+
+    # Should not reach here
+    return await _do_request()
 
 
 def rest_ensure(
