@@ -200,7 +200,7 @@ Test coverage:
 
 ## Full Update
 
-- `GET /full-update` - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, and VM IP sync.
+- `GET /full-update` - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.
 - `GET /full-update/stream` - SSE streaming variant.
 
 ## WebSocket
@@ -238,6 +238,7 @@ Headers:
 - `GET /sync/individual/task-history`
 - `GET /sync/individual/backup`
 - `GET /sync/individual/replication`
+- `GET /sync/individual/backup-routines`
 
 ## Extras Routes (`/extras`)
 

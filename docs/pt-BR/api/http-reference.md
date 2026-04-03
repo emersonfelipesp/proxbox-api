@@ -200,7 +200,7 @@ Cobertura de testes:
 
 ## Full Update
 
-- `GET /full-update` - Executa sync de devices, storages, VMs, task history, discos, backups, snapshots, interfaces de node, interfaces de VM e IPs de VM.
+- `GET /full-update` - Executa sync de devices, storages, VMs, task history, discos, backups, snapshots, interfaces de node, interfaces de VM, IPs de VM, replications e backup routines.
 - `GET /full-update/stream` - Variacao SSE.
 
 ## WebSocket
@@ -238,6 +238,7 @@ Headers:
 - `GET /sync/individual/task-history`
 - `GET /sync/individual/backup`
 - `GET /sync/individual/replication`
+- `GET /sync/individual/backup-routines`
 
 ## Rotas Extras (`/extras`)
 

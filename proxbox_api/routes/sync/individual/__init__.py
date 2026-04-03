@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from proxbox_api.routes.sync.individual import (
     backup,
+    backup_routine,
     cluster,
     device,
     disk,
@@ -19,6 +20,7 @@ from proxbox_api.routes.sync.individual import (
 router = APIRouter()
 
 router.include_router(backup.router, tags=["sync / individual / backup"])
+router.include_router(backup_routine.router, tags=["sync / individual / backup-routine"])
 router.include_router(cluster.router, tags=["sync / individual / cluster"])
 router.include_router(device.router, tags=["sync / individual / device"])
 router.include_router(vm.router, tags=["sync / individual / vm"])
