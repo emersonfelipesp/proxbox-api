@@ -389,11 +389,13 @@ async def create_all_device_interfaces(
                             }
                         )
                 except Exception as exc:
+                    error_detail = getattr(exc, "detail", str(exc))
+                    error_msg = f"{type(exc).__name__}: {error_detail}"
                     logger.warning(
                         "Failed to sync interface %s on node %s: %s",
                         iface_name,
                         node_name,
-                        exc,
+                        error_msg,
                     )
                     if use_websocket and websocket:
                         await websocket.send_json(
