@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 
-
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
-from proxbox_api.services.proxmox_helpers import dump_models, get_storage_config, get_storage_list
+from proxbox_api.services.proxmox_helpers import (
+    dump_models,
+    get_storage_config,
+    get_storage_list,
+)
 
 
-async def create_storages(
+async def create_storages(  # noqa: C901
     *,
     netbox_session: object,
     pxs: list[object] | None,
@@ -22,9 +25,9 @@ async def create_storages(
 ) -> list[dict[str, object]]:
     """Create or update plugin storage rows for each Proxmox endpoint storage.
 
-    The Proxmox /storage endpoint only returns storage IDs. For each storage,
-    we must call /storage/{storage_id} to get full configuration including
-    type, content, path, nodes, shared status, and enabled flag.
+    The Proxmox /storage endpoint may include enough information to reconcile a
+    storage record directly. When the list payload is incomplete, we fall back to
+    fetching /storage/{storage_id} for the full configuration.
     """
     nb = netbox_session
     tag_refs = [
@@ -62,62 +65,58 @@ async def create_storages(
         if name:
             proxmoxs_map[name] = px
 
-    async def _fetch_cluster_storage_ids(
+    async def _fetch_cluster_storage_items(
         proxmox: object,
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[dict[str, object]]]:
         cluster_name = str(getattr(proxmox, "name", "") or "").strip() or "unknown"
         async with fetch_sem:
             storage_items = await asyncio.to_thread(lambda: dump_models(get_storage_list(proxmox)))
-            storage_ids = [s.get("storage") for s in storage_items if s.get("storage")]
-        return cluster_name, storage_ids
+        return cluster_name, storage_items
 
-    cluster_storage_ids = await asyncio.gather(
-        *[_fetch_cluster_storage_ids(proxmox) for proxmox in pxs],
+    cluster_storage_items = await asyncio.gather(
+        *[_fetch_cluster_storage_items(proxmox) for proxmox in pxs],
         return_exceptions=True,
     )
 
-    async def _fetch_storage_config_for_cluster(
-        cluster_name: str,
-        storage_id: str,
-    ) -> dict[str, object] | None:
-        proxmox = proxmoxs_map.get(cluster_name)
-        if not proxmox:
-            return None
-        async with fetch_sem:
-            return await asyncio.to_thread(get_storage_config, proxmox, storage_id)
+    unique_payloads: dict[tuple[str, str], dict[str, object]] = {}
 
-    tasks: list[asyncio.Task] = []
-    cluster_storage_id_list: list[tuple[str, str]] = []
+    def _needs_storage_config(config: dict[str, object]) -> bool:
+        return any(
+            key not in config for key in ("type", "content", "path", "nodes", "shared", "disable")
+        )
 
-    for cluster_data in cluster_storage_ids:
+    for cluster_data in cluster_storage_items:
         if isinstance(cluster_data, Exception):
             logger.warning("Error fetching storage list from Proxmox endpoint: %s", cluster_data)
             continue
-        cluster_name, storage_ids = cluster_data
-        for storage_id in storage_ids:
-            cluster_storage_id_list.append((cluster_name, storage_id))
-            tasks.append(
-                asyncio.create_task(_fetch_storage_config_for_cluster(cluster_name, storage_id))
-            )
+        cluster_name, storage_items = cluster_data
+        proxmox = proxmoxs_map.get(cluster_name)
+        for storage_item in storage_items:
+            storage_name = str(storage_item.get("storage", "") or "").strip()
+            if not storage_name:
+                continue
+            config = dict(storage_item)
+            if proxmox and _needs_storage_config(config):
+                try:
+                    async with fetch_sem:
+                        fetched_config = await asyncio.to_thread(
+                            get_storage_config,
+                            proxmox,
+                            storage_name,
+                        )
+                except Exception as error:
+                    logger.warning(
+                        "Error fetching storage config for %s/%s: %s",
+                        cluster_name,
+                        storage_name,
+                        error,
+                    )
+                else:
+                    if fetched_config:
+                        config.update(fetched_config)
+            unique_payloads[(cluster_name, storage_name)] = config
 
-    config_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    storage_configs: list[tuple[str, str, dict[str, object]]] = []
-    for (cluster_name, storage_id), result in zip(cluster_storage_id_list, config_results):
-        if isinstance(result, Exception):
-            logger.warning(
-                "Error fetching storage config for %s/%s: %s",
-                cluster_name,
-                storage_id,
-                result,
-            )
-            continue
-        if result:
-            storage_configs.append((cluster_name, storage_id, result))
-
-    unique_payloads: dict[tuple[str, str], dict] = {}
-
-    for cluster_name, storage_name, config in storage_configs:
+    for (cluster_name, storage_name), config in unique_payloads.items():
         cluster_id = cluster_id_map.get(cluster_name)
         if cluster_id is None:
             logger.debug("Skipping storages for unknown NetBox cluster '%s'", cluster_name)
@@ -134,10 +133,6 @@ async def create_storages(
             "enabled": not bool(config.get("disable")),
             "tags": tag_refs,
         }
-        unique_payloads.setdefault((cluster_name, storage_name), payload)
-
-    for (cluster_name, storage_name), payload in unique_payloads.items():
-        cluster_id = payload["cluster"]
         record = await rest_reconcile_async(
             nb,
             "/api/plugins/proxbox/storage/",
