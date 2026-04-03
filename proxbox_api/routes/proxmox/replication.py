@@ -1,27 +1,29 @@
 """Proxmox cluster replication endpoints and response schemas."""
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter
 from pydantic import BaseModel
 
+from proxbox_api.logger import logger
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
 
 
 class ReplicationJobSchema(BaseModel):
+    cluster_name: str | None = None
+    status: str = "ok"
+    error: str | None = None
     comment: str | None = None
     disable: bool | None = None
-    guest: int
-    id: str
-    jobnum: int
+    guest: int | None = None
+    id: str | None = None
+    jobnum: int | None = None
     rate: float | None = None
     remove_job: str | None = None
     schedule: str | None = None
     source: str | None = None
-    target: str
-    type: str
+    target: str | None = None
+    type: str | None = None
 
 
 ReplicationJobSchemaList = list[ReplicationJobSchema]
@@ -62,9 +64,23 @@ async def cluster_replication(pxs: ProxmoxSessionsDep):
     for px in pxs:
         try:
             replications = px.session.cluster.replication.get()
+        except Exception as error:
+            logger.exception("Error fetching replication jobs for Proxmox cluster %s", px.name)
+            results.append(
+                ReplicationJobSchema(
+                    cluster_name=px.name,
+                    status="error",
+                    error=str(error),
+                )
+            )
+            continue
+
+        try:
             for rep in replications:
                 results.append(
                     ReplicationJobSchema(
+                        cluster_name=px.name,
+                        status="ok",
                         comment=rep.get("comment"),
                         disable=rep.get("disable"),
                         guest=rep.get("guest"),
@@ -78,7 +94,14 @@ async def cluster_replication(pxs: ProxmoxSessionsDep):
                         type=rep.get("type"),
                     )
                 )
-        except Exception as e:
-            continue
+        except Exception as error:
+            logger.exception("Unexpected replication payload for Proxmox cluster %s", px.name)
+            results.append(
+                ReplicationJobSchema(
+                    cluster_name=px.name,
+                    status="error",
+                    error=str(error),
+                )
+            )
 
     return results
