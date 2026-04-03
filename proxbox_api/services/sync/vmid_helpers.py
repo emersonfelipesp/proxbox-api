@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 def normalize_vmid(vmid: object) -> str | None:
     """Normalize VMID values for safe cross-system comparisons."""
     if vmid is None:

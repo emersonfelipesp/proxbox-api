@@ -32,8 +32,6 @@ def resolve_proxmox_session(
         px_name = getattr(px, "name", None)
         if px_name and px_name.lower() == cluster_name.lower():
             return px
-    if px_list:
-        return px_list[0]
     return None
 
 
@@ -125,10 +123,12 @@ def parse_disk_config_entry(raw_value: object) -> dict[str, str]:
     if not isinstance(raw_value, str):
         return {}
     result: dict[str, str] = {}
-    for part in raw_value.split(","):
+    for index, part in enumerate(raw_value.split(",")):
         if "=" in part:
             key, value = part.split("=", 1)
             result[key.strip()] = value.strip()
+        elif index == 0 and part.strip():
+            result["volume"] = part.strip()
     return result
 
 

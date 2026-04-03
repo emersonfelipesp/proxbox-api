@@ -59,6 +59,11 @@ async def sync_cluster_individual(
         }
 
     try:
+        existing_clusters = await rest_list_async(
+            nb,
+            "/api/virtualization/clusters/",
+            query={"name": cluster_name},
+        )
         cluster_type = await rest_reconcile_async(
             nb,
             "/api/virtualization/cluster-types/",
@@ -102,7 +107,7 @@ async def sync_cluster_individual(
         )
 
         netbox_object = cluster.serialize() if hasattr(cluster, "serialize") else None
-        action = "created" if getattr(cluster, "id", None) else "updated"
+        action = "updated" if existing_clusters else "created"
 
         return {
             "object_type": "cluster",

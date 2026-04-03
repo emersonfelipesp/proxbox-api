@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -38,6 +39,7 @@ from proxbox_api.services.sync.task_history import (
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.structured_logging import set_operation_id
 
 full_update_router = APIRouter()
 
@@ -84,6 +86,10 @@ async def full_update_sync(  # noqa: C901
         }
     ]
     tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+
+    operation_id = str(uuid.uuid4())
+    set_operation_id(operation_id)
+    logger.info(f"Starting full_update sync", extra={"operation_id": operation_id})
 
     try:
         sync_nodes = await create_proxmox_devices(
@@ -329,13 +335,17 @@ async def full_update_sync_stream(  # noqa: C901
         ]
         tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
 
+        operation_id = str(uuid.uuid4())
+        set_operation_id(operation_id)
+        logger.info(f"Starting full_update sync (stream)", extra={"operation_id": operation_id})
+
         try:
             yield sse_event(
                 "step",
                 {
                     "step": "stream",
                     "status": "started",
-                    "message": "Full update stream connected.",
+                    "message": f"Full update stream connected (operation_id={operation_id})",
                 },
             )
             yield sse_event(
