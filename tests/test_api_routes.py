@@ -246,6 +246,31 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session():
     assert first_post["ui_editable"] == "hidden"
 
 
+def test_create_custom_fields_caches_successful_bootstrap(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
+            if method == "POST" and path == "/api/extras/custom-fields/":
+                body = {"id": len([c for c in self.calls if c[0] == "POST"]), **payload}
+                return ApiResponse(status=201, text=json.dumps(body))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
+    session = SimpleNamespace(client=FakeClient())
+
+    first_result = asyncio.run(create_custom_fields(netbox_session=session))
+    first_call_count = len(session.client.calls)
+    second_result = asyncio.run(create_custom_fields(netbox_session=session))
+
+    assert second_result == first_result
+    assert len(session.client.calls) == first_call_count
+
+
 def test_proxmox_endpoint_crud_lifecycle(db_session):
     created = create_proxmox_endpoint(
         ProxmoxEndpointCreate(
@@ -428,7 +453,7 @@ def test_netbox_status_route_wraps_dependency_errors():
         asyncio.run(netbox_status(BrokenNetBoxSession()))
 
 
-def test_full_update_sync_returns_structured_payload(monkeypatch):
+def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
     create_vm_calls: list[dict] = []
 
     async def _fake_devices(**kwargs):
@@ -471,15 +496,21 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):
     monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
     monkeypatch.setattr("proxbox_api.app.full_update.create_storages", _fake_storage)
     monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_disks", _fake_disks)
-    monkeypatch.setattr("proxbox_api.app.full_update.create_all_virtual_machine_backups", _fake_backups)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_backups", _fake_backups
+    )
     monkeypatch.setattr(
         "proxbox_api.app.full_update.create_all_virtual_machine_snapshots", _fake_snapshots
     )
     monkeypatch.setattr(
         "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories", _fake_task_history
     )
-    monkeypatch.setattr("proxbox_api.app.full_update.create_all_device_interfaces", _fake_node_interfaces)
-    monkeypatch.setattr("proxbox_api.app.full_update.create_only_vm_interfaces", _fake_vm_interfaces)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_device_interfaces", _fake_node_interfaces
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_only_vm_interfaces", _fake_vm_interfaces
+    )
     monkeypatch.setattr(
         "proxbox_api.app.full_update.create_only_vm_ip_addresses", _fake_vm_ip_addresses
     )
