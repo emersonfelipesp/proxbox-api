@@ -2,7 +2,32 @@
 
 from __future__ import annotations
 
+import contextvars
+import logging
+
 from proxbox_api.logger import get_operation_context, logger
+
+_operation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "operation_id_var", default=None
+)
+
+
+def set_operation_id(operation_id: str | None) -> None:
+    """Set the operation ID for the current context.
+
+    Args:
+        operation_id: The operation ID to set, or None to clear
+    """
+    _operation_id_var.set(operation_id)
+
+
+def get_operation_id() -> str | None:
+    """Get the operation ID for the current context.
+
+    Returns:
+        The operation ID if set, None otherwise
+    """
+    return _operation_id_var.get()
 
 
 class SyncPhaseLogger:
@@ -123,6 +148,10 @@ class SyncPhaseLogger:
             message: Log message
             context: Context dict to pass to logger
         """
+        if "operation_id" not in context:
+            ctx_op_id = _operation_id_var.get()
+            if ctx_op_id:
+                context = {**context, "operation_id": ctx_op_id}
         log_func = getattr(logger, level.lower(), logger.info)
         log_func(message, extra=context)
 
@@ -165,7 +194,7 @@ def log_sync_result(
     level = "warning" if failure_count > 0 else "info"
     status = "completed with issues" if failure_count > 0 else "completed successfully"
     logger.log(
-        logger.getLevelName(level.upper()),
+        logging.getLevelName(level.upper()),
         f"Sync operation {operation} {status}: {success_count} successful, {failure_count} failed",
         extra=context,
     )

@@ -19,6 +19,7 @@ from proxbox_api.app.root_meta import root_meta_router
 from proxbox_api.app.websockets import register_websocket_routes
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.log_buffer import configure_buffer_logger
 from proxbox_api.openapi_custom import custom_openapi_builder
 from proxbox_api.routes.admin import router as admin_router
 from proxbox_api.routes.dcim import router as dcim_router
@@ -96,6 +97,8 @@ def create_app() -> FastAPI:
     )
 
     register_exception_handlers(app)
+
+    configure_buffer_logger("proxbox")
 
     app.include_router(root_meta_router)
     register_cache_routes(app)
