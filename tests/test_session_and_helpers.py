@@ -10,6 +10,7 @@ import pytest
 from netbox_sdk.client import ApiResponse
 from sqlmodel import Session
 
+from proxbox_api.app.netbox_session import get_raw_netbox_session
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
@@ -28,6 +29,8 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
+from proxbox_api.routes.proxmox.nodes import get_node_network
+from proxbox_api.routes.proxmox.replication import cluster_replication
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
 )
@@ -1120,6 +1123,122 @@ def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
 
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"
+
+
+def test_get_raw_netbox_session_closes_database_session(monkeypatch):
+    closed = {"value": False}
+    sentinel = object()
+
+    def fake_get_session():
+        try:
+            yield object()
+        finally:
+            closed["value"] = True
+
+    monkeypatch.setattr("proxbox_api.app.netbox_session.get_session", fake_get_session)
+    monkeypatch.setattr(
+        "proxbox_api.app.netbox_session.get_netbox_session",
+        lambda database_session: sentinel,
+    )
+
+    assert get_raw_netbox_session() is sentinel
+    assert closed["value"] is True
+
+
+def test_get_node_network_requires_explicit_cluster_for_multi_session():
+    class _FakeNetworkAccessor:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def get(self, **kwargs):
+            return self._payload
+
+    class _FakeNodeSession:
+        def __init__(self, name: str, payload: list[dict[str, object]]) -> None:
+            self.name = name
+            self.payload = payload
+            self.calls: list[str] = []
+
+        def session(self, path: str):
+            self.calls.append(path)
+            return _FakeNetworkAccessor(self.payload)
+
+    alpha = _FakeNodeSession(
+        "alpha",
+        [{"iface": "eth0", "type": "bridge", "vlan-id": "10", "vlan-raw-device": "bond0"}],
+    )
+    beta = _FakeNodeSession(
+        "beta",
+        [{"iface": "eth0", "type": "bridge", "vlan-id": "20", "vlan-raw-device": "bond1"}],
+    )
+
+    with pytest.raises(
+        ProxboxException,
+        match="Multiple Proxmox sessions configured; provide cluster_name for node network.",
+    ):
+        asyncio.run(get_node_network([alpha, beta], node="pve01"))
+
+    result = asyncio.run(get_node_network([alpha], node="pve01"))
+    assert result[0].vlan_id == "10"
+    assert alpha.calls == ["/nodes/pve01/network"]
+
+    result = asyncio.run(get_node_network([alpha, beta], node="pve01", cluster_name="beta"))
+    assert result[0].vlan_id == "20"
+    assert result[0].vlan_raw_device == "bond1"
+    assert beta.calls == ["/nodes/pve01/network"]
+    assert alpha.calls == ["/nodes/pve01/network"]
+
+
+def test_cluster_replication_reports_partial_failures():
+    class _FakeReplicationAccessor:
+        def __init__(self, payload=None, error: Exception | None = None):
+            self._payload = payload
+            self._error = error
+
+        def get(self):
+            if self._error is not None:
+                raise self._error
+            return self._payload
+
+    class _FakeClusterAccessor:
+        def __init__(self, payload=None, error: Exception | None = None):
+            self.replication = _FakeReplicationAccessor(payload=payload, error=error)
+
+    class _FakeReplicationSession:
+        def __init__(self, name: str, payload=None, error: Exception | None = None):
+            self.name = name
+            self.session = SimpleNamespace(cluster=_FakeClusterAccessor(payload=payload, error=error))
+
+    sessions = [
+        _FakeReplicationSession(
+            "alpha",
+            payload=[
+                {
+                    "comment": "alpha job",
+                    "disable": False,
+                    "guest": 100,
+                    "id": "100-1",
+                    "jobnum": 1,
+                    "rate": 10.5,
+                    "remove_job": None,
+                    "schedule": "*/15",
+                    "source": "proxmox-node-1",
+                    "target": "proxmox-node-2",
+                    "type": "local",
+                }
+            ],
+        ),
+        _FakeReplicationSession("beta", error=RuntimeError("replication unavailable")),
+    ]
+
+    result = asyncio.run(cluster_replication(sessions))
+
+    assert result[0].cluster_name == "alpha"
+    assert result[0].status == "ok"
+    assert result[0].guest == 100
+    assert result[1].cluster_name == "beta"
+    assert result[1].status == "error"
+    assert "replication unavailable" in (result[1].error or "")
 
 
 def test_typed_proxmox_helpers_validate_live_payloads():

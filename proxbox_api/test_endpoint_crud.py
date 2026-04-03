@@ -42,16 +42,22 @@ def test_proxmox_endpoint_crud_lifecycle(client: TestClient):
     created = create_response.json()
     endpoint_id = created["id"]
     assert created["name"] == "pve-lab-1"
+    for secret_field in ("password", "token_name", "token_value"):
+        assert secret_field not in created
 
     list_response = client.get("/proxmox/endpoints")
     assert list_response.status_code == 200
     listed = list_response.json()
     assert len(listed) == 1
     assert listed[0]["id"] == endpoint_id
+    for secret_field in ("password", "token_name", "token_value"):
+        assert secret_field not in listed[0]
 
     get_response = client.get(f"/proxmox/endpoints/{endpoint_id}")
     assert get_response.status_code == 200
     assert get_response.json()["username"] == "root@pam"
+    for secret_field in ("password", "token_name", "token_value"):
+        assert secret_field not in get_response.json()
 
     update_payload = {
         "name": "pve-lab-1-updated",
@@ -64,6 +70,8 @@ def test_proxmox_endpoint_crud_lifecycle(client: TestClient):
     assert updated["name"] == "pve-lab-1-updated"
     assert updated["port"] == 8443
     assert updated["verify_ssl"] is True
+    for secret_field in ("password", "token_name", "token_value"):
+        assert secret_field not in updated
 
     delete_response = client.delete(f"/proxmox/endpoints/{endpoint_id}")
     assert delete_response.status_code == 200

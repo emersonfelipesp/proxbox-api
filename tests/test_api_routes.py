@@ -286,10 +286,20 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
     )
     endpoint_id = created.id
     assert created.name == "pve-lab-1"
-    assert created.password == "supersecret"
+    assert created.model_dump() == {
+        "id": endpoint_id,
+        "name": "pve-lab-1",
+        "ip_address": "10.0.0.10",
+        "domain": "pve-lab-1.local",
+        "port": 8006,
+        "username": "root@pam",
+        "verify_ssl": False,
+    }
 
     listed = get_proxmox_endpoints(db_session)
     assert len(listed) == 1
+    assert listed[0].model_dump()["name"] == "pve-lab-1"
+    assert "password" not in listed[0].model_dump()
 
     updated = update_proxmox_endpoint(
         endpoint_id,
@@ -303,8 +313,15 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
         db_session,
     )
     assert updated.name == "pve-lab-1-updated"
-    assert updated.token_name == "sync"
-    assert updated.verify_ssl is True
+    assert updated.model_dump() == {
+        "id": endpoint_id,
+        "name": "pve-lab-1-updated",
+        "ip_address": "10.0.0.10",
+        "domain": "pve-lab-1.local",
+        "port": 8006,
+        "username": "root@pam",
+        "verify_ssl": True,
+    }
 
     deleted = delete_proxmox_endpoint(endpoint_id, db_session)
     assert deleted == {"message": "Proxmox endpoint deleted."}
