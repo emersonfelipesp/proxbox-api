@@ -74,7 +74,7 @@ show_missing = true
 [tool.uv]
 default-groups = ["dev"]
 # Raise transitive Pygments (pytest / MkDocs stack) above Dependabot-patched floor.
-constraint-dependencies = ["pygments>=2.20.0"]
+constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4"]
 
 [tool.ruff]
 target-version = "py311"
