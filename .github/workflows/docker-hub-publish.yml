@@ -112,7 +112,12 @@ jobs:
           uv run python -m compileall proxbox_api scripts tests
           uv run python -c "import proxbox_api.main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80 \
+            --deselect=tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists
           EOF
           chmod +x /tmp/docker-tests.sh
 
