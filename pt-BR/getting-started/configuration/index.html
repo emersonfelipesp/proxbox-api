@@ -434,22 +434,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#endpoint-netbox-singleton" class="md-nav__link">
+  <a href="#endpoint-netbox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Endpoint NetBox (singleton)
+        Endpoint NetBox
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Endpoint NetBox (singleton)">
+    <nav class="md-nav" aria-label="Endpoint NetBox">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#exemplo-de-payload" class="md-nav__link">
+  <a href="#exemplo-de-token-netbox-v1" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Exemplo de payload
+        Exemplo de token NetBox v1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exemplo-de-token-netbox-v2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exemplo de token NetBox v2
       
     </span>
   </a>
@@ -462,15 +473,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#endpoints-proxmox-multiplos" class="md-nav__link">
+  <a href="#endpoints-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Endpoints Proxmox (multiplos)
+        Endpoints Proxmox
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Endpoints Proxmox (multiplos)">
+    <nav class="md-nav" aria-label="Endpoints Proxmox">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1055,22 +1066,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#endpoint-netbox-singleton" class="md-nav__link">
+  <a href="#endpoint-netbox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Endpoint NetBox (singleton)
+        Endpoint NetBox
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Endpoint NetBox (singleton)">
+    <nav class="md-nav" aria-label="Endpoint NetBox">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#exemplo-de-payload" class="md-nav__link">
+  <a href="#exemplo-de-token-netbox-v1" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Exemplo de payload
+        Exemplo de token NetBox v1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exemplo-de-token-netbox-v2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exemplo de token NetBox v2
       
     </span>
   </a>
@@ -1083,15 +1105,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#endpoints-proxmox-multiplos" class="md-nav__link">
+  <a href="#endpoints-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Endpoints Proxmox (multiplos)
+        Endpoints Proxmox
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Endpoints Proxmox (multiplos)">
+    <nav class="md-nav" aria-label="Endpoints Proxmox">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1185,28 +1207,47 @@
 <ul>
 <li>Arquivo SQLite padrao: <code>database.db</code> na raiz do repositorio.</li>
 <li>ORM: SQLModel.</li>
-<li>Tabelas sao criadas automaticamente no startup.</li>
+<li>As tabelas sao criadas automaticamente no startup.</li>
 </ul>
-<h2 id="endpoint-netbox-singleton">Endpoint NetBox (singleton)<a class="headerlink" href="#endpoint-netbox-singleton" title="Permanent link">&para;</a></h2>
-<p>A configuracao de endpoint NetBox e gerenciada por:</p>
+<h2 id="endpoint-netbox">Endpoint NetBox<a class="headerlink" href="#endpoint-netbox" title="Permanent link">&para;</a></h2>
+<p>A configuracao do endpoint NetBox e gerenciada por:</p>
 <ul>
 <li><code>POST /netbox/endpoint</code></li>
 <li><code>GET /netbox/endpoint</code></li>
 <li><code>PUT /netbox/endpoint/{netbox_id}</code></li>
 <li><code>DELETE /netbox/endpoint/{netbox_id}</code></li>
 </ul>
-<p>Apenas um registro de endpoint NetBox e permitido.</p>
-<h3 id="exemplo-de-payload">Exemplo de payload<a class="headerlink" href="#exemplo-de-payload" title="Permanent link">&para;</a></h3>
+<p>Apenas um registro NetBox e permitido.</p>
+<p>O modelo armazenado agora inclui:</p>
+<ul>
+<li><code>token_version</code>: <code>v1</code> ou <code>v2</code></li>
+<li><code>token_key</code>: necessario para token v2, ignorado no token v1</li>
+<li><code>token</code>: o segredo do token</li>
+</ul>
+<h3 id="exemplo-de-token-netbox-v1">Exemplo de token NetBox v1<a class="headerlink" href="#exemplo-de-token-netbox-v1" title="Permanent link">&para;</a></h3>
 <p><code>json
 {
   "name": "netbox-primary",
   "ip_address": "10.0.0.20",
   "domain": "netbox.local",
   "port": 443,
+  "token_version": "v1",
   "token": "&lt;NETBOX_API_TOKEN&gt;",
   "verify_ssl": true
 }</code></p>
-<h2 id="endpoints-proxmox-multiplos">Endpoints Proxmox (multiplos)<a class="headerlink" href="#endpoints-proxmox-multiplos" title="Permanent link">&para;</a></h2>
+<h3 id="exemplo-de-token-netbox-v2">Exemplo de token NetBox v2<a class="headerlink" href="#exemplo-de-token-netbox-v2" title="Permanent link">&para;</a></h3>
+<p><code>json
+{
+  "name": "netbox-secondary",
+  "ip_address": "10.0.0.21",
+  "domain": "netbox.local",
+  "port": 443,
+  "token_version": "v2",
+  "token_key": "token-name",
+  "token": "&lt;NETBOX_API_TOKEN_SECRET&gt;",
+  "verify_ssl": true
+}</code></p>
+<h2 id="endpoints-proxmox">Endpoints Proxmox<a class="headerlink" href="#endpoints-proxmox" title="Permanent link">&para;</a></h2>
 <p>Os registros de endpoint Proxmox sao gerenciados por:</p>
 <ul>
 <li><code>POST /proxmox/endpoints</code></li>
@@ -1219,6 +1260,7 @@
 <ul>
 <li>Informe <code>password</code>, ou ambos <code>token_name</code> e <code>token_value</code>.</li>
 <li><code>token_name</code> e <code>token_value</code> devem ser enviados juntos.</li>
+<li>Os nomes dos endpoints devem ser unicos.</li>
 </ul>
 <h3 id="exemplo-com-senha">Exemplo com senha<a class="headerlink" href="#exemplo-com-senha" title="Permanent link">&para;</a></h3>
 <p><code>json
@@ -1245,9 +1287,9 @@
 }</code></p>
 <h2 id="comportamento-de-sessoes-em-runtime">Comportamento de sessoes em runtime<a class="headerlink" href="#comportamento-de-sessoes-em-runtime" title="Permanent link">&para;</a></h2>
 <ul>
-<li>A sessao NetBox e derivada do endpoint NetBox armazenado (singleton).</li>
-<li>Sessoes Proxmox usam por padrao registros de endpoint do banco local.</li>
-<li>O modo legado (<code>source=netbox</code>) segue suportado na dependencia de sessoes Proxmox.</li>
+<li>A sessao NetBox e derivada do endpoint NetBox armazenado.</li>
+<li>As sessoes Proxmox usam por padrao registros de endpoint do banco local.</li>
+<li>O modo legado (<code>source=netbox</code>) continua suportado na dependencia de sessoes Proxmox.</li>
 </ul>
 <h2 id="variaveis-de-ambiente">Variaveis de ambiente<a class="headerlink" href="#variaveis-de-ambiente" title="Permanent link">&para;</a></h2>
 <table>
@@ -1262,17 +1304,37 @@
 <tr>
 <td><code>PROXBOX_NETBOX_TIMEOUT</code></td>
 <td><code>120</code></td>
-<td>Timeout da API NetBox em segundos. Aplicado na config <code>netbox-sdk</code> e requisicoes <code>aiohttp</code>.</td>
+<td>Timeout da API NetBox em segundos. Aplicado ao <code>netbox-sdk</code> e as requisicoes internas.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_MAX_RETRIES</code></td>
+<td><code>3</code></td>
+<td>Numero de tentativas para falhas transientes do NetBox.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_RETRY_DELAY</code></td>
+<td><code>1.0</code></td>
+<td>Delay inicial, em segundos, para retries do NetBox.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code></td>
 <td><code>4</code></td>
-<td>Numero maximo de tarefas concorrentes na criacao de VMs durante a sincronizacao.</td>
+<td>Maximo de tarefas concorrentes de escrita no sync de VMs.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code></td>
+<td><code>8</code></td>
+<td>Maximo de operacoes concorrentes de escrita no NetBox.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_PROXMOX_FETCH_CONCURRENCY</code></td>
+<td><code>8</code></td>
+<td>Maximo de operacoes concorrentes de leitura no Proxmox.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_FETCH_MAX_CONCURRENCY</code></td>
 <td><code>8</code></td>
-<td>Numero maximo de operacoes concorrentes de coleta usadas em sync de backup, snapshot e storage.</td>
+<td>Override legado de concorrencia usado por alguns entrypoints de sync.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_CORS_EXTRA_ORIGINS</code></td>
@@ -1287,12 +1349,12 @@
 <tr>
 <td><code>PROXBOX_STRICT_STARTUP</code></td>
 <td>nao definido</td>
-<td>Quando <code>1</code>, <code>true</code> ou <code>yes</code>, falha no mount de rotas Proxmox geradas interrompe o startup da API.</td>
+<td>Quando <code>1</code>, <code>true</code> ou <code>yes</code>, falha no mount de rotas Proxmox geradas interrompe o startup.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code></td>
 <td>nao definido</td>
-<td>Quando <code>1</code>, <code>true</code> ou <code>yes</code>, nao cria cliente NetBox padrao no startup (util para desenvolvimento parcial).</td>
+<td>Quando <code>1</code>, <code>true</code> ou <code>yes</code>, nao cria o cliente NetBox padrao no startup.</td>
 </tr>
 </tbody>
 </table>

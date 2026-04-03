@@ -1107,6 +1107,9 @@ pytest</code></p>
 <p>Para o caminho especifico de geracao de schema e helpers tipados:</p>
 <p><code>bash
 pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py</code></p>
+<p>Para a superficie atual de rotas e contratos de docs:</p>
+<p><code>bash
+pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py</code></p>
 <h2 id="testes-direcionados-de-endpoints">Testes direcionados de endpoints<a class="headerlink" href="#testes-direcionados-de-endpoints" title="Permanent link">&para;</a></h2>
 <p>O arquivo <code>proxbox_api/test_endpoint_crud.py</code> cobre:</p>
 <ul>

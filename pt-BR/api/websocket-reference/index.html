@@ -1055,7 +1055,7 @@
 <p>Comportamento:</p>
 <ul>
 <li>Aceita conexao.</li>
-<li>Envia contador incremental de mensagem a cada 2 segundos.</li>
+<li>Envia um contador incremental de mensagens a cada 2 segundos.</li>
 </ul>
 <p>Uso:</p>
 <ul>
@@ -1069,8 +1069,8 @@
 <p>Comportamento:</p>
 <ul>
 <li>Aceita conexao e envia texto de boas-vindas.</li>
-<li>Dispara fluxo de sincronizacao de VMs (<code>create_virtual_machines</code>).</li>
-<li>Emite eventos JSON de progresso enquanto o sync de VMs executa (quando o modo websocket esta ativo no fluxo).</li>
+<li>Dispara o fluxo de sincronizacao de VMs (<code>create_virtual_machines</code>).</li>
+<li>Emite eventos JSON de progresso enquanto o sync de VMs executa, quando o modo websocket esta ativo no fluxo.</li>
 </ul>
 <p>Uso:</p>
 <ul>
@@ -1088,7 +1088,7 @@
 <li><code>Full Update Sync</code></li>
 <li><code>Sync Nodes</code></li>
 <li><code>Sync Virtual Machines</code></li>
-<li>Executa tarefas de sync correspondentes e envia mensagens de status.</li>
+<li>Executa as tarefas de sync correspondentes e envia mensagens de status.</li>
 </ul>
 <p>Comando invalido:</p>
 <ul>
@@ -1098,6 +1098,7 @@
 <ul>
 <li>Fluxos WebSocket dependem de endpoint NetBox valido e sessoes Proxmox disponiveis.</li>
 <li>Operacoes longas criam journal entries em objetos do plugin NetBox para auditabilidade.</li>
+<li>Os payloads de progresso sao normalizados pelo mesmo bridge usado pelo SSE, produzindo frames <code>step</code>, <code>error</code> e <code>complete</code>.</li>
 </ul>
 
 

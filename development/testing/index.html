@@ -1107,6 +1107,9 @@ pytest</code></p>
 <p>For the schema-generation and typed helper path specifically:</p>
 <p><code>bash
 pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py</code></p>
+<p>For the current route and docs contract surface:</p>
+<p><code>bash
+pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py</code></p>
 <h2 id="targeted-endpoint-tests">Targeted endpoint tests<a class="headerlink" href="#targeted-endpoint-tests" title="Permanent link">&para;</a></h2>
 <p>The file <code>proxbox_api/test_endpoint_crud.py</code> includes dedicated coverage for:</p>
 <ul>

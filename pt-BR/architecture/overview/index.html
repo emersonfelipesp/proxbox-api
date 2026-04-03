@@ -1149,49 +1149,60 @@
 <p><code>proxbox-api</code> e organizado em camadas de rotas FastAPI, dependencias de sessao, servicos de sync e camadas de schema.</p>
 <h2 id="camadas-de-alto-nivel">Camadas de alto nivel<a class="headerlink" href="#camadas-de-alto-nivel" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Camada de API: <code>proxbox_api/main.py</code>, <code>proxbox_api/routes/*</code></li>
+<li>Camada de API: <code>proxbox_api/main.py</code>, <code>proxbox_api/app/*</code> e <code>proxbox_api/routes/*</code></li>
 <li>Camada de sessao: <code>proxbox_api/session/*</code></li>
-<li>Camada de servicos: <code>proxbox_api/services/sync/*</code></li>
+<li>Camada de servicos: <code>proxbox_api/services/*</code></li>
 <li>Camada de schemas e enums: <code>proxbox_api/schemas/*</code>, <code>proxbox_api/enum/*</code></li>
 <li>Camada de persistencia: <code>proxbox_api/database.py</code></li>
-<li>Camada utilitaria: decorators, logger, cache e excecoes</li>
+<li>Camada utilitaria: streaming, logging, cache, retry e excecoes</li>
 </ul>
 <h2 id="componentes-de-runtime">Componentes de runtime<a class="headerlink" href="#componentes-de-runtime" title="Permanent link">&para;</a></h2>
 <ul>
-<li>App FastAPI com grupos de rotas:</li>
+<li>App FastAPI monta os grupos de rotas atuais:</li>
+<li><code>/</code></li>
+<li><code>/cache</code></li>
+<li><code>/clear-cache</code></li>
+<li><code>/full-update</code></li>
+<li><code>/ws</code></li>
+<li><code>/ws/virtual-machines</code></li>
+<li><code>/admin</code></li>
 <li><code>/netbox</code></li>
 <li><code>/proxmox</code></li>
 <li><code>/dcim</code></li>
 <li><code>/virtualization</code></li>
 <li><code>/extras</code></li>
+<li><code>/sync/individual</code></li>
 <li>Configuracao de endpoints persistida em SQLite.</li>
-<li>Acesso a NetBox via <code>netbox-sdk</code> sync proxy.</li>
-<li>Acesso a Proxmox via sessoes <code>proxmoxer</code>.</li>
+<li>Acesso ao NetBox via clientes <code>netbox-sdk</code> sync e async.</li>
+<li>Acesso ao Proxmox via sessoes <code>proxmoxer</code> e wrappers tipados.</li>
+<li>Rotas Proxmox geradas em runtime sao montadas durante o startup da aplicacao.</li>
 </ul>
 <h2 id="modelos-de-dados-principais">Modelos de dados principais<a class="headerlink" href="#modelos-de-dados-principais" title="Permanent link">&para;</a></h2>
 <h3 id="netboxendpoint"><code>NetBoxEndpoint</code><a class="headerlink" href="#netboxendpoint" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Campos: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>token</code>, <code>verify_ssl</code></li>
+<li>Campos: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>token_version</code>, <code>token_key</code>, <code>token</code>, <code>verify_ssl</code></li>
+<li>Suporta token NetBox v1 e v2.</li>
 <li>Inclui propriedade computada <code>url</code> para criar sessao NetBox.</li>
-<li>Comportamento singleton e aplicado na logica do endpoint de criacao.</li>
+<li>O comportamento singleton e aplicado na logica do endpoint de criacao.</li>
 </ul>
 <h3 id="proxmoxendpoint"><code>ProxmoxEndpoint</code><a class="headerlink" href="#proxmoxendpoint" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Campos: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>username</code>, <code>password</code>, <code>verify_ssl</code>, <code>token_name</code>, <code>token_value</code></li>
-<li>Suporta autenticacao por senha ou por token.</li>
+<li><code>domain</code> e opcional e <code>name</code> e unico.</li>
+<li>Suporta autenticacao por senha ou por par de token.</li>
 </ul>
 <h2 id="fluxo-de-startup">Fluxo de startup<a class="headerlink" href="#fluxo-de-startup" title="Permanent link">&para;</a></h2>
 <ol>
-<li>A app inicializa e tenta criar tabelas do banco.</li>
-<li>Carrega endpoint NetBox, se existir.</li>
-<li>Inicializa sessao NetBox e salva na camada de compatibilidade.</li>
-<li>Monta origins de CORS.</li>
-<li>Inclui routers.</li>
+<li><code>create_app()</code> inicializa o banco e o bootstrap do NetBox.</li>
+<li>A app monta static assets, CORS, handlers de excecao, rotas de cache, full-update e WebSocket.</li>
+<li>Os routers sao incluidos para NetBox, Proxmox, DCIM, virtualization, extras e sync individual.</li>
+<li>As rotas Proxmox geradas em runtime sao montadas no startup da lifespan e podem falhar em modo open, a menos que <code>PROXBOX_STRICT_STARTUP</code> esteja habilitado.</li>
+<li>O OpenAPI customizado embute o contrato Proxmox gerado quando ele existe.</li>
 </ol>
 <h2 id="extensao-de-openapi">Extensao de OpenAPI<a class="headerlink" href="#extensao-de-openapi" title="Permanent link">&para;</a></h2>
 <p><code>proxbox_api/openapi_custom.py</code> substitui a geracao de OpenAPI do FastAPI e embute metadados do OpenAPI Proxmox gerado quando disponivel:</p>
 <ul>
-<li>Arquivos-fontes: <code>proxbox_api/generated/proxmox/&lt;version-tag&gt;/openapi.json</code> (artefatos versionados; <code>latest</code> e a tag de versao padrao).</li>
+<li>Arquivo-fonte: <code>proxbox_api/generated/proxmox/latest/openapi.json</code></li>
 <li>Campos de extensao:</li>
 <li><code>info.x-proxmox-generated-openapi</code></li>
 <li><code>x-proxmox-generated-openapi</code></li>

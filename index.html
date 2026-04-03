@@ -1070,19 +1070,19 @@
 <p>This documentation covers installation, configuration, architecture, API references, synchronization flows, and contribution guidelines.</p>
 <h2 id="what-this-service-does">What this service does<a class="headerlink" href="#what-this-service-does" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Stores local endpoint bootstrap data in SQLite for NetBox and Proxmox connections.</li>
-<li>Exposes REST APIs for Proxmox and NetBox endpoint management.</li>
-<li>Exposes Proxmox data and sync orchestration endpoints.</li>
+<li>Stores local bootstrap data in SQLite for NetBox and Proxmox connections.</li>
+<li>Exposes REST APIs for endpoint management, status checks, and live-generated Proxmox contract routes.</li>
+<li>Exposes Proxmox discovery and sync orchestration endpoints, plus targeted individual-sync helpers.</li>
 <li>Provides WebSocket and SSE streaming endpoints for real-time sync feedback.</li>
 <li>Includes a generated OpenAPI extension for Proxmox API viewer contracts.</li>
 </ul>
 <h2 id="main-capabilities">Main capabilities<a class="headerlink" href="#main-capabilities" title="Permanent link">&para;</a></h2>
 <ul>
-<li>NetBox endpoint bootstrap (singleton endpoint behavior).</li>
-<li>Proxmox endpoint CRUD (multiple endpoints).</li>
-<li>Cluster, node, storage, and VM data collection.</li>
-<li>Virtual machine and backup synchronization toward NetBox.</li>
-<li>Custom field bootstrap under NetBox extras.</li>
+<li>NetBox endpoint bootstrap with token v1 and v2 support.</li>
+<li>Proxmox endpoint CRUD with password or token-pair auth.</li>
+<li>Cluster, node, storage, VM, backup, snapshot, and replication data collection.</li>
+<li>Virtual machine, interface, IP, disk, storage, and backup synchronization toward NetBox.</li>
+<li>Admin log inspection, cache inspection, and full-update orchestration.</li>
 </ul>
 <h2 id="audience">Audience<a class="headerlink" href="#audience" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1092,8 +1092,8 @@
 </ul>
 <h2 id="quick-links">Quick links<a class="headerlink" href="#quick-links" title="Permanent link">&para;</a></h2>
 <ul>
-<li>API docs (runtime): <code>/docs</code> (Swagger UI), <code>/redoc</code>.</li>
-<li>Health/info root endpoint: <code>/</code>.</li>
+<li>API docs (runtime): <code>/docs</code> and <code>/redoc</code>.</li>
+<li>Root metadata endpoint: <code>/</code>.</li>
 <li>Project repository: <a href="https://github.com/emersonfelipesp/proxbox-api">https://github.com/emersonfelipesp/proxbox-api</a></li>
 </ul>
 <h2 id="language">Language<a class="headerlink" href="#language" title="Permanent link">&para;</a></h2>

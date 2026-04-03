@@ -323,6 +323,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#principais-capacidades" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Principais capacidades
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#idioma" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -964,6 +975,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#principais-capacidades" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Principais capacidades
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#idioma" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1004,11 +1026,19 @@
 <p>Esta documentacao cobre instalacao, configuracao, arquitetura, referencias de API, fluxos de sincronizacao e contribuicao.</p>
 <h2 id="o-que-este-servico-faz">O que este servico faz<a class="headerlink" href="#o-que-este-servico-faz" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Armazena dados locais de bootstrap para conexoes NetBox e Proxmox em SQLite.</li>
-<li>Expoe APIs REST para gerenciamento de endpoints NetBox e Proxmox.</li>
-<li>Expoe endpoints de dados Proxmox e orquestracao de sincronizacao.</li>
-<li>Fornece endpoints WebSocket e SSE streaming para feedback de sincronizacao em tempo real.</li>
-<li>Inclui extensao OpenAPI gerada para contratos do API viewer do Proxmox.</li>
+<li>Armazena dados locais de bootstrap em SQLite para conexoes NetBox e Proxmox.</li>
+<li>Expoe APIs REST para gerenciamento de endpoints, verificacao de status e rotas geradas dinamicamente do contrato Proxmox.</li>
+<li>Expoe endpoints de descoberta e orquestracao de sync do Proxmox, alem de sync individual por objeto.</li>
+<li>Fornece endpoints WebSocket e SSE para feedback de sincronizacao em tempo real.</li>
+<li>Inclui extensao OpenAPI gerada para os contratos do API viewer do Proxmox.</li>
+</ul>
+<h2 id="principais-capacidades">Principais capacidades<a class="headerlink" href="#principais-capacidades" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Bootstrap do endpoint NetBox com suporte a token v1 e v2.</li>
+<li>CRUD de endpoints Proxmox com senha ou par de token.</li>
+<li>Coleta de dados de cluster, node, storage, VM, backup, snapshot e replication.</li>
+<li>Sincronizacao de VM, interfaces, IPs, discos, storages e backups para o NetBox.</li>
+<li>Inspecao de logs do admin, cache e fluxo full-update.</li>
 </ul>
 <h2 id="idioma">Idioma<a class="headerlink" href="#idioma" title="Permanent link">&para;</a></h2>
 <ul>

@@ -1155,7 +1155,7 @@
 <p>Behavior:</p>
 <ul>
 <li>Accepts connection.</li>
-<li>Sends incremental message counter every 2 seconds.</li>
+<li>Sends an incremental message counter every 2 seconds.</li>
 </ul>
 <p>Use case:</p>
 <ul>
@@ -1170,7 +1170,7 @@
 <ul>
 <li>Accepts connection and sends welcome text.</li>
 <li>Triggers VM synchronization workflow (<code>create_virtual_machines</code>).</li>
-<li>Emits JSON progress events while VM sync runs (when websocket mode is enabled in flow).</li>
+<li>Emits JSON progress events while VM sync runs when websocket mode is enabled in the flow.</li>
 </ul>
 <p>Use case:</p>
 <ul>
@@ -1188,7 +1188,7 @@
 <li><code>Full Update Sync</code></li>
 <li><code>Sync Nodes</code></li>
 <li><code>Sync Virtual Machines</code></li>
-<li>Runs corresponding sync tasks and streams status messages.</li>
+<li>Runs the corresponding sync tasks and streams status messages.</li>
 </ul>
 <p>Invalid command behavior:</p>
 <ul>
@@ -1198,6 +1198,7 @@
 <ul>
 <li>WebSocket flows depend on a valid NetBox endpoint and Proxmox sessions.</li>
 <li>Long-running operations may create sync-process records and journal entries in NetBox plugin objects.</li>
+<li>Progress payloads are normalized into <code>step</code>, <code>error</code>, and <code>complete</code> message frames by the shared streaming bridge used across HTTP and WebSocket transports.</li>
 </ul>
 <h2 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
 <p>WebSocket endpoints employ the same error handling and structured logging as HTTP endpoints:</p>

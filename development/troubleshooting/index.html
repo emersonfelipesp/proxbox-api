@@ -885,6 +885,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#generated-proxmox-route-mount-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated Proxmox route mount failures
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cors-issues-in-frontend-integration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1082,6 +1093,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#generated-proxmox-route-mount-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated Proxmox route mount failures
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cors-issues-in-frontend-integration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1221,6 +1243,7 @@
 <ol>
 <li>Create NetBox endpoint with <code>POST /netbox/endpoint</code>.</li>
 <li>Verify it exists with <code>GET /netbox/endpoint</code>.</li>
+<li>If the startup bootstrap was intentionally skipped, confirm <code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code> is not set.</li>
 </ol>
 <h2 id="proxmox-endpoint-auth-validation-errors">Proxmox endpoint auth validation errors<a class="headerlink" href="#proxmox-endpoint-auth-validation-errors" title="Permanent link">&para;</a></h2>
 <p>Symptom:</p>
@@ -1230,7 +1253,19 @@
 </ul>
 <p>Resolution:</p>
 <ul>
-<li>Provide password auth, or provide complete token pair.</li>
+<li>Provide password auth, or provide the complete token pair.</li>
+<li>For the NetBox endpoint, remember token v1 uses <code>token</code> only, while token v2 requires both <code>token_key</code> and <code>token</code>.</li>
+</ul>
+<h2 id="generated-proxmox-route-mount-failures">Generated Proxmox route mount failures<a class="headerlink" href="#generated-proxmox-route-mount-failures" title="Permanent link">&para;</a></h2>
+<p>Symptom:</p>
+<ul>
+<li>Startup logs mention that generated Proxmox routes could not be mounted.</li>
+</ul>
+<p>Resolution:</p>
+<ul>
+<li>Confirm the generated OpenAPI snapshot exists under <code>proxbox_api/generated/proxmox/latest/openapi.json</code>.</li>
+<li>Rebuild the live Proxmox contract with <code>POST /proxmox/viewer/generate</code> if the snapshot is missing.</li>
+<li>If the app should fail closed instead of continuing, enable <code>PROXBOX_STRICT_STARTUP</code>.</li>
 </ul>
 <h2 id="cors-issues-in-frontend-integration">CORS issues in frontend integration<a class="headerlink" href="#cors-issues-in-frontend-integration" title="Permanent link">&para;</a></h2>
 <p>Symptom:</p>
@@ -1253,6 +1288,7 @@
 <li>Validate Proxmox host, port, and credentials.</li>
 <li>Check <code>verify_ssl</code> behavior and certificates.</li>
 <li>Confirm API user/token permissions in Proxmox.</li>
+<li>For multi-endpoint deployments, confirm the correct <code>source</code> and endpoint target selection values are being passed.</li>
 </ul>
 <h2 id="sync-endpoints-return-partial-data">Sync endpoints return partial data<a class="headerlink" href="#sync-endpoints-return-partial-data" title="Permanent link">&para;</a></h2>
 <p>Symptom:</p>
@@ -1261,7 +1297,7 @@
 </ul>
 <p>Resolution:</p>
 <ul>
-<li>Inspect API logs for per-object exceptions.</li>
+<li>Inspect API logs for per-object exceptions with <code>GET /admin/logs</code>.</li>
 <li>Validate required NetBox objects and plugin models exist.</li>
 <li>Re-run sync using WebSocket mode for live visibility.</li>
 </ul>
@@ -1295,7 +1331,7 @@
 <p>Resolution:</p>
 <ul>
 <li>Increase client-side timeout or use streaming-aware HTTP client.</li>
-<li>For large inventories, consider using lower <code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code> values to reduce NetBox API pressure and avoid cascading timeouts.</li>
+<li>For large inventories, consider using lower <code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code> and <code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code> values to reduce NetBox API pressure and avoid cascading timeouts.</li>
 <li>Check <code>PROXBOX_NETBOX_TIMEOUT</code> is sufficient for your NetBox server response time.</li>
 </ul>
 <h3 id="sse-response-contains-hop-by-hop-header-error">SSE response contains hop-by-hop header error<a class="headerlink" href="#sse-response-contains-hop-by-hop-header-error" title="Permanent link">&para;</a></h3>

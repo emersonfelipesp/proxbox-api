@@ -515,7 +515,7 @@
   <a href="#high-level-layers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        High-level layers
+        High-level Layers
       
     </span>
   </a>
@@ -526,7 +526,7 @@
   <a href="#runtime-components" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runtime components
+        Runtime Components
       
     </span>
   </a>
@@ -537,12 +537,12 @@
   <a href="#core-data-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Core data models
+        Core Data Models
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Core data models">
+    <nav class="md-nav" aria-label="Core Data Models">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -576,7 +576,7 @@
   <a href="#startup-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Startup flow
+        Startup Flow
       
     </span>
   </a>
@@ -587,7 +587,7 @@
   <a href="#openapi-extension" class="md-nav__link">
     <span class="md-ellipsis">
       
-        OpenAPI extension
+        OpenAPI Extension
       
     </span>
   </a>
@@ -598,7 +598,7 @@
   <a href="#sync-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sync lifecycle
+        Sync Lifecycle
       
     </span>
   </a>
@@ -1030,7 +1030,7 @@
   <a href="#high-level-layers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        High-level layers
+        High-level Layers
       
     </span>
   </a>
@@ -1041,7 +1041,7 @@
   <a href="#runtime-components" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runtime components
+        Runtime Components
       
     </span>
   </a>
@@ -1052,12 +1052,12 @@
   <a href="#core-data-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Core data models
+        Core Data Models
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Core data models">
+    <nav class="md-nav" aria-label="Core Data Models">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1091,7 +1091,7 @@
   <a href="#startup-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Startup flow
+        Startup Flow
       
     </span>
   </a>
@@ -1102,7 +1102,7 @@
   <a href="#openapi-extension" class="md-nav__link">
     <span class="md-ellipsis">
       
-        OpenAPI extension
+        OpenAPI Extension
       
     </span>
   </a>
@@ -1113,7 +1113,7 @@
   <a href="#sync-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sync lifecycle
+        Sync Lifecycle
       
     </span>
   </a>
@@ -1147,56 +1147,67 @@
 
 <h1 id="architecture-overview">Architecture Overview<a class="headerlink" href="#architecture-overview" title="Permanent link">&para;</a></h1>
 <p><code>proxbox-api</code> is organized around FastAPI routing, session dependencies, sync services, and schema layers.</p>
-<h2 id="high-level-layers">High-level layers<a class="headerlink" href="#high-level-layers" title="Permanent link">&para;</a></h2>
+<h2 id="high-level-layers">High-level Layers<a class="headerlink" href="#high-level-layers" title="Permanent link">&para;</a></h2>
 <ul>
-<li>API layer: <code>proxbox_api/main.py</code>, <code>proxbox_api/routes/*</code></li>
+<li>API layer: <code>proxbox_api/main.py</code>, <code>proxbox_api/app/*</code>, and <code>proxbox_api/routes/*</code></li>
 <li>Session layer: <code>proxbox_api/session/*</code></li>
-<li>Service layer: <code>proxbox_api/services/sync/*</code></li>
+<li>Service layer: <code>proxbox_api/services/*</code></li>
 <li>Schema and enum layer: <code>proxbox_api/schemas/*</code>, <code>proxbox_api/enum/*</code></li>
 <li>Persistence layer: <code>proxbox_api/database.py</code></li>
-<li>Utility layer: decorators, logging, cache, exceptions</li>
+<li>Utility layer: streaming, logging, cache, retry, and error helpers</li>
 </ul>
-<h2 id="runtime-components">Runtime components<a class="headerlink" href="#runtime-components" title="Permanent link">&para;</a></h2>
+<h2 id="runtime-components">Runtime Components<a class="headerlink" href="#runtime-components" title="Permanent link">&para;</a></h2>
 <ul>
-<li>FastAPI app with grouped routers:</li>
+<li>FastAPI app mounts the current route groups:</li>
+<li><code>/</code></li>
+<li><code>/cache</code></li>
+<li><code>/clear-cache</code></li>
+<li><code>/full-update</code></li>
+<li><code>/ws</code></li>
+<li><code>/ws/virtual-machines</code></li>
+<li><code>/admin</code></li>
 <li><code>/netbox</code></li>
 <li><code>/proxmox</code></li>
 <li><code>/dcim</code></li>
 <li><code>/virtualization</code></li>
 <li><code>/extras</code></li>
-<li>SQLite-backed endpoint configuration.</li>
-<li>NetBox API access via <code>netbox-sdk</code> sync proxy.</li>
-<li>Proxmox API access via <code>proxmoxer</code> sessions.</li>
+<li><code>/sync/individual</code></li>
+<li>SQLite-backed endpoint configuration and bootstrap state.</li>
+<li>NetBox API access via <code>netbox-sdk</code> sync and async clients.</li>
+<li>Proxmox API access via <code>proxmoxer</code> sessions and typed helper wrappers.</li>
+<li>Runtime-generated Proxmox live routes mounted during app lifespan startup.</li>
 </ul>
-<h2 id="core-data-models">Core data models<a class="headerlink" href="#core-data-models" title="Permanent link">&para;</a></h2>
+<h2 id="core-data-models">Core Data Models<a class="headerlink" href="#core-data-models" title="Permanent link">&para;</a></h2>
 <h3 id="netboxendpoint"><code>NetBoxEndpoint</code><a class="headerlink" href="#netboxendpoint" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Fields: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>token</code>, <code>verify_ssl</code></li>
+<li>Fields: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>token_version</code>, <code>token_key</code>, <code>token</code>, <code>verify_ssl</code></li>
+<li>Supports both NetBox token v1 and v2 shapes.</li>
 <li>Includes computed <code>url</code> property for NetBox session creation.</li>
 <li>API-level singleton behavior is enforced by create endpoint logic.</li>
 </ul>
 <h3 id="proxmoxendpoint"><code>ProxmoxEndpoint</code><a class="headerlink" href="#proxmoxendpoint" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Fields: <code>name</code>, <code>ip_address</code>, <code>domain</code>, <code>port</code>, <code>username</code>, <code>password</code>, <code>verify_ssl</code>, <code>token_name</code>, <code>token_value</code></li>
-<li>Supports both password and token auth models.</li>
+<li><code>domain</code> is optional and <code>name</code> is unique.</li>
+<li>Supports either password auth or token-pair auth.</li>
 </ul>
-<h2 id="startup-flow">Startup flow<a class="headerlink" href="#startup-flow" title="Permanent link">&para;</a></h2>
+<h2 id="startup-flow">Startup Flow<a class="headerlink" href="#startup-flow" title="Permanent link">&para;</a></h2>
 <ol>
-<li>App initializes and attempts database table creation.</li>
-<li>NetBox endpoint is loaded if present.</li>
-<li>NetBox session is initialized and stored in compatibility layer.</li>
-<li>CORS origins are assembled.</li>
-<li>Routers are mounted.</li>
+<li><code>create_app()</code> initializes the database and NetBox bootstrap state.</li>
+<li>The app mounts static assets, CORS middleware, exception handlers, cache routes, full-update routes, and WebSocket routes.</li>
+<li>Route packages are included for NetBox, Proxmox, DCIM, virtualization, extras, and individual sync helpers.</li>
+<li>Generated Proxmox live routes are mounted during lifespan startup and can fail open unless <code>PROXBOX_STRICT_STARTUP</code> is enabled.</li>
+<li>The custom OpenAPI builder embeds the generated Proxmox OpenAPI contract when one is available.</li>
 </ol>
-<h2 id="openapi-extension">OpenAPI extension<a class="headerlink" href="#openapi-extension" title="Permanent link">&para;</a></h2>
+<h2 id="openapi-extension">OpenAPI Extension<a class="headerlink" href="#openapi-extension" title="Permanent link">&para;</a></h2>
 <p><code>proxbox_api/openapi_custom.py</code> overrides FastAPI OpenAPI generation and embeds generated Proxmox OpenAPI metadata when available:</p>
 <ul>
-<li>Source files: <code>proxbox_api/generated/proxmox/&lt;version-tag&gt;/openapi.json</code> (versioned artifacts; <code>latest</code> is used as the default version tag).</li>
+<li>Source file: <code>proxbox_api/generated/proxmox/latest/openapi.json</code></li>
 <li>Extension fields:</li>
 <li><code>info.x-proxmox-generated-openapi</code></li>
 <li><code>x-proxmox-generated-openapi</code></li>
 </ul>
-<h2 id="sync-lifecycle">Sync lifecycle<a class="headerlink" href="#sync-lifecycle" title="Permanent link">&para;</a></h2>
+<h2 id="sync-lifecycle">Sync Lifecycle<a class="headerlink" href="#sync-lifecycle" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Sync endpoints orchestrate Proxmox discovery and NetBox object creation.</li>
 <li>Journal entries and sync-process records are used for traceability.</li>

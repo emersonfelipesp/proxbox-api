@@ -721,7 +721,7 @@
   <a href="#full-update-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Full update flow
+        Full Update Flow
       
     </span>
   </a>
@@ -732,7 +732,7 @@
   <a href="#virtual-machine-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Virtual machine sync flow
+        Virtual Machine Sync Flow
       
     </span>
   </a>
@@ -743,7 +743,7 @@
   <a href="#backup-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup sync flow
+        Backup Sync Flow
       
     </span>
   </a>
@@ -754,7 +754,7 @@
   <a href="#snapshot-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Snapshot sync flow
+        Snapshot Sync Flow
       
     </span>
   </a>
@@ -765,7 +765,7 @@
   <a href="#storage-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Storage sync flow
+        Storage Sync Flow
       
     </span>
   </a>
@@ -776,7 +776,7 @@
   <a href="#sse-streaming-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        SSE streaming mode
+        SSE Streaming Mode
       
     </span>
   </a>
@@ -787,7 +787,7 @@
   <a href="#websocket-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        WebSocket mode
+        WebSocket Mode
       
     </span>
   </a>
@@ -798,7 +798,7 @@
   <a href="#tracking-and-observability" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Tracking and observability
+        Tracking and Observability
       
     </span>
   </a>
@@ -809,12 +809,12 @@
   <a href="#failure-handling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Failure handling
+        Failure Handling
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Failure handling">
+    <nav class="md-nav" aria-label="Failure Handling">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1096,7 +1096,7 @@
   <a href="#full-update-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Full update flow
+        Full Update Flow
       
     </span>
   </a>
@@ -1107,7 +1107,7 @@
   <a href="#virtual-machine-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Virtual machine sync flow
+        Virtual Machine Sync Flow
       
     </span>
   </a>
@@ -1118,7 +1118,7 @@
   <a href="#backup-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup sync flow
+        Backup Sync Flow
       
     </span>
   </a>
@@ -1129,7 +1129,7 @@
   <a href="#snapshot-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Snapshot sync flow
+        Snapshot Sync Flow
       
     </span>
   </a>
@@ -1140,7 +1140,7 @@
   <a href="#storage-sync-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Storage sync flow
+        Storage Sync Flow
       
     </span>
   </a>
@@ -1151,7 +1151,7 @@
   <a href="#sse-streaming-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        SSE streaming mode
+        SSE Streaming Mode
       
     </span>
   </a>
@@ -1162,7 +1162,7 @@
   <a href="#websocket-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        WebSocket mode
+        WebSocket Mode
       
     </span>
   </a>
@@ -1173,7 +1173,7 @@
   <a href="#tracking-and-observability" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Tracking and observability
+        Tracking and Observability
       
     </span>
   </a>
@@ -1184,12 +1184,12 @@
   <a href="#failure-handling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Failure handling
+        Failure Handling
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Failure handling">
+    <nav class="md-nav" aria-label="Failure Handling">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1278,13 +1278,13 @@
 
 
 <h1 id="synchronization-workflows">Synchronization Workflows<a class="headerlink" href="#synchronization-workflows" title="Permanent link">&para;</a></h1>
-<p>This page explains major synchronization workflows between Proxmox and NetBox.</p>
-<h2 id="full-update-flow">Full update flow<a class="headerlink" href="#full-update-flow" title="Permanent link">&para;</a></h2>
+<p>This page explains the major synchronization workflows between Proxmox and NetBox.</p>
+<h2 id="full-update-flow">Full Update Flow<a class="headerlink" href="#full-update-flow" title="Permanent link">&para;</a></h2>
 <p>HTTP endpoint:</p>
 <ul>
 <li><code>GET /full-update</code></li>
 </ul>
-<p>High-level sequence:</p>
+<p>Current execution order:</p>
 <ol>
 <li>Sync Proxmox nodes into NetBox devices.</li>
 <li>Sync Proxmox storages into NetBox plugin storage records.</li>
@@ -1297,7 +1297,8 @@
 <li>Sync VM interfaces.</li>
 <li>Sync VM IP addresses and primary IP assignment.</li>
 </ol>
-<h2 id="virtual-machine-sync-flow">Virtual machine sync flow<a class="headerlink" href="#virtual-machine-sync-flow" title="Permanent link">&para;</a></h2>
+<p>The streaming variant at <code>GET /full-update/stream</code> emits the same stage transitions over Server-Sent Events.</p>
+<h2 id="virtual-machine-sync-flow">Virtual Machine Sync Flow<a class="headerlink" href="#virtual-machine-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Primary endpoint:</p>
 <ul>
 <li><code>GET /virtualization/virtual-machines/create</code></li>
@@ -1305,14 +1306,14 @@
 <p>Core behavior:</p>
 <ul>
 <li>Reads cluster resources from Proxmox sessions.</li>
-<li>Resolves VM configs per VM (<code>qemu</code>/<code>lxc</code>).</li>
-<li>Builds normalized NetBox payload.</li>
-<li>Creates dependencies (cluster, device, role) as needed.</li>
+<li>Resolves VM configs per VM (<code>qemu</code> and <code>lxc</code>).</li>
+<li>Builds normalized NetBox payloads.</li>
+<li>Creates dependencies such as cluster, device, and role as needed.</li>
 <li>Creates VM interfaces and IP addresses when possible.</li>
 <li>Writes journal entries for auditability.</li>
-<li>In <code>Full Update</code>, VM creation skips network writes so the dedicated VM interface/IP stages own that work.</li>
+<li>In full-update mode, VM creation skips network writes so the dedicated VM interface and IP stages own that work.</li>
 </ul>
-<h2 id="backup-sync-flow">Backup sync flow<a class="headerlink" href="#backup-sync-flow" title="Permanent link">&para;</a></h2>
+<h2 id="backup-sync-flow">Backup Sync Flow<a class="headerlink" href="#backup-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>
 <ul>
 <li><code>GET /virtualization/virtual-machines/backups/create</code></li>
@@ -1323,11 +1324,11 @@
 <ul>
 <li>Discovers backup content in Proxmox storage.</li>
 <li>Maps backups to NetBox VMs.</li>
-<li>Creates backup objects under NetBox plugin model.</li>
+<li>Creates backup objects under the NetBox plugin model.</li>
 <li>Handles duplicate detection.</li>
-<li>Optional deletion of backups missing in Proxmox source.</li>
+<li>Optional deletion of backups missing from the Proxmox source.</li>
 </ul>
-<h2 id="snapshot-sync-flow">Snapshot sync flow<a class="headerlink" href="#snapshot-sync-flow" title="Permanent link">&para;</a></h2>
+<h2 id="snapshot-sync-flow">Snapshot Sync Flow<a class="headerlink" href="#snapshot-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>
 <ul>
 <li><code>GET /virtualization/virtual-machines/snapshots/create</code></li>
@@ -1337,10 +1338,10 @@
 <p>Core behavior:</p>
 <ul>
 <li>Discovers snapshots for NetBox VMs mapped to Proxmox VM IDs.</li>
-<li>Reconciles snapshot objects in NetBox plugin model.</li>
+<li>Reconciles snapshot objects in the NetBox plugin model.</li>
 <li>Resolves related storage records when possible.</li>
 </ul>
-<h2 id="storage-sync-flow">Storage sync flow<a class="headerlink" href="#storage-sync-flow" title="Permanent link">&para;</a></h2>
+<h2 id="storage-sync-flow">Storage Sync Flow<a class="headerlink" href="#storage-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>
 <ul>
 <li><code>GET /virtualization/virtual-machines/storage/create</code></li>
@@ -1349,9 +1350,9 @@
 <p>Core behavior:</p>
 <ul>
 <li>Discovers Proxmox storage definitions.</li>
-<li>Reconciles NetBox plugin storage records used by backup/snapshot flows.</li>
+<li>Reconciles NetBox plugin storage records used by backup and snapshot flows.</li>
 </ul>
-<h2 id="sse-streaming-mode">SSE streaming mode<a class="headerlink" href="#sse-streaming-mode" title="Permanent link">&para;</a></h2>
+<h2 id="sse-streaming-mode">SSE Streaming Mode<a class="headerlink" href="#sse-streaming-mode" title="Permanent link">&para;</a></h2>
 <p>Each sync flow has a corresponding <code>/stream</code> endpoint that emits Server-Sent Events in real time:</p>
 <ul>
 <li><code>GET /full-update/stream</code></li>
@@ -1363,7 +1364,7 @@
 <li>The stream endpoint creates a <code>WebSocketSSEBridge</code> instance.</li>
 <li>The sync service is called with <code>use_websocket=True</code> and the bridge as the <code>websocket</code> argument.</li>
 <li>As the sync service processes each object, it calls <code>await websocket.send_json(...)</code> with per-object progress.</li>
-<li>The bridge converts each websocket payload into an SSE <code>step</code> event with normalized fields (<code>step</code>, <code>status</code>, <code>message</code>, <code>rowid</code>, <code>payload</code>).</li>
+<li>The bridge converts each websocket payload into an SSE <code>step</code> event with normalized fields.</li>
 <li>The stream endpoint iterates <code>bridge.iter_sse()</code> and yields each SSE frame to the HTTP client.</li>
 <li>On completion, the bridge is closed and a final <code>complete</code> event is emitted.</li>
 </ol>
@@ -1374,21 +1375,22 @@
 <li><code>Processing virtual_machine vm101</code></li>
 <li><code>Synced virtual_machine vm101</code></li>
 </ul>
-<h2 id="websocket-mode">WebSocket mode<a class="headerlink" href="#websocket-mode" title="Permanent link">&para;</a></h2>
-<p>The <code>/ws</code> websocket endpoint provides interactive sync with the same per-object progress, but over a bidirectional WebSocket channel. The <code>full-update</code> command triggers the same sync logic but sends JSON messages directly to the websocket client.</p>
-<h2 id="tracking-and-observability">Tracking and observability<a class="headerlink" href="#tracking-and-observability" title="Permanent link">&para;</a></h2>
+<h2 id="websocket-mode">WebSocket Mode<a class="headerlink" href="#websocket-mode" title="Permanent link">&para;</a></h2>
+<p>The <code>/ws</code> websocket endpoint provides interactive sync with the same per-object progress, but over a bidirectional WebSocket channel.
+The <code>full-update</code> command triggers the same sync logic but sends JSON messages directly to the websocket client.</p>
+<h2 id="tracking-and-observability">Tracking and Observability<a class="headerlink" href="#tracking-and-observability" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Sync process records are created in NetBox plugin objects.</li>
-<li>Journal entries are written with summary and errors.</li>
-<li>WebSocket and SSE workflows provide interactive/real-time status output.</li>
+<li>Journal entries are written with summaries and errors.</li>
+<li>WebSocket and SSE workflows provide interactive, real-time status output.</li>
 </ul>
-<h2 id="failure-handling">Failure handling<a class="headerlink" href="#failure-handling" title="Permanent link">&para;</a></h2>
+<h2 id="failure-handling">Failure Handling<a class="headerlink" href="#failure-handling" title="Permanent link">&para;</a></h2>
 <p>Comprehensive error handling is implemented via decorators and validation utilities:</p>
 <h3 id="error-validation">Error Validation<a class="headerlink" href="#error-validation" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>NetBox responses</strong> are validated to ensure they contain required fields (e.g., <code>id</code>) before processing</li>
-<li><strong>Proxmox responses</strong> are validated against Pydantic models for type safety</li>
-<li>Invalid responses raise typed exceptions (<code>NetBoxAPIError</code>, <code>ProxmoxAPIError</code>, etc.)</li>
+<li>NetBox responses are validated to ensure they contain required fields before processing.</li>
+<li>Proxmox responses are validated against Pydantic models where typed helpers are available.</li>
+<li>Invalid responses raise typed exceptions such as <code>NetBoxAPIError</code> or <code>ProxmoxAPIError</code>.</li>
 </ul>
 <h3 id="sync-error-hierarchy">Sync Error Hierarchy<a class="headerlink" href="#sync-error-hierarchy" title="Permanent link">&para;</a></h3>
 <p>Custom exception types provide detailed context:</p>
@@ -1396,30 +1398,30 @@
 <li><code>VMSyncError</code>: Virtual machine sync failures</li>
 <li><code>DeviceSyncError</code>: Node/device sync failures</li>
 <li><code>StorageSyncError</code>: Storage definition failures</li>
-<li><code>NetworkSyncError</code>: Network interface/VLAN failures</li>
+<li><code>NetworkSyncError</code>: Network interface and VLAN failures</li>
 <li>Base: <code>SyncError</code> for generic sync operation failures</li>
 </ul>
 <h3 id="retry-and-resilience">Retry and Resilience<a class="headerlink" href="#retry-and-resilience" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Decorators apply exponential backoff retry logic for transient failures</li>
-<li>Configurable retry counts and backoff intervals</li>
-<li>Failed attempts are logged with context before retry</li>
-<li>Final failures bubble up with full error context</li>
+<li>Retry helpers apply exponential backoff to transient failures.</li>
+<li>The retry behavior is configurable through <code>PROXBOX_NETBOX_MAX_RETRIES</code> and <code>PROXBOX_NETBOX_RETRY_DELAY</code>.</li>
+<li>Failed attempts are logged with context before retry.</li>
+<li>Final failures bubble up with full error context.</li>
 </ul>
 <h3 id="structured-logging">Structured Logging<a class="headerlink" href="#structured-logging" title="Permanent link">&para;</a></h3>
 <p>All sync operations use structured logging for observability:</p>
 <ul>
-<li><strong>Phase logging</strong>: Each distinct phase (filtering, validation, creation) emits logs with operation and phase context</li>
-<li><strong>Resource logging</strong>: Per-object events are logged with resource ID, type, and status</li>
-<li><strong>Completion logging</strong>: Sync results logged with success/failure counts and elapsed time</li>
-<li><strong>Error logging</strong>: Failures include exception details, stack traces, and full operation context</li>
+<li>Phase logging: each distinct phase emits logs with operation and phase context.</li>
+<li>Resource logging: per-object events are logged with resource ID, type, and status.</li>
+<li>Completion logging: sync results include success and failure counts plus elapsed time.</li>
+<li>Error logging: failures include exception details, stack traces, and full operation context.</li>
 </ul>
 <h3 id="response-handling">Response Handling<a class="headerlink" href="#response-handling" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Domain errors are raised via <code>ProxboxException</code> and returned as structured JSON by app-level handler</li>
-<li>Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500</li>
-<li>Route handlers perform best-effort continuation in certain batch loops</li>
-<li>In SSE streaming mode, errors are emitted as <code>event: error</code> frames followed by a final <code>event: complete</code> with <code>ok: false</code></li>
+<li>Domain errors are raised via <code>ProxboxException</code> and returned as structured JSON by app-level handlers.</li>
+<li>Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500.</li>
+<li>Route handlers perform best-effort continuation in certain batch loops.</li>
+<li>In SSE streaming mode, errors are emitted as <code>event: error</code> frames followed by a final <code>event: complete</code> with <code>ok: false</code>.</li>
 </ul>
 <p>For details on error handling implementation, see <code>proxbox_api/utils/sync_error_handling.py</code> and <code>proxbox_api/utils/structured_logging.py</code>.</p>
 
