@@ -20,6 +20,7 @@ Per-object synchronization services that sync individual objects from Proxmox to
 - `backup_sync.py`: `sync_backup_individual()` for a single backup.
 - `snapshot_sync.py`: `sync_snapshot_individual()` for a single snapshot.
 - `replication_sync.py`: `sync_replication_individual()` for a single replication job.
+- `backup_routine_sync.py`: `sync_backup_routine_individual()` for a single backup routine.
 
 ## Key Design Rules
 

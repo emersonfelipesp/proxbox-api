@@ -33,12 +33,12 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
+from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
+from proxbox_api.services.sync.replications import sync_all_replications
 from proxbox_api.services.sync.task_history import (
     sync_all_virtual_machine_task_histories,
 )
-from proxbox_api.services.sync.replications import sync_all_replications
-from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 from proxbox_api.utils.structured_logging import set_operation_id
@@ -91,7 +91,7 @@ async def full_update_sync(  # noqa: C901
 
     operation_id = str(uuid.uuid4())
     set_operation_id(operation_id)
-    logger.info(f"Starting full_update sync", extra={"operation_id": operation_id})
+    logger.info("Starting full_update sync", extra={"operation_id": operation_id})
 
     try:
         sync_nodes = await create_proxmox_devices(
@@ -351,6 +351,8 @@ async def full_update_sync_stream(  # noqa: C901
         sync_node_interfaces: list = []
         sync_vm_interfaces: list = []
         sync_vm_ip_addresses: list = []
+        sync_replications: dict = {}
+        sync_backup_routines: dict = {}
         devices_bridge = WebSocketSSEBridge()
         storage_bridge = WebSocketSSEBridge()
         vm_bridge = WebSocketSSEBridge()
@@ -361,6 +363,8 @@ async def full_update_sync_stream(  # noqa: C901
         node_interfaces_bridge = WebSocketSSEBridge()
         vm_interfaces_bridge = WebSocketSSEBridge()
         vm_ip_addresses_bridge = WebSocketSSEBridge()
+        replications_bridge = WebSocketSSEBridge()
+        backup_routines_bridge = WebSocketSSEBridge()
 
         tag_refs = [
             {
@@ -373,7 +377,7 @@ async def full_update_sync_stream(  # noqa: C901
 
         operation_id = str(uuid.uuid4())
         set_operation_id(operation_id)
-        logger.info(f"Starting full_update sync (stream)", extra={"operation_id": operation_id})
+        logger.info("Starting full_update sync (stream)", extra={"operation_id": operation_id})
 
         try:
             yield sse_event(
@@ -768,6 +772,78 @@ async def full_update_sync_stream(  # noqa: C901
             )
 
             yield sse_event(
+                "step",
+                {
+                    "step": "replications",
+                    "status": "started",
+                    "message": "Starting replications synchronization.",
+                },
+            )
+
+            async def _run_replications_sync():
+                try:
+                    return await sync_all_replications(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                    )
+                finally:
+                    await replications_bridge.close()
+
+            replications_task = asyncio.create_task(_run_replications_sync())
+            async for frame in replications_bridge.iter_sse():
+                yield frame
+            sync_replications = await replications_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "replications",
+                    "status": "completed",
+                    "message": "Replications synchronization finished.",
+                    "result": {
+                        "created": sync_replications.get("created", 0),
+                        "updated": sync_replications.get("updated", 0),
+                    },
+                },
+            )
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "backup-routines",
+                    "status": "started",
+                    "message": "Starting backup routines synchronization.",
+                },
+            )
+
+            async def _run_backup_routines_sync():
+                try:
+                    return await sync_all_backup_routines(
+                        netbox_session=netbox_session,
+                        pxs=pxs,
+                    )
+                finally:
+                    await backup_routines_bridge.close()
+
+            backup_routines_task = asyncio.create_task(_run_backup_routines_sync())
+            async for frame in backup_routines_bridge.iter_sse():
+                yield frame
+            sync_backup_routines = await backup_routines_task
+
+            yield sse_event(
+                "step",
+                {
+                    "step": "backup-routines",
+                    "status": "completed",
+                    "message": "Backup routines synchronization finished.",
+                    "result": {
+                        "created": sync_backup_routines.get("created", 0),
+                        "updated": sync_backup_routines.get("updated", 0),
+                    },
+                },
+            )
+
+            yield sse_event(
                 "complete",
                 {
                     "ok": True,
@@ -783,6 +859,8 @@ async def full_update_sync_stream(  # noqa: C901
                         "node_interfaces": sync_node_interfaces,
                         "vm_interfaces": sync_vm_interfaces,
                         "vm_ip_addresses": sync_vm_ip_addresses,
+                        "replications": sync_replications,
+                        "backup_routines": sync_backup_routines,
                         "devices_count": len(sync_nodes),
                         "storage_count": len(sync_storage),
                         "virtual_machines_count": len(sync_vms),
@@ -793,6 +871,10 @@ async def full_update_sync_stream(  # noqa: C901
                         "node_interfaces_count": len(sync_node_interfaces),
                         "vm_interfaces_count": len(sync_vm_interfaces),
                         "vm_ip_addresses_count": len(sync_vm_ip_addresses),
+                        "replications_count": sync_replications.get("created", 0)
+                        + sync_replications.get("updated", 0),
+                        "backup_routines_count": sync_backup_routines.get("created", 0)
+                        + sync_backup_routines.get("updated", 0),
                     },
                 },
             )
