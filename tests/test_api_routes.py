@@ -509,6 +509,12 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
     async def _fake_vm_ip_addresses(**kwargs):
         return []
 
+    async def _fake_replications(**kwargs):
+        return {"created": 0, "updated": 0, "errors": 0}
+
+    async def _fake_backup_routines(**kwargs):
+        return {"created": 0, "updated": 0, "errors": 0}
+
     monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fake_devices)
     monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
     monkeypatch.setattr("proxbox_api.app.full_update.create_storages", _fake_storage)
@@ -530,6 +536,10 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
     )
     monkeypatch.setattr(
         "proxbox_api.app.full_update.create_only_vm_ip_addresses", _fake_vm_ip_addresses
+    )
+    monkeypatch.setattr("proxbox_api.app.full_update.sync_all_replications", _fake_replications)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_backup_routines", _fake_backup_routines
     )
 
     body = asyncio.run(
@@ -561,6 +571,8 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
         "node_interfaces": [],
         "vm_interfaces": [],
         "vm_ip_addresses": [],
+        "replications": {"created": 0, "updated": 0, "errors": 0},
+        "backup_routines": {"created": 0, "updated": 0, "errors": 0},
         "devices_count": 1,
         "storage_count": 1,
         "virtual_machines_count": 1,
@@ -571,6 +583,8 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
         "node_interfaces_count": 0,
         "vm_interfaces_count": 0,
         "vm_ip_addresses_count": 0,
+        "replications_count": 0,
+        "backup_routines_count": 0,
     }
 
 
