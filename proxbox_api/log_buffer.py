@@ -5,15 +5,10 @@ from __future__ import annotations
 import logging
 import threading
 import traceback
-import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 
 class LogLevel(str, Enum):
@@ -116,16 +111,16 @@ class LogBufferHandler(logging.Handler):
             record: Python logging LogRecord
         """
         try:
-            extra = getattr(record, "extra", {}) or {}
-
             level = LogLevel.from_python(record.levelno)
             timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
-            operation_id = extra.get("operation_id") or extra.get("uuid") or None
-            operation = extra.get("operation") or None
-            phase = extra.get("phase") or None
-            resource_type = extra.get("resource_type") or None
-            resource_id = extra.get("resource_id") or None
+            operation_id = getattr(record, "operation_id", None) or getattr(
+                record, "uuid", None
+            )
+            operation = getattr(record, "operation", None)
+            phase = getattr(record, "phase", None)
+            resource_type = getattr(record, "resource_type", None)
+            resource_id = getattr(record, "resource_id", None)
 
             expandable = None
             if record.exc_info:
@@ -155,7 +150,7 @@ class LogBufferHandler(logging.Handler):
 
     def get_logs(
         self,
-        level: str | None = None,
+        level: LogLevel | str | None = None,
         limit: int = 200,
         offset: int = 0,
         since: datetime | None = None,
@@ -164,7 +159,7 @@ class LogBufferHandler(logging.Handler):
         """Retrieve logs from the buffer with optional filtering.
 
         Args:
-            level: Minimum log level to include (as string: DEBUG, INFO, WARNING, ERROR, CRITICAL)
+            level: Exact log level to include (DEBUG, INFO, WARNING, ERROR, CRITICAL)
             limit: Maximum number of entries to return (default 200, max 5000)
             offset: Number of entries to skip (for pagination)
             since: Only return logs after this timestamp
@@ -174,6 +169,9 @@ class LogBufferHandler(logging.Handler):
             Dictionary with logs, total count, has_more flag, and active_filters
         """
         config = LogBufferConfig()
+        level_filter = None
+        if level:
+            level_filter = level if isinstance(level, LogLevel) else LogLevel.from_string(level)
 
         limit = min(limit, config.max_limit)
         if limit <= 0:
@@ -185,10 +183,8 @@ class LogBufferHandler(logging.Handler):
         filtered_logs: list[BufferedLogEntry] = []
 
         for entry in logs:
-            if level:
-                min_level = LogLevel.from_string(level)
-                if entry.level.to_python() < min_level.to_python():
-                    continue
+            if level_filter and entry.level != level_filter:
+                continue
 
             if since and entry.timestamp <= since:
                 continue
@@ -207,7 +203,7 @@ class LogBufferHandler(logging.Handler):
         has_more = end_idx < total
 
         active_filters: dict[str, str | None] = {
-            "level": level,
+            "level": level_filter.value if level_filter else None,
             "operation_id": operation_id,
             "since": since.isoformat() if since else None,
         }
@@ -256,7 +252,7 @@ def clear_log_buffer() -> None:
 
 
 def get_logs(
-    level: str | None = None,
+    level: LogLevel | str | None = None,
     limit: int = 200,
     offset: int = 0,
     since: datetime | None = None,
@@ -265,7 +261,7 @@ def get_logs(
     """Convenience function to get logs from the global buffer.
 
     Args:
-        level: Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        level: Exact log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         limit: Max entries to return
         offset: Pagination offset
         since: Only logs after this timestamp
@@ -292,6 +288,7 @@ def configure_buffer_logger(logger_name: str = "proxbox", level: int = logging.D
     """
     buffer = get_log_buffer()
     target_logger = logging.getLogger(logger_name)
-    target_logger.addHandler(buffer)
+    if buffer not in target_logger.handlers:
+        target_logger.addHandler(buffer)
     target_logger.setLevel(level)
     target_logger.propagate = False
