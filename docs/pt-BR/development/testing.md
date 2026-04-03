@@ -27,6 +27,12 @@ Para o caminho especifico de geracao de schema e helpers tipados:
 pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py
 ```
 
+Para a superficie atual de rotas e contratos de docs:
+
+```bash
+pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
+```
+
 ## Testes direcionados de endpoints
 
 O arquivo `proxbox_api/test_endpoint_crud.py` cobre:

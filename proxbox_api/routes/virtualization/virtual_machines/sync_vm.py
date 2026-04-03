@@ -662,11 +662,13 @@ async def _create_vm_disk_parallel(
         )
         return disk
     except Exception as exc:
+        error_detail = getattr(exc, "detail", str(exc))
+        error_msg = f"{type(exc).__name__}: {error_detail}"
         logger.warning(
             "Failed to create disk %s for VM %s: %s",
             disk_entry.name,
             virtual_machine.get("name"),
-            exc,
+            error_msg,
         )
         return None
 
@@ -893,7 +895,9 @@ async def create_virtual_machines(  # noqa: C901
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
         storage_index = build_storage_index(storage_records)
     except Exception as error:
-        logger.warning("Error loading storage records for VM sync: %s", error)
+        error_detail = getattr(error, "detail", str(error))
+        error_msg = f"{type(error).__name__}: {error_detail}"
+        logger.warning("Error loading storage records for VM sync: %s", error_msg)
 
     async def create_vm_task(cluster_name, resource):  # noqa: C901
         undefined_html = return_status_html("undefined", use_css)
@@ -1159,7 +1163,9 @@ async def create_virtual_machines(  # noqa: C901
                 interface_results = await asyncio.gather(*interface_tasks, return_exceptions=True)
                 for result in interface_results:
                     if isinstance(result, Exception):
-                        logger.warning("Interface creation failed: %s", result)
+                        error_detail = getattr(result, "detail", str(result))
+                        error_msg = f"{type(result).__name__}: {error_detail}"
+                        logger.warning("Interface creation failed: %s", error_msg)
                         continue
                     if result.get("interface"):
                         netbox_vm_interfaces.append(result["interface"])
@@ -1578,7 +1584,9 @@ async def create_only_vm_interfaces(  # noqa: C901
                         continue
                     results.append(result)
     except Exception as exc:
-        logger.warning("Error during VM interfaces sync: %s", exc)
+        error_detail = getattr(exc, "detail", str(exc))
+        error_msg = f"{type(exc).__name__}: {error_detail}"
+        logger.warning("Error during VM interfaces sync: %s", error_msg)
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_interface", "end": True})
@@ -1834,7 +1842,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                         continue
                     results.append(result)
     except Exception as exc:
-        logger.warning("Error during VM IP address sync: %s", exc)
+        error_detail = getattr(exc, "detail", str(exc))
+        error_msg = f"{type(exc).__name__}: {error_detail}"
+        logger.warning("Error during VM IP address sync: %s", error_msg)
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_ip", "end": True})

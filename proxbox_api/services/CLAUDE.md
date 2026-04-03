@@ -7,7 +7,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 ## Current Modules
 
 - `__init__.py`: service package namespace.
-- `proxmox_helpers.py`: shared Proxmox helper functions used by route orchestration.
+- `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/individual/`: targeted single-object sync workflows with dependency auto-creation and dry-run support.
 

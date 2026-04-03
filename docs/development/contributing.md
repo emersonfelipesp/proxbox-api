@@ -20,7 +20,7 @@
 - Update `docs/` when endpoint behavior changes.
 - Keep English docs as source-of-truth.
 - Update `docs/pt-BR/` for translated key pages.
-- Document generated-contract changes and any helper/service integration that depends on those generated models.
+- Document generated-contract changes, helper/service integration that depends on those generated models, and any route changes that affect the in-repo `CLAUDE.md` guides.
 
 ## Pull request checklist
 

@@ -27,6 +27,12 @@ For the schema-generation and typed helper path specifically:
 pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py
 ```
 
+For the current route and docs contract surface:
+
+```bash
+pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
+```
+
 ## Targeted endpoint tests
 
 The file `proxbox_api/test_endpoint_crud.py` includes dedicated coverage for:

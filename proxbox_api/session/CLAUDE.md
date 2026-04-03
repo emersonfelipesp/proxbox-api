@@ -8,16 +8,16 @@ Session management utilities for NetBox and Proxmox API clients.
 
 - `netbox.py`: NetBox API session creation and dependency wiring.
   - `get_netbox_session()`: resolves endpoint credentials from the SQLite database and returns a `SyncProxy`-wrapped `NetBoxApiClient` session.
-  - `netbox_config_from_endpoint()`: builds a `netbox_sdk.Config` from the stored `NetBoxEndpoint` record and applies `PROXBOX_NETBOX_TIMEOUT`.
+  - `netbox_config_from_endpoint()`: builds a `netbox_sdk.Config` from the stored `NetBoxEndpoint` record, including token v1/v2 support, and applies `PROXBOX_NETBOX_TIMEOUT`.
   - `NetBoxSessionDep` / `NetBoxAsyncSessionDep`: FastAPI dependency aliases for sync and async NetBox sessions.
-- `proxmox.py`: Proxmox session management and dependency provider utilities.
+- `proxmox.py`: Proxmox session management module that re-exports the session types and helper functions.
 - `proxmox_core.py`: shared Proxmox client core helpers.
 - `proxmox_providers.py`: dependency helpers that resolve `ProxmoxSession` instances from DB or NetBox plugin endpoints.
 
 ## How These Sessions Flow
 
 - `netbox.py` is the source of truth for building NetBox client sessions from persisted endpoint records.
-- `proxmox.py` creates ProxmoxAPI sessions and enriches them with cluster metadata used by sync flows.
+- `proxmox_core.py` and `proxmox_providers.py` create ProxmoxAPI sessions and enrich them with cluster metadata used by sync flows.
 - `proxmox_providers.py` validates `endpoint_ids` before filtering which Proxmox endpoints participate in a request.
 
 ## Extension Guidance

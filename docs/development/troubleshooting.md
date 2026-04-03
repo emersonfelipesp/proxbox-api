@@ -10,6 +10,7 @@ Resolution:
 
 1. Create NetBox endpoint with `POST /netbox/endpoint`.
 2. Verify it exists with `GET /netbox/endpoint`.
+3. If the startup bootstrap was intentionally skipped, confirm `PROXBOX_SKIP_NETBOX_BOOTSTRAP` is not set.
 
 ## Proxmox endpoint auth validation errors
 
@@ -20,7 +21,20 @@ Symptom:
 
 Resolution:
 
-- Provide password auth, or provide complete token pair.
+- Provide password auth, or provide the complete token pair.
+- For the NetBox endpoint, remember token v1 uses `token` only, while token v2 requires both `token_key` and `token`.
+
+## Generated Proxmox route mount failures
+
+Symptom:
+
+- Startup logs mention that generated Proxmox routes could not be mounted.
+
+Resolution:
+
+- Confirm the generated OpenAPI snapshot exists under `proxbox_api/generated/proxmox/latest/openapi.json`.
+- Rebuild the live Proxmox contract with `POST /proxmox/viewer/generate` if the snapshot is missing.
+- If the app should fail closed instead of continuing, enable `PROXBOX_STRICT_STARTUP`.
 
 ## CORS issues in frontend integration
 
@@ -45,6 +59,7 @@ Resolution:
 - Validate Proxmox host, port, and credentials.
 - Check `verify_ssl` behavior and certificates.
 - Confirm API user/token permissions in Proxmox.
+- For multi-endpoint deployments, confirm the correct `source` and endpoint target selection values are being passed.
 
 ## Sync endpoints return partial data
 
@@ -54,7 +69,7 @@ Symptom:
 
 Resolution:
 
-- Inspect API logs for per-object exceptions.
+- Inspect API logs for per-object exceptions with `GET /admin/logs`.
 - Validate required NetBox objects and plugin models exist.
 - Re-run sync using WebSocket mode for live visibility.
 
@@ -92,7 +107,7 @@ Symptom:
 Resolution:
 
 - Increase client-side timeout or use streaming-aware HTTP client.
-- For large inventories, consider using lower `PROXBOX_VM_SYNC_MAX_CONCURRENCY` values to reduce NetBox API pressure and avoid cascading timeouts.
+- For large inventories, consider using lower `PROXBOX_VM_SYNC_MAX_CONCURRENCY` and `PROXBOX_NETBOX_WRITE_CONCURRENCY` values to reduce NetBox API pressure and avoid cascading timeouts.
 - Check `PROXBOX_NETBOX_TIMEOUT` is sufficient for your NetBox server response time.
 
 ### SSE response contains hop-by-hop header error

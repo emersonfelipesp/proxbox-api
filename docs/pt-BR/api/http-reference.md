@@ -1,25 +1,30 @@
 # Referencia HTTP da API
 
-Esta pagina resume os principais endpoints HTTP do `proxbox-api`.
+Esta pagina resume os endpoints HTTP expostos por `proxbox-api`.
 
-Para schemas completos de requisicao/resposta, use OpenAPI em runtime em `/docs`.
+Para schemas completos de request e response, use o OpenAPI em tempo de execucao em `/docs`.
 
 ## Root e utilitarios
 
-- `GET /` - Metadados do servico e links.
-- `GET /version` - Versao do servico backend para invalidacao de cache externa.
-- `GET /cache` - Inspecao do snapshot da cache em memoria.
-- `GET /clear-cache` - Limpar cache em memoria.
+- `GET /` - Metadados e links do servico.
+- `GET /version` - Versao do backend para invalidacao externa de cache.
+- `GET /cache` - Inspeciona o cache em memoria.
+- `GET /clear-cache` - Limpa o cache em memoria.
+
+## Admin
+
+- `GET /admin/` - Dashboard HTML do admin para os registros configurados do NetBox. Esta rota fica fora do OpenAPI.
+- `GET /admin/logs` - Buffer de logs em memoria com filtros opcionais para `level`, `limit`, `offset`, `since` e `operation_id`.
 
 ## Rotas NetBox (`/netbox`)
 
-- `POST /netbox/endpoint` - Criar endpoint singleton do NetBox.
-- `GET /netbox/endpoint` - Listar registros de endpoints NetBox.
-- `GET /netbox/endpoint/{netbox_id}` - Obter endpoint por ID.
-- `PUT /netbox/endpoint/{netbox_id}` - Atualizar endpoint.
-- `DELETE /netbox/endpoint/{netbox_id}` - Excluir endpoint.
-- `GET /netbox/status` - Buscar status da API do NetBox.
-- `GET /netbox/openapi` - Buscar OpenAPI do NetBox.
+- `POST /netbox/endpoint` - Cria o endpoint NetBox singleton.
+- `GET /netbox/endpoint` - Lista os registros de endpoint NetBox.
+- `GET /netbox/endpoint/{netbox_id}` - Busca um endpoint pelo ID.
+- `PUT /netbox/endpoint/{netbox_id}` - Atualiza o endpoint.
+- `DELETE /netbox/endpoint/{netbox_id}` - Remove o endpoint.
+- `GET /netbox/status` - Busca o status da API NetBox.
+- `GET /netbox/openapi` - Busca o OpenAPI do NetBox.
 
 ### Regra singleton do NetBox
 
@@ -43,9 +48,9 @@ Tentar criar um segundo endpoint retorna HTTP 400 com:
 
 Regras de validacao:
 
-- Requer `password` ou (`token_name` e `token_value`).
-- `token_name` e `token_value` devem ser definidos juntos.
-- Nomes de endpoint devem ser unicos.
+- Informe `password`, ou ambos `token_name` e `token_value`.
+- `token_name` e `token_value` devem ser informados juntos.
+- Os nomes dos endpoints devem ser unicos.
 
 ### Sessao e descoberta
 
@@ -54,132 +59,198 @@ Regras de validacao:
 - `GET /proxmox/`
 - `GET /proxmox/storage`
 - `GET /proxmox/nodes/{node}/storage/{storage}/content`
-- `GET /proxmox/{top_level}`
+- `GET /proxmox/{top_level}` onde `top_level` e um de `access`, `cluster`, `nodes`, `storage` ou `version`
 - `GET /proxmox/{node}/{type}/{vmid}/config`
 
-### Dados de cluster e nodes
+### Dados de cluster, node e replication
 
 - `GET /proxmox/cluster/status`
 - `GET /proxmox/cluster/resources`
 - `GET /proxmox/nodes/`
 - `GET /proxmox/nodes/{node}/network`
 - `GET /proxmox/nodes/{node}/qemu`
+- `GET /proxmox/replication`
 
-### Geracao de codigo do viewer
+### Helpers do viewer e do contrato gerado
 
 - `POST /proxmox/viewer/generate`
 - `GET /proxmox/viewer/openapi`
 - `GET /proxmox/viewer/openapi/embedded`
 - `GET /proxmox/viewer/integration/contracts`
-- `GET /proxmox/viewer/pydantic`
 - `POST /proxmox/viewer/routes/refresh`
+- `GET /proxmox/viewer/pydantic`
 
-### Rotas proxy geradas em runtime
+### Rotas live geradas em runtime
 
-`proxbox-api` monta rotas proxy do Proxmox geradas em runtime a partir do contrato OpenAPI embutido sob:
+`proxbox-api` monta rotas Proxmox geradas em runtime a partir do OpenAPI embutido sob:
 
 - `/proxmox/api2/{version_tag}/*`
 - `/proxmox/api2/*` como alias de compatibilidade para `latest`
 
 Comportamento:
 
-- Rotas sao construidas na inicializacao para cada versao gerada presente em `proxbox_api/generated/proxmox/`.
-- O conjunto de rotas montadas e armazenado em cache em `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
-- No `uvicorn --reload`, a inicializacao prefere esse manifesto de cache para preservar o conjunto de rotas montado anteriormente em desenvolvimento.
-- Rotas sao reconstruidas sob demanda com `POST /proxmox/viewer/routes/refresh`.
-- `POST /proxmox/viewer/routes/refresh` sem parametros de consulta reconstrui todas as versoes disponiveis.
-- `POST /proxmox/viewer/routes/refresh?version_tag=8.3.0` reconstrui apenas essa versao montada.
+- As rotas sao montadas no startup para cada versao gerada disponivel em `proxbox_api/generated/proxmox/`.
+- O conjunto montado e armazenado em cache em `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
+- Em `uvicorn --reload`, o startup prefere esse manifest de cache para preservar o conjunto montado durante o desenvolvimento.
+- As rotas sao reconstruidas sob demanda com `POST /proxmox/viewer/routes/refresh`.
+- `POST /proxmox/viewer/routes/refresh` sem query params reconstrui todas as versoes disponiveis.
+- `POST /proxmox/viewer/routes/refresh?version_tag=8.3.0` reconstrui apenas essa versao.
 - O alias sem versao `/proxmox/api2/*` encaminha para o contrato `latest`.
-- Corpos de requisicao e respostas sao validados com modelos Pydantic gerados em runtime.
-- Rotas geradas aparecem no `/docs` e `/openapi.json` do FastAPI.
-- Rotas `latest` sao montadas antes de tags de versao mais antigas para aparecerem primeiro no Swagger.
-- Rotas geradas tem prioridade sobre rotas `proxmox/*` mais antigas, entao colisoes de caminho resolvem para a superficie da API gerada.
+- Request bodies e responses sao validados com modelos Pydantic gerados em runtime.
+- Os modelos gerados cobrem schemas de resposta object, array, scalar e `null`.
+- Para respostas em array cujos itens sao objetos, a geracao emite `{Operation}ResponseItem` junto com `RootModel[list[{Operation}ResponseItem]]`.
+- As rotas geradas aparecem no `/docs` e no `/openapi.json` do FastAPI.
+- As rotas `latest` sao montadas antes de tags mais antigas para aparecerem primeiro no Swagger.
+- As rotas geradas tem prioridade sobre rotas manuais `/proxmox/*` quando existe colisao de path.
 
-Normalizacao de parametros de caminho:
+Normalizacao de path parameters:
 
-- Quando o viewer Proxmox usa nomes de parametros de caminho que nao sao identificadores validos do FastAPI, a rota FastAPI montada usa um nome de placeholder normalizado.
+- Quando o viewer do Proxmox usa nomes de path parameters que nao sao identificadores validos do FastAPI, a rota montada usa um nome normalizado.
 - Exemplo:
   - Caminho do contrato Proxmox: `/nodes/{node}/hardware/pci/{pci-id-or-mapping}`
-  - Caminho FastAPI montado: `/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}`
-- A chamada proxmoxer upstream ainda usa o nome original do parametro Proxmox do contrato OpenAPI gerado.
+  - Caminho montado no FastAPI: `/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}`
+- A chamada proxmoxer continua usando o nome original do parameter do contrato gerado.
+
+Descoberta de versao:
+
+- Uma versao so pode ser montada quando `proxbox_api/generated/proxmox/<version-tag>/openapi.json` existe.
+- Entradas como `__pycache__` e arquivos na raiz de `generated/proxmox/` sao ignorados.
+
+Selecao de target:
+
+- Se existir apenas um endpoint Proxmox, as rotas geradas usam ele automaticamente.
+- Se existirem varios endpoints, informe um de:
+  - `target_name`
+  - `target_domain`
+  - `target_ip_address`
+- `source` define se os endpoints vem do banco local ou dos registros do plugin NetBox.
+
+Integracao tipada do sync:
+
+- As rotas de sync ainda chamam proxmoxer diretamente, mas passam por `proxbox_api/services/proxmox_helpers.py`.
+- Essa camada valida os payloads com os modelos gerados em `proxbox_api/generated/proxmox/latest/pydantic_models.py` antes de retornar para os handlers.
+- Isso evita round-trips HTTP internos e mantem VM config, cluster status, cluster resources, storage listing e node storage content alinhados ao contrato usado por `/proxmox/api2/*`.
+
+Exemplos de rotas geradas:
+
+- `GET /proxmox/api2/latest/cluster/resources`
+- `GET /proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config`
+- `POST /proxmox/api2/latest/access/acl`
+- `GET /proxmox/api2/cluster/resources` como alias de compatibilidade para `latest`
+
+Formato da resposta de refresh:
+
+- Resposta top-level: resumo da registracao retornado por `register_generated_proxmox_routes()` mais o campo `message`.
+- `state`: snapshot aninhado retornado por `generated_proxmox_route_state()`.
+- `state.mounted_versions`: versoes atualmente montadas no FastAPI.
+- `state.alias_version_tag`: versao usada por `/proxmox/api2/*`.
+- `state.cache_path`: caminho do manifest persistido usado para preservar as rotas entre reloads.
+- `state.cache_enabled`: indica se a persistencia de cache esta habilitada para as rotas geradas.
+- `state.loaded_from_cache`: indica se a ultima registracao veio do cache persistido.
+- `state.route_count`: total de rotas FastAPI atualmente montadas.
+- `state.versions.<tag>.route_count`: total de rotas FastAPI montadas para a versao.
+- `state.versions.<tag>.path_count`: total de paths OpenAPI montados para a versao.
+- `state.versions.<tag>.method_count`: total de operacoes HTTP montadas para a versao.
+- `state.versions.<tag>.schema_version`: valor de `info.version` do OpenAPI gerado.
+
+Cobertura de testes:
+
+- `tests/test_generated_proxmox_routes.py` executa um suite exaustivo de rotas mockadas para cada operacao gerada em todas as versoes disponiveis, mais o alias `latest`.
+- `tests/test_pydantic_generator_models.py` verifica os modelos gerados para payloads array, scalar, `null` e object aliasados.
+- `tests/test_session_and_helpers.py` valida a camada de helpers tipados do Proxmox e confirma que os handlers de sync continuam retornando payloads validados.
 
 ## Rotas DCIM (`/dcim`)
 
 - `GET /dcim/devices`
-- `GET /dcim/devices/create` - criar dispositivos NetBox a partir de nodes Proxmox (retorna JSON ao completar).
-- `GET /dcim/devices/create/stream` - variante SSE streaming. Emite eventos `step` por dispositivo com progresso granular enquanto dispositivos sao criados.
+- `GET /dcim/devices/create` - Cria devices NetBox a partir de nodes Proxmox.
+- `GET /dcim/devices/create/stream` - Variacao SSE.
 - `GET /dcim/devices/{node}/interfaces/create`
-- `GET /dcim/devices/interfaces/create` - sincroniza interfaces de todos os nodes em todos os clusters.
-- `GET /dcim/devices/interfaces/create/stream` - variante SSE streaming para sincronizacao de interfaces de todos os nodes.
+- `GET /dcim/devices/interfaces/create` - Sincroniza todas as interfaces de node em todos os clusters.
+- `GET /dcim/devices/interfaces/create/stream` - Variacao SSE para sync de interfaces.
 
 ## Rotas de Virtualizacao (`/virtualization`)
 
-- `GET /virtualization/cluster-types/create` (placeholder)
-- `GET /virtualization/clusters/create` (placeholder)
-- `GET /virtualization/virtual-machines/create` - criar VMs NetBox a partir de recursos Proxmox (retorna JSON ao completar).
-- `GET /virtualization/virtual-machines/create/stream` - variante SSE streaming. Emite eventos `step` por VM com progresso granular enquanto VMs sao criadas.
-- `GET /virtualization/virtual-machines/{netbox_vm_id}/create` - criar uma unica VM pelo ID do NetBox.
-- `GET /virtualization/virtual-machines/{netbox_vm_id}/create/stream` - variante SSE streaming para sincronizacao de uma unica VM.
+- `GET /virtualization/cluster-types/create` - Stub que retorna HTTP 501.
+- `GET /virtualization/clusters/create` - Stub que retorna HTTP 501.
+- `GET /virtualization/virtual-machines/create` - Cria VMs NetBox a partir dos recursos Proxmox.
+- `GET /virtualization/virtual-machines/create/stream` - Variacao SSE.
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/create` - Cria uma VM unica pelo ID do NetBox.
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/create/stream` - Variacao SSE para sync de uma VM.
 - `GET /virtualization/virtual-machines/`
 - `GET /virtualization/virtual-machines/{id}`
+- `GET /virtualization/virtual-machines/{id}/summary` - Stub que retorna HTTP 501.
 - `GET /virtualization/virtual-machines/summary/example`
-- `GET /virtualization/virtual-machines/interfaces/create` - sincroniza interfaces de VMs (JSON).
-- `GET /virtualization/virtual-machines/interfaces/create/stream` - variante SSE streaming.
-- `GET /virtualization/virtual-machines/interfaces/ip-address/create` - sincroniza IPs de VMs (JSON).
-- `GET /virtualization/virtual-machines/interfaces/ip-address/create/stream` - variante SSE streaming.
-- `GET /virtualization/virtual-machines/backups/create` - criar backups para node/storage especifico.
-- `GET /virtualization/virtual-machines/backups/all/create` - criar backups para todas as VMs.
-- `GET /virtualization/virtual-machines/backups/all/create/stream` - variante SSE streaming.
-- `GET /virtualization/virtual-machines/{netbox_vm_id}/backups/create/stream` - sincroniza backups de uma VM do NetBox.
+- `GET /virtualization/virtual-machines/interfaces/create`
+- `GET /virtualization/virtual-machines/interfaces/create/stream`
+- `GET /virtualization/virtual-machines/interfaces/ip-address/create`
+- `GET /virtualization/virtual-machines/interfaces/ip-address/create/stream`
+- `GET /virtualization/virtual-machines/backups/create`
+- `GET /virtualization/virtual-machines/backups/all/create`
+- `GET /virtualization/virtual-machines/backups/all/create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/backups/create/stream`
 - `GET /virtualization/virtual-machines/snapshots/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create/stream`
-- `GET /virtualization/virtual-machines/{netbox_vm_id}/snapshots/create/stream` - sincroniza snapshots de uma VM do NetBox.
-- `GET /virtualization/virtual-machines/virtual-disks/create` - sincroniza discos virtuais (JSON).
-- `GET /virtualization/virtual-machines/virtual-disks/create/stream` - variante SSE streaming.
-- `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream` - sincroniza discos de uma VM.
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/snapshots/create/stream`
+- `GET /virtualization/virtual-machines/virtual-disks/create`
+- `GET /virtualization/virtual-machines/virtual-disks/create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
 
-## Atualizacao completa (`/full-update`)
+## Full Update
 
-- `GET /full-update` - executa sincronizacao de dispositivos depois de VMs, retorna resultado JSON combinado.
-- `GET /full-update/stream` - variante SSE streaming. Emite eventos `step` por objeto para dispositivos e VMs durante a sincronizacao completa.
+- `GET /full-update` - Executa sync de devices, storages, VMs, task history, discos, backups, snapshots, interfaces de node, interfaces de VM e IPs de VM.
+- `GET /full-update/stream` - Variacao SSE.
 
-## Formato SSE streaming
+## WebSocket
 
-Todos os endpoints `/stream` retornam `Content-Type: text/event-stream` e emitem tres tipos de eventos:
+- `GET /` - WebSocket basico de contagem para testes de conectividade.
+- `GET /ws/virtual-machines` - WebSocket para sincronizacao de VMs.
+- `GET /ws` - WebSocket orientado por comandos para orquestracao de sync.
 
-| Evento      | Descricao |
-|-------------|-----------|
-| `step`      | Frame de progresso. Contem `step` (tipo de objeto, ex. `device`, `virtual_machine`), `status` (`started`, `progress`, `completed`, `failed`), `message` (texto legivel), `rowid` (nome/ID do objeto), e `payload` (JSON original estilo websocket). |
-| `error`     | Frame de erro. Contem `step`, `status: "failed"`, `error`, e `detail`. |
-| `complete`  | Frame final. Contem `ok` (booleano), `message`, e opcionalmente `result` ou `errors`. |
+## Formato SSE
 
-Exemplo de evento `step` para um dispositivo:
+Todos os endpoints `/stream` retornam `Content-Type: text/event-stream` e emitem tres tipos de evento:
 
-```
-event: step
-data: {"step":"device","status":"progress","message":"Processing device pve01","rowid":"pve01","payload":{"object":"device","type":"create","data":{"rowid":"pve01","completed":false}}}
-```
+| Evento | Descricao |
+|--------|-----------|
+| `step` | Frame de progresso com `step`, `status`, `message`, `rowid` e `payload`. |
+| `error` | Frame de erro com `step`, `status: "failed"`, `error` e `detail`. |
+| `complete` | Frame final com `ok`, `message` e, opcionalmente, `result` ou `errors`. |
 
 Headers:
 
 - `Cache-Control: no-cache`
 - `X-Accel-Buffering: no`
 
+## Rotas Individual Sync (`/sync/individual`)
+
+- `GET /sync/individual/node`
+- `GET /sync/individual/vm`
+- `GET /sync/individual/vm/{cluster_name}/{node}/{type}/{vmid}`
+- `GET /sync/individual/cluster`
+- `GET /sync/individual/interface`
+- `GET /sync/individual/ip`
+- `GET /sync/individual/disk`
+- `GET /sync/individual/storage`
+- `GET /sync/individual/snapshot`
+- `GET /sync/individual/task-history`
+- `GET /sync/individual/backup`
+- `GET /sync/individual/replication`
+
 ## Rotas Extras (`/extras`)
 
 - `GET /extras/extras/custom-fields/create`
 
-Este endpoint cria campos customizados esperados usados pela sincronizacao de metadados de VM.
+Esse endpoint cria os custom fields usados pelos metadados de sincronizacao de VMs.
 
 ## Rotas de configuracao do plugin Proxbox
 
-Estes handlers de rota existem em `proxbox_api/routes/proxbox/__init__.py` mas nao estao atualmente montados em `main.py`:
+Estes handlers existem em `proxbox_api/routes/proxbox/__init__.py`, mas nao estao montados atualmente em `main.py`:
 
 - `GET /netbox/plugins-config`
 - `GET /netbox/default-settings`
 - `GET /settings`
 
-Para monta-los, inclua o router na inicializacao do app se desejado.
+Para montar essas rotas, e preciso incluir esse router no startup da aplicacao.

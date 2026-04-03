@@ -12,6 +12,7 @@ Virtualization route namespace and high-level endpoints.
 
 - This namespace acts as an entry point for cluster and virtual machine synchronization endpoints.
 - The functional VM work lives under `virtual_machines/`; this package mainly owns the higher-level virtualization namespace and placeholders.
+- The `/virtualization/virtual-machines` router is mounted separately in the app factory and contains the real VM sync surface.
 
 ## Extension Guidance
 

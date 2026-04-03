@@ -59,7 +59,9 @@ async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
     except Exception as error:
-        logger.warning("Error loading storage records for backup sync: %s", error)
+        error_detail = getattr(error, "detail", str(error))
+        error_msg = f"{type(error).__name__}: {error_detail}"
+        logger.warning("Error loading storage records for backup sync: %s", error_msg)
         return {}
     return build_storage_index(storage_records)
 
