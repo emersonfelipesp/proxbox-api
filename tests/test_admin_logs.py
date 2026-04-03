@@ -22,7 +22,7 @@ async def test_backend_logs_view_normalizes_timestamp_and_passes_exact_level(mon
             "has_more": False,
             "active_filters": {
                 "level": kwargs.get("level").value if kwargs.get("level") else None,
-                "errors_only": kwargs.get("errors_only"),
+                "errors_only": True if kwargs.get("errors_only") else None,
                 "operation_id": kwargs.get("operation_id"),
                 "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
             },
@@ -63,7 +63,7 @@ async def test_backend_logs_view_forwards_errors_only_filter(monkeypatch):
             "has_more": False,
             "active_filters": {
                 "level": kwargs.get("level").value if kwargs.get("level") else None,
-                "errors_only": kwargs.get("errors_only"),
+                "errors_only": True if kwargs.get("errors_only") else None,
                 "operation_id": kwargs.get("operation_id"),
                 "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
             },
