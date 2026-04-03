@@ -244,6 +244,18 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session():
     )
     assert first_post["object_types"] == ["virtualization.virtualmachine"]
     assert first_post["ui_editable"] == "hidden"
+    migration_payloads = {
+        payload["name"]: payload
+        for method, path, _query, payload, _expect_json in session.client.calls
+        if method == "POST" and path == "/api/extras/custom-fields/"
+        and payload["name"] in {"proxmox_migration_duration", "proxmox_migration_type"}
+    }
+    assert migration_payloads["proxmox_migration_duration"]["object_types"] == [
+        "virtualization.virtualmachine"
+    ]
+    assert migration_payloads["proxmox_migration_type"]["object_types"] == [
+        "virtualization.virtualmachine"
+    ]
 
 
 def test_create_custom_fields_caches_successful_bootstrap(monkeypatch):

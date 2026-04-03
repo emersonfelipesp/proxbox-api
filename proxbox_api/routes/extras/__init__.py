@@ -504,7 +504,8 @@ async def create_custom_fields(
                 "group_name": "Proxmox",
             },
             {
-                "object_types": ["virtualization.vmmigration"],
+                # NetBox does not expose a VMMigration content type; store migration telemetry on the VM.
+                "object_types": ["virtualization.virtualmachine"],
                 "type": "integer",
                 "name": "proxmox_migration_duration",
                 "label": "Migration Duration",
@@ -517,7 +518,7 @@ async def create_custom_fields(
                 "group_name": "Proxmox",
             },
             {
-                "object_types": ["virtualization.vmmigration"],
+                "object_types": ["virtualization.virtualmachine"],
                 "type": "text",
                 "name": "proxmox_migration_type",
                 "label": "Migration Type",
