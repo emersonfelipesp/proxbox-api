@@ -54,6 +54,7 @@ def _install_common_sync_patches(  # noqa: C901
     vm_config: dict,
     ip_payloads: list[dict],
     interface_payloads: list[dict] | None = None,
+    first_queries: list[dict] | None = None,
 ):
     async def _fake_get_vm_config(**kwargs):
         return vm_config
@@ -85,9 +86,14 @@ def _install_common_sync_patches(  # noqa: C901
 
     async def _fake_rest_first(_nb, path, **kwargs):
         query = kwargs.get("query", {})
+        if first_queries is not None:
+            first_queries.append({"path": path, "query": query})
         if path == "/api/virtualization/interfaces/" and query.get("name"):
             return None
         return None
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -135,6 +141,18 @@ def _install_common_sync_patches(  # noqa: C901
     )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_first_async",
+        _fake_rest_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.rest_reconcile_async",
+        _fake_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.rest_first_async",
         _fake_rest_first,
     )
 
@@ -524,6 +542,41 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
 
     assert result == [{"id": 66, "ip_id": 77, "ip_address": "10.0.0.50/24"}]
     assert captured_vm_ids == [55]
+
+
+def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    ip_payloads: list[dict] = []
+    first_queries: list[dict] = []
+    _install_common_sync_patches(
+        monkeypatch,
+        vm_config=data["vm_config"],
+        ip_payloads=ip_payloads,
+        first_queries=first_queries,
+    )
+
+    result = asyncio.run(
+        create_only_vm_interfaces(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert result and result[0]["id"] == 66
+    assert first_queries == [
+        {
+            "path": "/api/virtualization/interfaces/",
+            "query": {"name": "vmbr0", "virtual_machine_id": 55, "limit": 1},
+        }
+    ]
 
 
 def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):

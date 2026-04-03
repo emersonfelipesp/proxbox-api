@@ -593,6 +593,7 @@ async def _create_vm_interface_parallel(
         interface_name=interface_name,
         now=now,
         create_ip=True,
+        ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
     )
     if interface_ip and interface_ip != "dhcp":
         result["ip"] = {"id": ip_id, "address": interface_ip}
@@ -1504,6 +1505,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                         tag_refs=tag_refs,
                         use_guest_agent_interface_name=use_guest_agent_interface_name,
                         create_ip=False,
+                        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                         now=now,
                     )
                     interfaces_synced.append(result)
@@ -1747,6 +1749,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                         tag_refs=tag_refs,
                         use_guest_agent_interface_name=use_guest_agent_interface_name,
                         create_interface=False,
+                        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                         now=now,
                     )
                     if result.get("ip_id"):
