@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import os
+import random
 from collections.abc import AsyncIterable, AsyncIterator
 from urllib.parse import urlsplit
 
@@ -323,7 +324,14 @@ async def rest_list_async(
             except Exception as e:
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
-                delay = base_delay * (2**attempt)
+                is_conn_refused = (
+                    "connection refused" in str(e).lower()
+                    or "connect call failed" in str(e).lower()
+                )
+                exponential_delay = base_delay * (2**attempt)
+                if is_conn_refused:
+                    exponential_delay = max(exponential_delay, 5.0)
+                delay = exponential_delay + random.uniform(0, exponential_delay * 0.5)
                 logger.warning(
                     "NetBox request failed (attempt %s/%s), retrying in %ss: %s",
                     attempt + 1,
@@ -331,7 +339,7 @@ async def rest_list_async(
                     delay,
                     str(e)[:200],
                 )
-                await asyncio.sleep(delay)
+        await asyncio.sleep(delay)
 
     # Should not reach here, but satisfy type checker
     return await _do_request()
@@ -387,7 +395,14 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
             except Exception as e:
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
-                delay = base_delay * (2**attempt)
+                is_conn_refused = (
+                    "connection refused" in str(e).lower()
+                    or "connect call failed" in str(e).lower()
+                )
+                exponential_delay = base_delay * (2**attempt)
+                if is_conn_refused:
+                    exponential_delay = max(exponential_delay, 5.0)
+                delay = exponential_delay + random.uniform(0, exponential_delay * 0.5)
                 logger.warning(
                     "NetBox create failed (attempt %s/%s), retrying in %ss: %s",
                     attempt + 1,
@@ -395,7 +410,7 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
                     delay,
                     str(e)[:200],
                 )
-                await asyncio.sleep(delay)
+        await asyncio.sleep(delay)
 
     # Should not reach here
     return await _do_request()
@@ -553,7 +568,14 @@ async def rest_patch_async(
             except Exception as e:
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
-                delay = base_delay * (2**attempt)
+                is_conn_refused = (
+                    "connection refused" in str(e).lower()
+                    or "connect call failed" in str(e).lower()
+                )
+                exponential_delay = base_delay * (2**attempt)
+                if is_conn_refused:
+                    exponential_delay = max(exponential_delay, 5.0)
+                delay = exponential_delay + random.uniform(0, exponential_delay * 0.5)
                 logger.warning(
                     "NetBox patch failed (attempt %s/%s), retrying in %ss: %s",
                     attempt + 1,
@@ -561,7 +583,7 @@ async def rest_patch_async(
                     delay,
                     str(e)[:200],
                 )
-                await asyncio.sleep(delay)
+        await asyncio.sleep(delay)
 
     # Should not reach here
     return await _do_request()
