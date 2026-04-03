@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 from typing import Callable, TypeVar
 
 from proxbox_api.exception import ProxboxException
@@ -59,6 +60,25 @@ def _is_transient_netbox_error(error: Exception) -> bool:
     return any(indicator in error_str for indicator in transient_indicators)
 
 
+def _is_connection_refused_error(error: Exception) -> bool:
+    """Check if this is a connection refused error (NetBox completely unreachable)."""
+    error_str = str(error).lower()
+    return "connection refused" in error_str or "connect call failed" in error_str
+
+
+def _compute_delay(attempt: int, base_delay: float, is_connection_refused: bool = False) -> float:
+    """Compute delay with exponential backoff and jitter.
+
+    For connection refused errors (NetBox offline), use longer delays since
+    retrying immediately won't help - NetBox needs time to come back.
+    """
+    exponential_delay = base_delay * (2**attempt)
+    if is_connection_refused:
+        exponential_delay = max(exponential_delay, 5.0)
+    jitter = random.uniform(0, exponential_delay * 0.5)
+    return exponential_delay + jitter
+
+
 async def retry_async(
     coro: Callable[..., object],
     *args: object,
@@ -98,7 +118,8 @@ async def retry_async(
             is_transient = _is_transient_netbox_error(e)
 
             if attempt < max_retries and is_transient:
-                delay = base_delay * (2**attempt)
+                is_conn_refused = _is_connection_refused_error(e)
+                delay = _compute_delay(attempt, base_delay, is_conn_refused)
                 errors.append(f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}")
                 logger.warning(
                     "%s failed (attempt %d/%d): %s. Retrying in %.1fs...",
