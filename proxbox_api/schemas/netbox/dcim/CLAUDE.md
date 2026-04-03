@@ -8,10 +8,13 @@ Schemas for NetBox DCIM payloads used by synchronization endpoints.
 
 - `__init__.py`: NetBox DCIM schema models used by API payloads.
 
-## Key Data Flow and Dependencies
+## How These Schemas Flow
 
-- Consumes enum and tag schemas to validate outgoing payload structures.
+- DCIM route and service modules import these models to validate outgoing device, interface, VLAN, and IP-related payloads.
+- Enum and extras schemas feed nested values into these models so the payloads stay API-safe.
 
 ## Extension Guidance
 
-- Update fields when NetBox DCIM models evolve and keep optionality accurate.
+- Update fields when NetBox DCIM models evolve.
+- Keep optionality accurate so the models reject only truly invalid payloads.
+- Add new nested schema dependencies before adding route logic that uses them.

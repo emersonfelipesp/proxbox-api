@@ -2,23 +2,28 @@
 
 ## Purpose
 
-Top-level route namespace package for FastAPI router modules.
+Top-level namespace for FastAPI route packages.
 
 ## Current Subpackages
 
 - `admin/`: HTML admin dashboard for NetBox endpoint records.
-- `dcim/`: Device, interface, VLAN, and IP sync routes.
-- `extras/`: NetBox extras and custom field routes.
-- `netbox/`: NetBox endpoint CRUD and plugin configuration routes.
+- `dcim/`: device, interface, VLAN, and IP sync routes.
+- `extras/`: NetBox extras routes used by sync flows.
+- `netbox/`: NetBox endpoint CRUD, status, and plugin configuration routes.
 - `proxbox/`: Proxbox plugin configuration routes.
-- `proxbox/clusters/`: Cluster-specific Proxbox routes.
-- `proxmox/`: Proxmox session, storage, node, and generated viewer routes.
-- `virtualization/`: VM and cluster bootstrap routes.
+- `proxbox/clusters/`: reserved namespace for cluster-specific Proxbox routes.
+- `proxmox/`: Proxmox session, node, cluster, storage, and codegen routes.
+- `virtualization/`: virtualization bootstrap and VM sync routes.
+- `sync/`: internal sync route helpers used by other route packages.
 
-## Key Data Flow and Dependencies
+## How It Fits Together
 
-- `proxbox_api.app.factory.create_app()` imports routers from nested route packages and mounts them with prefixes.
+- `proxbox_api.app.factory.create_app()` imports routers from these packages and mounts them with prefixes.
+- Route modules should expose routers and dependency aliases only; heavy workflow code belongs in `services/`.
+- Most route groups depend on schemas from `proxbox_api.schemas` and sync helpers from `proxbox_api.services.sync`.
 
 ## Extension Guidance
 
-- Create new endpoint groups as subpackages and register them in `proxbox_api.app.factory.create_app()`.
+- Add new route namespaces as subpackages and register them in the app factory.
+- Keep request validation and response shaping close to the boundary.
+- Convert upstream Proxmox and NetBox errors into `ProxboxException` where the failure is expected.
