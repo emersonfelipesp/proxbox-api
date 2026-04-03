@@ -479,6 +479,70 @@ async def test_individual_snapshot_route_forwards_auto_create_flags(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_individual_task_history_route_uses_explicit_cluster(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_sync_task_history_individual(*args, **kwargs):
+        captured.update(kwargs)
+        return {"object_type": "task_history", "cluster_name": kwargs["cluster_name"]}
+
+    app.dependency_overrides[get_netbox_session] = lambda: object()
+    app.dependency_overrides[proxmox_sessions] = lambda: [
+        SimpleNamespace(name="alpha"),
+        SimpleNamespace(name="beta"),
+    ]
+    app.dependency_overrides[proxbox_tag] = lambda: SimpleNamespace(
+        id=7, name="Proxbox", slug="proxbox", color="ff5722"
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.sync.individual.task_history.sync_task_history_individual",
+        _fake_sync_task_history_individual,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/sync/individual/task-history",
+            params={
+                "cluster_name": "beta",
+                "node": "pve01",
+                "type": "qemu",
+                "vmid": 101,
+                "upid": "UPID:1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["cluster_name"] == "beta"
+    assert response.json()["cluster_name"] == "beta"
+
+
+@pytest.mark.asyncio
+async def test_individual_task_history_route_requires_cluster_for_multi_session():
+    app.dependency_overrides[get_netbox_session] = lambda: object()
+    app.dependency_overrides[proxmox_sessions] = lambda: [
+        SimpleNamespace(name="alpha"),
+        SimpleNamespace(name="beta"),
+    ]
+    app.dependency_overrides[proxbox_tag] = lambda: SimpleNamespace(
+        id=7, name="Proxbox", slug="proxbox", color="ff5722"
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/sync/individual/task-history",
+            params={
+                "node": "pve01",
+                "type": "qemu",
+                "vmid": 101,
+                "upid": "UPID:1",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "Multiple Proxmox sessions configured" in response.json()["message"]
+
+
+@pytest.mark.asyncio
 async def test_sync_task_history_individual_accepts_cluster_name_and_reports_updated(monkeypatch):
     async def _fake_rest_list_async(_nb, path, query=None):
         if path == "/api/virtualization/virtual-machines/":

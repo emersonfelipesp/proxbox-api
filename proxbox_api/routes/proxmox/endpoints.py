@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep as SessionDep
@@ -36,6 +36,20 @@ class ProxmoxEndpointUpdate(BaseModel):
     token_value: str | None = None
 
 
+class ProxmoxEndpointPublic(BaseModel):
+    """Public Proxmox endpoint shape with credentials redacted."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int | None = None
+    name: str
+    ip_address: str
+    domain: str | None = None
+    port: int
+    username: str
+    verify_ssl: bool
+
+
 def _validate_auth_fields(
     password: str | None,
     token_name: str | None,
@@ -58,11 +72,15 @@ def _validate_auth_fields(
         )
 
 
+def _to_public_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxEndpointPublic:
+    return ProxmoxEndpointPublic.model_validate(endpoint)
+
+
 @router.post("/endpoints")
 def create_proxmox_endpoint(
     endpoint: ProxmoxEndpointCreate,
     session: SessionDep,
-) -> ProxmoxEndpoint:
+) -> ProxmoxEndpointPublic:
     _validate_auth_fields(endpoint.password, endpoint.token_name, endpoint.token_value)
 
     existing = session.exec(
@@ -75,7 +93,7 @@ def create_proxmox_endpoint(
     session.add(db_endpoint)
     session.commit()
     session.refresh(db_endpoint)
-    return db_endpoint
+    return _to_public_endpoint(db_endpoint)
 
 
 @router.get("/endpoints")
@@ -83,17 +101,17 @@ def get_proxmox_endpoints(
     session: SessionDep,
     offset: int = 0,
     limit: Annotated[int, Query(le=100)] = 100,
-) -> list[ProxmoxEndpoint]:
+) -> list[ProxmoxEndpointPublic]:
     endpoints = session.exec(select(ProxmoxEndpoint).offset(offset).limit(limit)).all()
-    return list(endpoints)
+    return [_to_public_endpoint(endpoint) for endpoint in endpoints]
 
 
 @router.get("/endpoints/{endpoint_id}")
-def get_proxmox_endpoint(endpoint_id: int, session: SessionDep) -> ProxmoxEndpoint:
+def get_proxmox_endpoint(endpoint_id: int, session: SessionDep) -> ProxmoxEndpointPublic:
     endpoint = session.get(ProxmoxEndpoint, endpoint_id)
     if not endpoint:
         raise HTTPException(status_code=404, detail="Proxmox endpoint not found")
-    return endpoint
+    return _to_public_endpoint(endpoint)
 
 
 @router.put("/endpoints/{endpoint_id}")
@@ -101,7 +119,7 @@ def update_proxmox_endpoint(
     endpoint_id: int,
     endpoint: ProxmoxEndpointUpdate,
     session: SessionDep,
-) -> ProxmoxEndpoint:
+) -> ProxmoxEndpointPublic:
     db_endpoint = session.get(ProxmoxEndpoint, endpoint_id)
     if not db_endpoint:
         raise HTTPException(status_code=404, detail="Proxmox endpoint not found")
@@ -126,7 +144,7 @@ def update_proxmox_endpoint(
     session.add(db_endpoint)
     session.commit()
     session.refresh(db_endpoint)
-    return db_endpoint
+    return _to_public_endpoint(db_endpoint)
 
 
 @router.delete("/endpoints/{endpoint_id}")
