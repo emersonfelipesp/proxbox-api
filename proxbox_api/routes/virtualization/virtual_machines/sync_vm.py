@@ -454,7 +454,6 @@ async def _create_vm_interface_parallel(
             nb,
             "/api/virtualization/interfaces/",
             lookup={
-                "virtual_machine_id": vm_id,
                 "name": bridge_name,
             },
             payload={
