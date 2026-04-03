@@ -6,12 +6,14 @@ Virtualization status enumerations for NetBox schema validation.
 
 ## Current Files
 
-- `__init__.py`: Virtualization status options used by NetBox schema models.
+- `__init__.py`: virtualization status options used by NetBox schema models.
 
-## Key Data Flow and Dependencies
+## How These Enums Are Used
 
-- `schemas/netbox/virtualization` imports `ClusterStatusOptions` for cluster payload correctness.
+- `proxbox_api.schemas.netbox.virtualization` imports these values for cluster and related virtualization payloads.
+- Sync flows use them before sending requests to NetBox so choice-field validation fails early in Python instead of at the API boundary.
 
 ## Extension Guidance
 
-- Update enum values with care; these values are sent to external NetBox APIs.
+- Update enum values carefully because they are sent to external NetBox APIs.
+- Keep value names aligned with the upstream model field semantics.

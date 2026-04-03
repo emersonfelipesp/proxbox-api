@@ -1,10 +1,10 @@
 # proxbox-api Agent Index
 
-Start with the root project guide, then open the most specific scoped guide for the code you are touching.
+Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code you are changing.
 
-## Pre-commit Checklist
+## Required Checks
 
-Before pushing any changes, always run (use `rtk` for compact output):
+Run these before pushing anything that touches the backend package:
 
 ```bash
 rtk ruff check .
@@ -15,9 +15,15 @@ uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_
 rtk pytest tests
 ```
 
-If you touch `nextjs-ui/`, also run `npm run lint` and `npm run build` there.
+If you edit `nextjs-ui/`, also run:
 
-Fix any failures locally before pushing.
+```bash
+cd nextjs-ui
+npm run lint
+npm run build
+```
+
+Fix failures locally before finishing the task.
 
 ## Primary Guide
 
@@ -25,6 +31,7 @@ Fix any failures locally before pushing.
 
 ## Scoped Guides
 
+- `nextjs-ui/AGENTS.md`
 - `nextjs-ui/CLAUDE.md`
 - `proxbox_api/CLAUDE.md`
 - `proxbox_api/custom_objects/CLAUDE.md`
@@ -39,8 +46,8 @@ Fix any failures locally before pushing.
 - `proxbox_api/generated/proxmox/CLAUDE.md`
 - `proxbox_api/proxmox_codegen/CLAUDE.md`
 - `proxbox_api/proxmox_to_netbox/CLAUDE.md`
-- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md`
 - `proxbox_api/proxmox_to_netbox/mappers/CLAUDE.md`
+- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md`
 - `proxbox_api/routes/CLAUDE.md`
 - `proxbox_api/routes/admin/CLAUDE.md`
 - `proxbox_api/routes/dcim/CLAUDE.md`
@@ -59,5 +66,6 @@ Fix any failures locally before pushing.
 - `proxbox_api/schemas/virtualization/CLAUDE.md`
 - `proxbox_api/services/CLAUDE.md`
 - `proxbox_api/services/sync/CLAUDE.md`
+- `proxbox_api/services/sync/individual/CLAUDE.md`
 - `proxbox_api/session/CLAUDE.md`
 - `proxbox_api/utils/CLAUDE.md`

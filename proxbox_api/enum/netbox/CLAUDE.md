@@ -6,14 +6,17 @@ Namespace package for NetBox-oriented enum groups.
 
 ## Current Modules
 
-- `__init__.py`: Enum namespace for NetBox-related choices.
+- `__init__.py`: package marker and export location for stable enum symbols.
 - `dcim/`: DCIM status and choice enums.
-- `virtualization/`: Virtualization cluster status enums.
+- `virtualization/`: virtualization cluster status enums.
 
-## Key Data Flow and Dependencies
+## How These Enums Are Used
 
-- Subpackages provide enum values consumed by schemas.
+- NetBox schema modules import these enums to constrain payload fields.
+- Sync services rely on them to avoid sending invalid choice values to NetBox.
 
 ## Extension Guidance
 
-- Keep package init light and re-export only stable enum symbols if needed.
+- Keep the package init light.
+- Re-export only symbols that are intended to be stable.
+- Mirror upstream NetBox values exactly when the enum maps to an external choice field.

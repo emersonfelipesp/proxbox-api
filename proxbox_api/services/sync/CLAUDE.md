@@ -6,32 +6,35 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 
 ## Current Modules
 
-- `__init__.py`: Sync service namespace for Proxmox-to-NetBox flows.
-- `clusters.py`: Cluster synchronization helpers.
-- `device_ensure.py`: Device creation and reconciliation helpers.
-- `devices.py`: Device synchronization from Proxmox nodes to NetBox.
-- `network.py`: Network and interface sync helpers.
-- `snapshots.py`: Snapshot sync helpers.
-- `storage_links.py`: Storage-to-NetBox relationship helpers.
-- `storages.py`: Storage sync helpers.
+- `__init__.py`: sync service namespace for Proxmox-to-NetBox flows.
+- `clusters.py`: cluster synchronization helpers.
+- `device_ensure.py`: device creation and reconciliation helpers.
+- `devices.py`: device synchronization from Proxmox nodes to NetBox.
+- `network.py`: network and interface sync helpers.
+- `snapshots.py`: snapshot sync helpers.
+- `storage_links.py`: storage-to-NetBox relationship helpers.
+- `storages.py`: storage sync helpers.
 - `task_history.py`: NetBox task history and journal helpers.
 - `virtual_disks.py`: VM disk sync helpers.
-- `virtual_machines.py`: Virtual machine payload and sync helpers.
+- `virtual_machines.py`: virtual machine payload and sync helpers.
 - `vm_coordinator.py`: VM sync orchestration.
 - `vm_create.py`: VM create path helpers.
 - `vm_filter.py`: VM filtering helpers.
-- `vm_helpers.py`: Shared VM helper functions.
+- `vm_helpers.py`: shared VM helper functions.
 - `vm_network.py`: VM network sync helpers.
 - `vm_network_processor.py`: VM network parsing and processing helpers.
 - `vmid_helpers.py`: VMID lookup and coordination helpers.
+- `individual/`: targeted single-object sync workflows.
 
-## Key Data Flow and Dependencies
+## How These Services Work
 
-- These modules implement idempotent Proxmox-to-NetBox synchronization flows and journal tracking.
-- Route handlers consume the helpers here to keep HTTP orchestration thin.
+- Route handlers call these helpers to keep HTTP orchestration thin.
+- These modules implement idempotent Proxmox-to-NetBox sync flows and journal tracking.
+- The VM helpers split orchestration, filtering, network processing, and object creation so the route layer does not need to duplicate state handling.
 
 ## Extension Guidance
 
-- Keep sync routines idempotent where possible to support repeated runs.
+- Keep sync routines idempotent where possible.
 - Emit structured errors with `ProxboxException` for route-level handling.
-- When adding progress reporting, keep payload shapes compatible with both websocket and SSE transport.
+- Keep progress reporting compatible with both WebSocket and SSE transport.
+- Prefer small helper functions for object-specific concerns instead of growing a single coordinator module.

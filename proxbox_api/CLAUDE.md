@@ -2,45 +2,49 @@
 
 ## Purpose
 
-Core FastAPI package for proxbox-api. This package owns app composition, route registration, session factories, schemas, services, generated artifacts, and shared helpers.
+Core FastAPI package for `proxbox-api`. This package owns application composition, route registration, client session factories, schemas, services, generated artifacts, and shared helpers.
 
-## Modules and Responsibilities
+## Package Map
 
-- `__init__.py`: Top-level package exports for `proxbox_api`.
-- `app/`: Application composition, bootstrap, middleware, exception handling, cache routes, root metadata, full-update streaming, and websocket wiring.
-- `cache.py`: In-memory cache helper used across API workflows.
-- `constants.py`: Shared constants for request and sync behavior.
-- `database.py`: SQLModel database configuration and NetBox endpoint persistence.
-- `dependencies.py`: FastAPI dependency providers shared by route modules.
-- `enum/`: Proxmox and NetBox enum definitions used by schemas and routes.
-- `exception.py`: Custom exception types and async exception logging helpers.
-- `logger.py`: Logging setup utilities for console and file outputs.
-- `main.py`: Re-exports `app` from `proxbox_api.app.factory` and symbols used by tests and legacy callers.
-- `netbox_async_bridge.py`: Blocking bridge for async NetBox calls when the event loop is already running.
-- `netbox_compat.py`: Compatibility helpers around the NetBox client base class.
-- `netbox_rest.py`: REST reconciliation helpers for NetBox object sync flows.
-- `netbox_sdk_helpers.py` / `netbox_sdk_sync.py`: NetBox SDK compatibility shims.
-- `openapi_custom.py`: FastAPI OpenAPI override and Proxmox generated-schema embedding.
-- `proxmox_codegen/`: Proxmox API Viewer crawler and OpenAPI/Pydantic code generation pipeline.
-- `proxmox_to_netbox/`: Schema-driven normalization from Proxmox payloads to NetBox payloads.
-- `routes/`: FastAPI router packages for admin, NetBox, Proxmox, DCIM, virtualization, and Proxbox plugin helpers.
-- `schemas/`: Pydantic request/response models and contracts.
-- `services/`: Sync orchestration and reusable helper functions.
-- `session/`: NetBox and Proxmox session factories and dependency helpers.
-- `types/`: Shared aliases and protocol definitions.
-- `utils/`: Streaming, retry, status HTML, structured logging, and websocket helpers.
-- `e2e/`: Playwright demo auth helpers, fixtures, and shared e2e test data.
-- `templates/`: Jinja2 HTML templates used by the admin route.
-- `test_*.py`: Package-level smoke tests that run alongside the repository tests.
+- `app/`: application factory, bootstrap, CORS, exceptions, cache routes, root metadata, SSE bridge wiring, and WebSocket handlers.
+- `routes/`: FastAPI route packages for admin, NetBox, Proxmox, DCIM, virtualization, Proxbox plugin access, and sync helpers.
+- `services/`: synchronization workflows and reusable helper logic.
+- `session/`: NetBox and Proxmox session factories and dependency providers.
+- `schemas/`: Pydantic request and response models for external and internal contracts.
+- `enum/`: Proxmox and NetBox choice values used by schemas and routes.
+- `proxmox_codegen/`: crawler and generator pipeline that produces Proxmox contract artifacts.
+- `proxmox_to_netbox/`: schema-driven transformation from Proxmox payloads to NetBox payloads.
+- `generated/`: checked-in generated OpenAPI and model artifacts.
+- `e2e/`: browser-backed test helpers and fixtures.
+- `utils/`: streaming, retry, logging, error handling, and WebSocket helper utilities.
+- `custom_objects/`: reserved area for custom NetBox object wrappers.
+- `diode/`: experimental Diode sandbox integration.
+- `templates/`: Jinja2 templates used by the admin route.
+- `types/`: shared aliases and protocol definitions.
+- `static/`: static assets bundled with the package.
+- `test_*.py`: package-level smoke tests that run with the repository test suite.
 
-## Key Data Flow and Dependencies
+## Runtime Boundaries
 
-- `app.factory.create_app()` builds the FastAPI app and includes routers under `/netbox`, `/proxmox`, `/dcim`, `/virtualization`, and `/extras`; `main.py` imports that `app`.
-- `database.py` and `session/netbox.py` provide database-backed NetBox connection material used by most routes and sync services.
-- `services/sync` modules and `routes/virtualization/virtual_machines` drive synchronization from Proxmox to NetBox objects.
+- `proxbox_api.app.factory.create_app()` is the application assembly point. It initializes bootstrap state, registers middleware, mounts routers, and exposes the `app` object imported by `proxbox_api.main`.
+- `database.py` persists NetBox endpoint records in SQLite and feeds bootstrap/session creation.
+- `session/netbox.py` and `session/proxmox.py` own client construction. Route handlers should use these dependencies instead of creating clients inline.
+- `services/sync/` and `routes/virtualization/virtual_machines/` handle the main Proxmox-to-NetBox sync flow, including per-object journal tracking and stream progress.
+- `proxmox_to_netbox/` is the normalization boundary. Parsing and conversion must happen in schemas and mappers, not in route handlers.
+
+## Key Data Flow
+
+1. Startup bootstraps the local database and default NetBox session.
+2. Routes resolve NetBox or Proxmox clients through dependency aliases.
+3. Service modules fetch source data, normalize it through schemas, and create or update NetBox objects.
+4. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
+5. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
 
 ## Extension Guidance
 
-- Keep route modules thin; move business logic to services and helper modules.
-- Add new shared dependencies to `dependencies.py` and reuse `Annotated` dependency aliases.
-- Prefer explicit Pydantic schemas in `schemas/` for request and response models.
+- Keep route modules thin and move reusable logic into services or utility modules.
+- Add new request and response models to `schemas/` before wiring route code.
+- Keep generated artifacts and contract snapshots out of manual edits unless you are debugging the generator.
+- Preserve ASCII-only documentation and source text unless a file already requires otherwise.
+- Prefer `ProxboxException` for expected API failures and `logger` for operational messages.
+- When adding new sync behavior, keep WebSocket and SSE payload shapes aligned.

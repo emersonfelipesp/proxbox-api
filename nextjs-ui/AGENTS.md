@@ -2,94 +2,73 @@
 
 ## Context
 
-This is a standalone Next.js 16+ frontend for managing NetBox and Proxmox endpoint configuration as part of the Proxbox API project.
+This is the standalone Next.js 16.2.1 frontend for managing NetBox and Proxmox endpoint configuration as part of the `proxbox-api` project.
 
-**Parent project**: See `/root/nms/proxbox-api/CLAUDE.md` for the overall Proxbox architecture.
+**Parent project**: see `/root/nms/proxbox-api/CLAUDE.md` for the backend architecture and repo-wide rules.
 
-**This directory**: Self-contained Next.js 16.2.1 app with minimal dependencies.
-
-## Critical Next.js Version Notice
+## Critical Next.js Notice
 
 <!-- BEGIN:nextjs-agent-rules -->
-**This is NOT the Next.js you know.**
-
-Next.js 16+ has breaking changes — APIs, conventions, and file structure may differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
+Next.js 16+ differs from older App Router examples. Before changing code, check the versioned guidance under `node_modules/next/dist/docs/` and follow the repo's current scripts and conventions.
 <!-- END:nextjs-agent-rules -->
 
 ## Project Structure
 
 ```
 nextjs-ui/
-├── AGENTS.md              ← Local index for the UI docs
-├── CLAUDE.md              ← Local context (references parent AGENTS.md)
-├── README.md              ← Setup and development instructions
+├── AGENTS.md
+├── CLAUDE.md
+├── README.md
 ├── app/
-│   ├── page.tsx           ← Main dashboard page
-│   ├── layout.tsx         ← Root layout
-│   └── globals.css        ← Global styles and theme tokens
+│   ├── page.tsx
+│   ├── layout.tsx
+│   └── globals.css
 ├── components/
-│   └── endpoint-form.tsx  ← Reusable CRUD form component
+│   └── endpoint-form.tsx
 └── lib/
-    ├── api.ts             ← Backend request helpers
-    └── types.ts           ← Shared frontend types
+    ├── api.ts
+    └── types.ts
 ```
 
 ## Stack
 
-- **Next.js**: 16.2.1 (App Router)
-- **React**: 19.2.4
-- **TypeScript**: 5.x
-- **Tailwind CSS**: 4.x
-- **API Backend**: Proxbox API at `http://127.0.0.1:8000`
+- Next.js 16.2.1 with the App Router
+- React 19.2.4
+- TypeScript 5.x
+- Tailwind CSS 4.x
 
-## Key Features
+## What This UI Owns
 
-This UI manages:
-- **One NetBox endpoint** (`/netbox/endpoint`)
-- **Many Proxmox endpoints** (`/proxmox/endpoints`)
+- One NetBox endpoint at `/netbox/endpoint`
+- Many Proxmox endpoints at `/proxmox/endpoints`
+- Local theme state and endpoint CRUD orchestration in `app/page.tsx`
 
-The backend API is defined in `/root/nms/proxbox-api/proxbox_api/`.
+## Working Rules
+
+1. Start the backend first at the configured API URL.
+2. Keep fetch and response normalization in `lib/api.ts`.
+3. Keep shared endpoint types in `lib/types.ts`.
+4. Keep UI state and presentation logic in the React components.
+5. Reuse the controlled-form pattern in `components/endpoint-form.tsx` before adding new patterns.
 
 ## Development Workflow
 
-1. **Start backend first**: Ensure Proxbox API is running at `http://127.0.0.1:8000`
-2. **Install dependencies**: `npm install` (if needed)
-3. **Start dev server**: `npm run dev`
-4. **Access UI**: `http://localhost:3000`
+1. Install dependencies with `npm install` if needed.
+2. Run the app with `npm run dev`.
+3. Verify the UI at `http://localhost:3000`.
 
-## Important Conventions
+## Verification
 
-- **API URL**: Configured via `NEXT_PUBLIC_PROXBOX_API_URL` in `.env.local`
-- **App Router**: Use server components by default, client components only when needed
-- **TypeScript**: Strict typing enabled
-- **Styling**: Tailwind CSS 4.x utility classes
+Run these checks after editing this directory:
 
-## Common Tasks
-
-### Adding a new endpoint form
-1. Review `components/endpoint-form.tsx` for the current controlled-form pattern
-2. Follow the existing CRUD structure in `app/page.tsx`
-3. Ensure TypeScript types match backend API schemas in `lib/types.ts`
-
-### API integration
-- Use `fetch()` with `NEXT_PUBLIC_PROXBOX_API_URL` from environment
-- Handle errors gracefully with user-friendly messages
-- Follow REST conventions matching the backend
-
-### Styling
-- Use Tailwind utility classes
-- Maintain consistency with existing components
-- Check `globals.css` for any custom styles
-
-## Testing Changes
-
-1. Run linter: `npm run lint`
-2. Build check: `npm run build`
-3. Manual testing: Verify CRUD operations work end-to-end with the backend
+```bash
+npm run lint
+npm run build
+```
 
 ## References
 
-- **Parent project context**: `/root/nms/proxbox-api/CLAUDE.md`
-- **Backend API**: `/root/nms/proxbox-api/proxbox_api/`
-- **Setup instructions**: `./README.md`
-- **Next.js docs**: `node_modules/next/dist/docs/` (for version-specific guidance)
+- Backend architecture: `/root/nms/proxbox-api/CLAUDE.md`
+- Backend package: `/root/nms/proxbox-api/proxbox_api/`
+- Setup instructions: `./README.md`
+- Version-specific Next.js docs: `node_modules/next/dist/docs/`

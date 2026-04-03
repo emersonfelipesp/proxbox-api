@@ -8,10 +8,12 @@ DCIM-specific status enumerations for NetBox schema validation.
 
 - `__init__.py`: DCIM status options used by NetBox schema models.
 
-## Key Data Flow and Dependencies
+## How These Enums Are Used
 
-- `schemas/netbox/dcim` imports `StatusOptions` to constrain site and DCIM object status fields.
+- `proxbox_api.schemas.netbox.dcim` imports these values to constrain payload fields.
+- DCIM sync paths use them to keep device and related object payloads valid before requests are sent.
 
 ## Extension Guidance
 
-- Mirror canonical NetBox status values to avoid API rejection errors.
+- Mirror canonical NetBox status values exactly.
+- Keep the public enum names stable so schema references do not break.
