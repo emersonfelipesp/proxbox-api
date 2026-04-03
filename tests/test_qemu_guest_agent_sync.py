@@ -76,9 +76,18 @@ def _install_common_sync_patches(  # noqa: C901
         return {"id": 99}
 
     async def _fake_rest_list(_nb, path, **kwargs):
+        query = kwargs.get("query", {})
         if path == "/api/plugins/proxbox/storage/":
             return []
+        if path == "/api/virtualization/interfaces/" and query.get("name"):
+            return []
         return []
+
+    async def _fake_rest_first(_nb, path, **kwargs):
+        query = kwargs.get("query", {})
+        if path == "/api/virtualization/interfaces/" and query.get("name"):
+            return None
+        return None
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -123,6 +132,10 @@ def _install_common_sync_patches(  # noqa: C901
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
         _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_first_async",
+        _fake_rest_first,
     )
 
 
