@@ -37,6 +37,8 @@ from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.task_history import (
     sync_all_virtual_machine_task_histories,
 )
+from proxbox_api.services.sync.replications import sync_all_replications
+from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 from proxbox_api.utils.structured_logging import set_operation_id
@@ -269,6 +271,34 @@ async def full_update_sync(  # noqa: C901
             python_exception=str(error),
         ) from error
 
+    try:
+        sync_replications = await sync_all_replications(
+            netbox_session=netbox_session,
+            pxs=pxs,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing replications during full-update")
+        raise ProxboxException(
+            message="Error while syncing replications.",
+            python_exception=str(error),
+        ) from error
+
+    try:
+        sync_backup_routines = await sync_all_backup_routines(
+            netbox_session=netbox_session,
+            pxs=pxs,
+        )
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Error while syncing backup routines during full-update")
+        raise ProxboxException(
+            message="Error while syncing backup routines.",
+            python_exception=str(error),
+        ) from error
+
     return {
         "status": "completed",
         "devices": sync_nodes,
@@ -278,6 +308,8 @@ async def full_update_sync(  # noqa: C901
         "task_history": sync_task_history,
         "backups": sync_backups,
         "snapshots": sync_snapshots,
+        "replications": sync_replications,
+        "backup_routines": sync_backup_routines,
         "node_interfaces": sync_node_interfaces,
         "vm_interfaces": sync_vm_interfaces,
         "vm_ip_addresses": sync_vm_ip_addresses,
@@ -288,6 +320,10 @@ async def full_update_sync(  # noqa: C901
         "task_history_count": _result_count(sync_task_history),
         "backups_count": len(sync_backups),
         "snapshots_count": _result_count(sync_snapshots),
+        "replications_count": sync_replications.get("created", 0)
+        + sync_replications.get("updated", 0),
+        "backup_routines_count": sync_backup_routines.get("created", 0)
+        + sync_backup_routines.get("updated", 0),
         "node_interfaces_count": len(sync_node_interfaces),
         "vm_interfaces_count": len(sync_vm_interfaces),
         "vm_ip_addresses_count": len(sync_vm_ip_addresses),

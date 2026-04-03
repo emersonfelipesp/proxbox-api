@@ -164,3 +164,30 @@ async def cluster_resources(
 
 
 ClusterResourcesDep = Annotated[ClusterResourcesList, Depends(cluster_resources)]
+
+
+# Backup routines endpoint
+@router.get("/backup", response_model=list)
+async def cluster_backup(pxs: ProxmoxSessionsDep):
+    """
+    ### Retrieve backup job configurations from multiple Proxmox sessions.
+
+    **Args:**
+    - **pxs (`ProxmoxSessionsDep`):** A list of Proxmox session dependencies.
+
+    **Returns:**
+    - **list:** A list of backup job configurations from each cluster.
+    """
+    results = []
+
+    for px in pxs:
+        try:
+            backup_jobs = px.session.cluster.backup.get()
+            for job in backup_jobs:
+                job["cluster_name"] = px.name
+                results.append(job)
+        except Exception as error:
+            logger.exception("Error fetching backup jobs for Proxmox cluster %s", px.name)
+            results.append({"cluster_name": px.name, "error": str(error)})
+
+    return results
