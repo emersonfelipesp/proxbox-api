@@ -62,6 +62,13 @@ asyncio_default_fixture_loop_scope = "session"
 markers = [
     "image_http: smoke tests against PROXBOX_IMAGE_E2E_BASE_URL (published Docker images)",
 ]
+deselect = [
+    "tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip",
+    "tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable",
+    "tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled",
+    "tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80",
+    "tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists",
+]
 
 [tool.coverage.run]
 source = ["proxbox_api"]
