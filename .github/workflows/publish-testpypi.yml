@@ -5,9 +5,6 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: read
-
 jobs:
   prepare-release:
     name: prepare artifacts + metadata
@@ -179,12 +176,3 @@ jobs:
             --username "$PYPI_USERNAME" \
             --password "$PYPI_TOKEN" \
             dist/*
-
-  docker-publish:
-    name: publish Docker images to Docker Hub
-    if: github.event_name == 'release'
-    needs: [prepare-release, validate-testpypi]
-    uses: ./.github/workflows/docker-hub-publish.yml
-    secrets: inherit
-    with:
-      checkout_ref: ${{ github.event.release.tag_name }}
