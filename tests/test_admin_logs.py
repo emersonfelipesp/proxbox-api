@@ -23,6 +23,8 @@ async def test_backend_logs_view_normalizes_timestamp_and_passes_exact_level(mon
             "active_filters": {
                 "level": kwargs.get("level").value if kwargs.get("level") else None,
                 "errors_only": True if kwargs.get("errors_only") else None,
+                "newer_than_id": kwargs.get("newer_than_id"),
+                "older_than_id": kwargs.get("older_than_id"),
                 "operation_id": kwargs.get("operation_id"),
                 "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
             },
@@ -41,6 +43,8 @@ async def test_backend_logs_view_normalizes_timestamp_and_passes_exact_level(mon
 
     assert captured["level"] == LogLevel.INFO
     assert captured["errors_only"] is False
+    assert captured["newer_than_id"] is None
+    assert captured["older_than_id"] is None
     assert captured["limit"] == 10
     assert captured["offset"] == 3
     assert captured["operation_id"] == "op-123"
@@ -64,6 +68,8 @@ async def test_backend_logs_view_forwards_errors_only_filter(monkeypatch):
             "active_filters": {
                 "level": kwargs.get("level").value if kwargs.get("level") else None,
                 "errors_only": True if kwargs.get("errors_only") else None,
+                "newer_than_id": kwargs.get("newer_than_id"),
+                "older_than_id": kwargs.get("older_than_id"),
                 "operation_id": kwargs.get("operation_id"),
                 "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
             },
@@ -76,6 +82,36 @@ async def test_backend_logs_view_forwards_errors_only_filter(monkeypatch):
     assert captured["errors_only"] is True
     assert captured["level"] is None
     assert result["active_filters"]["errors_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_backend_logs_view_forwards_id_cursors(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_get_logs(**kwargs):
+        captured.update(kwargs)
+        return {
+            "logs": [],
+            "total": 0,
+            "has_more": False,
+            "active_filters": {
+                "level": kwargs.get("level").value if kwargs.get("level") else None,
+                "errors_only": True if kwargs.get("errors_only") else None,
+                "newer_than_id": kwargs.get("newer_than_id"),
+                "older_than_id": kwargs.get("older_than_id"),
+                "operation_id": kwargs.get("operation_id"),
+                "since": kwargs.get("since").isoformat() if kwargs.get("since") else None,
+            },
+        }
+
+    monkeypatch.setattr(admin_logs, "get_logs", fake_get_logs)
+
+    result = await admin_logs.get_backend_logs(newer_than_id=10, older_than_id=5)
+
+    assert captured["newer_than_id"] == 10
+    assert captured["older_than_id"] == 5
+    assert result["active_filters"]["newer_than_id"] == 10
+    assert result["active_filters"]["older_than_id"] == 5
 
 
 @pytest.mark.asyncio
