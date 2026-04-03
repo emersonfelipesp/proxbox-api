@@ -142,7 +142,10 @@ def _normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def _best_guest_agent_ip(guest_iface: dict | None) -> str | None:
+def _best_guest_agent_ip(
+    guest_iface: dict | None,
+    ignore_ipv6_link_local: bool = True,
+) -> str | None:
     """Select the best IP address from guest agent interface data."""
     from ipaddress import ip_address
 
@@ -158,7 +161,9 @@ def _best_guest_agent_ip(guest_iface: dict | None) -> str | None:
             parsed = ip_address(ip_text)
         except ValueError:
             continue
-        if parsed.is_loopback or parsed.is_link_local:
+        if parsed.is_loopback:
+            continue
+        if ignore_ipv6_link_local and parsed.is_link_local:
             continue
         prefix = addr.get("prefix")
         if isinstance(prefix, int) and 0 <= prefix <= 128:
@@ -249,13 +254,13 @@ async def _reconcile_vm_interface_record(
     vm_id = virtual_machine.get("id")
     bridge: dict = {}
     bridge_name = interface_config.get("bridge")
-    if bridge_name and vm_id:
+    if bridge_name and vm_id is not None:
         bridge = await rest_first_async(
             nb,
             "/api/virtualization/interfaces/",
             query={
                 "name": bridge_name,
-                "virtual_machine_id": "",
+                "virtual_machine_id": vm_id,
                 "limit": 1,
             },
         )
@@ -289,11 +294,11 @@ async def _reconcile_vm_interface_record(
         "tags": tag_refs,
         "custom_fields": {"proxmox_last_updated": now.isoformat()},
     }
-    if vm_id:
+    if vm_id is not None:
         payload["virtual_machine"] = vm_id
 
     lookup: dict = {"name": resolved_name}
-    if vm_id:
+    if vm_id is not None:
         lookup["virtual_machine_id"] = vm_id
 
     vm_interface = await rest_reconcile_async(
@@ -337,6 +342,7 @@ async def _resolve_vm_interface_ip(
     interface_name: str,
     now: datetime,
     create_ip: bool,
+    ignore_ipv6_link_local: bool = True,
 ) -> tuple[int | None, str | None]:
     """Create or update the IP attached to a VM interface."""
     if not create_ip:
@@ -344,7 +350,7 @@ async def _resolve_vm_interface_ip(
 
     interface_ip: str | None = None
     if guest_iface:
-        interface_ip = _best_guest_agent_ip(guest_iface)
+        interface_ip = _best_guest_agent_ip(guest_iface, ignore_ipv6_link_local)
     if not interface_ip:
         interface_ip = interface_config.get("ip")
 
@@ -397,6 +403,7 @@ async def sync_vm_interface_and_ip(
     use_guest_agent_interface_name: bool = True,
     create_interface: bool = True,
     create_ip: bool = True,
+    ignore_ipv6_link_local_addresses: bool = True,
     now: datetime | None = None,
 ) -> dict:
     if now is None:
@@ -420,7 +427,7 @@ async def sync_vm_interface_and_ip(
             "/api/virtualization/interfaces/",
             query={
                 "name": interface_name,
-                **({"virtual_machine_id": vm_id} if vm_id else {}),
+                **({"virtual_machine_id": vm_id} if vm_id is not None else {}),
                 "limit": 2,
             },
         )
@@ -458,6 +465,7 @@ async def sync_vm_interface_and_ip(
         interface_name=interface_name,
         now=now,
         create_ip=create_ip,
+        ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
     )
     if ip_id is not None:
         result["ip_id"] = ip_id
