@@ -2,18 +2,24 @@
 
 ## Purpose
 
-Service layer package namespace for reusable business workflows.
+Reusable business workflows for synchronization, reconciliation, and Proxmox helper logic.
 
 ## Current Modules
 
-- `__init__.py`: Service package namespace.
-- `proxmox_helpers.py`: Shared Proxmox helper functions used by route orchestration.
-- `sync/`: Sync workflows for clusters, devices, virtual machines, storage, backups, and task history.
+- `__init__.py`: service package namespace.
+- `proxmox_helpers.py`: shared Proxmox helper functions used by route orchestration.
+- `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
+- `sync/individual/`: targeted single-object sync workflows with dependency auto-creation and dry-run support.
 
-## Key Data Flow and Dependencies
+## How Services Are Used
 
-- Routes import sync services from `services/sync` during orchestration.
+- Route handlers import these modules to keep HTTP, SSE, and WebSocket code thin.
+- `session/` provides the authenticated clients that service functions consume.
+- `schemas/` and `proxmox_to_netbox/` provide the normalization layer that services rely on.
 
 ## Extension Guidance
 
-- Keep services side-effect aware and independent from HTTP request objects where possible.
+- Keep service functions independent from request objects where possible.
+- Prefer idempotent operations so repeated sync runs are safe.
+- Surface predictable errors through `ProxboxException`.
+- Keep response payloads compatible with both JSON and stream transports when a service is reused in SSE or WebSocket paths.

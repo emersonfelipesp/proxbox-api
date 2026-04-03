@@ -6,12 +6,14 @@ Reserved route namespace for Proxbox cluster-specific endpoints.
 
 ## Current Files
 
-- `__init__.py`: Cluster-specific Proxbox route namespace.
+- `__init__.py`: cluster-specific Proxbox route namespace.
 
-## Key Data Flow and Dependencies
+## Current Role
 
-- Currently an empty package used to keep future cluster routes organized.
+- This package is currently empty and exists to keep future cluster routes organized.
+- No active request handling lives here yet.
 
 ## Extension Guidance
 
 - Add endpoints here when introducing plugin-side cluster resource APIs.
+- Keep the namespace reserved until there is a real route surface to document.

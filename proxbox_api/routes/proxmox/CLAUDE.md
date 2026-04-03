@@ -10,16 +10,18 @@ Endpoints that expose Proxmox sessions, cluster data, nodes, storage, and genera
 - `cluster.py`: Proxmox cluster endpoints and cluster response schemas.
 - `endpoints.py`: Proxmox endpoint listing and resource helpers.
 - `nodes.py`: Proxmox node endpoints and node interface response schemas.
-- `runtime_generated.py`: Runtime-generated route registration helpers.
-- `viewer_codegen.py`: Runtime endpoints to generate and return Proxmox OpenAPI and Pydantic artifacts.
+- `runtime_generated.py`: runtime-generated route registration helpers.
+- `viewer_codegen.py`: runtime endpoints to generate and return Proxmox OpenAPI and Pydantic artifacts.
 
-## Key Data Flow and Dependencies
+## How These Routes Work
 
-- Uses `ProxmoxSessionsDep` from `session/proxmox.py` for authenticated Proxmox access.
-- Route modules provide typed response schemas and dependency aliases.
+- The package uses `ProxmoxSessionsDep` from `session/proxmox.py` for authenticated access.
+- Route modules expose typed response schemas and dependency aliases for client-facing API calls.
 - Viewer codegen endpoints delegate generation to `proxbox_api.proxmox_codegen`.
+- Runtime-generated routes are mounted during application lifespan and should stay aligned with the generated artifact tree.
 
 ## Extension Guidance
 
 - Keep API wrappers resilient to upstream Proxmox errors and convert them to `ProxboxException`.
 - Prefer schema-backed responses for stable client behavior.
+- Keep runtime route registration and code generation responsibilities separated.

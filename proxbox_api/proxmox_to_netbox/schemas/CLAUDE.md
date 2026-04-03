@@ -6,7 +6,7 @@ Schema-driven parsing modules for Proxmox-to-NetBox normalization. All parsing l
 
 ## Current Files
 
-- `__init__.py`: Re-exports the public parsing helpers.
+- `__init__.py`: re-exports the public parsing helpers.
 - `disks.py`: `ProxmoxDiskEntry`, disk size conversion, and Proxmox VM config disk parsing.
 
 ## Architecture Rule
@@ -14,9 +14,10 @@ Schema-driven parsing modules for Proxmox-to-NetBox normalization. All parsing l
 **ALL normalization and parsing MUST be done inside Pydantic schemas.**
 
 That means:
-- Parsing logic such as disk config parsing and size conversions belongs in schema validators and computed fields.
-- Normalization functions should be schema methods or computed properties.
-- Route handlers and `normalize.py` should only orchestrate; they should not parse raw strings.
+
+- parsing logic such as disk config parsing and size conversions belongs in schema validators and computed fields
+- normalization functions should be schema methods or computed properties
+- route handlers and `normalize.py` only orchestrate and should not parse raw strings
 
 ## Adding New Schema Modules
 

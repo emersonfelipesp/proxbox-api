@@ -8,13 +8,14 @@ Endpoints that synchronize and expose DCIM entities in NetBox.
 
 - `__init__.py`: DCIM route handlers for device, interface, VLAN, and IP synchronization.
 
-## Key Data Flow and Dependencies
+## How These Routes Work
 
-- Consumes Proxmox-derived dependencies and sync services to create devices and interfaces.
-- Depends on NetBox reconciliation helpers and `WebSocketSSEBridge` for stream responses.
+- Route handlers consume Proxmox-derived dependencies and sync services to create or update NetBox DCIM objects.
+- They depend on NetBox reconciliation helpers and `WebSocketSSEBridge` for streamed progress responses.
+- The route layer should stay thin and defer the object-specific workflow to `services/sync`.
 
 ## Extension Guidance
 
-- Keep endpoint orchestration simple; place long-running sync logic in `services/sync`.
-- Preserve response model declarations to maintain API contracts.
-- When adding stream endpoints, use `WebSocketSSEBridge` and `StreamingResponse` with `text/event-stream`.
+- Keep endpoint orchestration simple.
+- Preserve response model declarations so API contracts stay stable.
+- Use `WebSocketSSEBridge` and `StreamingResponse` with `text/event-stream` for new stream endpoints.

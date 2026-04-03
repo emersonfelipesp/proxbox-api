@@ -2,16 +2,18 @@
 
 ## Purpose
 
-Schemas for NetBox virtualization objects like clusters and cluster types.
+Schemas for NetBox virtualization objects such as clusters and cluster types.
 
 ## Current Files
 
 - `__init__.py`: NetBox virtualization schema models for clusters and types.
 
-## Key Data Flow and Dependencies
+## How These Schemas Flow
 
-- Used by synchronization logic to shape valid virtualization object payloads.
+- Virtualization route and sync modules use these models to shape valid NetBox payloads.
+- Status and choice enums are wired through this package to keep cluster payloads valid.
 
 ## Extension Guidance
 
-- Mirror NetBox model constraints and status choices to reduce runtime validation errors.
+- Mirror NetBox model constraints and status choices carefully.
+- Keep schema names stable so route and service imports remain simple.
