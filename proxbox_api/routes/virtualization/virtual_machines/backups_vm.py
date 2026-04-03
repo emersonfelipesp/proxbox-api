@@ -169,7 +169,9 @@ async def create_netbox_backups(
         return netbox_backup
 
     except Exception as error:
-        logger.warning("Error creating NetBox backup for VM %s: %s", vmid_log, error)
+        error_detail = getattr(error, "detail", str(error))
+        error_msg = f"{type(error).__name__}: {error_detail}"
+        logger.warning("Error creating NetBox backup for VM %s: %s", vmid_log, error_msg)
         return None
 
 
