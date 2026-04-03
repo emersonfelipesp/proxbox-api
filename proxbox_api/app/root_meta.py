@@ -1,10 +1,11 @@
-"""Root metadata and backend version endpoints."""
+"""Root metadata, health check, and backend version endpoints."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
 from proxbox_api import __version__
+from proxbox_api.app.bootstrap import init_ok
 
 root_meta_router = APIRouter()
 
@@ -30,4 +31,13 @@ async def backend_version() -> dict:
     """Return backend service version for external cache invalidation."""
     return {
         "version": __version__,
+    }
+
+
+@root_meta_router.get("/health")
+async def health_check() -> dict:
+    """Return backend health status for readiness checks."""
+    return {
+        "status": "ready" if init_ok else "initializing",
+        "init_ok": init_ok,
     }
