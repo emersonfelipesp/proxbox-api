@@ -19,7 +19,17 @@ def _record_to_dict(record: object) -> dict[str, object]:
         return record.serialize()
     if isinstance(record, dict):
         return record
-    return dict(record)
+    # Handle Pydantic models or other objects with model_dump
+    if hasattr(record, "model_dump"):
+        return record.model_dump()
+    # Handle objects with __dict__
+    if hasattr(record, "__dict__"):
+        return dict(record.__dict__)
+    # Fallback: try direct conversion
+    try:
+        return dict(record)
+    except Exception:
+        return {"id": getattr(record, "id", None), "name": getattr(record, "name", None)}
 
 
 def _cluster_name(value: object) -> str | None:
