@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from proxbox_api import __version__
-from proxbox_api.app.bootstrap import init_ok
+from proxbox_api.app import bootstrap
 
 root_meta_router = APIRouter()
 
@@ -38,6 +38,6 @@ async def backend_version() -> dict:
 async def health_check() -> dict:
     """Return backend health status for readiness checks."""
     return {
-        "status": "ready" if init_ok else "initializing",
-        "init_ok": init_ok,
+        "status": "ready" if bootstrap.init_ok else "initializing",
+        "init_ok": bootstrap.init_ok,
     }
