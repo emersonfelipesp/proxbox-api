@@ -8,53 +8,76 @@
 
 Open the nearest scoped guide for the code you are changing.
 
-- `nextjs-ui/AGENTS.md`
-- `nextjs-ui/CLAUDE.md`
-- `proxbox_api/CLAUDE.md`
-- `proxbox_api/custom_objects/CLAUDE.md`
-- `proxbox_api/diode/CLAUDE.md`
-- `proxbox_api/e2e/CLAUDE.md`
-- `proxbox_api/enum/CLAUDE.md`
-- `proxbox_api/enum/netbox/CLAUDE.md`
-- `proxbox_api/enum/netbox/dcim/CLAUDE.md`
-- `proxbox_api/enum/netbox/virtualization/CLAUDE.md`
-- `proxbox_api/generated/CLAUDE.md`
-- `proxbox_api/generated/netbox/CLAUDE.md`
-- `proxbox_api/generated/proxmox/CLAUDE.md`
-- `proxbox_api/proxmox_codegen/CLAUDE.md`
-- `proxbox_api/proxmox_to_netbox/CLAUDE.md`
-- `proxbox_api/proxmox_to_netbox/mappers/CLAUDE.md`
-- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md`
-- `proxbox_api/routes/CLAUDE.md`
-- `proxbox_api/routes/admin/CLAUDE.md`
-- `proxbox_api/routes/dcim/CLAUDE.md`
-- `proxbox_api/routes/extras/CLAUDE.md`
-- `proxbox_api/routes/netbox/CLAUDE.md`
-- `proxbox_api/routes/proxbox/CLAUDE.md`
-- `proxbox_api/routes/proxbox/clusters/CLAUDE.md`
-- `proxbox_api/routes/proxmox/CLAUDE.md`
-- `proxbox_api/routes/virtualization/CLAUDE.md`
-- `proxbox_api/routes/virtualization/virtual_machines/CLAUDE.md`
-- `proxbox_api/schemas/CLAUDE.md`
-- `proxbox_api/schemas/netbox/CLAUDE.md`
-- `proxbox_api/schemas/netbox/dcim/CLAUDE.md`
-- `proxbox_api/schemas/netbox/extras/CLAUDE.md`
-- `proxbox_api/schemas/netbox/virtualization/CLAUDE.md`
-- `proxbox_api/schemas/virtualization/CLAUDE.md`
-- `proxbox_api/services/CLAUDE.md`
-- `proxbox_api/services/sync/CLAUDE.md`
-- `proxbox_api/services/sync/individual/CLAUDE.md`
-- `proxbox_api/session/CLAUDE.md`
-- `proxbox_api/utils/CLAUDE.md`
+### Top-level packages
+
+- `proxbox_api/CLAUDE.md` — Core FastAPI package overview
+- `proxmox-mock/CLAUDE.md` — Standalone Proxmox mock API package
+- `nextjs-ui/CLAUDE.md` — Next.js frontend for endpoint management
+- `nextjs-ui/AGENTS.md` — Frontend agent quick-reference
+
+### Infrastructure and tooling
+
+- `.github/CLAUDE.md` — CI/CD workflow descriptions
+- `docker/CLAUDE.md` — Container runtime and proxy configuration
+- `docs/CLAUDE.md` — MkDocs documentation structure
+- `tests/CLAUDE.md` — Backend test suite layout and conventions
+- `scripts/CLAUDE.md` — Utility and maintenance scripts
+- `tasks/CLAUDE.md` — Development task tracking
+- `automation/CLAUDE.md` — Automation entry points
+
+### proxbox_api subpackages
+
+- `proxbox_api/app/CLAUDE.md` — Application factory and lifecycle
+- `proxbox_api/routes/CLAUDE.md` — Route package index
+- `proxbox_api/routes/admin/CLAUDE.md` — Admin dashboard routes
+- `proxbox_api/routes/dcim/CLAUDE.md` — DCIM device routes
+- `proxbox_api/routes/extras/CLAUDE.md` — Extras (tags, custom fields) routes
+- `proxbox_api/routes/netbox/CLAUDE.md` — NetBox endpoint CRUD routes
+- `proxbox_api/routes/proxbox/CLAUDE.md` — Proxbox plugin routes
+- `proxbox_api/routes/proxbox/clusters/CLAUDE.md` — Cluster route namespace
+- `proxbox_api/routes/proxmox/CLAUDE.md` — Proxmox proxy and codegen routes
+- `proxbox_api/routes/sync/CLAUDE.md` — Internal sync helper routes
+- `proxbox_api/routes/virtualization/CLAUDE.md` — Virtualization routes
+- `proxbox_api/routes/virtualization/virtual_machines/CLAUDE.md` — VM sync routes
+- `proxbox_api/services/CLAUDE.md` — Service layer index
+- `proxbox_api/services/sync/CLAUDE.md` — Sync workflow services
+- `proxbox_api/services/sync/individual/CLAUDE.md` — Individual object sync services
+- `proxbox_api/session/CLAUDE.md` — Session and client factories
+- `proxbox_api/schemas/CLAUDE.md` — Pydantic schema index
+- `proxbox_api/schemas/netbox/CLAUDE.md` — NetBox domain schemas
+- `proxbox_api/schemas/netbox/dcim/CLAUDE.md` — DCIM schemas
+- `proxbox_api/schemas/netbox/extras/CLAUDE.md` — Extras schemas
+- `proxbox_api/schemas/netbox/virtualization/CLAUDE.md` — Virtualization schemas
+- `proxbox_api/schemas/virtualization/CLAUDE.md` — VM-level schemas
+- `proxbox_api/enum/CLAUDE.md` — Enum/choice values index
+- `proxbox_api/enum/netbox/CLAUDE.md` — NetBox enums
+- `proxbox_api/enum/netbox/dcim/CLAUDE.md` — DCIM enums
+- `proxbox_api/enum/netbox/virtualization/CLAUDE.md` — Virtualization enums
+- `proxbox_api/proxmox_codegen/CLAUDE.md` — Proxmox API crawler and generator
+- `proxbox_api/proxmox_to_netbox/CLAUDE.md` — Proxmox-to-NetBox transformation
+- `proxbox_api/proxmox_to_netbox/mappers/CLAUDE.md` — Object mappers
+- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md` — Transformation schemas
+- `proxbox_api/generated/CLAUDE.md` — Generated artifacts (do not edit)
+- `proxbox_api/generated/netbox/CLAUDE.md` — NetBox model snapshots
+- `proxbox_api/generated/proxmox/CLAUDE.md` — Proxmox model snapshots
+- `proxbox_api/types/CLAUDE.md` — Type aliases and protocols
+- `proxbox_api/utils/CLAUDE.md` — Shared utilities
+- `proxbox_api/custom_objects/CLAUDE.md` — Custom NetBox object wrappers
+- `proxbox_api/diode/CLAUDE.md` — Diode sandbox integration
+- `proxbox_api/e2e/CLAUDE.md` — E2E browser test helpers
 
 ## Repo Structure
 
 - `proxbox_api/`: FastAPI package, session factories, schemas, routes, sync services, code generation, and shared utilities.
+- `proxmox-mock/`: Standalone `proxmox-mock-api` package — schema-driven Proxmox API mock, published separately to PyPI.
 - `nextjs-ui/`: Next.js frontend used to manage one NetBox endpoint and multiple Proxmox endpoints.
 - `tests/`: Unit, integration, and end-to-end tests for the backend package.
 - `docs/`: MkDocs documentation, including English and Brazilian Portuguese content.
 - `scripts/`: Utility scripts, including schema refresh helpers.
+- `automation/`: Placeholder for future automation workflows.
+- `tasks/`: Development task tracking.
 - `Dockerfile` and `docker/`: runtime and reverse-proxy images for local and published deployments.
+- `.github/workflows/`: CI/CD pipelines for test, lint, publish, and docs.
 
 ## Architecture
 
