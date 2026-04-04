@@ -1,4 +1,4 @@
-name: Release validation and publish
+name: Release proxmox-mock-api
 
 # Runs when a GitHub Release is published (tag + release), not on raw tag pushes alone.
 on:
@@ -43,8 +43,10 @@ jobs:
           version = data['project']['version']
           event = os.getenv('GITHUB_EVENT_NAME', '')
           release_tag = os.getenv('RELEASE_TAG_NAME', '') or ''
-          if project_name != 'proxbox_api':
-              raise SystemExit(f'Expected project name proxbox_api, got {project_name!r}')
+          if project_name != 'proxmox-mock-api':
+              raise SystemExit(
+                  f'Expected project name proxmox-mock-api, got {project_name!r}'
+              )
           if event == 'release' and release_tag != f'v{version}':
               raise SystemExit(
                   f'Release tag/version mismatch: tag={release_tag!r}, version={version!r}'
@@ -136,6 +138,7 @@ jobs:
       - name: Import smoke checks
         run: |
           uv run python -c "import proxbox_api.main"
+          uv run python -c "import proxbox_api.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Run mocked schema-driven tests
@@ -146,6 +149,42 @@ jobs:
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80 \
             --deselect=tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists
+
+  publish-docker:
+    name: publish proxmox-mock-api Docker image
+    if: github.event_name == 'release'
+    needs: [prepare-release, validate-testpypi]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and publish runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            APP_MODULE=proxbox_api.mock_main:app
+          tags: |
+            emersonfelipesp/proxmox-mock-api:${{ needs.prepare-release.outputs.version }}
+            emersonfelipesp/proxmox-mock-api:latest
 
   publish-pypi:
     name: publish to PyPI

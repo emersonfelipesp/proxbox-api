@@ -9,9 +9,9 @@ include = ["proxbox_api*"]
 proxbox_api = ["static/*"]
 
 [project]
-name = "proxbox_api"
+name = "proxmox-mock-api"
 version = "0.0.6.post5"
-description = "Proxbox API service made using FastAPI"
+description = "Schema-driven FastAPI mock for the generated Proxmox API"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -53,6 +53,7 @@ dev = [
 
 [project.scripts]
 proxbox-proxmox-codegen = "proxbox_api.proxmox_codegen.cli:main"
+proxmox-mock-api = "proxbox_api.mock_main:run"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
