@@ -9,9 +9,9 @@ include = ["proxbox_api*"]
 proxbox_api = ["static/*"]
 
 [project]
-name = "proxmox-mock-api"
+name = "proxbox_api"
 version = "0.0.6.post5"
-description = "Schema-driven FastAPI mock for the generated Proxmox API"
+description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -49,11 +49,11 @@ docs = [
 [dependency-groups]
 dev = [
     "ruff>=0.15.8",
+    "proxmox-mock-api>=0.0.6.post5",
 ]
 
 [project.scripts]
 proxbox-proxmox-codegen = "proxbox_api.proxmox_codegen.cli:main"
-proxmox-mock-api = "proxbox_api.mock_main:run"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -77,11 +77,15 @@ default-groups = ["dev"]
 # Raise transitive Pygments (pytest / MkDocs stack) above Dependabot-patched floor.
 constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4"]
 
+[tool.uv.sources]
+"proxmox-mock-api" = { path = "proxmox-mock", editable = true }
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
 extend-exclude = [
     "proxbox_api/generated",
+    "proxmox-mock",
     "site",
     "nextjs-ui",
     ".venv",
