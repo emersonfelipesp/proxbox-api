@@ -1,0 +1,218 @@
+name: Release proxmox-mock-api
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  prepare-release:
+    name: prepare mock artifacts + metadata
+    runs-on: ubuntu-latest
+    outputs:
+      package_name: ${{ steps.meta.outputs.package_name }}
+      version: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Validate package metadata and tag
+        id: meta
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+        working-directory: proxmox-mock
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
+          project_name = data['project']['name']
+          version = data['project']['version']
+          event = os.getenv('GITHUB_EVENT_NAME', '')
+          release_tag = os.getenv('RELEASE_TAG_NAME', '') or ''
+          if project_name != 'proxmox-mock-api':
+              raise SystemExit(
+                  f'Expected project name proxmox-mock-api, got {project_name!r}'
+              )
+          if event == 'release' and release_tag != f'v{version}':
+              raise SystemExit(
+                  f'Release tag/version mismatch: tag={release_tag!r}, version={version!r}'
+              )
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write(f'package_name={project_name}\nversion={version}\n')
+          PY
+
+      - name: Build distribution
+        working-directory: proxmox-mock
+        run: uv run --with build python -m build
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: proxmox-mock-dist
+          path: proxmox-mock/dist/*
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: publish mock package to TestPyPI
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          ignore-empty-workdir: true
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: proxmox-mock-dist
+          path: dist
+
+      - name: Upload to TestPyPI
+        env:
+          TEST_PYPI_USERNAME: ${{ secrets.TEST_PYPI_USERNAME }}
+          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
+        run: |
+          uv run --with twine python -m twine upload \
+            --non-interactive \
+            --skip-existing \
+            --repository-url https://test.pypi.org/legacy/ \
+            --username "$TEST_PYPI_USERNAME" \
+            --password "$TEST_PYPI_TOKEN" \
+            dist/*
+
+  validate-testpypi:
+    name: validate proxmox-mock-api / py${{ matrix.python-version }}
+    needs: [prepare-release, publish-testpypi]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync development environment
+        working-directory: proxmox-mock
+        run: uv sync --frozen --extra test --group dev
+
+      - name: Ruff (lint + format check)
+        working-directory: proxmox-mock
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Compile package
+        working-directory: proxmox-mock
+        run: uv run python -m compileall proxmox_mock tests
+
+      - name: Import smoke checks
+        working-directory: proxmox-mock
+        run: uv run python -c "import proxmox_mock.main"
+
+      - name: Run tests
+        working-directory: proxmox-mock
+        run: uv run pytest tests
+
+  publish-docker:
+    name: publish proxmox-mock-api Docker image
+    if: github.event_name == 'release'
+    needs: [prepare-release, validate-testpypi]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and publish runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./proxmox-mock
+          file: ./proxmox-mock/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            emersonfelipesp/proxmox-mock-api:${{ needs.prepare-release.outputs.version }}
+            emersonfelipesp/proxmox-mock-api:latest
+
+  publish-pypi:
+    name: publish mock package to PyPI
+    if: github.event_name == 'release'
+    needs: [prepare-release, validate-testpypi]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          ignore-empty-workdir: true
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: proxmox-mock-dist
+          path: dist
+
+      - name: Upload to PyPI
+        env:
+          PYPI_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          uv run --with twine python -m twine upload \
+            --non-interactive \
+            --skip-existing \
+            --repository-url https://upload.pypi.org/legacy/ \
+            --username "$PYPI_USERNAME" \
+            --password "$PYPI_TOKEN" \
+            dist/*
