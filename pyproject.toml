@@ -10,7 +10,7 @@ proxbox_api = ["static/*"]
 
 [project]
 name = "proxbox_api"
-version = "0.0.6.post4"
+version = "0.0.6.post5"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -1915,6 +1915,7 @@ async def create_virtual_machines_stream(
     ),
 ):
     filtered_cluster_resources = cluster_resources
+    vm_ids: list[int] = []
 
     if netbox_vm_ids:
         vm_ids = parse_comma_separated_ints(netbox_vm_ids)
