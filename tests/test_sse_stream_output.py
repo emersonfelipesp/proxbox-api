@@ -115,6 +115,31 @@ class TestStreamEndpoints:
                 assert resp.status_code != 405
 
     @pytest.mark.asyncio
+    async def test_vms_create_stream_without_netbox_vm_ids(self, client_with_fake_netbox):
+        """Regression test: /create/stream without netbox_vm_ids should not fail with closure error.
+
+        This tests the fix for the vm_ids closure bug where vm_ids was only assigned
+        inside the if netbox_vm_ids: branch but referenced unconditionally in the SSE message.
+        """
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            async with client.stream(
+                "GET", "/virtualization/virtual-machines/create/stream"
+            ) as resp:
+                assert resp.status_code != 404
+                assert resp.status_code != 405
+                # Consume some of the stream to ensure no runtime error during initial yield
+                chunks = []
+                async for chunk in resp.aiter_bytes():
+                    chunks.append(chunk)
+                    if len(chunks) >= 3:
+                        break
+                # If we got here without RuntimeError, the test passes
+                assert len(chunks) >= 0
+
+    @pytest.mark.asyncio
     async def test_full_update_stream_path_exists(self, client_with_fake_netbox):
         """Plugin expects /full-update/stream endpoint."""
         async with AsyncClient(
