@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
@@ -47,10 +48,38 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
     )
 
 
+@lru_cache(maxsize=16)
+def _cached_netbox_api(
+    base_url: str,
+    token_version: str,
+    token_key: str | None,
+    token_secret: str | None,
+    timeout: float,
+    ssl_verify: bool,
+) -> Api:
+    """Build and cache a netbox-sdk Api for a stable endpoint configuration."""
+    cfg = Config(
+        base_url=base_url,
+        token_version=token_version,
+        token_key=token_key,
+        token_secret=token_secret,
+        timeout=timeout,
+        ssl_verify=ssl_verify,
+    )
+    return Api(client=NetBoxApiClient(cfg))
+
+
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     """Instantiate netbox-sdk Api using NetBoxApiClient + Config (no string token shortcut)."""
     cfg = netbox_config_from_endpoint(endpoint)
-    return Api(client=NetBoxApiClient(cfg))
+    return _cached_netbox_api(
+        cfg.base_url or "",
+        cfg.token_version,
+        cfg.token_key,
+        cfg.token_secret,
+        cfg.timeout,
+        bool(endpoint.verify_ssl),
+    )
 
 
 NetBoxClient = Api | SyncProxy
