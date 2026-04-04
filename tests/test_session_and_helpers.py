@@ -305,6 +305,13 @@ class FakeTypedProxmoxSession:
         self.session = FakeTypedSessionAPI()
 
 
+class FakeMinimalClusterStatusSession:
+    def __init__(self):
+        self.name = "lab-cluster"
+        self.mode = "cluster"
+        self.session = FakeProxmoxAPI("127.0.0.1")
+
+
 @dataclass
 class SerializableRecord:
     id: int
@@ -1337,6 +1344,20 @@ def test_proxmox_routes_use_typed_helpers_for_sync_dependencies():
     assert vm_config_payload["net0"].startswith("virtio=")
     assert backup_payload[0]["volid"] == "local:backup/vzdump-qemu-101.vma.zst"
     assert backup_payload[0]["content"] == "backup"
+
+
+def test_cluster_status_accepts_minimal_cluster_payloads():
+    pxs = [FakeMinimalClusterStatusSession()]
+
+    cluster_status_payload = asyncio.run(cluster_status(pxs))
+
+    assert cluster_status_payload[0].id == "cluster/lab-cluster"
+    assert cluster_status_payload[0].name == "lab-cluster"
+    assert cluster_status_payload[0].nodes == 1
+    assert cluster_status_payload[0].quorate == 1
+    assert cluster_status_payload[0].mode == "cluster"
+    assert cluster_status_payload[0].node_list[0].id == "node/pve01"
+    assert cluster_status_payload[0].node_list[0].name == "pve01"
 
 
 def test_netbox_v2_config_produces_bearer_authorization():

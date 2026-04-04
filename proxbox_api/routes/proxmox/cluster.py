@@ -43,6 +43,42 @@ class ClusterStatusSchema(BaseClusterStatusSchema):
 ClusterStatusSchemaList = list[ClusterStatusSchema]
 
 
+def _cluster_item_defaults(
+    item_data: dict[str, object],
+    *,
+    cluster_name: str,
+    node_count: int,
+    mode: str,
+) -> dict[str, object]:
+    """Normalize sparse Proxmox cluster payloads to the route schema."""
+    name = str(item_data.get("name") or cluster_name)
+    quorate = item_data.get("quorate")
+    return {
+        "id": item_data.get("id") or f"cluster/{name}",
+        "name": name,
+        "type": item_data.get("type") or "cluster",
+        "nodes": int(item_data.get("nodes") or node_count),
+        "quorate": int(quorate) if quorate is not None else int(node_count > 0),
+        "version": int(item_data.get("version") or 0),
+        "mode": mode,
+    }
+
+
+def _node_item_defaults(item_data: dict[str, object]) -> dict[str, object]:
+    """Normalize sparse Proxmox node payloads to the route schema."""
+    name = str(item_data.get("name") or "")
+    return {
+        "id": item_data.get("id") or f"node/{name}",
+        "name": name,
+        "type": item_data.get("type") or "node",
+        "ip": item_data.get("ip") or "",
+        "level": item_data.get("level"),
+        "local": int(item_data.get("local") or 0),
+        "nodeid": int(item_data.get("nodeid") or 0),
+        "online": int(item_data.get("online") or 0),
+    }
+
+
 # /proxmox/cluster/ API Endpoints
 @router.get("/status", response_model=ClusterStatusSchemaList)
 async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
@@ -94,21 +130,29 @@ async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
     async def parse_cluster_status(
         proxmox_object: ProxmoxSession, data: list
     ) -> ClusterStatusSchema:
-        node_list = []
-        cluster: ClusterStatusSchema = None
+        node_list: list[ClusterNodeStatusSchema] = []
+        cluster_item: dict[str, object] | None = None
 
         for item in data:
             item_data = item.model_dump(mode="python", by_alias=True, exclude_none=True)
             item_data["mode"] = proxmox_object.mode
-            if item_data.get("type") == "cluster":
-                cluster = ClusterStatusSchema(**item_data)
 
             if item_data.get("type") == "node":
-                node_list.append(ClusterNodeStatusSchema(**item_data))
+                node_list.append(ClusterNodeStatusSchema(**_node_item_defaults(item_data)))
+                continue
 
-        if cluster:
-            cluster.node_list = node_list
-            return cluster
+            if item_data.get("type") == "cluster":
+                cluster_item = item_data
+
+        cluster_payload = _cluster_item_defaults(
+            cluster_item or {},
+            cluster_name=proxmox_object.name,
+            node_count=len(node_list),
+            mode=proxmox_object.mode,
+        )
+        cluster = ClusterStatusSchema(**cluster_payload)
+        cluster.node_list = node_list
+        return cluster
 
     return ClusterStatusSchemaList(
         [
