@@ -18,6 +18,7 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
+from proxbox_api.schemas.netbox.extras import TagSchema
 from proxbox_api.utils.retry import _is_transient_netbox_error
 
 
@@ -650,22 +651,22 @@ async def ensure_tag_async(
     color: str,
     description: str,
 ) -> RestRecord:
-    existing = await rest_first_async(nb, "/api/extras/tags/", query={"slug": slug, "limit": 2})
-    if existing:
-        return existing
-    try:
-        return await rest_create_async(
-            nb,
-            "/api/extras/tags/",
-            {
-                "name": name,
-                "slug": slug,
-                "color": color,
-                "description": description,
-            },
-        )
-    except ProxboxException:
-        retry = await rest_first_async(nb, "/api/extras/tags/", query={"slug": slug, "limit": 2})
-        if retry:
-            return retry
-        raise
+    return await rest_reconcile_async(
+        nb,
+        "/api/extras/tags/",
+        lookup={"slug": slug},
+        payload={
+            "name": name,
+            "slug": slug,
+            "color": color,
+            "description": description,
+        },
+        schema=TagSchema,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "color": record.get("color"),
+            "description": record.get("description"),
+        },
+        patchable_fields={"name", "color", "description"},
+    )

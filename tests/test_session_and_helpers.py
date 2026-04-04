@@ -439,6 +439,7 @@ def test_ensure_tag_async_uses_rest_client():
     assert created.id == 99
     assert session.client.calls == [
         ("GET", "/api/extras/tags/", {"slug": "proxbox", "limit": 2}, None, True),
+        ("GET", "/api/extras/tags/", {"name": "Proxbox", "limit": 2}, None, True),
         (
             "POST",
             "/api/extras/tags/",
@@ -451,6 +452,73 @@ def test_ensure_tag_async_uses_rest_client():
             },
             True,
         ),
+    ]
+
+
+def test_ensure_tag_async_reuses_duplicate_tag_after_failed_create_with_stale_lookup():
+    def _get_tags(query, payload):
+        if query == {"slug": "proxbox", "limit": 2}:
+            return 200, {"count": 0, "results": []}
+        if query == {"name": "Proxbox", "limit": 2}:
+            return 200, {"count": 0, "results": []}
+        if query == {"limit": 200, "offset": 0}:
+            return 200, {
+                "count": 1,
+                "results": [
+                    {
+                        "id": 101,
+                        "name": "Proxbox",
+                        "slug": "proxbox",
+                        "color": "ff5722",
+                        "description": "Proxbox Identifier",
+                        "url": "https://netbox.local/api/extras/tags/101/",
+                    }
+                ],
+            }
+        raise AssertionError(f"unexpected query {query}")
+
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/extras/tags/"): _get_tags,
+            ("POST", "/api/extras/tags/"): (
+                400,
+                {
+                    "slug": ["tag with this slug already exists."],
+                    "name": ["tag with this name already exists."],
+                },
+            ),
+        }
+    )
+
+    reused = asyncio.run(
+        ensure_tag_async(
+            session,
+            name="Proxbox",
+            slug="proxbox",
+            color="ff5722",
+            description="Proxbox Identifier",
+        )
+    )
+
+    assert reused.id == 101
+    assert session.client.calls == [
+        ("GET", "/api/extras/tags/", {"slug": "proxbox", "limit": 2}, None, True),
+        ("GET", "/api/extras/tags/", {"name": "Proxbox", "limit": 2}, None, True),
+        (
+            "POST",
+            "/api/extras/tags/",
+            None,
+            {
+                "name": "Proxbox",
+                "slug": "proxbox",
+                "color": "ff5722",
+                "description": "Proxbox Identifier",
+            },
+            True,
+        ),
+        ("GET", "/api/extras/tags/", {"slug": "proxbox", "limit": 2}, None, True),
+        ("GET", "/api/extras/tags/", {"name": "Proxbox", "limit": 2}, None, True),
+        ("GET", "/api/extras/tags/", {"limit": 200, "offset": 0}, None, True),
     ]
 
 
