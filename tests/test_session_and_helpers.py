@@ -915,6 +915,39 @@ def test_get_netbox_session_wraps_async_facade(monkeypatch, db_engine):
     assert wrapped.status() == {"netbox": "ok"}
 
 
+def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
+    netbox_session_module._cached_netbox_api.cache_clear()
+
+    api_client_calls = {"count": 0}
+
+    class DummyNetBoxApiClient:
+        def __init__(self, config):
+            api_client_calls["count"] += 1
+            self.config = config
+
+    class DummyApi:
+        def __init__(self, client):
+            self.client = client
+
+    monkeypatch.setattr(netbox_session_module, "NetBoxApiClient", DummyNetBoxApiClient)
+    monkeypatch.setattr(netbox_session_module, "Api", DummyApi)
+
+    endpoint = NetBoxEndpoint(
+        name="netbox",
+        ip_address="10.0.0.20",
+        domain="netbox.local",
+        port=443,
+        token="secret",
+        verify_ssl=True,
+    )
+
+    first = netbox_session_module.netbox_api_from_endpoint(endpoint)
+    second = netbox_session_module.netbox_api_from_endpoint(endpoint)
+
+    assert first is second
+    assert api_client_calls["count"] == 1
+
+
 def test_get_netbox_session_requires_endpoint(db_engine):
     with Session(db_engine) as session:
         with pytest.raises(ProxboxException) as excinfo:
