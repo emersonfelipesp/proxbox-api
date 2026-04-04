@@ -1,3 +1,5 @@
+ARG APP_MODULE=proxbox_api.main:app
+
 # Build dependencies and the app into a virtualenv with uv from the checked-out repo.
 FROM python:3.13-slim-bookworm AS builder
 
@@ -38,6 +40,8 @@ EXPOSE 8000
 # Default image: nginx listens on PORT (default 8000), proxies to uvicorn on 127.0.0.1:8001.
 FROM runtime-base AS runtime
 
+ARG APP_MODULE
+
 USER root
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -52,6 +56,8 @@ COPY docker/supervisor/supervisord.conf /etc/supervisor/supervisord.conf
 COPY docker/supervisor/proxbox.conf /etc/supervisor/conf.d/proxbox.conf
 COPY docker/entrypoint-runtime.sh /usr/local/bin/docker-entrypoint-runtime.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint-runtime.sh
+
+ENV APP_MODULE=${APP_MODULE}
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint-runtime.sh"]
 CMD []

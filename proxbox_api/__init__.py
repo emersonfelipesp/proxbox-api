@@ -9,10 +9,12 @@ from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.session.netbox import get_netbox_session
 
-try:
-    __version__ = version("proxbox_api")
-except PackageNotFoundError:
-    __version__ = "0.0.0"
+for _distribution_name in ("proxmox-mock-api", "proxbox_api"):
+    try:
+        __version__ = version(_distribution_name)
+        break
+    except PackageNotFoundError:
+        __version__ = "0.0.0"
 
 # Initialize templates
 base_dir = os.path.dirname(os.path.abspath(__file__))
