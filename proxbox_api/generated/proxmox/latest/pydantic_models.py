@@ -540,7 +540,7 @@ class PutClusterAcmeAccountNameResponse(RootModel[str]):
 class GetClusterAcmeChallengeSchemaResponseItem(ProxmoxBaseModel):
     id: str | None = Field(None)
     name: str | None = Field(None, description='Human readable name, falls back to id')
-    schema: dict[str, object] | None = Field(None)
+    schema_: dict[str, object] | None = Field(None, alias="schema")
     type: str | None = Field(None)
 
 class GetClusterAcmeChallengeSchemaResponse(RootModel[list[GetClusterAcmeChallengeSchemaResponseItem]]):
