@@ -531,7 +531,9 @@ def crawl_proxmox_api_viewer(
 ) -> dict[str, object]:
     """Synchronous wrapper for async crawler, preserving existing call sites."""
 
-    return asyncio.run(
+    from proxbox_api.proxmox_codegen.pipeline import _run_async_from_sync
+
+    return _run_async_from_sync(
         crawl_proxmox_api_viewer_async(
             url=url,
             timeout_ms=timeout_ms,

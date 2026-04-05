@@ -88,10 +88,35 @@ async def proxmox_version(pxs: ProxmoxSessionsDep):
     json_response = []
 
     for px in pxs:
-        if px.CONNECTED:
-            session = getattr(px, "session", None)
+        if not getattr(px, "CONNECTED", False):
+            continue
+
+        session = getattr(px, "session", None)
+        if session is None:
+            raise ProxboxException(
+                message="Invalid Proxmox session state",
+                detail="Connected session is missing SDK client instance.",
+            )
+
+        try:
             version = await resolve_async(session.version.get())
             json_response.append({getattr(px, "name", None): version})
+        except ResourceException as error:
+            target = getattr(px, "domain", None) or getattr(px, "ip_address", None)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Failed to query Proxmox version "
+                    f"for endpoint '{getattr(px, 'name', 'unknown')}' ({target}). "
+                    f"Upstream responded with HTTP {error.status_code} {error.status_message}."
+                ),
+            ) from error
+        except Exception as error:
+            raise ProxboxException(
+                message="Error retrieving Proxmox version",
+                detail="Unexpected error while querying upstream Proxmox API.",
+                python_exception=str(error),
+            ) from error
 
     if not json_response:
         raise HTTPException(

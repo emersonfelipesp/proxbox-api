@@ -163,7 +163,8 @@ class ProxmoxSession:
 
         try:
             if hasattr(self, "session") and hasattr(self.session, "close"):
-                self.session.close()
+                close_result = self.session.close()
+                resolve_sync(close_result)
         except Exception as error:
             logger.debug("Failed to close Proxmox session cleanly: %s", error)
 
