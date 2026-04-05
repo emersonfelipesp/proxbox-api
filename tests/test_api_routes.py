@@ -214,7 +214,7 @@ def test_create_proxmox_devices_surfaces_real_netbox_detail():
     assert excinfo.value.detail == "tags: expected object, got integer"
 
 
-def test_create_custom_fields_uses_rest_reconcile_with_async_session():
+def test_create_custom_fields_uses_rest_reconcile_with_async_session(monkeypatch):
     class FakeClient:
         def __init__(self):
             self.calls = []
@@ -229,6 +229,7 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session():
             raise AssertionError((method, path, query, payload, expect_json))
 
     session = SimpleNamespace(client=FakeClient())
+    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
 
     result = asyncio.run(create_custom_fields(netbox_session=session))
 
@@ -269,6 +270,27 @@ def test_create_custom_fields_caches_successful_bootstrap(monkeypatch):
 
     assert second_result == first_result
     assert len(session.client.calls) == first_call_count
+
+
+def test_create_custom_fields_reports_netbox_overwhelmed(monkeypatch):
+    class FakeClient:
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                return ApiResponse(status=500, text=json.dumps({"detail": "database unavailable"}))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
+    monkeypatch.setenv("PROXBOX_NETBOX_MAX_RETRIES", "0")
+    session = SimpleNamespace(client=FakeClient())
+
+    with pytest.raises(ProxboxException, match="NetBox is overwhelmed") as excinfo:
+        asyncio.run(create_custom_fields(netbox_session=session))
+
+    assert isinstance(excinfo.value.detail, dict)
+    assert excinfo.value.detail.get("reason") == "netbox_overwhelmed"
+    failed_fields = excinfo.value.detail.get("failed_fields")
+    assert isinstance(failed_fields, list)
+    assert failed_fields
 
 
 def test_proxmox_endpoint_crud_lifecycle(db_session):
