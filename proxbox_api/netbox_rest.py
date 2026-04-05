@@ -19,14 +19,19 @@ from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.schemas.netbox.extras import TagSchema
-from proxbox_api.utils.retry import _is_transient_netbox_error
+from proxbox_api.utils.retry import (
+    _is_connection_refused_error,
+    _is_netbox_overwhelmed_error,
+    _is_transient_netbox_error,
+)
 
 
 def _resolve_netbox_max_concurrent() -> int:
     """Resolve max concurrent NetBox requests from environment."""
     raw = os.environ.get("PROXBOX_NETBOX_MAX_CONCURRENT", "").strip()
     if not raw:
-        return 5
+        # Keep default conservative to avoid exhausting NetBox DB pools.
+        return 3
     try:
         return max(1, int(raw))
     except ValueError:
@@ -129,11 +134,28 @@ def _handle_netbox_error(error: Exception, operation: str) -> None:
     if isinstance(error, ProxboxException):
         raise
 
+    if _is_netbox_overwhelmed_error(error):
+        raise ProxboxException(
+            message="NetBox is overwhelmed. Please retry in a few moments.",
+            detail=f"{operation} failed: {error_str}",
+            python_exception=error_str,
+        ) from error
+
     raise ProxboxException(
         message=f"NetBox {operation} failed",
         detail=error_str,
         python_exception=error_str,
     ) from error
+
+
+def _compute_retry_delay(base_delay: float, attempt: int, error: Exception) -> float:
+    """Compute backoff delay with stronger throttling when NetBox is overloaded."""
+    exponential_delay = base_delay * (2**attempt)
+    if _is_connection_refused_error(error):
+        exponential_delay = max(exponential_delay, 5.0)
+    if _is_netbox_overwhelmed_error(error):
+        exponential_delay = max(exponential_delay, 3.0)
+    return exponential_delay + random.uniform(0, exponential_delay * 0.5)
 
 
 def _is_duplicate_error(detail: object) -> bool:
@@ -325,16 +347,13 @@ async def rest_list_async(
             except Exception as e:
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
-                is_conn_refused = (
-                    "connection refused" in str(e).lower()
-                    or "connect call failed" in str(e).lower()
+                delay = _compute_retry_delay(base_delay, attempt, e)
+                pressure_note = (
+                    " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
                 )
-                exponential_delay = base_delay * (2**attempt)
-                if is_conn_refused:
-                    exponential_delay = max(exponential_delay, 5.0)
-                delay = exponential_delay + random.uniform(0, exponential_delay * 0.5)
                 logger.warning(
-                    "NetBox request failed (attempt %s/%s), retrying in %ss: %s",
+                    "NetBox request failed%s (attempt %s/%s), retrying in %ss: %s",
+                    pressure_note,
                     attempt + 1,
                     max_retries + 1,
                     delay,
@@ -396,16 +415,13 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
             except Exception as e:
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
-                is_conn_refused = (
-                    "connection refused" in str(e).lower()
-                    or "connect call failed" in str(e).lower()
+                delay = _compute_retry_delay(base_delay, attempt, e)
+                pressure_note = (
+                    " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
                 )
-                exponential_delay = base_delay * (2**attempt)
-                if is_conn_refused:
-                    exponential_delay = max(exponential_delay, 5.0)
-                delay = exponential_delay + random.uniform(0, exponential_delay * 0.5)
                 logger.warning(
-                    "NetBox create failed (attempt %s/%s), retrying in %ss: %s",
+                    "NetBox create failed%s (attempt %s/%s), retrying in %ss: %s",
+                    pressure_note,
                     attempt + 1,
                     max_retries + 1,
                     delay,
@@ -523,7 +539,9 @@ async def rest_reconcile_async(  # noqa: C901
             current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
         else:
             current_payload = {
-                key: value for key, value in dict(current_normalized or {}).items() if value is not None
+                key: value
+                for key, value in dict(current_normalized or {}).items()
+                if value is not None
             }
 
         patch_payload = {
@@ -588,16 +606,13 @@ async def rest_patch_async(
             except Exception as e:
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
-                is_conn_refused = (
-                    "connection refused" in str(e).lower()
-                    or "connect call failed" in str(e).lower()
+                delay = _compute_retry_delay(base_delay, attempt, e)
+                pressure_note = (
+                    " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
                 )
-                exponential_delay = base_delay * (2**attempt)
-                if is_conn_refused:
-                    exponential_delay = max(exponential_delay, 5.0)
-                delay = exponential_delay + random.uniform(0, exponential_delay * 0.5)
                 logger.warning(
-                    "NetBox patch failed (attempt %s/%s), retrying in %ss: %s",
+                    "NetBox patch failed%s (attempt %s/%s), retrying in %ss: %s",
+                    pressure_note,
                     attempt + 1,
                     max_retries + 1,
                     delay,

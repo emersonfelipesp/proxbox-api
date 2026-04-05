@@ -60,6 +60,29 @@ def _is_transient_netbox_error(error: Exception) -> bool:
     return any(indicator in error_str for indicator in transient_indicators)
 
 
+def _is_netbox_overwhelmed_error(error: Exception) -> bool:
+    """Check whether NetBox appears overloaded or PostgreSQL-saturated."""
+    details: list[str] = [str(error)]
+    for attr_name in ("detail", "python_exception"):
+        attr_val = getattr(error, attr_name, None)
+        if attr_val is not None:
+            details.append(str(attr_val))
+    error_str = " ".join(details).lower()
+    overload_indicators = [
+        "too many connections",
+        "remaining connection slots",
+        "connection slots are reserved",
+        "database unavailable",
+        "service unavailable",
+        "service temporarily unavailable",
+        "http 503",
+        "status 503",
+        "operationalerror",
+        "psycopg2.errors",
+    ]
+    return any(indicator in error_str for indicator in overload_indicators)
+
+
 def _is_connection_refused_error(error: Exception) -> bool:
     """Check if this is a connection refused error (NetBox completely unreachable)."""
     error_str = str(error).lower()
