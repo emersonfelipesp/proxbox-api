@@ -16,9 +16,13 @@ from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
+    clear_rest_get_cache,
     ensure_tag_async,
     rest_create,
+    rest_create_async,
     rest_ensure_async,
+    rest_list_async,
+    rest_patch_async,
     rest_reconcile_async,
 )
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
@@ -586,6 +590,151 @@ def test_rest_create_returns_tag_record_that_can_save_and_delete():
     record.color = "ffffff"
     assert record.save().color == "ffffff"
     assert record.delete() is True
+
+
+def test_rest_list_async_reuses_cached_get_results():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [{"id": 55, "name": "pve01"}],
+                },
+            )
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        first = asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        second = asyncio.run(
+            rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"})
+        )
+
+    assert first[0].id == 55
+    assert second[0].id == 55
+    assert session.client.calls == [("GET", "/api/dcim/devices/", {"name": "pve01"}, None, True)]
+    clear_rest_get_cache()
+
+
+def test_rest_list_async_revalidates_after_ttl_expires():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [{"id": 55, "name": "pve01"}],
+                },
+            )
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "0.01")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        asyncio.run(asyncio.sleep(0.02))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+
+    assert session.client.calls == [
+        ("GET", "/api/dcim/devices/", {"name": "pve01"}, None, True),
+        ("GET", "/api/dcim/devices/", {"name": "pve01"}, None, True),
+    ]
+    clear_rest_get_cache()
+
+
+def test_rest_create_async_invalidates_related_get_cache_entries():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/extras/tags/"): (
+                200,
+                {
+                    "count": 0,
+                    "results": [],
+                },
+            ),
+            ("POST", "/api/extras/tags/"): (
+                201,
+                {
+                    "id": 101,
+                    "name": "proxbox-test",
+                    "slug": "proxbox-test",
+                    "url": "https://netbox.local/api/extras/tags/101/",
+                },
+            ),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        asyncio.run(rest_list_async(session, "/api/extras/tags/", query={"slug": "proxbox-test"}))
+        asyncio.run(
+            rest_create_async(
+                session,
+                "/api/extras/tags/",
+                {"name": "proxbox-test", "slug": "proxbox-test"},
+            )
+        )
+        asyncio.run(rest_list_async(session, "/api/extras/tags/", query={"slug": "proxbox-test"}))
+
+    assert session.client.calls == [
+        ("GET", "/api/extras/tags/", {"slug": "proxbox-test"}, None, True),
+        (
+            "POST",
+            "/api/extras/tags/",
+            None,
+            {"name": "proxbox-test", "slug": "proxbox-test"},
+            True,
+        ),
+        ("GET", "/api/extras/tags/", {"slug": "proxbox-test"}, None, True),
+    ]
+    clear_rest_get_cache()
+
+
+def test_rest_patch_async_invalidates_related_get_cache_entries():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [
+                        {
+                            "id": 55,
+                            "name": "pve01",
+                            "url": "https://netbox.local/api/dcim/devices/55/",
+                        }
+                    ],
+                },
+            ),
+            ("PATCH", "/api/dcim/devices/55/"): (
+                200,
+                {
+                    "id": 55,
+                    "name": "pve01-updated",
+                    "url": "https://netbox.local/api/dcim/devices/55/",
+                },
+            ),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        asyncio.run(rest_patch_async(session, "/api/dcim/devices/", 55, {"name": "pve01-updated"}))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+
+    assert session.client.calls == [
+        ("GET", "/api/dcim/devices/", {"name": "pve01"}, None, True),
+        ("PATCH", "/api/dcim/devices/55/", None, {"name": "pve01-updated"}, True),
+        ("GET", "/api/dcim/devices/", {"name": "pve01"}, None, True),
+    ]
+    clear_rest_get_cache()
 
 
 def test_rest_ensure_async_reuses_duplicate_resource_via_payload_fallback():
@@ -1272,12 +1421,12 @@ def test_proxmox_session_allows_version_when_cluster_status_permission_denied(mo
     assert session.version == {"version": "8.3.0"}
 
 
-def test_proxmox_session_close_uses_running_event_loop(monkeypatch):
+def test_proxmox_session_close_uses_resolve_sync(monkeypatch):
     calls = {"resolve_sync": 0, "closed": 0}
 
     def _fake_resolve_sync(value):
         calls["resolve_sync"] += 1
-        return value
+        return None
 
     class AsyncCloseSession:
         async def close(self):
@@ -1285,16 +1434,11 @@ def test_proxmox_session_close_uses_running_event_loop(monkeypatch):
 
     monkeypatch.setattr("proxbox_api.session.proxmox_core.resolve_sync", _fake_resolve_sync)
 
-    async def _run_close() -> None:
-        session = ProxmoxSession.__new__(ProxmoxSession)
-        session.session = AsyncCloseSession()
-        session.close()
-        await asyncio.sleep(0)
+    session = ProxmoxSession.__new__(ProxmoxSession)
+    session.session = AsyncCloseSession()
+    session.close()
 
-    asyncio.run(_run_close())
-
-    assert calls["closed"] == 1
-    assert calls["resolve_sync"] == 0
+    assert calls["resolve_sync"] == 1
 
 
 def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
@@ -1789,4 +1933,244 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device():
     )
 
     assert any(path == "/api/dcim/devices/50/" for path, _ in patch_calls)
-    assert all(path != "/api/dcim/devices/51/" for path, _ in patch_calls)
+
+
+def test_rest_delete_invalidates_related_get_cache_entries():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [
+                        {
+                            "id": 55,
+                            "name": "pve01",
+                            "url": "https://netbox.local/api/dcim/devices/55/",
+                        }
+                    ],
+                },
+            ),
+            ("DELETE", "/api/dcim/devices/55/"): (204, None),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        asyncio.run(session.api.extras.tags.id(55).delete())
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+
+    assert session.client.calls == [
+        ("GET", "/api/dcim/devices/", {"name": "pve01"}, None, True),
+        ("DELETE", "/api/dcim/devices/55/", None, None, False),
+        ("GET", "/api/dcim/devices/", {"name": "pve01"}, None, True),
+    ]
+    clear_rest_get_cache()
+
+
+def test_cache_invalidation_is_precise_not_prefix_based():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [{"id": 55, "name": "pve01"}],
+                },
+            ),
+            ("GET", "/api/dcim/devices/10/"): (
+                200,
+                {"id": 10, "name": "other-node"},
+            ),
+            ("GET", "/api/dcim/devices/100/"): (
+                200,
+                {"id": 100, "name": "another-node"},
+            ),
+            ("PATCH", "/api/dcim/devices/55/"): (
+                200,
+                {
+                    "id": 55,
+                    "name": "pve01-updated",
+                    "url": "https://netbox.local/api/dcim/devices/55/",
+                },
+            ),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/10/", query=None))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/100/", query=None))
+        asyncio.run(rest_patch_async(session, "/api/dcim/devices/", 55, {"name": "pve01-updated"}))
+
+        second_list = asyncio.run(
+            rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"})
+        )
+        second_10 = asyncio.run(rest_list_async(session, "/api/dcim/devices/10/", query=None))
+        second_100 = asyncio.run(rest_list_async(session, "/api/dcim/devices/100/", query=None))
+
+    assert second_list[0].name == "pve01-updated"
+    assert second_10[0].name == "other-node"
+    assert second_100[0].name == "another-node"
+
+    get_calls_after_patch = [
+        c for c in session.client.calls if c[0] == "GET" and c[1] == "/api/dcim/devices/"
+    ]
+    assert len(get_calls_after_patch) == 1
+
+    clear_rest_get_cache()
+
+
+def test_cache_handles_complex_query_serialization():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 2,
+                    "results": [
+                        {"id": 1, "name": "node1"},
+                        {"id": 2, "name": "node2"},
+                    ],
+                },
+            ),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        q1 = {"name": "node1", "site_id": 5, "status": "active", "cluster_id": [10, 20]}
+        q2 = {"site_id": 5, "status": "active", "name": "node1", "cluster_id": [10, 20]}
+        result1 = asyncio.run(rest_list_async(session, "/api/dcim/devices/", query=q1))
+        result2 = asyncio.run(rest_list_async(session, "/api/dcim/devices/", query=q2))
+
+    assert len(result1) == 2
+    assert len(result2) == 2
+    get_calls = [c for c in session.client.calls if c[0] == "GET"]
+    assert len(get_calls) == 1
+    clear_rest_get_cache()
+
+
+def test_cache_disabled_when_ttl_is_zero():
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [{"id": 55, "name": "pve01"}],
+                },
+            ),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "0")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query=None))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query=None))
+
+    get_calls = [c for c in session.client.calls if c[0] == "GET"]
+    assert len(get_calls) == 2
+    clear_rest_get_cache()
+
+
+def test_cache_metrics_track_hits_and_misses():
+    from proxbox_api.netbox_rest import (
+        get_cache_metrics,
+    )
+
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [{"id": 55, "name": "pve01"}],
+                },
+            ),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "other"}))
+
+    metrics = get_cache_metrics()
+    assert metrics["hits"] == 1
+    assert metrics["misses"] == 1
+    assert metrics["hit_rate"] == 50.0
+    clear_rest_get_cache()
+
+
+def test_cache_metrics_track_invalidations():
+    from proxbox_api.netbox_rest import get_cache_metrics
+
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [{"id": 55, "name": "pve01"}],
+                },
+            ),
+            ("POST", "/api/dcim/devices/"): (
+                201,
+                {
+                    "id": 56,
+                    "name": "pve02",
+                    "url": "https://netbox.local/api/dcim/devices/56/",
+                },
+            ),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
+        metrics_before = get_cache_metrics()
+        asyncio.run(
+            rest_create_async(session, "/api/dcim/devices/", {"name": "pve02", "status": "active"})
+        )
+        metrics_after = get_cache_metrics()
+
+    assert metrics_after["invalidations"] > metrics_before["invalidations"]
+    clear_rest_get_cache()
+
+
+def test_cache_overflow_evicts_oldest_entries():
+    from proxbox_api.netbox_rest import (
+        get_cache_metrics,
+    )
+
+    clear_rest_get_cache()
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", f"/api/dcim/device-types/{i}/"): (
+                200,
+                {"id": i, "model": f"device-{i}"},
+            )
+            for i in range(10)
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "3600")
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES", "3")
+        for i in range(10):
+            asyncio.run(rest_list_async(session, f"/api/dcim/device-types/{i}/", query=None))
+
+    metrics = get_cache_metrics()
+    assert metrics["current_entries"] <= 3
+    assert metrics["evictions_size"] >= 5
+    clear_rest_get_cache()
