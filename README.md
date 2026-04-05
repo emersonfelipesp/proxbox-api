@@ -125,6 +125,31 @@ Just pass your desired IP like `--host <YOUR-IP>` and it will also work.
 
 - `--port 8000` is the default port, but you can change it if needed. Just to remember to update it on NetBox also, at FastAPI Endpoint model.
 
+### Cache Configuration (optional)
+
+Control NetBox API request caching to optimize sync performance:
+
+```bash
+# 5-minute TTL (default is 60 seconds)
+export PROXBOX_NETBOX_GET_CACHE_TTL=300
+
+# Disable caching entirely
+export PROXBOX_NETBOX_GET_CACHE_TTL=0
+
+# Increase max entries (default 4096)
+export PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES=8192
+
+# Set max cache size in bytes (default 52428800 = 50MB)
+export PROXBOX_NETBOX_GET_CACHE_MAX_BYTES=104857600  # 100MB
+
+# Enable debug logging
+export PROXBOX_DEBUG_CACHE=1
+
+uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+Cache metrics are available at `GET /cache` and `GET /cache/metrics/prometheus`.
+
 ### Alternative: pip editable install
 
 ```
