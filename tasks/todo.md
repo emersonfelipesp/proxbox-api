@@ -52,3 +52,24 @@
 - Added fallback to `/api/plugins/proxbox/endpoints/proxmox/` when schema list path is unavailable in netbox-sdk facade.
 - Verified with `pytest tests/test_session_and_helpers.py` (13 passed) and full `pytest` (30 passed).
 - Runtime endpoint now returns auth/domain errors (HTTP 400) instead of generic internal server error when Proxmox credentials fail.
+
+## Migrate Proxmox Client to proxmox-openapi (v0.0.7)
+
+- [x] Record baseline behavior with targeted session tests.
+- [x] Replace `proxmoxer` dependency with `proxmox-openapi` in project metadata.
+- [x] Migrate Proxmox session factory in `proxbox_api/session/proxmox.py` and `proxbox_api/session/proxmox_core.py`.
+- [x] Replace `proxmoxer` exception imports/usages in Proxmox route modules.
+- [x] Update tests/fakes to validate proxmox-openapi-backed session wiring.
+- [x] Update docs and route metadata text that still references `proxmoxer`.
+- [x] Run lint/compile/test validation and capture results.
+
+## Review
+
+- Completed migration on branch `v0.0.7`: runtime dependency switched from `proxmoxer` to `proxmox-openapi`.
+- Added compatibility adapter and safe session finalization for request-scoped Proxmox dependencies.
+- Updated Proxmox route exception imports and docs/CLAUDE references.
+- Validation results:
+	- `uv run pytest tests/test_session_and_helpers.py` passed (38/38).
+	- `uv run ruff check .` passed.
+	- `uv run python -m compileall proxbox_api tests` passed.
+	- `uv run pytest tests` reported one pre-existing unit failure in `tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists` and three env-dependent image HTTP E2E errors requiring `PROXBOX_IMAGE_E2E_BASE_URL`.

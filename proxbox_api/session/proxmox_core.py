@@ -80,13 +80,13 @@ class ProxmoxSession:
 
             # Prefer using token to authenticate
 
-            self.proxmoxer = (
+            self.proxmox = (
                 self._auth(auth_method="token")
                 if self.token_name and self.token_value
                 else self._auth(auth_method="password")
             )
-            if self.proxmoxer:
-                self.session = self.proxmoxer
+            if self.proxmox:
+                self.session = self.proxmox
                 self.CONNECTED = True
 
         except ProxboxException:
@@ -145,7 +145,7 @@ class ProxmoxSession:
 
                     self.cluster_name = cluster_name
                     self.name = cluster_name
-                    self.fingerprints: list = self.get_node_fingerprints(self.proxmoxer)
+                    self.fingerprints: list = self.get_node_fingerprints(self.proxmox)
 
                 elif self.mode == "standalone":
                     standalone_node_name: str = self.get_standalone_name()
@@ -156,6 +156,15 @@ class ProxmoxSession:
 
     def __repr__(self) -> str:
         return f"Proxmox Connection Object. URL: {self.domain}:{self.http_port}"
+
+    def close(self) -> None:
+        """Close underlying SDK resources when available."""
+
+        try:
+            if hasattr(self, "session") and hasattr(self.session, "close"):
+                self.session.close()
+        except Exception as error:
+            logger.debug("Failed to close Proxmox session cleanly: %s", error)
 
     #
     # Proxmox Authentication Modes: TOKEN-BASED & PASSWORD-BASED

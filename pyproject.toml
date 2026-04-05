@@ -16,7 +16,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.135.2",
-    "proxmoxer>=2.3.0",
+    "proxmox-openapi>=0.0.1",
     "netbox-sdk>=0.0.6",
     "sqlmodel>=0.0.37",
 ]

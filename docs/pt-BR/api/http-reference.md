@@ -109,7 +109,7 @@ Normalizacao de path parameters:
 - Exemplo:
   - Caminho do contrato Proxmox: `/nodes/{node}/hardware/pci/{pci-id-or-mapping}`
   - Caminho montado no FastAPI: `/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}`
-- A chamada proxmoxer continua usando o nome original do parameter do contrato gerado.
+- A chamada via SDK proxmox-openapi continua usando o nome original do parameter do contrato gerado.
 
 Descoberta de versao:
 
@@ -127,7 +127,7 @@ Selecao de target:
 
 Integracao tipada do sync:
 
-- As rotas de sync ainda chamam proxmoxer diretamente, mas passam por `proxbox_api/services/proxmox_helpers.py`.
+- As rotas de sync ainda chamam o Proxmox diretamente, mas passam por `proxbox_api/services/proxmox_helpers.py` com backend proxmox-openapi.
 - Essa camada valida os payloads com os modelos gerados em `proxbox_api/generated/proxmox/latest/pydantic_models.py` antes de retornar para os handlers.
 - Isso evita round-trips HTTP internos e mantem VM config, cluster status, cluster resources, storage listing e node storage content alinhados ao contrato usado por `/proxmox/api2/*`.
 

@@ -29,7 +29,7 @@
   - `/sync/individual`
 - SQLite-backed endpoint configuration and bootstrap state.
 - NetBox API access via `netbox-sdk` sync and async clients.
-- Proxmox API access via `proxmoxer` sessions and typed helper wrappers.
+- Proxmox API access via `proxmox-openapi` sync SDK sessions and typed helper wrappers.
 - Runtime-generated Proxmox live routes mounted during app lifespan startup.
 
 ## Core Data Models

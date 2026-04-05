@@ -1391,7 +1391,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "netbox-sdk" },
-    { name = "proxmoxer" },
+    { name = "proxmox-openapi" },
     { name = "sqlmodel" },
 ]
 
@@ -1438,7 +1438,7 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'e2e'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "proxmoxer", specifier = ">=2.3.0" },
+    { name = "proxmox-openapi", specifier = ">=0.0.1" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.2" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", marker = "extra == 'e2e'", specifier = ">=0.24.0" },
@@ -1477,12 +1477,17 @@ provides-extras = ["test"]
 dev = [{ name = "ruff", specifier = ">=0.15.8" }]
 
 [[package]]
-name = "proxmoxer"
-version = "2.3.0"
+name = "proxmox-openapi"
+version = "0.0.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/22/2e/5481ad9cc91eff6e585eabac5be94879bc2297b8b615c7427bce610d1447/proxmoxer-2.3.0.tar.gz", hash = "sha256:0b0b2067187af1fc6d4257a46ac68c8fd79cc25d2813637cdae7a9a98fbfd11f", size = 30830, upload-time = "2026-03-04T02:19:48.816Z" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "fastapi", extra = ["standard"] },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/66/493c7d94801b1812fb0866926e262cd1506c429467e9cafd4fda66ffec42/proxmox_openapi-0.0.1.tar.gz", hash = "sha256:3557df38f69eb694df36ca82c457d527fdb18a52bcd9b5ce4754a63d9cbf16c8", size = 144574, upload-time = "2026-04-04T22:11:15.627Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/fa/598ceae13e96ac97cf8e9b481433587b87edddb4bb9200632bd8bd80e448/proxmoxer-2.3.0-py3-none-any.whl", hash = "sha256:1c03445e95cf9c53b6e50614dbaf561e0e1eb3ec878cf45ddde4bc4421c56743", size = 19796, upload-time = "2026-03-04T02:19:47.724Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/3d/6f4119b0a2a04fcadd04e6d13b1152e91f08ce67c0bd37cb55c639723174/proxmox_openapi-0.0.1-py3-none-any.whl", hash = "sha256:8bed8f648bf07b78530cee196c4d1b74cfa44268412881891b603f3205c03383", size = 176808, upload-time = "2026-04-04T22:11:13.931Z" },
 ]
 
 [[package]]
