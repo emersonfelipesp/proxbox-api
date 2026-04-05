@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from proxbox_api.e2e.fixtures.proxmox_mock import (
+from proxbox_api.e2e.fixtures.proxmox_openapi_mock import (
     MockProxmoxCluster,
     create_minimal_cluster,
 )

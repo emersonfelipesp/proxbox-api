@@ -49,7 +49,6 @@ docs = [
 [dependency-groups]
 dev = [
     "ruff>=0.15.8",
-    "proxmox-mock-api>=0.0.6.post5",
 ]
 
 [project.scripts]
@@ -77,15 +76,11 @@ default-groups = ["dev"]
 # Raise transitive Pygments (pytest / MkDocs stack) above Dependabot-patched floor.
 constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4"]
 
-[tool.uv.sources]
-"proxmox-mock-api" = { path = "proxmox-mock", editable = true }
-
 [tool.ruff]
 target-version = "py311"
 line-length = 100
 extend-exclude = [
     "proxbox_api/generated",
-    "proxmox-mock",
     "site",
     "nextjs-ui",
     ".venv",

@@ -11,7 +11,7 @@ Open the nearest scoped guide for the code you are changing.
 ### Top-level packages
 
 - `proxbox_api/CLAUDE.md` — Core FastAPI package overview
-- `proxmox-mock/CLAUDE.md` — Standalone Proxmox mock API package
+- `proxmox-openapi/CLAUDE.md` — Proxmox OpenAPI package (mock + real API modes)
 - `nextjs-ui/CLAUDE.md` — Next.js frontend for endpoint management
 - `nextjs-ui/AGENTS.md` — Frontend agent quick-reference
 
@@ -69,7 +69,7 @@ Open the nearest scoped guide for the code you are changing.
 ## Repo Structure
 
 - `proxbox_api/`: FastAPI package, session factories, schemas, routes, sync services, code generation, and shared utilities.
-- `proxmox-mock/`: Standalone `proxmox-mock-api` package — schema-driven Proxmox API mock, published separately to PyPI.
+- `proxmox-openapi/`: Schema-driven Proxmox API package used for both mock endpoints and real API access.
 - `nextjs-ui/`: Next.js frontend used to manage one NetBox endpoint and multiple Proxmox endpoints.
 - `tests/`: Unit, integration, and end-to-end tests for the backend package.
 - `docs/`: MkDocs documentation, including English and Brazilian Portuguese content.

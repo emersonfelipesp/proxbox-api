@@ -36,7 +36,7 @@ jobs:
       - name: Import smoke checks
         run: |
           uv run python -c "import proxbox_api.main"
-          uv run python -c "import proxmox_mock.main"
+          uv run python -c "import proxmox_openapi.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Run mocked schema-driven tests
@@ -48,48 +48,10 @@ jobs:
           name: proxbox-api-coverage
           path: coverage.xml
 
-  mock-package:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: "3.12"
-
-      - name: Sync mock package dependencies
-        working-directory: proxmox-mock
-        run: uv sync --frozen --extra test --group dev
-
-      - name: Ruff (lint + format check)
-        working-directory: proxmox-mock
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
-
-      - name: Compile package
-        working-directory: proxmox-mock
-        run: uv run python -m compileall proxmox_mock tests
-
-      - name: Import smoke checks
-        working-directory: proxmox-mock
-        run: uv run python -c "import proxmox_mock.main"
-
-      - name: Build distribution
-        working-directory: proxmox-mock
-        run: uv run --with build python -m build
-
-      - name: Run tests
-        working-directory: proxmox-mock
-        run: uv run pytest tests
-
   # Publish Docker images only from main branch pushes.
   docker-images:
     name: Publish Docker images (Hub)
-    needs: [test, mock-package]
+    needs: [test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/docker-hub-publish.yml
     with:

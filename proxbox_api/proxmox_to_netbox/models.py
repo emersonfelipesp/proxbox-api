@@ -34,7 +34,8 @@ def _mb_from_bytes(value: object) -> int:
         return 0
     if as_int <= 0:
         return 0
-    return as_int // 1_000_000
+    # NetBox VM disk must match virtual disk aggregate, which is parsed in MiB.
+    return as_int // (1024 * 1024)
 
 
 def _relation_id(value: object) -> object:
