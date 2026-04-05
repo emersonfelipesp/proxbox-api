@@ -270,9 +270,7 @@ async def _dispatch_vm_operation_queue(
             if operation.existing_record is None:
                 raise ProxboxException(
                     message="Cannot update VM without existing NetBox record",
-                    python_exception=(
-                        f"cluster={operation.prepared.cluster_name} vmid={vmid}"
-                    ),
+                    python_exception=(f"cluster={operation.prepared.cluster_name} vmid={vmid}"),
                 )
 
             record_id = _relation_id(operation.existing_record.get("id"))
@@ -1161,6 +1159,10 @@ async def create_virtual_machines(  # noqa: C901
                 if vm_resources:
                     resources_by_cluster[str(candidate_cluster_name)] = vm_resources
 
+        # Nothing to precompute when no VM resources were discovered.
+        if not resources_by_cluster:
+            return
+
         manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
         device_type = await _ensure_device_type(
             nb,
@@ -1373,7 +1375,10 @@ async def create_virtual_machines(  # noqa: C901
                 return await _prepare_vm_state(cluster_name, resource)
 
         prepared_results = await asyncio.gather(
-            *[_prepare_with_limit(cluster_name, resource) for cluster_name, resource in operation_inputs],
+            *[
+                _prepare_with_limit(cluster_name, resource)
+                for cluster_name, resource in operation_inputs
+            ],
             return_exceptions=True,
         )
 

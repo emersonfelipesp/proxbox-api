@@ -348,9 +348,7 @@ async def rest_list_async(
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
                 delay = _compute_retry_delay(base_delay, attempt, e)
-                pressure_note = (
-                    " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
-                )
+                pressure_note = " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
                 logger.warning(
                     "NetBox request failed%s (attempt %s/%s), retrying in %ss: %s",
                     pressure_note,
@@ -416,9 +414,7 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
                 delay = _compute_retry_delay(base_delay, attempt, e)
-                pressure_note = (
-                    " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
-                )
+                pressure_note = " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
                 logger.warning(
                     "NetBox create failed%s (attempt %s/%s), retrying in %ss: %s",
                     pressure_note,
@@ -607,9 +603,7 @@ async def rest_patch_async(
                 if attempt == max_retries or not _is_transient_netbox_error(e):
                     raise
                 delay = _compute_retry_delay(base_delay, attempt, e)
-                pressure_note = (
-                    " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
-                )
+                pressure_note = " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
                 logger.warning(
                     "NetBox patch failed%s (attempt %s/%s), retrying in %ss: %s",
                     pressure_note,

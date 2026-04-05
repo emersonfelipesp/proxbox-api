@@ -35,7 +35,7 @@ def _resolve_custom_field_delay() -> float:
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
-async def create_custom_fields(
+async def create_custom_fields(  # noqa: C901
     netbox_session: NetBoxAsyncSessionDep,
 ) -> list[dict]:
     """Create custom fields in NetBox for Proxmox synchronization."""

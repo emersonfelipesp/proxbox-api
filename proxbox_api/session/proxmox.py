@@ -18,6 +18,7 @@ def ProxmoxAPI(host: str, **kwargs: object) -> ProxmoxSDK:
 
     return ProxmoxSDK(host=host, backend="https", **kwargs)
 
+
 __all__ = (
     "ProxmoxAPI",
     "ProxmoxSession",
