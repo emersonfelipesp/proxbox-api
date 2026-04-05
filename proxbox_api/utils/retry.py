@@ -12,8 +12,8 @@ from proxbox_api.logger import logger
 
 T = TypeVar("T")
 
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_BASE_DELAY = 1.0
+DEFAULT_MAX_RETRIES = 5
+DEFAULT_BASE_DELAY = 2.0
 
 
 def _resolve_max_retries() -> int:
@@ -89,15 +89,23 @@ def _is_connection_refused_error(error: Exception) -> bool:
     return "connection refused" in error_str or "connect call failed" in error_str
 
 
-def _compute_delay(attempt: int, base_delay: float, is_connection_refused: bool = False) -> float:
+def _compute_delay(
+    attempt: int,
+    base_delay: float,
+    is_connection_refused: bool = False,
+    is_overwhelmed: bool = False,
+) -> float:
     """Compute delay with exponential backoff and jitter.
 
     For connection refused errors (NetBox offline), use longer delays since
     retrying immediately won't help - NetBox needs time to come back.
+    For overwhelmed errors (DB pool saturated), use aggressive backoff.
     """
     exponential_delay = base_delay * (2**attempt)
     if is_connection_refused:
-        exponential_delay = max(exponential_delay, 5.0)
+        exponential_delay = max(exponential_delay, 10.0)
+    if is_overwhelmed:
+        exponential_delay = max(exponential_delay, 30.0)
     jitter = random.uniform(0, exponential_delay * 0.5)
     return exponential_delay + jitter
 
@@ -142,7 +150,8 @@ async def retry_async(
 
             if attempt < max_retries and is_transient:
                 is_conn_refused = _is_connection_refused_error(e)
-                delay = _compute_delay(attempt, base_delay, is_conn_refused)
+                is_overwhelmed = _is_netbox_overwhelmed_error(e)
+                delay = _compute_delay(attempt, base_delay, is_conn_refused, is_overwhelmed)
                 errors.append(f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}")
                 logger.warning(
                     "%s failed (attempt %d/%d): %s. Retrying in %.1fs...",

@@ -122,13 +122,22 @@ Open the nearest scoped guide for the code you are changing.
 
 ## Environment Variables
 
-- `PROXBOX_NETBOX_TIMEOUT`: NetBox client timeout in seconds.
+- `PROXBOX_NETBOX_TIMEOUT`: NetBox client timeout in seconds (default: 120).
+- `PROXBOX_NETBOX_MAX_CONCURRENT`: max concurrent NetBox API requests (default: 1, keep low to avoid PostgreSQL pool exhaustion).
+- `PROXBOX_NETBOX_MAX_RETRIES`: retry attempts for transient failures (default: 5).
+- `PROXBOX_NETBOX_RETRY_DELAY`: base retry delay in seconds (default: 2.0).
 - `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: limits concurrent VM sync work.
 - `PROXBOX_FETCH_MAX_CONCURRENCY`: limits concurrent storage, backup, and snapshot fetches.
 - `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins.
 - `PROXBOX_EXPOSE_INTERNAL_ERRORS`: returns raw exception details in 500 responses when enabled.
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
+
+### Cache Configuration
+
+- `PROXBOX_NETBOX_GET_CACHE_TTL`: NetBox GET response cache TTL in seconds (default: 60.0, set to 0 to disable)
+- `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES`: maximum cached GET responses (default: 4096)
+- `PROXBOX_DEBUG_CACHE`: enable debug-level cache logging (default: 0)
 
 ## Validation
 
