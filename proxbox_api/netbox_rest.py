@@ -457,12 +457,17 @@ async def rest_reconcile_async(  # noqa: C901
     *,
     lookup: dict[str, object],
     payload: dict[str, object],
-    schema: type[BaseModel],
+    schema: type[BaseModel] | type[dict],
     current_normalizer,
     patchable_fields: set[str] | frozenset[str] | None = None,
 ) -> RestRecord:
-    desired_model = schema.model_validate(payload)
-    desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
+    supports_model_validation = hasattr(schema, "model_validate") and hasattr(schema, "model_dump")
+
+    if supports_model_validation:
+        desired_model = schema.model_validate(payload)
+        desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
+    else:
+        desired_payload = {key: value for key, value in payload.items() if value is not None}
 
     async def _find_existing() -> RestRecord | None:
         for candidate in _candidate_reuse_lookups(lookup, desired_payload):
@@ -487,14 +492,22 @@ async def rest_reconcile_async(  # noqa: C901
                 return None
             for record in records:
                 try:
-                    current_model = schema.model_validate(current_normalizer(record.serialize()))
+                    current_normalized = current_normalizer(record.serialize())
+                    if supports_model_validation:
+                        current_model = schema.model_validate(current_normalized)
+                        current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+                    else:
+                        current_payload = {
+                            key: value
+                            for key, value in dict(current_normalized or {}).items()
+                            if value is not None
+                        }
                 except Exception:
                     logger.debug(
                         "Skipping NetBox record during reconcile scan (validation failed)",
                         exc_info=True,
                     )
                     continue
-                current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
                 for candidate in candidates:
                     if all(current_payload.get(key) == value for key, value in candidate.items()):
                         return record
@@ -504,8 +517,14 @@ async def rest_reconcile_async(  # noqa: C901
         return None
 
     async def _reconcile(existing_record: RestRecord) -> RestRecord:
-        current_model = schema.model_validate(current_normalizer(existing_record.serialize()))
-        current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+        current_normalized = current_normalizer(existing_record.serialize())
+        if supports_model_validation:
+            current_model = schema.model_validate(current_normalized)
+            current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+        else:
+            current_payload = {
+                key: value for key, value in dict(current_normalized or {}).items() if value is not None
+            }
 
         patch_payload = {
             key: value
