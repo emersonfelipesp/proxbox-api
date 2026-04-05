@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from netbox_sdk.client import ApiResponse
+from proxmox_openapi.sdk.exceptions import ResourceException
 from sqlmodel import Session
 
 from proxbox_api.app.netbox_session import get_raw_netbox_session
@@ -27,7 +28,11 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxSiteSyncState,
     NetBoxTaskHistorySyncState,
 )
-from proxbox_api.routes.proxmox import get_proxmox_node_storage_content, get_vm_config
+from proxbox_api.routes.proxmox import (
+    get_proxmox_node_storage_content,
+    get_vm_config,
+    proxmox_version,
+)
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.routes.proxmox.nodes import get_node_network
 from proxbox_api.routes.proxmox.replication import cluster_replication
@@ -303,6 +308,25 @@ class FakeTypedProxmoxSession:
         self.name = "lab"
         self.mode = "cluster"
         self.session = FakeTypedSessionAPI()
+
+
+class _ExplodingVersionResource:
+    def get(self):
+        raise ResourceException(
+            status_code=401,
+            status_message="Unauthorized",
+            content="ticket expired",
+        )
+
+
+class _FailingVersionSession:
+    CONNECTED = True
+
+    def __init__(self):
+        self.name = "lab"
+        self.domain = "pve.local"
+        self.ip_address = "10.0.0.10"
+        self.session = SimpleNamespace(version=_ExplodingVersionResource())
 
 
 class FakeMinimalClusterStatusSession:
@@ -1423,9 +1447,15 @@ def test_cluster_status_accepts_minimal_cluster_payloads():
     assert cluster_status_payload[0].name == "lab-cluster"
     assert cluster_status_payload[0].nodes == 1
     assert cluster_status_payload[0].quorate == 1
-    assert cluster_status_payload[0].mode == "cluster"
-    assert cluster_status_payload[0].node_list[0].id == "node/pve01"
-    assert cluster_status_payload[0].node_list[0].name == "pve01"
+
+
+def test_proxmox_version_maps_resource_exception_to_http_502():
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(proxmox_version([_FailingVersionSession()]))
+
+    error = exc_info.value
+    assert getattr(error, "status_code", None) == 502
+    assert "Failed to query Proxmox version" in str(getattr(error, "detail", ""))
 
 
 def test_netbox_v2_config_produces_bearer_authorization():

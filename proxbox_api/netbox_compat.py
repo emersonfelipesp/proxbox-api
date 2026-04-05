@@ -17,6 +17,7 @@ def _slugify(value: str) -> str:
 
 
 def _run(coro: object) -> object:
+    """Run a coroutine from sync code, even when already inside an event loop."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -27,7 +28,7 @@ def _run(coro: object) -> object:
     def _runner() -> None:
         try:
             result["value"] = asyncio.run(coro)
-        except Exception as error:
+        except Exception as error:  # pragma: no cover - surfaced to caller
             result["error"] = error
 
     import threading
@@ -35,7 +36,7 @@ def _run(coro: object) -> object:
     thread = threading.Thread(target=_runner, daemon=True)
     thread.start()
     thread.join()
-    if result["error"]:
+    if result["error"] is not None:
         raise result["error"]
     return result["value"]
 

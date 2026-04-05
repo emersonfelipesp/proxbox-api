@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from json import JSONDecodeError
 from typing import Annotated
 
@@ -115,9 +117,22 @@ async def proxmox_sessions_dep(
         yield sessions
     finally:
         for session in sessions:
-            close_session = getattr(session, "close", None)
-            if callable(close_session):
-                close_session()
+            close_method = getattr(session, "close", None)
+            if callable(close_method):
+                # ProxmoxSession.close() returns coroutine (from resolve_sync wrapping async close)
+                result = close_method()
+                if inspect.iscoroutine(result):
+                    import asyncio
+                    try:
+                        asyncio.get_running_loop()
+                        # Inside async context: schedule in background (best-effort cleanup)
+                        asyncio.create_task(result)
+                    except RuntimeError:
+                        # No loop running: run synchronously
+                        asyncio.run(result)
+                else:
+                    # Close method is already sync; result is None from resolve_sync
+                    pass
 
 
 ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions_dep)]
