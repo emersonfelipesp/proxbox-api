@@ -119,20 +119,11 @@ async def proxmox_sessions_dep(
         for session in sessions:
             close_method = getattr(session, "close", None)
             if callable(close_method):
-                # ProxmoxSession.close() returns coroutine (from resolve_sync wrapping async close)
-                result = close_method()
-                if inspect.iscoroutine(result):
-                    import asyncio
-                    try:
-                        asyncio.get_running_loop()
-                        # Inside async context: schedule in background (best-effort cleanup)
-                        asyncio.create_task(result)
-                    except RuntimeError:
-                        # No loop running: run synchronously
-                        asyncio.run(result)
-                else:
-                    # Close method is already sync; result is None from resolve_sync
-                    pass
+                # ProxmoxSession.close() is synchronous (uses resolve_sync internally)
+                try:
+                    close_method()
+                except Exception as error:  # pragma: no cover
+                    logger.debug("Failed to clean up proxmox session: %s", error)
 
 
 ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions_dep)]

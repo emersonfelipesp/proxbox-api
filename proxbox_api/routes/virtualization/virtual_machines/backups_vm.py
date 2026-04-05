@@ -667,6 +667,18 @@ async def create_all_virtual_machine_backups_stream(
                 },
             )
         except Exception as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
