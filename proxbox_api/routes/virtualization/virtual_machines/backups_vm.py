@@ -33,6 +33,54 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 router = APIRouter()
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
 
+_BACKUP_SUBTYPE_ALIASES: dict[str, str] = {
+    "ct": "lxc",
+    "lxc": "lxc",
+    "qemu": "qemu",
+    "vm": "qemu",
+}
+
+_BACKUP_FORMAT_ALIASES: dict[str, str] = {
+    "zst": "tzst",
+    "vma.zst": "tzst",
+    "vma.zstd": "tzst",
+    "pbs-ct": "pbs-ct",
+    "pbs-vm": "pbs-vm",
+    "qcow2": "qcow2",
+    "raw": "raw",
+    "tgz": "tgz",
+    "tbz": "tbz",
+    "tar": "tar",
+    "iso": "iso",
+    "tzst": "tzst",
+}
+
+
+def _normalize_backup_subtype(raw_subtype: object, volume_id: object) -> str:
+    text = str(raw_subtype or "").strip().lower()
+    if text in _BACKUP_SUBTYPE_ALIASES:
+        return _BACKUP_SUBTYPE_ALIASES[text]
+
+    volid = str(volume_id or "").lower()
+    if "/ct/" in volid:
+        return "lxc"
+    if "/vm/" in volid:
+        return "qemu"
+    return "undefined"
+
+
+def _normalize_backup_format(raw_format: object, volume_id: object) -> str:
+    text = str(raw_format or "").strip().lower()
+    if text in _BACKUP_FORMAT_ALIASES:
+        return _BACKUP_FORMAT_ALIASES[text]
+
+    volid = str(volume_id or "").lower()
+    if "/ct/" in volid:
+        return "pbs-ct"
+    if "/vm/" in volid:
+        return "pbs-vm"
+    return "undefined"
+
 
 def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
     """Collect Proxmox volume IDs for backup content rows (volid / NetBox volume_id)."""
@@ -125,7 +173,7 @@ async def create_netbox_backups(
         backup_payload = {
             "proxmox_storage": storage_record.get("id") if storage_record else None,
             "virtual_machine": virtual_machine.get("id"),
-            "subtype": backup.get("subtype"),
+            "subtype": _normalize_backup_subtype(backup.get("subtype"), volume_id),
             "creation_time": creation_time,
             "size": backup.get("size"),
             "verification_state": verification_state,
@@ -133,7 +181,7 @@ async def create_netbox_backups(
             "volume_id": volume_id,
             "notes": backup.get("notes"),
             "vmid": vmid,
-            "format": backup.get("format"),
+            "format": _normalize_backup_format(backup.get("format"), volume_id),
         }
 
         netbox_backup = await rest_reconcile_async(

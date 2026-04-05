@@ -6,9 +6,27 @@ import asyncio
 from types import SimpleNamespace
 
 from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
+    _normalize_backup_format,
+    _normalize_backup_subtype,
     create_netbox_backups,
     get_node_backups,
 )
+
+
+def test_normalize_backup_subtype_aliases_and_volume_fallbacks():
+    assert _normalize_backup_subtype("ct", "pbs:backup/ct/100/2026-01-01T00:00:00Z") == "lxc"
+    assert _normalize_backup_subtype("vm", "pbs:backup/vm/101/2026-01-01T00:00:00Z") == "qemu"
+    assert _normalize_backup_subtype(None, "pbs:backup/ct/100/2026-01-01T00:00:00Z") == "lxc"
+    assert _normalize_backup_subtype("", "pbs:backup/vm/101/2026-01-01T00:00:00Z") == "qemu"
+    assert _normalize_backup_subtype("unknown", "local:backup/other") == "undefined"
+
+
+def test_normalize_backup_format_aliases_and_volume_fallbacks():
+    assert _normalize_backup_format("zst", "pbs:backup/vm/101/2026-01-01T00:00:00Z") == "tzst"
+    assert _normalize_backup_format("vma.zst", "pbs:backup/vm/101/2026-01-01T00:00:00Z") == "tzst"
+    assert _normalize_backup_format(None, "pbs:backup/ct/100/2026-01-01T00:00:00Z") == "pbs-ct"
+    assert _normalize_backup_format("", "pbs:backup/vm/101/2026-01-01T00:00:00Z") == "pbs-vm"
+    assert _normalize_backup_format("unexpected", "local:backup/foo") == "undefined"
 
 
 def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
