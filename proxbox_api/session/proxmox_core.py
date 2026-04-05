@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_sync
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 
 
@@ -105,7 +106,7 @@ class ProxmoxSession:
         if self.CONNECTED:
             try:
                 """Test Proxmox Connection and return Cluster Status API response as class attribute"""
-                self.cluster_status = self.session("cluster/status").get()
+                self.cluster_status = resolve_sync(self.session("cluster/status").get())
             except Exception as error:
                 if self._is_permission_denied_error(error):
                     logger.warning(
@@ -208,7 +209,7 @@ class ProxmoxSession:
 
                 # Get Proxmox Version to test connection.
                 # Object instatiation does not actually connect to Proxmox, need to make an API call to test connection.
-                self.version = proxmox_session.version.get()
+                self.version = resolve_sync(proxmox_session.version.get())
                 return proxmox_session
             else:
                 logger.info(
@@ -218,7 +219,7 @@ class ProxmoxSession:
 
                 # Get Proxmox Version to test connection.
                 # Object instatiation does not actually connect to Proxmox, need to make an API call to test connection.
-                self.version = proxmox_session.version.get()
+                self.version = resolve_sync(proxmox_session.version.get())
                 return proxmox_session
 
         except Exception as error:
@@ -234,7 +235,7 @@ class ProxmoxSession:
 
                 # Get Proxmox Version to test connection.
                 # Object instatiation does not actually connect to Proxmox, need to make an API call to test connection.
-                self.version = proxmox_session.version.get()
+                self.version = resolve_sync(proxmox_session.version.get())
                 return proxmox_session
 
             except Exception as error:
@@ -284,7 +285,7 @@ class ProxmoxSession:
     def get_node_fingerprints(self, px: object) -> list[str]:
         """Get Nodes Fingerprints. It is the way I better found to differentiate clusters."""
         try:
-            join_info = px("cluster/config/join").get()
+            join_info = resolve_sync(px("cluster/config/join").get())
 
             fingerprints: list[str] = []
             for node in join_info.get("nodelist"):

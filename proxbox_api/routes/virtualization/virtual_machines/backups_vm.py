@@ -17,6 +17,7 @@ from proxbox_api.netbox_rest import (
     rest_list_async,
     rest_reconcile_async,
 )
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxBackupSyncState
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.proxmox_helpers import dump_models, get_node_storage_content
@@ -383,12 +384,13 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
 
         for proxmox, cluster in zip(pxs, cluster_status):
             cluster_name = getattr(cluster, "name", None) if cluster else None
+            storage_payload = await resolve_async(proxmox.session.storage.get())
             storage_list = [
                 {
                     "storage": storage_dict.get("storage"),
                     "nodes": storage_dict.get("nodes", "all"),
                 }
-                for storage_dict in proxmox.session.storage.get()
+                for storage_dict in storage_payload
                 if "backup" in storage_dict.get("content")
             ]
 

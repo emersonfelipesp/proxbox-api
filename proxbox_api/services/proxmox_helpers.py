@@ -5,6 +5,7 @@ from __future__ import annotations
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_sync
 from proxbox_api.session.proxmox import ProxmoxSession
 
 
@@ -28,7 +29,7 @@ def get_cluster_status(
         "Error fetching Proxmox cluster status",
         lambda: (
             generated_models.GetClusterStatusResponse.model_validate(
-                session.session("cluster/status").get()
+                resolve_sync(session.session("cluster/status").get())
             ).root
         ),
     )
@@ -42,9 +43,9 @@ def get_cluster_resources(
         "Error fetching Proxmox cluster resources",
         lambda: (
             generated_models.GetClusterResourcesResponse.model_validate(
-                session.session("cluster/resources").get(type=resource_type)
+                resolve_sync(session.session("cluster/resources").get(type=resource_type))
                 if resource_type
-                else session.session("cluster/resources").get()
+                else resolve_sync(session.session("cluster/resources").get())
             ).root
         ),
     )
@@ -55,7 +56,7 @@ def get_cluster_replication(
 ) -> list[dict[str, object]]:
     """Get cluster replication jobs from Proxmox."""
     try:
-        result = session.session("cluster/replication").get()
+        result = resolve_sync(session.session("cluster/replication").get())
         return result if isinstance(result, list) else []
     except Exception:
         return []
@@ -72,10 +73,10 @@ def get_vm_config(
 ):
     def _fetch_config():
         if vm_type == "qemu":
-            payload = session.session.nodes(node).qemu(vmid).config.get()
+            payload = resolve_sync(session.session.nodes(node).qemu(vmid).config.get())
             return generated_models.GetNodesNodeQemuVmidConfigResponse.model_validate(payload)
         if vm_type == "lxc":
-            payload = session.session.nodes(node).lxc(vmid).config.get()
+            payload = resolve_sync(session.session.nodes(node).lxc(vmid).config.get())
             return generated_models.GetNodesNodeLxcVmidConfigResponse.model_validate(payload)
         raise ValueError(f"Unsupported VM type: {vm_type}")
 
@@ -130,7 +131,9 @@ def get_qemu_guest_agent_network_interfaces(
 
     try:
         try:
-            payload = session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+            payload = resolve_sync(
+                session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+            )
         except Exception as error:
             logger.debug(
                 "Primary guest-agent interfaces call failed for node=%s vmid=%s: %s",
@@ -138,7 +141,7 @@ def get_qemu_guest_agent_network_interfaces(
                 vmid,
                 error,
             )
-            payload = (
+            payload = resolve_sync(
                 session.session.nodes(node).qemu(vmid).agent.get(command="network-get-interfaces")
             )
         return _normalize_guest_agent_interfaces(payload)
@@ -158,7 +161,9 @@ def get_storage_list(
     return _wrap_backend_call(
         "Error fetching Proxmox storage list",
         lambda: (
-            generated_models.GetStorageResponse.model_validate(session.session.storage.get()).root
+            generated_models.GetStorageResponse.model_validate(
+                resolve_sync(session.session.storage.get())
+            ).root
         ),
     )
 
@@ -176,7 +181,7 @@ def get_storage_config(
         f"Error fetching Proxmox storage config for {storage_id}",
         lambda: _model_dump(
             generated_models.GetStorageStorageResponse.model_validate(
-                session.session.storage(storage_id).get()
+                resolve_sync(session.session.storage(storage_id).get())
             )
         ),
     )
@@ -193,7 +198,7 @@ def get_node_storage_content(
         "Error fetching Proxmox node storage content",
         lambda: (
             generated_models.GetNodesNodeStorageStorageContentResponse.model_validate(
-                session.session.nodes(node).storage(storage).content.get(**params)
+                resolve_sync(session.session.nodes(node).storage(storage).content.get(**params))
             ).root
         ),
     )
@@ -223,7 +228,7 @@ def get_node_tasks(
         "Error fetching Proxmox node tasks",
         lambda: (
             generated_models.GetNodesNodeTasksResponse.model_validate(
-                session.session.nodes(node).tasks.get(**filtered)
+                resolve_sync(session.session.nodes(node).tasks.get(**filtered))
             ).root
         ),
     )
@@ -237,7 +242,7 @@ def get_node_task_status(
     return _wrap_backend_call(
         "Error fetching Proxmox task status",
         lambda: generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(
-            session.session.nodes(node).tasks(upid).status.get()
+            resolve_sync(session.session.nodes(node).tasks(upid).status.get())
         ),
     )
 
@@ -267,9 +272,9 @@ def get_vm_snapshots(
 
     def _fetch_snapshots():
         if vm_type == "qemu":
-            payload = session.session.nodes(node).qemu(vmid).snapshot.get()
+            payload = resolve_sync(session.session.nodes(node).qemu(vmid).snapshot.get())
         elif vm_type == "lxc":
-            payload = session.session.nodes(node).lxc(vmid).snapshot.get()
+            payload = resolve_sync(session.session.nodes(node).lxc(vmid).snapshot.get())
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
         return payload
