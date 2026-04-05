@@ -73,3 +73,25 @@
 	- `uv run ruff check .` passed.
 	- `uv run python -m compileall proxbox_api tests` passed.
 	- `uv run pytest tests` reported one pre-existing unit failure in `tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists` and three env-dependent image HTTP E2E errors requiring `PROXBOX_IMAGE_E2E_BASE_URL`.
+
+## Full Sync Reconciliation Refactor
+
+- [x] Review current full-update VM sync execution order and identify write points.
+- [x] Implement in-memory Proxmox data collection for VM sync (parallel fetch with asyncio gather).
+- [x] Implement in-memory NetBox VM snapshot loading before reconciliation.
+- [x] Add Pydantic-based reconciliation to classify objects as ok/create/update.
+- [x] Queue NetBox operations (GET/CREATE/UPDATE) in deterministic sequential order.
+- [x] Dispatch queued NetBox operations sequentially in batches using global write concurrency as batch size.
+- [x] Integrate the new planner/dispatcher flow into `/virtualization/virtual-machines/create` used by full-update.
+- [x] Add/adjust tests for operation classification and sequential dispatch semantics.
+- [x] Run targeted pytest validation for VM sync paths.
+
+## Review
+
+- Implemented queue-based in-memory VM reconciliation path for full-update mode (`sync_vm_network=False`) with explicit GET/CREATE/UPDATE operation planning.
+- Added deterministic sequential NetBox dispatch in batch windows governed by `PROXBOX_NETBOX_WRITE_CONCURRENCY`.
+- Preserved existing network/interface VM sync flow for non-full-update route calls.
+- Validation:
+	- `uv run pytest tests/test_vm_sync_reconciliation_queue.py` passed (2/2).
+	- `uv run pytest tests/test_qemu_guest_agent_sync.py` passed (12/12).
+	- `uv run python -m compileall proxbox_api/routes/virtualization/virtual_machines/sync_vm.py tests/test_vm_sync_reconciliation_queue.py` passed.

@@ -61,6 +61,7 @@ nav:
       - WebSocket Reference: api/websocket-reference.md
   - Synchronization:
       - Workflows: sync/workflows.md
+      - VM Reconciliation Architecture: sync/reconciliation-architecture.md
   - Development:
       - Testing: development/testing.md
       - Deployment: development/deployment.md
