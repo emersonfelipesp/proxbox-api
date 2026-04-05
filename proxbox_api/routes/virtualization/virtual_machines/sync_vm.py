@@ -1948,6 +1948,12 @@ async def create_virtual_machines_stream(
 
         sync_task = asyncio.create_task(_run_sync())
         try:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "step",
                 {
@@ -1980,6 +1986,12 @@ async def create_virtual_machines_stream(
                 },
             )
         except Exception as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
