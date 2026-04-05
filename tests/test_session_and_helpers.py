@@ -764,6 +764,79 @@ def test_rest_reconcile_async_patches_only_schema_detected_changes():
     ]
 
 
+def test_rest_reconcile_async_accepts_dict_schema_payloads():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/plugins/proxbox/backup-routines/"): (
+                200,
+                {
+                    "count": 1,
+                    "results": [
+                        {
+                            "id": 88,
+                            "job_id": "backup-weekly",
+                            "enabled": False,
+                            "schedule": "sun 03:00",
+                            "status": "active",
+                            "url": "https://netbox.local/api/plugins/proxbox/backup-routines/88/",
+                        }
+                    ],
+                },
+            ),
+            ("PATCH", "/api/plugins/proxbox/backup-routines/88/"): (
+                200,
+                {
+                    "id": 88,
+                    "job_id": "backup-weekly",
+                    "enabled": True,
+                    "schedule": "sun 03:00",
+                    "status": "active",
+                    "url": "https://netbox.local/api/plugins/proxbox/backup-routines/88/",
+                },
+            ),
+        }
+    )
+
+    updated = asyncio.run(
+        rest_reconcile_async(
+            session,
+            "/api/plugins/proxbox/backup-routines/",
+            lookup={"job_id": "backup-weekly"},
+            payload={
+                "job_id": "backup-weekly",
+                "enabled": True,
+                "schedule": "sun 03:00",
+                "status": "active",
+            },
+            schema=dict,
+            current_normalizer=lambda record: {
+                "job_id": record.get("job_id"),
+                "enabled": record.get("enabled"),
+                "schedule": record.get("schedule"),
+                "status": record.get("status"),
+            },
+        )
+    )
+
+    assert updated.enabled is True
+    assert session.client.calls == [
+        (
+            "GET",
+            "/api/plugins/proxbox/backup-routines/",
+            {"job_id": "backup-weekly", "limit": 2},
+            None,
+            True,
+        ),
+        (
+            "PATCH",
+            "/api/plugins/proxbox/backup-routines/88/",
+            None,
+            {"enabled": True},
+            True,
+        ),
+    ]
+
+
 def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
     expected_pstart = datetime.fromtimestamp(3001, timezone.utc).isoformat()
     session = AsyncNetBoxRestFacade(
@@ -1197,6 +1270,31 @@ def test_proxmox_session_allows_version_when_cluster_status_permission_denied(mo
     assert session.mode == "restricted"
     assert session.name == "10.0.0.10"
     assert session.version == {"version": "8.3.0"}
+
+
+def test_proxmox_session_close_uses_running_event_loop(monkeypatch):
+    calls = {"resolve_sync": 0, "closed": 0}
+
+    def _fake_resolve_sync(value):
+        calls["resolve_sync"] += 1
+        return value
+
+    class AsyncCloseSession:
+        async def close(self):
+            calls["closed"] += 1
+
+    monkeypatch.setattr("proxbox_api.session.proxmox_core.resolve_sync", _fake_resolve_sync)
+
+    async def _run_close() -> None:
+        session = ProxmoxSession.__new__(ProxmoxSession)
+        session.session = AsyncCloseSession()
+        session.close()
+        await asyncio.sleep(0)
+
+    asyncio.run(_run_close())
+
+    assert calls["closed"] == 1
+    assert calls["resolve_sync"] == 0
 
 
 def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
