@@ -39,6 +39,50 @@ Core behavior:
 - Writes journal entries for auditability.
 - In full-update mode, VM creation skips network writes so the dedicated VM interface and IP stages own that work.
 
+### Dependency-Ordered Async Model
+
+VM sync is async end-to-end, but not every step can run in parallel. The workflow enforces a strict dependency chain before running VM-level fan-out.
+
+Sequential dependency preflight:
+
+1. Ensure global parent objects exist in NetBox:
+	- Manufacturer
+	- Device type (depends on manufacturer)
+	- Proxmox node role
+2. For each cluster, ensure cluster-scoped parents:
+	- Cluster type
+	- Cluster
+	- Site
+3. For each node in the cluster, ensure device:
+	- Device (depends on cluster + device type + role + site)
+4. Ensure VM role objects by VM type (`qemu` and `lxc`).
+
+After this preflight, VM operations run concurrently per VM with a semaphore limit.
+
+Per-VM required order:
+
+1. Fetch VM data from Proxmox (resource/config).
+2. Reconcile VM in NetBox (create/patch).
+3. Reconcile VM interfaces and IPs (if enabled).
+4. Reconcile VM disks.
+5. Reconcile VM task history.
+
+This means async is used for throughput where objects are independent, while parent-child dependencies are always awaited in sequence.
+
+### Parallelism Rules
+
+Allowed in parallel:
+
+- Different VMs in the same or different clusters, after preflight dependencies are ready.
+- Interface operations for a single VM once the VM object exists.
+- Disk operations for a single VM once the VM object exists.
+
+Not allowed in parallel:
+
+- Creating child objects before required parent objects exist.
+- Reconciling NetBox VM state before Proxmox VM data is fetched.
+- Creating a device before manufacturer/device type/site/cluster prerequisites exist.
+
 ## Backup Sync Flow
 
 Endpoints:

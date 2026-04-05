@@ -880,6 +880,141 @@ async def create_virtual_machines(  # noqa: C901
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
     flattened_results = []
     storage_index: dict[tuple[str, str], dict] = {}
+    cluster_dependency_cache: dict[str, dict[str, object]] = {}
+    node_device_cache: dict[tuple[str, str], object] = {}
+    vm_role_cache: dict[str, object] = {}
+    vm_role_mapping: dict[str, dict[str, object]] = {
+        "qemu": {
+            "name": "Virtual Machine (QEMU)",
+            "slug": "virtual-machine-qemu",
+            "color": "00ffff",
+            "description": "Proxmox Virtual Machine",
+            "tags": [tag_id],
+            "vm_role": True,
+        },
+        "lxc": {
+            "name": "Container (LXC)",
+            "slug": "container-lxc",
+            "color": "7fffd4",
+            "description": "Proxmox LXC Container",
+            "tags": [tag_id],
+            "vm_role": True,
+        },
+        "undefined": {
+            "name": "Unknown",
+            "slug": "unknown",
+            "color": "000000",
+            "description": "VM Type not found. Neither QEMU nor LXC.",
+            "tags": [tag_id],
+            "vm_role": True,
+        },
+    }
+
+    async def _precompute_vm_dependencies() -> None:
+        """Ensure shared dependencies in strict parent-to-child order.
+
+        Dependency chain enforced here:
+        manufacturer -> device type -> cluster type -> cluster/site -> node device -> VM role.
+        """
+
+        resources_by_cluster: dict[str, list[dict]] = {}
+        for cluster in filtered_cluster_resources:
+            if not isinstance(cluster, dict):
+                continue
+            for candidate_cluster_name, resources in cluster.items():
+                if not isinstance(resources, list):
+                    continue
+                vm_resources = [
+                    resource
+                    for resource in resources
+                    if isinstance(resource, dict) and resource.get("type") in ("qemu", "lxc")
+                ]
+                if vm_resources:
+                    resources_by_cluster[str(candidate_cluster_name)] = vm_resources
+
+        manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
+        device_type = await _ensure_device_type(
+            nb,
+            manufacturer_id=getattr(manufacturer, "id", None),
+            tag_refs=tag_refs,
+        )
+        device_role = await _ensure_proxmox_node_role(nb, tag_refs=tag_refs)
+
+        vm_types: set[str] = set()
+
+        for cluster_name, vm_resources in resources_by_cluster.items():
+            cluster_mode = next(
+                (
+                    cluster_state.mode
+                    for cluster_state in cluster_status
+                    if getattr(cluster_state, "name", None) == cluster_name
+                ),
+                "cluster",
+            )
+            cluster_type = await _ensure_cluster_type(
+                nb,
+                mode=cluster_mode,
+                tag_refs=tag_refs,
+            )
+            cluster = await _ensure_cluster(
+                nb,
+                cluster_name=cluster_name,
+                cluster_type_id=getattr(cluster_type, "id", None),
+                mode=cluster_mode,
+                tag_refs=tag_refs,
+            )
+            site = await _ensure_site(nb, cluster_name=cluster_name, tag_refs=tag_refs)
+
+            cluster_dependency_cache[cluster_name] = {
+                "cluster": cluster,
+                "site": site,
+                "device_type": device_type,
+                "device_role": device_role,
+            }
+
+            node_names = {
+                str(resource.get("node"))
+                for resource in vm_resources
+                if resource.get("node") is not None
+            }
+            for node_name in sorted(node_names):
+                node_device_cache[(cluster_name, node_name)] = await _ensure_device(
+                    nb,
+                    device_name=node_name,
+                    cluster_id=getattr(cluster, "id", None),
+                    device_type_id=getattr(device_type, "id", None),
+                    role_id=getattr(device_role, "id", None),
+                    site_id=getattr(site, "id", None),
+                    tag_refs=tag_refs,
+                )
+
+            for resource in vm_resources:
+                vm_type = str(resource.get("type") or "undefined").lower()
+                if vm_type not in vm_role_mapping:
+                    vm_type = "undefined"
+                vm_types.add(vm_type)
+
+        for vm_type in sorted(vm_types):
+            role_payload = vm_role_mapping.get(vm_type, vm_role_mapping["undefined"])
+            vm_role_cache[vm_type] = await rest_reconcile_async(
+                nb,
+                "/api/dcim/device-roles/",
+                lookup={"slug": role_payload.get("slug")},
+                payload={
+                    **role_payload,
+                    "tags": tag_refs,
+                },
+                schema=NetBoxDeviceRoleSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "color": record.get("color"),
+                    "description": record.get("description"),
+                    "vm_role": record.get("vm_role"),
+                    "tags": record.get("tags"),
+                },
+            )
+
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
         storage_index = build_storage_index(storage_records)
@@ -887,6 +1022,14 @@ async def create_virtual_machines(  # noqa: C901
         error_detail = getattr(error, "detail", str(error))
         error_msg = f"{type(error).__name__}: {error_detail}"
         logger.warning("Error loading storage records for VM sync: %s", error_msg)
+
+    try:
+        await _precompute_vm_dependencies()
+    except Exception as error:
+        raise ProxboxException(
+            message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
+            python_exception=f"Error: {str(error)}",
+        )
 
     async def create_vm_task(cluster_name, resource):  # noqa: C901
         undefined_html = return_status_html("undefined", use_css)
@@ -905,34 +1048,10 @@ async def create_virtual_machines(  # noqa: C901
             "vm_interfaces": undefined_html,
         }
 
-        vm_role_mapping: dict = {
-            "qemu": {
-                "name": "Virtual Machine (QEMU)",
-                "slug": "virtual-machine-qemu",
-                "color": "00ffff",
-                "description": "Proxmox Virtual Machine",
-                "tags": [tag_id],
-                "vm_role": True,
-            },
-            "lxc": {
-                "name": "Container (LXC)",
-                "slug": "container-lxc",
-                "color": "7fffd4",
-                "description": "Proxmox LXC Container",
-                "tags": [tag_id],
-                "vm_role": True,
-            },
-            "undefined": {
-                "name": "Unknown",
-                "slug": "unknown",
-                "color": "000000",
-                "description": "VM Type not found. Neither QEMU nor LXC.",
-                "tags": [tag_id],
-                "vm_role": True,
-            },
-        }
-
         vm_type = resource.get("type", "unknown")
+        vm_type_key = str(vm_type).lower() if vm_type else "undefined"
+        if vm_type_key not in vm_role_mapping:
+            vm_type_key = "undefined"
         vm_config_result = get_vm_config(
             pxs=pxs,
             cluster_status=cluster_status,
@@ -962,61 +1081,57 @@ async def create_virtual_machines(  # noqa: C901
             )
 
         try:
-            cluster_mode = next(
-                (
-                    cluster_state.mode
-                    for cluster_state in cluster_status
-                    if getattr(cluster_state, "name", None) == cluster_name
-                ),
-                "cluster",
-            )
-            cluster_type = await _ensure_cluster_type(
-                nb,
-                mode=cluster_mode,
-                tag_refs=tag_refs,
-            )
-            cluster = await _ensure_cluster(
-                nb,
-                cluster_name=cluster_name,
-                cluster_type_id=getattr(cluster_type, "id", None),
-                mode=cluster_mode,
-                tag_refs=tag_refs,
-            )
-            manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
-            device_type = await _ensure_device_type(
-                nb,
-                manufacturer_id=getattr(manufacturer, "id", None),
-                tag_refs=tag_refs,
-            )
-            device_role = await _ensure_proxmox_node_role(nb, tag_refs=tag_refs)
-            site = await _ensure_site(nb, cluster_name=cluster_name, tag_refs=tag_refs)
-            device = await _ensure_device(
-                nb,
-                device_name=resource.get("node"),
-                cluster_id=getattr(cluster, "id", None),
-                device_type_id=getattr(device_type, "id", None),
-                role_id=getattr(device_role, "id", None),
-                site_id=getattr(site, "id", None),
-                tag_refs=tag_refs,
-            )
-            role = await rest_reconcile_async(
-                nb,
-                "/api/dcim/device-roles/",
-                lookup={"slug": vm_role_mapping.get(vm_type, {}).get("slug")},
-                payload={
-                    **vm_role_mapping.get(vm_type, {}),
-                    "tags": tag_refs,
-                },
-                schema=NetBoxDeviceRoleSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "slug": record.get("slug"),
-                    "color": record.get("color"),
-                    "description": record.get("description"),
-                    "vm_role": record.get("vm_role"),
-                    "tags": record.get("tags"),
-                },
-            )
+            cluster_dependencies = cluster_dependency_cache.get(str(cluster_name), {})
+            cluster = cluster_dependencies.get("cluster")
+
+            if cluster is None:
+                raise ProxboxException(
+                    message=(
+                        "Error creating Virtual Machine dependent objects "
+                        "(cluster, device, tag and role)"
+                    ),
+                    python_exception=(
+                        f"Missing precomputed cluster dependency for cluster={cluster_name}"
+                    ),
+                )
+
+            node_name = str(resource.get("node"))
+            device = node_device_cache.get((str(cluster_name), node_name))
+            if device is None:
+                # Fallback for edge cases where a node appears after preflight filtering.
+                device = await _ensure_device(
+                    nb,
+                    device_name=node_name,
+                    cluster_id=getattr(cluster, "id", None),
+                    device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
+                    role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
+                    site_id=getattr(cluster_dependencies.get("site"), "id", None),
+                    tag_refs=tag_refs,
+                )
+                node_device_cache[(str(cluster_name), node_name)] = device
+
+            role = vm_role_cache.get(vm_type_key)
+            if role is None:
+                role_payload = vm_role_mapping.get(vm_type_key, vm_role_mapping["undefined"])
+                role = await rest_reconcile_async(
+                    nb,
+                    "/api/dcim/device-roles/",
+                    lookup={"slug": role_payload.get("slug")},
+                    payload={
+                        **role_payload,
+                        "tags": tag_refs,
+                    },
+                    schema=NetBoxDeviceRoleSyncState,
+                    current_normalizer=lambda record: {
+                        "name": record.get("name"),
+                        "slug": record.get("slug"),
+                        "color": record.get("color"),
+                        "description": record.get("description"),
+                        "vm_role": record.get("vm_role"),
+                        "tags": record.get("tags"),
+                    },
+                )
+                vm_role_cache[vm_type_key] = role
 
             logger.debug("VM deps cluster=%s device=%s role=%s", cluster, device, role)
 

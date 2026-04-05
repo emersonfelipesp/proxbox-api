@@ -205,6 +205,35 @@ async def create_virtual_machines_v2(
     context: VMSyncContext,
     cluster_resources: list[dict],
 ) -> VMSyncResult:
-    """Create virtual machines using the new coordinator pattern."""
-    coordinator = VMSyncCoordinator(context)
-    return await coordinator.run(cluster_resources)
+    """Create virtual machines using the production VM sync flow.
+
+    The coordinator class is still available for incremental migration, but this
+    entrypoint delegates to the production route-level implementation to preserve
+    dependency ordering guarantees end-to-end.
+    """
+
+    from proxbox_api.routes.virtualization.virtual_machines.sync_vm import create_virtual_machines
+
+    try:
+        results = await create_virtual_machines(
+            netbox_session=context.netbox_session,
+            pxs=context.pxs,
+            cluster_status=context.cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=context.custom_fields,
+            tag=context.tag,
+            websocket=None,
+            use_css=context.use_css,
+            use_websocket=False,
+            sync_vm_network=True,
+            use_guest_agent_interface_name=context.use_guest_agent_interface_name,
+            netbox_vm_ids=None,
+            ignore_ipv6_link_local_addresses=True,
+        )
+    except Exception as error:
+        return VMSyncResult(created=0, updated=0, failed=1, errors=[str(error)])
+
+    if not isinstance(results, list):
+        return VMSyncResult(created=0, updated=0, failed=1, errors=["Unexpected VM sync result"])
+
+    return VMSyncResult(created=len(results), updated=0, failed=0, errors=[])
