@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 import random
+import time
 from collections.abc import AsyncIterable, AsyncIterator
 from urllib.parse import urlsplit
 
@@ -30,8 +31,9 @@ def _resolve_netbox_max_concurrent() -> int:
     """Resolve max concurrent NetBox requests from environment."""
     raw = os.environ.get("PROXBOX_NETBOX_MAX_CONCURRENT", "").strip()
     if not raw:
-        # Keep default conservative to avoid exhausting NetBox DB pools.
-        return 3
+        # Default to 1 to avoid exhausting NetBox DB connection pools.
+        # Increase only if NetBox has sufficient PostgreSQL pool capacity.
+        return 1
     try:
         return max(1, int(raw))
     except ValueError:
@@ -39,6 +41,275 @@ def _resolve_netbox_max_concurrent() -> int:
 
 
 _netbox_request_semaphore: asyncio.Semaphore | None = None
+_netbox_get_cache: dict[tuple[int, str, str], tuple[float, list[dict[str, object]]]] = {}
+
+_cache_metrics_hits: int = 0
+_cache_metrics_misses: int = 0
+_cache_metrics_invalidations: int = 0
+_cache_metrics_evictions_ttl: int = 0
+_cache_metrics_evictions_size: int = 0
+
+
+def get_cache_metrics() -> dict[str, object]:
+    """Return current cache metrics for observability."""
+    global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
+    global _cache_metrics_evictions_ttl, _cache_metrics_evictions_size
+
+    ttl = _resolve_get_cache_ttl_seconds()
+    max_entries = _resolve_get_cache_max_entries()
+    now = time.monotonic()
+
+    oldest = 0.0
+    if _netbox_get_cache:
+        oldest = min(now - cached_at for cached_at, _ in _netbox_get_cache.values())
+
+    return {
+        "hits": _cache_metrics_hits,
+        "misses": _cache_metrics_misses,
+        "hit_rate": (
+            round(_cache_metrics_hits / (_cache_metrics_hits + _cache_metrics_misses) * 100, 2)
+            if (_cache_metrics_hits + _cache_metrics_misses) > 0
+            else 0.0
+        ),
+        "invalidations": _cache_metrics_invalidations,
+        "evictions_ttl": _cache_metrics_evictions_ttl,
+        "evictions_size": _cache_metrics_evictions_size,
+        "current_entries": len(_netbox_get_cache),
+        "max_entries": max_entries,
+        "ttl_seconds": ttl,
+        "oldest_entry_age_seconds": round(oldest, 2),
+    }
+
+
+def get_cache_prometheus_metrics() -> str:
+    """Return cache metrics in Prometheus exposition format."""
+    metrics = get_cache_metrics()
+    lines = [
+        "# HELP proxbox_cache_hits Total number of cache hits",
+        "# TYPE proxbox_cache_hits counter",
+        f"proxbox_cache_hits {metrics['hits']}",
+        "# HELP proxbox_cache_misses Total number of cache misses",
+        "# TYPE proxbox_cache_misses counter",
+        f"proxbox_cache_misses {metrics['misses']}",
+        "# HELP proxbox_cache_hit_rate Cache hit rate percentage",
+        "# TYPE proxbox_cache_hit_rate gauge",
+        f"proxbox_cache_hit_rate {metrics['hit_rate']}",
+        "# HELP proxbox_cache_invalidations Total number of cache invalidations",
+        "# TYPE proxbox_cache_invalidations counter",
+        f"proxbox_cache_invalidations {metrics['invalidations']}",
+        "# HELP proxbox_cache_evictions_ttl Total entries evicted due to TTL expiry",
+        "# TYPE proxbox_cache_evictions_ttl counter",
+        f"proxbox_cache_evictions_ttl {metrics['evictions_ttl']}",
+        "# HELP proxbox_cache_evictions_size Total entries evicted due to size limit",
+        "# TYPE proxbox_cache_evictions_size counter",
+        f"proxbox_cache_evictions_size {metrics['evictions_size']}",
+        "# HELP proxbox_cache_entries Current number of cached entries",
+        "# TYPE proxbox_cache_entries gauge",
+        f"proxbox_cache_entries {metrics['current_entries']}",
+        "# HELP proxbox_cache_max_entries Maximum cache size",
+        "# TYPE proxbox_cache_max_entries gauge",
+        f"proxbox_cache_max_entries {metrics['max_entries']}",
+        "# HELP proxbox_cache_ttl_seconds Cache TTL setting",
+        "# TYPE proxbox_cache_ttl_seconds gauge",
+        f"proxbox_cache_ttl_seconds {metrics['ttl_seconds']}",
+        "# HELP proxbox_cache_oldest_age_seconds Age of oldest entry in cache",
+        "# TYPE proxbox_cache_oldest_age_seconds gauge",
+        f"proxbox_cache_oldest_age_seconds {metrics['oldest_entry_age_seconds']}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _debug_cache_enabled() -> bool:
+    """Check if debug cache logging is enabled."""
+    return os.environ.get("PROXBOX_DEBUG_CACHE", "0").strip() == "1"
+
+
+def _resolve_get_cache_ttl_seconds() -> float:
+    """Resolve NetBox GET cache TTL from environment."""
+    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_TTL", "").strip()
+    if not raw:
+        return 60.0
+    try:
+        ttl = float(raw)
+    except ValueError:
+        return 60.0
+    return max(0.0, ttl)
+
+
+def _resolve_get_cache_max_entries() -> int:
+    """Resolve NetBox GET cache max entries from environment."""
+    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES", "").strip()
+    if not raw:
+        return 4096
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 4096
+
+
+def _serialize_query(query: dict[str, object] | None) -> str:
+    if not query:
+        return ""
+    try:
+        return json.dumps(query, sort_keys=True, default=str, separators=(",", ":"))
+    except TypeError:
+        # Fallback for non-JSON values while still keeping deterministic ordering.
+        normalized = {key: str(value) for key, value in sorted(query.items())}
+        return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+
+
+def _cache_key(api: object, path: str, query: dict[str, object] | None) -> tuple[int, str, str]:
+    return (id(api), _normalize_path(path), _serialize_query(query))
+
+
+def clear_rest_get_cache() -> None:
+    """Clear the in-memory NetBox GET response cache."""
+    global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
+    global _cache_metrics_evictions_ttl, _cache_metrics_evictions_size
+    _netbox_get_cache.clear()
+    _cache_metrics_hits = 0
+    _cache_metrics_misses = 0
+    _cache_metrics_invalidations = 0
+    _cache_metrics_evictions_ttl = 0
+    _cache_metrics_evictions_size = 0
+
+
+def _prune_get_cache(now: float) -> None:
+    global _cache_metrics_evictions_ttl, _cache_metrics_evictions_size
+    ttl = _resolve_get_cache_ttl_seconds()
+    if ttl <= 0:
+        _netbox_get_cache.clear()
+        return
+
+    expired_keys = [
+        key for key, (cached_at, _) in _netbox_get_cache.items() if (now - cached_at) >= ttl
+    ]
+    for key in expired_keys:
+        _netbox_get_cache.pop(key, None)
+    _cache_metrics_evictions_ttl += len(expired_keys)
+
+    max_entries = _resolve_get_cache_max_entries()
+    if len(_netbox_get_cache) > max_entries:
+        num_to_evict = len(_netbox_get_cache) - max_entries
+        for key, _ in sorted(_netbox_get_cache.items(), key=lambda item: item[1][0])[
+            0:num_to_evict
+        ]:
+            _netbox_get_cache.pop(key, None)
+        _cache_metrics_evictions_size += num_to_evict
+
+
+def _read_get_cache(
+    api: object,
+    path: str,
+    query: dict[str, object] | None,
+) -> list[dict[str, object]] | None:
+    global _cache_metrics_hits, _cache_metrics_misses
+    now = time.monotonic()
+    _prune_get_cache(now)
+
+    ttl = _resolve_get_cache_ttl_seconds()
+    if ttl <= 0:
+        if _debug_cache_enabled():
+            logger.debug("Cache DISABLED: TTL=%s path=%s query=%s", ttl, path, query)
+        return None
+
+    cache_key = _cache_key(api, path, query)
+    entry = _netbox_get_cache.get(cache_key)
+    if entry is None:
+        _cache_metrics_misses += 1
+        if _debug_cache_enabled():
+            logger.debug("Cache MISS: path=%s query=%s", path, query)
+        return None
+    cached_at, records = entry
+    if (now - cached_at) >= ttl:
+        _netbox_get_cache.pop(cache_key, None)
+        _cache_metrics_misses += 1
+        if _debug_cache_enabled():
+            logger.debug("Cache EXPIRED: path=%s query=%s age=%s", path, query, now - cached_at)
+        return None
+    _cache_metrics_hits += 1
+    if _debug_cache_enabled():
+        logger.debug("Cache HIT: path=%s query=%s", path, query)
+    return [dict(record) for record in records]
+
+
+def _write_get_cache(
+    api: object,
+    path: str,
+    query: dict[str, object] | None,
+    records: list[dict[str, object]],
+) -> None:
+    ttl = _resolve_get_cache_ttl_seconds()
+    if ttl <= 0:
+        return
+    now = time.monotonic()
+    _prune_get_cache(now)
+    _netbox_get_cache[_cache_key(api, path, query)] = (now, [dict(record) for record in records])
+
+
+def _is_detail_path(path: str) -> bool:
+    """Check if a path is a detail endpoint (ends with numeric ID)."""
+    segments = path.strip("/").split("/")
+    return len(segments) > 0 and segments[-1].isdigit()
+
+
+def _extract_list_path(detail_path: str) -> str:
+    """Extract list path from a detail path."""
+    normalized = _normalize_path(detail_path)
+    segments = normalized.strip("/").split("/")
+    if segments and segments[-1].isdigit():
+        return "/" + "/".join(segments[:-1]) + "/"
+    return normalized
+
+
+def _invalidate_get_cache_for_path(api: object, path: str) -> None:
+    """Invalidate cache entries for an exact path, its parent list, and direct children."""
+    global _cache_metrics_invalidations
+    normalized = _normalize_path(path)
+    api_id = id(api)
+    is_detail = _is_detail_path(normalized)
+    list_path = _extract_list_path(normalized) if is_detail else normalized
+
+    to_remove = []
+    for key in _netbox_get_cache:
+        if key[0] != api_id:
+            continue
+        cached_path = key[1]
+
+        if cached_path == normalized:
+            to_remove.append(key)
+            continue
+
+        if is_detail and cached_path == list_path:
+            to_remove.append(key)
+            continue
+
+        if not is_detail and cached_path.startswith(normalized):
+            remainder = cached_path[len(normalized) :].strip("/")
+            if remainder and "/" not in remainder and remainder.isdigit():
+                to_remove.append(key)
+
+    for key in to_remove:
+        _netbox_get_cache.pop(key, None)
+    _cache_metrics_invalidations += len(to_remove)
+
+    if _debug_cache_enabled():
+        logger.debug("Cache INVALIDATE: %d entries for path=%s", len(to_remove), path)
+
+
+def _invalidate_get_cache_for_record(
+    api: object, list_path: str, record: dict[str, object]
+) -> None:
+    """Invalidate cache for list endpoint, detail endpoint from URL, and detail endpoint from ID."""
+    _invalidate_get_cache_for_path(api, list_path)
+    record_url = record.get("url")
+    if isinstance(record_url, str):
+        parsed = urlsplit(record_url)
+        if parsed.path:
+            _invalidate_get_cache_for_path(api, parsed.path)
+    record_id = record.get("id")
+    if record_id is not None:
+        _invalidate_get_cache_for_path(api, _detail_path(list_path, record_id))
 
 
 def _get_netbox_semaphore() -> asyncio.Semaphore:
@@ -152,9 +423,10 @@ def _compute_retry_delay(base_delay: float, attempt: int, error: Exception) -> f
     """Compute backoff delay with stronger throttling when NetBox is overloaded."""
     exponential_delay = base_delay * (2**attempt)
     if _is_connection_refused_error(error):
-        exponential_delay = max(exponential_delay, 5.0)
+        exponential_delay = max(exponential_delay, 10.0)
     if _is_netbox_overwhelmed_error(error):
-        exponential_delay = max(exponential_delay, 3.0)
+        # Aggressive backoff when DB pool is saturated - wait up to 30s
+        exponential_delay = max(exponential_delay, 30.0)
     return exponential_delay + random.uniform(0, exponential_delay * 0.5)
 
 
@@ -281,6 +553,11 @@ class RestRecord:
 
         if not isinstance(response_payload, dict):
             raise ProxboxException(message="NetBox returned invalid JSON for record update")
+        _invalidate_get_cache_for_record(
+            self._api,
+            self._list_path,
+            response_payload,
+        )
         object.__setattr__(self, "_data", response_payload)
         object.__setattr__(self, "_dirty_fields", set())
         return self
@@ -299,6 +576,8 @@ class RestRecord:
                 message="NetBox REST request failed",
                 detail=response.text,
             )
+        _invalidate_get_cache_for_path(self._api, self._list_path)
+        _invalidate_get_cache_for_path(self._api, self._detail_path)
         return True
 
 
@@ -307,10 +586,15 @@ async def rest_list_async(
 ) -> list[RestRecord]:
     api = _unwrap_api(nb)
     semaphore = _get_netbox_semaphore()
+    normalized_path = _normalize_path(path)
+
+    cached = _read_get_cache(api, normalized_path, query)
+    if cached is not None:
+        return [RestRecord(api, normalized_path, item) for item in cached]
 
     async def _do_request() -> list[RestRecord]:
         try:
-            response = await api.client.request("GET", _normalize_path(path), query=query)
+            response = await api.client.request("GET", normalized_path, query=query)
         except Exception as e:
             _handle_netbox_error(e, f"list {path}")
             raise  # Early return via exception
@@ -331,14 +615,13 @@ async def rest_list_async(
             raise ProxboxException(message="NetBox REST list response was not JSON array/object")
         if not isinstance(results, list):
             raise ProxboxException(message="NetBox REST list response missing results list")
-        return [
-            RestRecord(api, path, item if isinstance(item, dict) else to_dict(item))
-            for item in results
-        ]
+        normalized_results = [item if isinstance(item, dict) else to_dict(item) for item in results]
+        _write_get_cache(api, normalized_path, query, normalized_results)
+        return [RestRecord(api, normalized_path, item) for item in normalized_results]
 
     # Retry loop with semaphore and exponential backoff for transient errors
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "3")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "1.0"))
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -382,10 +665,11 @@ async def rest_first_async(
 async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -> RestRecord:
     api = _unwrap_api(nb)
     semaphore = _get_netbox_semaphore()
+    normalized_path = _normalize_path(path)
 
     async def _do_request() -> RestRecord:
         try:
-            response = await api.client.request("POST", _normalize_path(path), payload=payload)
+            response = await api.client.request("POST", normalized_path, payload=payload)
         except Exception as e:
             _handle_netbox_error(e, f"create {path}")
             raise  # Early return via exception
@@ -400,11 +684,12 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
 
         if not isinstance(body, dict):
             raise ProxboxException(message="NetBox REST create response was not a JSON object")
-        return RestRecord(api, path, body)
+        _invalidate_get_cache_for_record(api, normalized_path, body)
+        return RestRecord(api, normalized_path, body)
 
     # Retry loop with semaphore and exponential backoff for transient errors
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "3")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "1.0"))
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -581,19 +866,26 @@ async def rest_patch_async(
     api = _unwrap_api(nb)
     semaphore = _get_netbox_semaphore()
 
+    normalized_path = _normalize_path(path)
+    detail_path = _detail_path(normalized_path, record_id)
+
     async def _do_request() -> dict[str, object]:
         try:
-            response = await api.client.request(
-                "PATCH", _detail_path(path, record_id), payload=payload
-            )
+            response = await api.client.request("PATCH", detail_path, payload=payload)
         except Exception as e:
             _handle_netbox_error(e, f"patch {path}")
             raise  # Early return via exception
-        return _extract_payload(response)
+        body = _extract_payload(response)
+        if isinstance(body, dict):
+            _invalidate_get_cache_for_record(api, normalized_path, body)
+        else:
+            _invalidate_get_cache_for_path(api, normalized_path)
+            _invalidate_get_cache_for_path(api, detail_path)
+        return body
 
     # Retry loop with semaphore and exponential backoff for transient errors
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "3")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "1.0"))
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
 
     for attempt in range(max_retries + 1):
         async with semaphore:
