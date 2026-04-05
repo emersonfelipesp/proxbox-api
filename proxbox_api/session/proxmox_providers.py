@@ -118,7 +118,6 @@ async def proxmox_sessions_dep(
         for session in sessions:
             close_method = getattr(session, "close", None)
             if callable(close_method):
-                # ProxmoxSession.close() is synchronous (uses resolve_sync internally)
                 try:
                     close_method()
                 except Exception as error:  # pragma: no cover

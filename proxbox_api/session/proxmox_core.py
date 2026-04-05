@@ -1,6 +1,5 @@
 """Proxmox API session wrapper (single cluster / node)."""
 
-import asyncio
 import inspect
 import json
 import re
@@ -167,12 +166,7 @@ class ProxmoxSession:
             if hasattr(self, "session") and hasattr(self.session, "close"):
                 close_result = self.session.close()
                 if inspect.isawaitable(close_result):
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        resolve_sync(close_result)
-                    else:
-                        loop.create_task(close_result)
+                    resolve_sync(close_result)
         except Exception as error:
             logger.debug("Failed to close Proxmox session cleanly: %s", error)
 
