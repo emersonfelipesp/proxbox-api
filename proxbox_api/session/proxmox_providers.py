@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 from json import JSONDecodeError
 from typing import Annotated
 
@@ -12,6 +10,7 @@ from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep, ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
 from proxbox_api.session.netbox import get_netbox_async_session
