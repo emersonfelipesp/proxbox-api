@@ -108,7 +108,19 @@ async def proxmox_sessions(  # noqa: C901
         )
 
 
-ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions)]
+async def proxmox_sessions_dep(
+    sessions: Annotated[list[ProxmoxSession], Depends(proxmox_sessions)],
+):
+    try:
+        yield sessions
+    finally:
+        for session in sessions:
+            close_session = getattr(session, "close", None)
+            if callable(close_session):
+                close_session()
+
+
+ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions_dep)]
 
 
 def _netbox_field(endpoint: object, field: str, default: object = None) -> object:

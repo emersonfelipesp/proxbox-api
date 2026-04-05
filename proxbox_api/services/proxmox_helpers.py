@@ -1,4 +1,4 @@
-"""Typed helpers for direct proxmoxer calls validated through generated models."""
+"""Typed helpers for proxmox-openapi calls validated through generated models."""
 
 from __future__ import annotations
 

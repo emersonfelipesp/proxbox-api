@@ -116,7 +116,7 @@ Open the nearest scoped guide for the code you are changing.
 
 ## Dependencies
 
-- Runtime: `fastapi[standard]`, `proxmoxer`, `netbox-sdk`, `sqlmodel`
+- Runtime: `fastapi[standard]`, `proxmox-openapi`, `netbox-sdk`, `sqlmodel`
 - Tests: `pytest`, `httpx`, `playwright`, `pytest-cov`, `pytest-asyncio`, `pytest-xdist`
 - Docs: `mkdocs`, `mkdocs-material`, `mkdocs-static-i18n`
 

@@ -1122,7 +1122,7 @@ def test_proxmox_session_falls_back_to_ip_when_domain_fails(monkeypatch):
     )
 
     assert session.CONNECTED is True
-    assert getattr(session.proxmoxer, "host", None) == "10.0.0.10"
+    assert getattr(session.proxmox, "host", None) == "10.0.0.10"
 
 
 def test_proxmox_session_normalizes_token_string_value(monkeypatch):
@@ -1146,8 +1146,8 @@ def test_proxmox_session_normalizes_token_string_value(monkeypatch):
     assert session.CONNECTED is True
     assert session.token_name == "sync"
     assert session.token_value == "secret-value"
-    assert session.proxmoxer.kwargs["token_name"] == "sync"
-    assert session.proxmoxer.kwargs["token_value"] == "secret-value"
+    assert session.proxmox.kwargs["token_name"] == "sync"
+    assert session.proxmox.kwargs["token_value"] == "secret-value"
 
 
 def test_proxmox_session_allows_version_when_cluster_status_permission_denied(monkeypatch):

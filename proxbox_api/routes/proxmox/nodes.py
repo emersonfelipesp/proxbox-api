@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
-from proxmoxer.core import ResourceException
+from proxmox_openapi.sdk.exceptions import ResourceException
 from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
