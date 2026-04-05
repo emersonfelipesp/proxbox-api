@@ -20,7 +20,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
-| `test_proxmox_mock_dependency.py` | Verifies `proxbox_api` can import and use `proxmox_mock` correctly |
+| `test_proxmox_openapi_dependency.py` | Verifies `proxbox_api` can import the `proxmox_openapi` mock entrypoint |
 | `test_pydantic_generator_models.py` | Pydantic model generation from OpenAPI specs |
 | `test_qemu_guest_agent_helpers.py` | QEMU guest agent utility functions |
 | `test_qemu_guest_agent_sync.py` | QEMU guest agent sync workflows |
@@ -58,6 +58,6 @@ uv run pytest tests/e2e
 
 - Use `conftest.py` fixtures for app wiring and session mocks — do not create clients inline.
 - Name test functions `test_<behavior>_<condition>` (e.g., `test_vm_sync_skips_templates`).
-- `proxmox_mock` is the canonical mock for Proxmox API responses — import `create_mock_app` from it.
+- `proxmox_openapi` is the canonical mock source for Proxmox API responses.
 - Keep each test file scoped to one module or workflow; cross-cutting concerns go in `fixtures.py`.
 - Mark slow tests with `@pytest.mark.slow` and skip in CI fast-path if needed.

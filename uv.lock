@@ -1422,7 +1422,6 @@ test = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "proxmox-mock-api" },
     { name = "ruff" },
 ]
 
@@ -1449,29 +1448,6 @@ requires-dist = [
     { name = "sqlmodel", specifier = ">=0.0.37" },
 ]
 provides-extras = ["test", "e2e", "playwright", "docs"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "proxmox-mock-api", editable = "proxmox-mock" },
-    { name = "ruff", specifier = ">=0.15.8" },
-]
-
-[[package]]
-name = "proxmox-mock-api"
-version = "0.0.6.post5"
-source = { editable = "proxmox-mock" }
-dependencies = [
-    { name = "fastapi", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.135.2" },
-    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.2" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
-]
-provides-extras = ["test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.15.8" }]

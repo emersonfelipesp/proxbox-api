@@ -38,7 +38,7 @@ from proxbox_api.e2e.demo_auth import (
     PlaywrightNotInstalledError,
     bootstrap_demo_profile,
 )
-from proxbox_api.e2e.fixtures.proxmox_mock import (
+from proxbox_api.e2e.fixtures.proxmox_openapi_mock import (
     MockProxmoxCluster,
     create_minimal_cluster,
     create_multi_cluster,
