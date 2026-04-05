@@ -56,9 +56,11 @@ nav:
       - Configuration: getting-started/configuration.md
   - Architecture:
       - Overview: architecture/overview.md
+      - Caching: architecture/caching.md
   - API:
       - HTTP Reference: api/http-reference.md
       - WebSocket Reference: api/websocket-reference.md
+      - Cache API: api/cache.md
   - Synchronization:
       - Workflows: sync/workflows.md
       - VM Reconciliation Architecture: sync/reconciliation-architecture.md

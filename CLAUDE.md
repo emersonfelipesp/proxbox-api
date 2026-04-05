@@ -136,7 +136,8 @@ Open the nearest scoped guide for the code you are changing.
 ### Cache Configuration
 
 - `PROXBOX_NETBOX_GET_CACHE_TTL`: NetBox GET response cache TTL in seconds (default: 60.0, set to 0 to disable)
-- `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES`: maximum cached GET responses (default: 4096)
+- `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES`: maximum cached GET responses by entry count (default: 4096)
+- `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES`: maximum cache size in bytes (default: 52428800 = 50MB)
 - `PROXBOX_DEBUG_CACHE`: enable debug-level cache logging (default: 0)
 
 ## Validation

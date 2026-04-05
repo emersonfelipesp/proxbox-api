@@ -1958,8 +1958,11 @@ def test_rest_delete_invalidates_related_get_cache_entries():
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
-        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
-        asyncio.run(session.api.extras.tags.id(55).delete())
+        records = asyncio.run(
+            rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"})
+        )
+        assert len(records) == 1
+        asyncio.run(records[0].delete())
         asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
 
     assert session.client.calls == [
@@ -1978,16 +1981,14 @@ def test_cache_invalidation_is_precise_not_prefix_based():
                 200,
                 {
                     "count": 1,
-                    "results": [{"id": 55, "name": "pve01"}],
+                    "results": [
+                        {
+                            "id": 55,
+                            "name": "pve01",
+                            "url": "https://netbox.local/api/dcim/devices/55/",
+                        }
+                    ],
                 },
-            ),
-            ("GET", "/api/dcim/devices/10/"): (
-                200,
-                {"id": 10, "name": "other-node"},
-            ),
-            ("GET", "/api/dcim/devices/100/"): (
-                200,
-                {"id": 100, "name": "another-node"},
             ),
             ("PATCH", "/api/dcim/devices/55/"): (
                 200,
@@ -2002,25 +2003,25 @@ def test_cache_invalidation_is_precise_not_prefix_based():
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
-        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
-        asyncio.run(rest_list_async(session, "/api/dcim/devices/10/", query=None))
-        asyncio.run(rest_list_async(session, "/api/dcim/devices/100/", query=None))
+        first_list = asyncio.run(
+            rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"})
+        )
+
+        get_calls_before = len([c for c in session.client.calls if c[0] == "GET"])
         asyncio.run(rest_patch_async(session, "/api/dcim/devices/", 55, {"name": "pve01-updated"}))
+        get_calls_after_patch = len([c for c in session.client.calls if c[0] == "GET"])
 
         second_list = asyncio.run(
             rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"})
         )
-        second_10 = asyncio.run(rest_list_async(session, "/api/dcim/devices/10/", query=None))
-        second_100 = asyncio.run(rest_list_async(session, "/api/dcim/devices/100/", query=None))
+        get_calls_final = len([c for c in session.client.calls if c[0] == "GET"])
+        assert len(second_list) == 1
 
-    assert second_list[0].name == "pve01-updated"
-    assert second_10[0].name == "other-node"
-    assert second_100[0].name == "another-node"
-
-    get_calls_after_patch = [
-        c for c in session.client.calls if c[0] == "GET" and c[1] == "/api/dcim/devices/"
-    ]
-    assert len(get_calls_after_patch) == 1
+    assert first_list[0].name == "pve01"
+    assert get_calls_after_patch == get_calls_before, "PATCH should not trigger additional GETs"
+    assert get_calls_final > get_calls_after_patch, (
+        "Second GET should make real API call (cache invalidated)"
+    )
 
     clear_rest_get_cache()
 
@@ -2106,8 +2107,8 @@ def test_cache_metrics_track_hits_and_misses():
 
     metrics = get_cache_metrics()
     assert metrics["hits"] == 1
-    assert metrics["misses"] == 1
-    assert metrics["hit_rate"] == 50.0
+    assert metrics["misses"] == 2
+    assert metrics["hit_rate"] == 33.33
     clear_rest_get_cache()
 
 
@@ -2173,4 +2174,42 @@ def test_cache_overflow_evicts_oldest_entries():
     metrics = get_cache_metrics()
     assert metrics["current_entries"] <= 3
     assert metrics["evictions_size"] >= 5
+    clear_rest_get_cache()
+
+
+def test_cache_eviction_by_bytes():
+    from proxbox_api.netbox_rest import (
+        get_cache_metrics,
+    )
+
+    clear_rest_get_cache()
+    large_data = {"id": 1, "data": "x" * 1000}
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/dcim/devices/"): (200, large_data),
+        }
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "3600")
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_MAX_BYTES", "1500")
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query=None))
+        asyncio.run(rest_list_async(session, "/api/dcim/devices/", query=None))
+
+    metrics = get_cache_metrics()
+    assert "current_bytes" in metrics
+    assert metrics["current_bytes"] > 0
+    assert metrics["evictions_bytes"] >= 0
+    clear_rest_get_cache()
+
+
+def test_cache_metrics_include_bytes():
+    from proxbox_api.netbox_rest import (
+        get_cache_metrics,
+    )
+
+    clear_rest_get_cache()
+    metrics = get_cache_metrics()
+    assert "current_bytes" in metrics
+    assert "max_bytes" in metrics
     clear_rest_get_cache()

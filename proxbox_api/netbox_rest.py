@@ -41,27 +41,34 @@ def _resolve_netbox_max_concurrent() -> int:
 
 
 _netbox_request_semaphore: asyncio.Semaphore | None = None
-_netbox_get_cache: dict[tuple[int, str, str], tuple[float, list[dict[str, object]]]] = {}
+_netbox_get_cache: dict[tuple[int, str, str], tuple[float, int, list[dict[str, object]]]] = {}
 
 _cache_metrics_hits: int = 0
 _cache_metrics_misses: int = 0
 _cache_metrics_invalidations: int = 0
 _cache_metrics_evictions_ttl: int = 0
 _cache_metrics_evictions_size: int = 0
+_cache_metrics_evictions_bytes: int = 0
 
 
 def get_cache_metrics() -> dict[str, object]:
     """Return current cache metrics for observability."""
     global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
-    global _cache_metrics_evictions_ttl, _cache_metrics_evictions_size
+    global \
+        _cache_metrics_evictions_ttl, \
+        _cache_metrics_evictions_size, \
+        _cache_metrics_evictions_bytes
 
     ttl = _resolve_get_cache_ttl_seconds()
     max_entries = _resolve_get_cache_max_entries()
+    max_bytes = _resolve_get_cache_max_bytes()
     now = time.monotonic()
 
     oldest = 0.0
+    current_bytes = 0
     if _netbox_get_cache:
-        oldest = min(now - cached_at for cached_at, _ in _netbox_get_cache.values())
+        oldest = min(now - cached_at for cached_at, _, _ in _netbox_get_cache.values())
+        current_bytes = sum(size_bytes for _, size_bytes, _ in _netbox_get_cache.values())
 
     return {
         "hits": _cache_metrics_hits,
@@ -74,8 +81,11 @@ def get_cache_metrics() -> dict[str, object]:
         "invalidations": _cache_metrics_invalidations,
         "evictions_ttl": _cache_metrics_evictions_ttl,
         "evictions_size": _cache_metrics_evictions_size,
+        "evictions_bytes": _cache_metrics_evictions_bytes,
         "current_entries": len(_netbox_get_cache),
+        "current_bytes": current_bytes,
         "max_entries": max_entries,
+        "max_bytes": max_bytes,
         "ttl_seconds": ttl,
         "oldest_entry_age_seconds": round(oldest, 2),
     }
@@ -100,15 +110,24 @@ def get_cache_prometheus_metrics() -> str:
         "# HELP proxbox_cache_evictions_ttl Total entries evicted due to TTL expiry",
         "# TYPE proxbox_cache_evictions_ttl counter",
         f"proxbox_cache_evictions_ttl {metrics['evictions_ttl']}",
-        "# HELP proxbox_cache_evictions_size Total entries evicted due to size limit",
+        "# HELP proxbox_cache_evictions_size Total entries evicted due to entry count limit",
         "# TYPE proxbox_cache_evictions_size counter",
         f"proxbox_cache_evictions_size {metrics['evictions_size']}",
+        "# HELP proxbox_cache_evictions_bytes Total bytes evicted due to size limit",
+        "# TYPE proxbox_cache_evictions_bytes counter",
+        f"proxbox_cache_evictions_bytes {metrics['evictions_bytes']}",
         "# HELP proxbox_cache_entries Current number of cached entries",
         "# TYPE proxbox_cache_entries gauge",
         f"proxbox_cache_entries {metrics['current_entries']}",
-        "# HELP proxbox_cache_max_entries Maximum cache size",
+        "# HELP proxbox_cache_bytes Current cache size in bytes",
+        "# TYPE proxbox_cache_bytes gauge",
+        f"proxbox_cache_bytes {metrics['current_bytes']}",
+        "# HELP proxbox_cache_max_entries Maximum cache entry count",
         "# TYPE proxbox_cache_max_entries gauge",
         f"proxbox_cache_max_entries {metrics['max_entries']}",
+        "# HELP proxbox_cache_max_bytes Maximum cache size in bytes",
+        "# TYPE proxbox_cache_max_bytes gauge",
+        f"proxbox_cache_max_bytes {metrics['max_bytes']}",
         "# HELP proxbox_cache_ttl_seconds Cache TTL setting",
         "# TYPE proxbox_cache_ttl_seconds gauge",
         f"proxbox_cache_ttl_seconds {metrics['ttl_seconds']}",
@@ -147,6 +166,25 @@ def _resolve_get_cache_max_entries() -> int:
         return 4096
 
 
+def _resolve_get_cache_max_bytes() -> int:
+    """Resolve NetBox GET cache max bytes from environment."""
+    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_MAX_BYTES", "").strip()
+    if not raw:
+        return 50 * 1024 * 1024  # 50 MB default
+    try:
+        return max(1024, int(raw))
+    except ValueError:
+        return 50 * 1024 * 1024
+
+
+def _calculate_cache_entry_size(records: list[dict[str, object]]) -> int:
+    """Calculate approximate memory size of cache entry in bytes."""
+    try:
+        return len(json.dumps(records, default=str))
+    except TypeError:
+        return len(str(records))
+
+
 def _serialize_query(query: dict[str, object] | None) -> str:
     if not query:
         return ""
@@ -165,37 +203,64 @@ def _cache_key(api: object, path: str, query: dict[str, object] | None) -> tuple
 def clear_rest_get_cache() -> None:
     """Clear the in-memory NetBox GET response cache."""
     global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
-    global _cache_metrics_evictions_ttl, _cache_metrics_evictions_size
+    global \
+        _cache_metrics_evictions_ttl, \
+        _cache_metrics_evictions_size, \
+        _cache_metrics_evictions_bytes
     _netbox_get_cache.clear()
     _cache_metrics_hits = 0
     _cache_metrics_misses = 0
     _cache_metrics_invalidations = 0
     _cache_metrics_evictions_ttl = 0
     _cache_metrics_evictions_size = 0
+    _cache_metrics_evictions_bytes = 0
 
 
-def _prune_get_cache(now: float) -> None:
-    global _cache_metrics_evictions_ttl, _cache_metrics_evictions_size
+def _prune_get_cache(now: float, counting: bool = True) -> None:
+    global \
+        _cache_metrics_evictions_ttl, \
+        _cache_metrics_evictions_size, \
+        _cache_metrics_evictions_bytes
     ttl = _resolve_get_cache_ttl_seconds()
     if ttl <= 0:
         _netbox_get_cache.clear()
         return
 
     expired_keys = [
-        key for key, (cached_at, _) in _netbox_get_cache.items() if (now - cached_at) >= ttl
+        key for key, (cached_at, _, _) in _netbox_get_cache.items() if (now - cached_at) >= ttl
     ]
     for key in expired_keys:
         _netbox_get_cache.pop(key, None)
-    _cache_metrics_evictions_ttl += len(expired_keys)
 
     max_entries = _resolve_get_cache_max_entries()
-    if len(_netbox_get_cache) > max_entries:
-        num_to_evict = len(_netbox_get_cache) - max_entries
-        for key, _ in sorted(_netbox_get_cache.items(), key=lambda item: item[1][0])[
-            0:num_to_evict
-        ]:
-            _netbox_get_cache.pop(key, None)
-        _cache_metrics_evictions_size += num_to_evict
+    max_bytes = _resolve_get_cache_max_bytes()
+
+    current_bytes = sum(size_bytes for _, size_bytes, _ in _netbox_get_cache.values())
+    entries_to_evict = max(0, len(_netbox_get_cache) - max_entries)
+    bytes_to_evict = max(0, current_bytes - max_bytes)
+
+    if entries_to_evict > 0 or bytes_to_evict > 0:
+        sorted_entries = sorted(_netbox_get_cache.items(), key=lambda item: item[1][0])
+        evicted_entries = 0
+        evicted_bytes = 0
+
+        for key, (_, size_bytes, _) in sorted_entries:
+            if entries_to_evict > 0 and evicted_entries < entries_to_evict:
+                _netbox_get_cache.pop(key, None)
+                evicted_entries += 1
+                if counting:
+                    _cache_metrics_evictions_size += 1
+            elif bytes_to_evict > 0 and evicted_bytes < bytes_to_evict:
+                _netbox_get_cache.pop(key, None)
+                evicted_bytes += size_bytes
+                if counting:
+                    _cache_metrics_evictions_size += 1
+                    _cache_metrics_evictions_bytes += size_bytes
+            else:
+                break
+
+        if counting and bytes_to_evict > evicted_bytes:
+            _cache_metrics_evictions_bytes += evicted_bytes
 
 
 def _read_get_cache(
@@ -205,7 +270,7 @@ def _read_get_cache(
 ) -> list[dict[str, object]] | None:
     global _cache_metrics_hits, _cache_metrics_misses
     now = time.monotonic()
-    _prune_get_cache(now)
+    _prune_get_cache(now, counting=False)
 
     ttl = _resolve_get_cache_ttl_seconds()
     if ttl <= 0:
@@ -220,7 +285,7 @@ def _read_get_cache(
         if _debug_cache_enabled():
             logger.debug("Cache MISS: path=%s query=%s", path, query)
         return None
-    cached_at, records = entry
+    cached_at, size_bytes, records = entry
     if (now - cached_at) >= ttl:
         _netbox_get_cache.pop(cache_key, None)
         _cache_metrics_misses += 1
@@ -239,12 +304,43 @@ def _write_get_cache(
     query: dict[str, object] | None,
     records: list[dict[str, object]],
 ) -> None:
+    global \
+        _cache_metrics_evictions_ttl, \
+        _cache_metrics_evictions_size, \
+        _cache_metrics_evictions_bytes
+    now = time.monotonic()
     ttl = _resolve_get_cache_ttl_seconds()
     if ttl <= 0:
         return
-    now = time.monotonic()
-    _prune_get_cache(now)
-    _netbox_get_cache[_cache_key(api, path, query)] = (now, [dict(record) for record in records])
+
+    entry_size = _calculate_cache_entry_size(records)
+    max_bytes = _resolve_get_cache_max_bytes()
+
+    expired_keys = [
+        key for key, (cached_at, _, _) in _netbox_get_cache.items() if (now - cached_at) >= ttl
+    ]
+    for key in expired_keys:
+        _netbox_get_cache.pop(key, None)
+    if expired_keys:
+        _cache_metrics_evictions_ttl += len(expired_keys)
+
+    max_entries = _resolve_get_cache_max_entries()
+    current_bytes = sum(size_bytes for _, size_bytes, _ in _netbox_get_cache.values())
+
+    while len(_netbox_get_cache) >= max_entries or (current_bytes + entry_size) > max_bytes:
+        if not _netbox_get_cache:
+            break
+        oldest_key = min(_netbox_get_cache.items(), key=lambda item: item[1][0])[0]
+        evicted_size = _netbox_get_cache.pop(oldest_key, (0, 0, []))[1]
+        current_bytes -= evicted_size
+        _cache_metrics_evictions_size += 1
+        _cache_metrics_evictions_bytes += evicted_size
+
+    _netbox_get_cache[_cache_key(api, path, query)] = (
+        now,
+        entry_size,
+        [dict(record) for record in records],
+    )
 
 
 def _is_detail_path(path: str) -> bool:
