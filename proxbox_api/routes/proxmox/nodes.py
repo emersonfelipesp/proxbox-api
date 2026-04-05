@@ -8,6 +8,7 @@ from proxmox_openapi.sdk.exceptions import ResourceException
 from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session_for_request
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
@@ -31,7 +32,12 @@ NodeSchemaList = list[dict[str, NodeSchema]]
 @router.get("/", response_model=NodeSchemaList)
 async def get_node(pxs: ProxmoxSessionsDep) -> NodeSchemaList:
     # Return all
-    return NodeSchemaList([{px.name: NodeSchema(**px.session("/nodes/").get()[0])} for px in pxs])
+    result: list[dict[str, NodeSchema]] = []
+    for px in pxs:
+        nodes = await resolve_async(px.session("/nodes/").get())
+        if isinstance(nodes, list) and nodes:
+            result.append({px.name: NodeSchema(**nodes[0])})
+    return NodeSchemaList(result)
 
 
 ProxmoxNodeDep = Annotated[NodeSchemaList, Depends(get_node)]
@@ -111,9 +117,9 @@ async def get_node_network(
     interfaces = []
     try:
         if type:
-            node_networks = px.session(f"/nodes/{node}/network").get(type=type)
+            node_networks = await resolve_async(px.session(f"/nodes/{node}/network").get(type=type))
         else:
-            node_networks = px.session(f"/nodes/{node}/network").get()
+            node_networks = await resolve_async(px.session(f"/nodes/{node}/network").get())
     except ResourceException as error:
         raise ProxboxException(
             message="Error getting node network interfaces from Proxmox",
@@ -160,7 +166,7 @@ async def node_qemu(
     )
 
     try:
-        json_result = px.session(f"/nodes/{node}/qemu").get()
+        json_result = await resolve_async(px.session(f"/nodes/{node}/qemu").get())
     except ResourceException as error:
         raise ProxboxException(
             message="Error fetching qemu list for node from Proxmox",

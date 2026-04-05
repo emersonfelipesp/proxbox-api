@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -63,7 +64,7 @@ async def cluster_replication(pxs: ProxmoxSessionsDep):
 
     for px in pxs:
         try:
-            replications = px.session.cluster.replication.get()
+            replications = await resolve_async(px.session.cluster.replication.get())
         except Exception as error:
             logger.exception("Error fetching replication jobs for Proxmox cluster %s", px.name)
             results.append(

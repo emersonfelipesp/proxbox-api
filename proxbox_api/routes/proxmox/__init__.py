@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from proxbox_api.enum.proxmox import *
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.schemas.virtualization import VMConfig
@@ -89,7 +90,8 @@ async def proxmox_version(pxs: ProxmoxSessionsDep):
     for px in pxs:
         if px.CONNECTED:
             session = getattr(px, "session", None)
-            json_response.append({getattr(px, "name", None): session.version.get()})
+            version = await resolve_async(session.version.get())
+            json_response.append({getattr(px, "name", None): version})
 
     if not json_response:
         raise HTTPException(
@@ -124,7 +126,7 @@ async def proxmox(pxs: ProxmoxSessionsDep):
 
     json_response = []
 
-    def minimize_result(endpoint_name):
+    async def minimize_result(endpoint_name):
         """
         Minimize the result obtained from a Proxmox endpoint.
         This function retrieves data from a specified Proxmox endpoint and extracts
@@ -142,7 +144,7 @@ async def proxmox(pxs: ProxmoxSessionsDep):
         """
 
         endpoint_list = []
-        result = px.session(endpoint_name).get()
+        result = await resolve_async(px.session(endpoint_name).get())
 
         match endpoint_name:
             case "access":
@@ -156,15 +158,19 @@ async def proxmox(pxs: ProxmoxSessionsDep):
         return endpoint_list
 
     for px in pxs:
+        nodes = await resolve_async(px.session.nodes.get())
+        pools = await resolve_async(px.session.pools.get())
+        storage = await resolve_async(px.session.storage.get())
+        version = await resolve_async(px.session.version.get())
         json_response.append(
             {
                 f"{px.name}": {
-                    "access": minimize_result("access"),
-                    "cluster": minimize_result("cluster"),
-                    "nodes": px.session.nodes.get(),
-                    "pools": px.session.pools.get(),
-                    "storage": px.session.storage.get(),
-                    "version": px.session.version.get(),
+                    "access": await minimize_result("access"),
+                    "cluster": await minimize_result("cluster"),
+                    "nodes": nodes,
+                    "pools": pools,
+                    "storage": storage,
+                    "version": version,
                 }
             }
         )
@@ -330,7 +336,7 @@ async def top_level_endpoint(
     json_response = []
 
     for px in pxs:
-        json_response.append({px.name: px.session(top_level).get()})
+        json_response.append({px.name: await resolve_async(px.session(top_level).get())})
 
     return json_response
 

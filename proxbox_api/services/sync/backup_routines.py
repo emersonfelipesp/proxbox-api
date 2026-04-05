@@ -6,6 +6,7 @@ import asyncio
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 
@@ -29,7 +30,7 @@ async def sync_all_backup_routines(
         """Sync backup routines for a single Proxmox session."""
         session_results = {"created": 0, "updated": 0, "errors": 0}
         try:
-            backup_jobs = px.session.cluster.backup.get()
+            backup_jobs = await resolve_async(px.session.cluster.backup.get())
         except Exception as e:
             logger.warning("Error fetching backup routines for %s: %s", px.name, e)
             return session_results

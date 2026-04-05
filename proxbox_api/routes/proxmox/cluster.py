@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from proxbox_api.enum.proxmox import *
+from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
@@ -226,7 +228,7 @@ async def cluster_backup(pxs: ProxmoxSessionsDep):
 
     for px in pxs:
         try:
-            backup_jobs = px.session.cluster.backup.get()
+            backup_jobs = await resolve_async(px.session.cluster.backup.get())
             for job in backup_jobs:
                 job["cluster_name"] = px.name
                 results.append(job)
