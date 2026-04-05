@@ -1212,6 +1212,34 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
                             }
                         ),
                     )
+                # Handle scan query after duplicate error
+                if query.get("limit") == 200:
+                    return ApiResponse(
+                        status=200,
+                        text=json.dumps(
+                            {
+                                "count": 1,
+                                "results": [
+                                    {
+                                        "id": 900,
+                                        "volume_id": "backup-store:vm/101/2026-03-29",
+                                        "virtual_machine": 55,
+                                        "storage": "backup-store",
+                                        "subtype": "qemu",
+                                        "creation_time": datetime.fromtimestamp(
+                                            1711660800
+                                        ).isoformat(),
+                                        "size": 1024,
+                                        "verification_state": "ok",
+                                        "verification_upid": "UPID:1",
+                                        "notes": None,
+                                        "vmid": "101",
+                                        "format": "tzst",
+                                    }
+                                ],
+                            }
+                        ),
+                    )
             if method == "POST" and path == "/api/plugins/proxbox/backups/":
                 return ApiResponse(
                     status=400,

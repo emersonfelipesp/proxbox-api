@@ -544,8 +544,6 @@ def test_ensure_tag_async_reuses_duplicate_tag_after_failed_create_with_stale_lo
             },
             True,
         ),
-        ("GET", "/api/extras/tags/", {"slug": "proxbox", "limit": 2}, None, True),
-        ("GET", "/api/extras/tags/", {"name": "Proxbox", "limit": 2}, None, True),
         ("GET", "/api/extras/tags/", {"limit": 200, "offset": 0}, None, True),
     ]
 
@@ -1116,35 +1114,46 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
 def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
     site_queries = {"count": 0}
 
+    def _get_sites(query, payload):
+        # Handle scan query (after duplicate error)
+        if query.get("limit") == 200:
+            return 200, {
+                "count": 1,
+                "results": [
+                    {
+                        "id": 16,
+                        "name": "Proxmox Default Site - lab",
+                        "slug": "proxmox-default-site-lab",
+                        "status": {"value": "active"},
+                        "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                        "url": "https://netbox.local/api/dcim/sites/16/",
+                    }
+                ],
+            }
+
+        # Handle filtered queries (stale lookups that return empty on first 2 attempts)
+        if query.get("name") == "Proxmox Default Site - lab":
+            site_queries["count"] += 1
+            if site_queries["count"] > 1:
+                return 200, {
+                    "count": 1,
+                    "results": [
+                        {
+                            "id": 16,
+                            "name": "Proxmox Default Site - lab",
+                            "slug": "proxmox-default-site-lab",
+                            "status": {"value": "active"},
+                            "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                            "url": "https://netbox.local/api/dcim/sites/16/",
+                        }
+                    ],
+                }
+
+        return 200, {"count": 0, "results": []}
+
     session = AsyncNetBoxRestFacade(
         {
-            ("GET", "/api/dcim/sites/"): lambda query, payload: (
-                200,
-                {
-                    "count": (
-                        1
-                        if query.get("name") == "Proxmox Default Site - lab"
-                        and site_queries.__setitem__("count", site_queries["count"] + 1) is None
-                        and site_queries["count"] > 1
-                        else 0
-                    ),
-                    "results": (
-                        [
-                            {
-                                "id": 16,
-                                "name": "Proxmox Default Site - lab",
-                                "slug": "proxmox-default-site-lab",
-                                "status": {"value": "active"},
-                                "tags": [{"slug": "proxbox", "name": "Proxbox"}],
-                                "url": "https://netbox.local/api/dcim/sites/16/",
-                            }
-                        ]
-                        if query.get("name") == "Proxmox Default Site - lab"
-                        and site_queries["count"] > 1
-                        else []
-                    ),
-                },
-            ),
+            ("GET", "/api/dcim/sites/"): _get_sites,
             ("POST", "/api/dcim/sites/"): (
                 400,
                 {
@@ -1193,8 +1202,7 @@ def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
             },
             True,
         ),
-        ("GET", "/api/dcim/sites/", {"slug": "proxmox-default-site-lab", "limit": 2}, None, True),
-        ("GET", "/api/dcim/sites/", {"name": "Proxmox Default Site - lab", "limit": 2}, None, True),
+        ("GET", "/api/dcim/sites/", {"limit": 200, "offset": 0}, None, True),
     ]
 
 
