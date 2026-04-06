@@ -102,6 +102,30 @@ jobs:
             proxbox_base_url: https://127.0.0.1:18481
             proxbox_host_port: 18481
             proxbox_curl_flags: -k
+          - netbox_transport: https_granian
+            netbox_public_url: https://127.0.0.1:18443
+            netbox_endpoint_host: netbox-e2e-granian
+            netbox_endpoint_port: 8443
+            netbox_endpoint_verify_ssl: true
+            netbox_wait_url: https://127.0.0.1:18443/api/
+            netbox_app_container: netbox-e2e-granian
+            proxbox_transport: https_granian
+            proxbox_docker_target: granian
+            proxbox_base_url: https://127.0.0.1:18481
+            proxbox_host_port: 18481
+            proxbox_curl_flags: -k
+          - netbox_transport: http_manage
+            netbox_public_url: http://127.0.0.1:18080
+            netbox_endpoint_host: netbox-e2e-http
+            netbox_endpoint_port: 8000
+            netbox_endpoint_verify_ssl: false
+            netbox_wait_url: http://127.0.0.1:18080/api/
+            netbox_app_container: netbox-e2e-http
+            proxbox_transport: http_raw
+            proxbox_docker_target: raw
+            proxbox_base_url: http://127.0.0.1:18081
+            proxbox_host_port: 18081
+            proxbox_curl_flags: ""
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:v4.5
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-openapi:latest
