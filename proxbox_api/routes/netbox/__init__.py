@@ -5,25 +5,59 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.ssrf import validate_endpoint_host
 
-# FastAPI Router
 router = APIRouter()
 
-#
-# Endpoints: /netbox/<endpoint>
-#
+
+class NetBoxEndpointCreate(BaseModel):
+    name: str
+    ip_address: str
+    domain: str = ""
+    port: int = 443
+    token_version: str = "v1"
+    token_key: str | None = None
+    token: str
+    verify_ssl: bool = True
+
+
+class NetBoxEndpointUpdate(BaseModel):
+    name: str | None = None
+    ip_address: str | None = None
+    domain: str | None = None
+    port: int | None = None
+    token_version: str | None = None
+    token_key: str | None = None
+    token: str | None = None
+    verify_ssl: bool | None = None
+
+
+class NetBoxEndpointResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int | None = None
+    name: str
+    ip_address: str
+    domain: str
+    port: int
+    token_version: str
+    verify_ssl: bool
 
 
 def _normalize_netbox_endpoint_fields(nb: NetBoxEndpoint) -> None:
     nb.token_version = (nb.token_version or "v1").strip().lower()
     if nb.token_version not in ("v1", "v2"):
-        nb.token_version = "v1"
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid token_version. Must be 'v1' or 'v2'.",
+        )
     if nb.token_version == "v1":
         nb.token_key = None
     elif nb.token_key is not None:
@@ -52,66 +86,109 @@ def _validate_netbox_credentials(nb: NetBoxEndpoint) -> None:
     nb.token_key = key
 
 
-@router.post("/endpoint")
-def create_netbox_endpoint(netbox: NetBoxEndpoint, session: SessionDep) -> NetBoxEndpoint:
+def _encrypt_credentials(nb: NetBoxEndpoint) -> None:
+    nb.token = nb.set_encrypted_token(nb.token) if hasattr(nb, "set_encrypted_token") else nb.token
+    if nb.token_key and hasattr(nb, "set_encrypted_token_key"):
+        nb.set_encrypted_token_key(nb.token_key)
+
+
+@router.post("/endpoint", response_model=NetBoxEndpointResponse)
+def create_netbox_endpoint(
+    netbox: NetBoxEndpointCreate, session: SessionDep
+) -> NetBoxEndpointResponse:
     existing_any = session.exec(select(NetBoxEndpoint)).first()
     if existing_any:
         raise HTTPException(status_code=400, detail="Only one NetBox endpoint is allowed")
 
     if session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.name == netbox.name)).first():
         raise HTTPException(status_code=400, detail="NetBox endpoint name already exists")
-    _normalize_netbox_endpoint_fields(netbox)
-    _validate_netbox_credentials(netbox)
-    session.add(netbox)
+
+    ip_safe, ip_reason = validate_endpoint_host(netbox.ip_address)
+    if not ip_safe:
+        raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+
+    if netbox.domain:
+        domain_safe, domain_reason = validate_endpoint_host(netbox.domain)
+        if not domain_safe:
+            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
+
+    db_endpoint = NetBoxEndpoint(**netbox.model_dump())
+    _normalize_netbox_endpoint_fields(db_endpoint)
+    _validate_netbox_credentials(db_endpoint)
+
+    db_endpoint.set_encrypted_token(db_endpoint.token)
+    if db_endpoint.token_key:
+        db_endpoint.set_encrypted_token_key(db_endpoint.token_key)
+
+    session.add(db_endpoint)
     session.commit()
-    session.refresh(netbox)
-    return netbox
+    session.refresh(db_endpoint)
+    return NetBoxEndpointResponse.model_validate(db_endpoint)
 
 
-@router.get("/endpoint")
+@router.get("/endpoint", response_model=list[NetBoxEndpointResponse])
 def get_netbox_endpoints(
     session: SessionDep, offset: int = 0, limit: Annotated[int, Query(le=100)] = 100
-) -> list[NetBoxEndpoint]:
+) -> list[NetBoxEndpointResponse]:
     netbox_endpoints = session.exec(select(NetBoxEndpoint).offset(offset).limit(limit)).all()
-    return list(netbox_endpoints)
+    return [NetBoxEndpointResponse.model_validate(ep) for ep in netbox_endpoints]
 
 
-GetNetBoxEndpoint = Annotated[list[NetBoxEndpoint], Depends(get_netbox_endpoints)]
+GetNetBoxEndpoint = Annotated[list[NetBoxEndpointResponse], Depends(get_netbox_endpoints)]
 
 
-@router.get("/endpoint/{netbox_id}")
-def get_netbox_endpoint(netbox_id: int, session: SessionDep) -> NetBoxEndpoint:
+@router.get("/endpoint/{netbox_id}", response_model=NetBoxEndpointResponse)
+def get_netbox_endpoint(netbox_id: int, session: SessionDep) -> NetBoxEndpointResponse:
     netbox_endpoint = session.get(NetBoxEndpoint, netbox_id)
     if not netbox_endpoint:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found")
-    return netbox_endpoint
+    return NetBoxEndpointResponse.model_validate(netbox_endpoint)
 
 
-@router.put("/endpoint/{netbox_id}")
+@router.put("/endpoint/{netbox_id}", response_model=NetBoxEndpointResponse)
 def update_netbox_endpoint(
-    netbox_id: int, netbox: NetBoxEndpoint, session: SessionDep
-) -> NetBoxEndpoint:
+    netbox_id: int, netbox: NetBoxEndpointUpdate, session: SessionDep
+) -> NetBoxEndpointResponse:
     db_netbox = session.get(NetBoxEndpoint, netbox_id)
     if not db_netbox:
         raise HTTPException(status_code=404, detail="NetBox Endpoint not found")
 
-    for key, value in netbox.model_dump(exclude_unset=True).items():
+    update_data = netbox.model_dump(exclude_unset=True)
+
+    if "ip_address" in update_data:
+        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"])
+        if not ip_safe:
+            raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+
+    if "domain" in update_data and update_data["domain"]:
+        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"])
+        if not domain_safe:
+            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
+
+    if "token" in update_data:
+        update_data["token"] = (update_data["token"] or "").strip()
+
+    for key, value in update_data.items():
         setattr(db_netbox, key, value)
 
     _normalize_netbox_endpoint_fields(db_netbox)
     _validate_netbox_credentials(db_netbox)
 
+    db_netbox.set_encrypted_token(db_netbox.token)
+    if db_netbox.token_key:
+        db_netbox.set_encrypted_token_key(db_netbox.token_key)
+
     session.add(db_netbox)
     session.commit()
     session.refresh(db_netbox)
-    return db_netbox
+    return NetBoxEndpointResponse.model_validate(db_netbox)
 
 
 @router.delete("/endpoint/{netbox_id}")
 def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
     netbox_endpoint = session.get(NetBoxEndpoint, netbox_id)
     if not netbox_endpoint:
-        raise HTTPException(status_code=404, detail="NetBox Endpoint not found.")
+        raise HTTPException(status_code=404, detail="Netbox Endpoint not found.")
     session.delete(netbox_endpoint)
     session.commit()
     return {"message": "NetBox Endpoint deleted."}

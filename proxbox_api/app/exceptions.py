@@ -12,8 +12,6 @@ from proxbox_api.logger import logger
 
 
 def _expose_internal_errors(app: FastAPI) -> bool:
-    if getattr(app, "debug", False):
-        return True
     flag = os.environ.get("PROXBOX_EXPOSE_INTERNAL_ERRORS", "").lower()
     return flag in ("1", "true", "yes")
 

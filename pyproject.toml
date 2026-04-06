@@ -19,6 +19,7 @@ dependencies = [
     "proxmox-openapi>=0.0.1",
     "netbox-sdk>=0.0.6",
     "sqlmodel>=0.0.37",
+    "cryptography>=43.0.0",
 ]
 
 [project.optional-dependencies]

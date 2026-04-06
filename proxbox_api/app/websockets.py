@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
+import secrets
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -16,6 +19,29 @@ from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 websocket_router = APIRouter()
+
+
+def _verify_ws_api_key(api_key: str | None) -> bool:
+    """Verify WebSocket API key against configured key."""
+    raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+    if not raw_key:
+        return True
+    if not api_key:
+        return False
+    stored_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    provided_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    return secrets.compare_digest(provided_hash, stored_hash)
+
+
+async def _authenticate_websocket(websocket: WebSocket, api_key: str | None) -> bool:
+    """Authenticate a WebSocket connection. Returns True if authenticated."""
+    raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+    if not raw_key:
+        return True
+    if not _verify_ws_api_key(api_key):
+        await websocket.close(code=4001, reason="Invalid or missing API key")
+        return False
+    return True
 
 
 @websocket_router.websocket("/")
@@ -41,8 +67,13 @@ async def websocket_virtual_machines(
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     websocket: WebSocket,
+    api_key: str | None = None,
 ) -> None:
     logger.info("WebSocket /ws/virtual-machines connection attempt")
+
+    if not await _authenticate_websocket(websocket, api_key):
+        logger.warning("WebSocket /ws/virtual-machines auth failed")
+        return
 
     try:
         await websocket.accept()
@@ -88,12 +119,18 @@ async def websocket_sync_commands(  # noqa: C901
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     websocket: WebSocket,
+    api_key: str | None = None,
 ) -> None:
     connection_open = False
 
     nb = netbox_session
 
     logger.info("WebSocket /ws connection attempt")
+
+    if not await _authenticate_websocket(websocket, api_key):
+        logger.warning("WebSocket /ws auth failed")
+        return
+
     try:
         await websocket.accept()
         connection_open = True

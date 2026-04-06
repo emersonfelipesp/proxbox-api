@@ -8,6 +8,7 @@ from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.ssrf import validate_endpoint_host
 
 router = APIRouter()
 
@@ -83,6 +84,15 @@ def create_proxmox_endpoint(
 ) -> ProxmoxEndpointPublic:
     _validate_auth_fields(endpoint.password, endpoint.token_name, endpoint.token_value)
 
+    ip_safe, ip_reason = validate_endpoint_host(endpoint.ip_address)
+    if not ip_safe:
+        raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+
+    if endpoint.domain:
+        domain_safe, domain_reason = validate_endpoint_host(endpoint.domain)
+        if not domain_safe:
+            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
+
     existing = session.exec(
         select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == endpoint.name)
     ).first()
@@ -90,6 +100,12 @@ def create_proxmox_endpoint(
         raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
     db_endpoint = ProxmoxEndpoint(**endpoint.model_dump())
+
+    if db_endpoint.password:
+        db_endpoint.set_encrypted_password(db_endpoint.password)
+    if db_endpoint.token_value:
+        db_endpoint.set_encrypted_token_value(db_endpoint.token_value)
+
     session.add(db_endpoint)
     session.commit()
     session.refresh(db_endpoint)
@@ -114,7 +130,7 @@ def get_proxmox_endpoint(endpoint_id: int, session: SessionDep) -> ProxmoxEndpoi
     return _to_public_endpoint(endpoint)
 
 
-@router.put("/endpoints/{endpoint_id}")
+@router.put("/endpoints/{endpoint_id}")  # noqa: C901
 def update_proxmox_endpoint(
     endpoint_id: int,
     endpoint: ProxmoxEndpointUpdate,
@@ -122,9 +138,19 @@ def update_proxmox_endpoint(
 ) -> ProxmoxEndpointPublic:
     db_endpoint = session.get(ProxmoxEndpoint, endpoint_id)
     if not db_endpoint:
-        raise HTTPException(status_code=404, detail="Proxmox endpoint not found")
+        raise HTTPException(status_code=404, detail="Proxmox Endpoint not found")
 
     update_data = endpoint.model_dump(exclude_unset=True)
+
+    if "ip_address" in update_data:
+        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"])
+        if not ip_safe:
+            raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+
+    if "domain" in update_data and update_data["domain"]:
+        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"])
+        if not domain_safe:
+            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
 
     if "name" in update_data:
         existing = session.exec(
@@ -140,6 +166,11 @@ def update_proxmox_endpoint(
 
     for key, value in update_data.items():
         setattr(db_endpoint, key, value)
+
+    if "password" in update_data:
+        db_endpoint.set_encrypted_password(update_data["password"])
+    if "token_value" in update_data:
+        db_endpoint.set_encrypted_token_value(update_data["token_value"])
 
     session.add(db_endpoint)
     session.commit()
