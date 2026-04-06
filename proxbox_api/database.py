@@ -6,9 +6,10 @@ import time
 from pathlib import Path
 from typing import Annotated
 
+import bcrypt
 from fastapi import Depends
 from sqlalchemy import inspect, text
-from sqlmodel import Field, Session, SQLModel, create_engine
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from proxbox_api.credentials import decrypt_value, encrypt_value
 
@@ -129,6 +130,39 @@ class AuthLockout(SQLModel, table=True):
         if lockout:
             session.delete(lockout)
             session.commit()
+
+
+class ApiKey(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    label: str = Field(default="")
+    key_hash: str = Field()
+    is_active: bool = Field(default=True)
+    created_at: float = Field(default_factory=time.time)
+
+    @staticmethod
+    def store_key(session: Session, raw_key: str, label: str = "") -> "ApiKey":
+        key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+        obj = ApiKey(label=label, key_hash=key_hash)
+        session.add(obj)
+        session.commit()
+        session.refresh(obj)
+        return obj
+
+    @staticmethod
+    def has_any_key(session: Session) -> bool:
+        return session.exec(select(ApiKey).where(ApiKey.is_active == True)).first() is not None  # noqa: E712
+
+    @staticmethod
+    def verify_any(session: Session, provided_key: str) -> bool:
+        for row in session.exec(select(ApiKey).where(ApiKey.is_active == True)):  # noqa: E712
+            try:
+                if bcrypt.checkpw(provided_key.encode(), row.key_hash.encode()):
+                    return True
+            except Exception:
+                continue
+        return False
 
 
 def _migrate_netbox_endpoint_columns() -> None:

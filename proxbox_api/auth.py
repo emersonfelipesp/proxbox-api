@@ -10,7 +10,7 @@ import os
 import bcrypt
 from sqlalchemy.orm import Session
 
-from proxbox_api.database import AuthLockout, engine
+from proxbox_api.database import ApiKey, AuthLockout, engine
 
 _LOCKOUT_DURATION = 300
 _MAX_FAILED_ATTEMPTS = 5
@@ -80,6 +80,17 @@ def check_auth_header(api_key: str | None, client_ip: str) -> tuple[bool, str | 
     raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
 
     if not raw_key:
+        # Fall back to database-stored keys.
+        with Session(engine) as session:
+            if ApiKey.has_any_key(session):
+                if not api_key or not ApiKey.verify_any(session, api_key):
+                    record_failed_attempt(client_ip)
+                    remaining = _MAX_FAILED_ATTEMPTS - _get_attempt_count(client_ip)
+                    if remaining > 0:
+                        return False, f"Invalid API key. {remaining} attempts remaining."
+                    return False, "Invalid or missing API key."
+                clear_failed_attempts(client_ip)
+                return True, None
         if dev_mode:
             return True, None
         return False, "API key not configured. Set PROXBOX_API_KEY environment variable."

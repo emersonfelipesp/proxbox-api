@@ -35,6 +35,7 @@ from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
+from proxbox_api.routes.auth import router as auth_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
@@ -51,6 +52,7 @@ AUTH_EXEMPT_PATHS = frozenset(
         "/openapi.json",
         "/health",
         "/meta",
+        "/auth/register-key",
     }
 )
 
@@ -224,6 +226,7 @@ def create_app() -> FastAPI:
     configure_buffer_logger("proxbox")
 
     app.include_router(root_meta_router)
+    app.include_router(auth_router)
     register_cache_routes(app)
     register_full_update_routes(app)
     register_websocket_routes(app)
