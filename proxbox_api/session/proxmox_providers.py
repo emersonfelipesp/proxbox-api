@@ -153,6 +153,30 @@ async def proxmox_sessions_dep(
                     logger.debug("Failed to clean up proxmox session: %s", error)
 
 
+async def close_proxmox_sessions(pxs: list[ProxmoxSession]) -> None:
+    """Best-effort cleanup for Proxmox sessions after endpoint use.
+
+    This helper is used by routes that receive ``pxs`` from dependency injection
+    and want explicit teardown at the end of execution. It is idempotent and
+    tolerates already-closed sessions.
+    """
+    for session in pxs:
+        close_method = getattr(session, "aclose", None)
+        if callable(close_method):
+            try:
+                await close_method()
+                continue
+            except Exception as error:  # pragma: no cover
+                logger.debug("Failed to clean up proxmox session: %s", error)
+
+        close_method = getattr(session, "close", None)
+        if callable(close_method):
+            try:
+                close_method()
+            except Exception as error:  # pragma: no cover
+                logger.debug("Failed to clean up proxmox session: %s", error)
+
+
 ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions_dep)]
 
 

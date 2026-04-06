@@ -95,10 +95,12 @@ def get_settings(netbox_session: "Api | None" = None, use_cache: bool = True) ->
             return _SETTINGS_CACHE
 
     if netbox_session is None:
-        from proxbox_api.session.netbox import get_netbox_session
+        from proxbox_api.app.netbox_session import get_raw_netbox_session
 
         try:
-            netbox_session = get_netbox_session()
+            netbox_session = get_raw_netbox_session()
+            if netbox_session is None:
+                return get_default_settings()
         except Exception as exc:
             logger.debug("Could not get NetBox session for settings: %s", exc)
             return get_default_settings()

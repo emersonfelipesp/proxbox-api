@@ -197,6 +197,15 @@ class ProxmoxSession:
         except Exception as error:
             logger.debug("Failed to close Proxmox session cleanly: %s", error)
 
+    async def aclose(self) -> None:
+        """Async close for request-loop-safe session cleanup."""
+        sdk_session = getattr(self, "session", None)
+        if sdk_session is not None and hasattr(sdk_session, "close"):
+            close_result = sdk_session.close()
+            if inspect.isawaitable(close_result):
+                await close_result
+        self.session = None
+
     #
     # Proxmox Authentication Modes: TOKEN-BASED & PASSWORD-BASED
     #
