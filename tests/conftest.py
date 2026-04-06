@@ -205,3 +205,84 @@ def mock_proxmox_connection_error():
         message="Connection refused",
         detail="Could not connect to Proxmox. Check if the endpoint is reachable.",
     )
+
+
+@pytest.fixture
+async def proxmox_mock_backend():
+    """In-process MockBackend for fast unit/integration tests.
+
+    This fixture provides an in-memory MockBackend that generates
+    responses from the OpenAPI schema without requiring HTTP.
+
+    Usage:
+        async def test_something(proxmox_mock_backend):
+            vms = await proxmox_mock_backend.request("GET", "/api2/json/nodes/pve01/qemu")
+    """
+    import os
+
+    os.environ["PROXMOX_API_MODE"] = "mock"
+
+    from proxmox_openapi.sdk.backends.mock import MockBackend
+
+    backend = MockBackend(schema_version="latest")
+    yield backend
+
+    if hasattr(backend, "_store") and backend._store:
+        try:
+            backend._store.reset()
+        except Exception:
+            pass
+
+
+@pytest.fixture
+async def proxmox_mock_http_published():
+    """HTTP mock using published Docker image (port 8006).
+
+    This fixture connects to the proxmox-mock-published container
+    running on localhost:8006.
+
+    Usage:
+        async def test_something(proxmox_mock_http_published):
+            async with ProxmoxSDK.mock() as sdk:
+                vms = await sdk.nodes.get()
+    """
+    import os
+
+    os.environ["PROXMOX_API_MODE"] = "mock"
+
+    from proxmox_openapi import ProxmoxSDK
+
+    base_url = os.getenv("PROXMOX_MOCK_PUBLISHED_URL", "http://localhost:8006")
+    sdk = ProxmoxSDK(host=base_url, backend="https", verify_ssl=False)
+    yield sdk
+    try:
+        await sdk.close()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+async def proxmox_mock_http_local():
+    """HTTP mock using locally built Docker image (port 8007).
+
+    This fixture connects to the proxmox-mock-local container
+    running on localhost:8007.
+
+    Usage:
+        async def test_something(proxmox_mock_http_local):
+            async with ProxmoxSDK.mock() as sdk:
+                vms = await sdk.nodes.get()
+    """
+    import os
+
+    os.environ["PROXMOX_API_MODE"] = "mock"
+
+    from proxmox_openapi import ProxmoxSDK
+
+    base_url = os.getenv("PROXMOX_MOCK_LOCAL_URL", "http://localhost:8007")
+    sdk = ProxmoxSDK(host=base_url, backend="https", verify_ssl=False)
+    yield sdk
+    try:
+        await sdk.close()
+    except Exception:
+        pass
