@@ -517,7 +517,7 @@ async def create_custom_fields(  # noqa: C901
                 "group_name": "Proxmox",
             },
             {
-                "object_types": ["virtualization.vmmigration"],
+                "object_types": ["virtualization.virtualmachine"],
                 "type": "integer",
                 "name": "proxmox_migration_duration",
                 "label": "Migration Duration",
@@ -530,7 +530,7 @@ async def create_custom_fields(  # noqa: C901
                 "group_name": "Proxmox",
             },
             {
-                "object_types": ["virtualization.vmmigration"],
+                "object_types": ["virtualization.virtualmachine"],
                 "type": "text",
                 "name": "proxmox_migration_type",
                 "label": "Migration Type",
