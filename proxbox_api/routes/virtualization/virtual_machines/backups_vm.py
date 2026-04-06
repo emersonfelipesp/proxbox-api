@@ -32,6 +32,8 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
+_DEFAULT_BACKUP_BATCH_SIZE = max(1, int(os.getenv("PROXBOX_BACKUP_BATCH_SIZE", "5")))
+_DEFAULT_BACKUP_BATCH_DELAY_MS = max(0, int(os.getenv("PROXBOX_BACKUP_BATCH_DELAY_MS", "200")))
 
 _BACKUP_SUBTYPE_ALIASES: dict[str, str] = {
     "ct": "lxc",
@@ -226,23 +228,50 @@ async def create_netbox_backups(
         return None
 
 
-async def process_backups_batch(backup_tasks: list, batch_size: int = 10) -> tuple[list, int]:
+async def process_backups_batch(
+    backup_tasks: list,
+    batch_size: int = 10,
+    delay_ms: int = 200,
+) -> tuple[list, int]:
     """
     Process a list of backup tasks in batches to avoid overwhelming the API.
+
+    Args:
+        backup_tasks: List of async coroutine tasks to execute
+        batch_size: Number of tasks to execute concurrently per batch (default: 10)
+        delay_ms: Milliseconds to wait between batches (default: 200ms)
 
     Returns:
         (successful_reconcile_results, failure_count) where failures are exceptions from gather.
     """
     results: list = []
     failures = 0
-    for i in range(0, len(backup_tasks), batch_size):
+    total_batches = (len(backup_tasks) + batch_size - 1) // batch_size
+
+    for batch_idx, i in enumerate(range(0, len(backup_tasks), batch_size), start=1):
         batch = backup_tasks[i : i + batch_size]
         batch_results = await asyncio.gather(*batch, return_exceptions=True)
+
         for r in batch_results:
             if isinstance(r, Exception):
                 failures += 1
             elif r is not None:
                 results.append(r)
+
+        # Log progress every 10 batches to avoid log spam
+        if batch_idx % 10 == 0 or batch_idx == total_batches:
+            logger.info(
+                "Backup sync progress: batch %d/%d (%d items processed, %d failures)",
+                batch_idx,
+                total_batches,
+                len(results),
+                failures,
+            )
+
+        # Delay between batches to allow NetBox DB connections to release
+        if i + batch_size < len(backup_tasks) and delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000.0)
+
     return results, failures
 
 
@@ -491,7 +520,11 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 }
             )
 
-        results, failure_count = await process_backups_batch(all_backup_tasks)
+        results, failure_count = await process_backups_batch(
+            all_backup_tasks,
+            batch_size=_DEFAULT_BACKUP_BATCH_SIZE,
+            delay_ms=_DEFAULT_BACKUP_BATCH_DELAY_MS,
+        )
         if failure_count:
             logger.warning("Backup batch reported %s task error(s)", failure_count)
 

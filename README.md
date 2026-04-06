@@ -181,6 +181,31 @@ uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
 
 Cache metrics are available at `GET /cache` and `GET /cache/metrics/prometheus`.
 
+### Backup Sync Throttling (optional)
+
+Control backup synchronization batch size and delay to prevent overwhelming NetBox's PostgreSQL connection pool:
+
+```bash
+# Batch size for backup sync (default 5, was 10 before fix)
+export PROXBOX_BACKUP_BATCH_SIZE=5
+
+# Delay between batches in milliseconds (default 200ms)
+export PROXBOX_BACKUP_BATCH_DELAY_MS=200
+
+uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+**Why adjust these?**
+- **Smaller batch size (3-5)**: Use when NetBox has limited PostgreSQL connections or many concurrent users
+- **Larger batch size (10-20)**: Safe if NetBox has a large PostgreSQL pool (50+ connections) and dedicated hardware
+- **Longer delay (500-1000ms)**: Helps when "database unavailable" errors appear during full sync
+- **Shorter delay (0-100ms)**: Faster sync when NetBox is lightly loaded
+
+**Symptoms of incorrect tuning:**
+- HTTP 500 "database unavailable" during backup/VM sync → decrease batch size, increase delay
+- HTTP 502 "Response ended prematurely" → decrease batch size, increase delay
+- Slow sync performance on powerful hardware → increase batch size, decrease delay
+
 ### Alternative: pip editable install
 
 ```
