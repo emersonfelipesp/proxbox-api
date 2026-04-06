@@ -94,7 +94,10 @@ def _request_schema_without_path_params(
 def _render_proxmox_path(path_template: str, path_values: dict[str, object]) -> str:
     rendered = path_template
     for name, value in path_values.items():
-        rendered = rendered.replace(f"{{{name}}}", str(value))
+        str_value = str(value)
+        if ".." in str_value or str_value.startswith("/") or str_value.startswith("\\"):
+            raise ValueError(f"Invalid path parameter value for {name}: {str_value!r}")
+        rendered = rendered.replace(f"{{{name}}}", str_value)
     return rendered
 
 

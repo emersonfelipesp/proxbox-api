@@ -24,8 +24,9 @@ websocket_router = APIRouter()
 def _verify_ws_api_key(api_key: str | None) -> bool:
     """Verify WebSocket API key against configured key."""
     raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+    dev_mode = os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
     if not raw_key:
-        return True
+        return dev_mode
     if not api_key:
         return False
     stored_hash = hashlib.sha256(raw_key.encode()).hexdigest()
@@ -36,8 +37,12 @@ def _verify_ws_api_key(api_key: str | None) -> bool:
 async def _authenticate_websocket(websocket: WebSocket, api_key: str | None) -> bool:
     """Authenticate a WebSocket connection. Returns True if authenticated."""
     raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+    dev_mode = os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
     if not raw_key:
-        return True
+        if dev_mode:
+            return True
+        await websocket.close(code=4001, reason="API key not configured")
+        return False
     if not _verify_ws_api_key(api_key):
         await websocket.close(code=4001, reason="Invalid or missing API key")
         return False
@@ -47,6 +52,11 @@ async def _authenticate_websocket(websocket: WebSocket, api_key: str | None) -> 
 @websocket_router.websocket("/")
 async def base_websocket(websocket: WebSocket) -> None:
     count = 0
+    api_key = websocket.query_params.get("api_key")
+
+    if not await _authenticate_websocket(websocket, api_key):
+        logger.warning("WebSocket / auth failed")
+        return
 
     try:
         await websocket.accept()
