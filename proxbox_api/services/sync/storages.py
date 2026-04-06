@@ -7,11 +7,13 @@ import asyncio
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
+from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
 from proxbox_api.services.proxmox_helpers import (
     dump_models,
     get_storage_config,
     get_storage_list,
 )
+from proxbox_api.utils.streaming import WebSocketSSEBridge
 
 
 async def create_storages(  # noqa: C901
@@ -45,6 +47,9 @@ async def create_storages(  # noqa: C901
         return synced
 
     fetch_sem = asyncio.Semaphore(max(1, int(fetch_concurrency)))
+    bridge: WebSocketSSEBridge | None = (
+        websocket if isinstance(websocket, WebSocketSSEBridge) else None
+    )
 
     # Pre-fetch all clusters from NetBox to build a name -> id mapping
     cluster_id_map: dict[str, int] = {}
@@ -116,10 +121,52 @@ async def create_storages(  # noqa: C901
                         config.update(fetched_config)
             unique_payloads[(cluster_name, storage_name)] = config
 
+    if bridge:
+        discovery_items: list[dict[str, object]] = []
+        for (cluster_name, storage_name), config in unique_payloads.items():
+            discovery_items.append(
+                {
+                    "name": storage_name,
+                    "type": "storage",
+                    "cluster": cluster_name,
+                    "node": str(config.get("nodes") or ""),
+                }
+            )
+        await bridge.emit_discovery(
+            phase="storage",
+            items=discovery_items,
+            message=f"Discovered {len(discovery_items)} storage item(s) to synchronize",
+            metadata={"fetch_concurrency": int(fetch_concurrency)},
+        )
+
+    synced_count = 0
+    failed_count = 0
+    total_items = len(unique_payloads)
+    processed_count = 0
+
     for (cluster_name, storage_name), config in unique_payloads.items():
+        processed_count += 1
         cluster_id = cluster_id_map.get(cluster_name)
         if cluster_id is None:
             logger.debug("Skipping storages for unknown NetBox cluster '%s'", cluster_name)
+            if bridge:
+                await bridge.emit_item_progress(
+                    phase="storage",
+                    item={
+                        "name": storage_name,
+                        "type": "storage",
+                        "cluster": cluster_name,
+                    },
+                    operation=ItemOperation.SKIPPED,
+                    status="skipped",
+                    message=(
+                        f"Skipped storage '{cluster_name}/{storage_name}' "
+                        "because cluster was not found in NetBox"
+                    ),
+                    progress_current=processed_count,
+                    progress_total=total_items,
+                    warning="Cluster not found in NetBox",
+                )
             continue
 
         payload = {
@@ -133,37 +180,104 @@ async def create_storages(  # noqa: C901
             "enabled": not bool(config.get("disable")),
             "tags": tag_refs,
         }
-        record = await rest_reconcile_async(
-            nb,
-            "/api/plugins/proxbox/storage/",
-            lookup={"cluster": cluster_id, "name": storage_name},
-            payload=payload,
-            schema=NetBoxStorageSyncState,
-            current_normalizer=lambda item: {
-                "cluster": item.get("cluster", {}).get("id")
-                if isinstance(item.get("cluster"), dict)
-                else item.get("cluster"),
-                "name": item.get("name"),
-                "storage_type": item.get("storage_type"),
-                "content": item.get("content"),
-                "path": item.get("path"),
-                "nodes": item.get("nodes"),
-                "shared": item.get("shared"),
-                "enabled": item.get("enabled"),
-                "backups": item.get("backups"),
-                "tags": item.get("tags"),
-            },
-        )
-        data = record.serialize()
-        synced.append(data)
-        if use_websocket and websocket:
-            await websocket.send_json(
-                {
-                    "step": "storage",
-                    "status": "synced",
-                    "message": f"Synced storage {cluster_name}/{storage_name}",
-                    "result": {"id": data.get("id"), "name": storage_name},
-                }
+        try:
+            record = await rest_reconcile_async(
+                nb,
+                "/api/plugins/proxbox/storage/",
+                lookup={"cluster": cluster_id, "name": storage_name},
+                payload=payload,
+                schema=NetBoxStorageSyncState,
+                current_normalizer=lambda item: {
+                    "cluster": item.get("cluster", {}).get("id")
+                    if isinstance(item.get("cluster"), dict)
+                    else item.get("cluster"),
+                    "name": item.get("name"),
+                    "storage_type": item.get("storage_type"),
+                    "content": item.get("content"),
+                    "path": item.get("path"),
+                    "nodes": item.get("nodes"),
+                    "shared": item.get("shared"),
+                    "enabled": item.get("enabled"),
+                    "backups": item.get("backups"),
+                    "tags": item.get("tags"),
+                },
             )
+            data = record.serialize()
+            synced.append(data)
+            synced_count += 1
+
+            if bridge:
+                await bridge.emit_item_progress(
+                    phase="storage",
+                    item={
+                        "name": storage_name,
+                        "type": "storage",
+                        "cluster": cluster_name,
+                        "netbox_id": data.get("id"),
+                        "netbox_url": data.get("url") or data.get("display_url"),
+                    },
+                    operation=ItemOperation.UPDATED,
+                    status="completed",
+                    message=f"Synced storage '{cluster_name}/{storage_name}'",
+                    progress_current=processed_count,
+                    progress_total=total_items,
+                )
+            elif use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "object": "storage",
+                        "type": "sync",
+                        "data": {
+                            "rowid": f"{cluster_name}/{storage_name}",
+                            "name": storage_name,
+                            "completed": True,
+                            "status": "synced",
+                            "message": f"Synced storage {cluster_name}/{storage_name}",
+                            "result": {"id": data.get("id"), "name": storage_name},
+                        },
+                    }
+                )
+        except Exception as error:
+            failed_count += 1
+            if bridge:
+                await bridge.emit_error_detail(
+                    message=f"Failed to sync storage '{cluster_name}/{storage_name}'",
+                    category=ErrorCategory.INTERNAL,
+                    phase="storage",
+                    item={
+                        "name": storage_name,
+                        "type": "storage",
+                        "cluster": cluster_name,
+                    },
+                    detail=str(error),
+                    suggestion="Check NetBox API and storage payload compatibility",
+                )
+                await bridge.emit_item_progress(
+                    phase="storage",
+                    item={
+                        "name": storage_name,
+                        "type": "storage",
+                        "cluster": cluster_name,
+                    },
+                    operation=ItemOperation.FAILED,
+                    status="failed",
+                    message=f"Failed to sync storage '{cluster_name}/{storage_name}'",
+                    progress_current=processed_count,
+                    progress_total=total_items,
+                    error=str(error),
+                )
+            raise
+
+    if bridge:
+        await bridge.emit_phase_summary(
+            phase="storage",
+            created=0,
+            updated=synced_count,
+            failed=failed_count,
+            skipped=max(0, total_items - synced_count - failed_count),
+            message=(
+                f"Storage synchronization completed: {synced_count} synced, {failed_count} failed"
+            ),
+        )
 
     return synced
