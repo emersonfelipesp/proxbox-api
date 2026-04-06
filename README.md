@@ -40,55 +40,86 @@ uv run mkdocs serve
 
 ## Using docker (recommended)
 
-The image is built from this repository with **uv** and **`uv.lock`** (multi-stage Dockerfile): dependencies install in a builder stage, then only `.venv` and `proxbox_api/` are copied into the runtime image.
+All images are **Alpine-based** (smaller footprint), built from this repository with **uv** and **`uv.lock`** in a multi-stage Dockerfile. Three variants are published to Docker Hub:
 
-**Reverse proxy:** both the default and mkcert images run **[nginx](https://nginx.org/)** in front of the app. **nginx** listens on **`PORT`** (default **8000**); **uvicorn** listens only on **`127.0.0.1:8001`** inside the container. **[supervisord](http://supervisord.org/)** keeps both processes running. Map your host port to **`PORT`** (for example `-p 8800:8000`). The bundled nginx config turns **`proxy_buffering`** off (and disables **gzip** for that location) so **chunked and streaming responses** (including SSE) are forwarded without being fully buffered first.
+| Variant | Tags | Description |
+|---------|------|-------------|
+| **Raw** (default) | `latest`, `<version>` | Pure uvicorn, HTTP only. Smallest image. |
+| **Nginx** | `latest-nginx`, `<version>-nginx` | nginx terminates HTTPS via mkcert; proxies to uvicorn. |
+| **Granian** | `latest-granian`, `<version>-granian` | [Granian](https://github.com/emmett-framework/granian) (Rust ASGI server) with native TLS via mkcert. No nginx. |
 
-### Build from source (this repo)
+> **Upgrade note:** before v0.0.7, `latest` was the nginx+HTTP image. It is now the raw uvicorn image. Pull `latest-nginx` for the previous behavior.
+
+### Raw image (default)
+
+Plain uvicorn on HTTP — the simplest option for local dev or when you put your own proxy in front.
 
 ```bash
-docker build -t proxbox-api:local .
-docker run -d -p 8000:8000 --name proxbox-api proxbox-api:local
-```
-
-### Pull the docker image
-
-```
 docker pull emersonfelipesp/proxbox-api:latest
-```
-
-### Run the container
-```
 docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest
 ```
 
-### HTTPS image (mkcert)
-
-There is a second image variant where **nginx terminates HTTPS** using certificates from [mkcert](https://github.com/FiloSottile/mkcert) and still proxies to **uvicorn** on `127.0.0.1:8001`. It is published next to the default image:
-
-- `emersonfelipesp/proxbox-api:<version>-mkcert` (for example `0.0.4-mkcert`)
-- `emersonfelipesp/proxbox-api:latest-mkcert`
-
-**Defaults:** the certificate always includes **`localhost`** and **`127.0.0.1`**. You can add more names or IPs with **`MKCERT_EXTRA_NAMES`** (commas and/or spaces), for example `proxbox.lan,10.0.0.5`.
-
-**Optional:** set **`CAROOT`** to a mounted directory so the same local CA is reused across container restarts (then install that root CA on your workstation if you want the browser to trust the cert).
+Build from source:
 
 ```bash
-docker pull emersonfelipesp/proxbox-api:latest-mkcert
+docker build -t proxbox-api:raw .
+docker run -d -p 8000:8000 proxbox-api:raw
+```
 
+### Nginx image (nginx + mkcert HTTPS + uvicorn)
+
+**nginx** terminates HTTPS on `PORT` (default **8000**) using certificates from [mkcert](https://github.com/FiloSottile/mkcert) and proxies to **uvicorn** on `127.0.0.1:8001`. **supervisord** manages both processes. The nginx config disables proxy buffering so chunked / SSE responses flow through unmodified.
+
+```bash
+docker pull emersonfelipesp/proxbox-api:latest-nginx
+docker run -d -p 8443:8000 --name proxbox-api-nginx \
+  emersonfelipesp/proxbox-api:latest-nginx
+```
+
+Build from source:
+
+```bash
+docker build --target nginx -t proxbox-api:nginx .
+docker run -d -p 8443:8000 proxbox-api:nginx
+```
+
+### Granian image (granian + mkcert HTTPS)
+
+[Granian](https://github.com/emmett-framework/granian) is a Rust-based ASGI server with native HTTP/2, WebSocket, and TLS support. This variant eliminates nginx and supervisord — a single granian process handles everything.
+
+```bash
+docker pull emersonfelipesp/proxbox-api:latest-granian
+docker run -d -p 8443:8000 --name proxbox-api-granian \
+  emersonfelipesp/proxbox-api:latest-granian
+```
+
+Build from source:
+
+```bash
+docker build --target granian -t proxbox-api:granian .
+docker run -d -p 8443:8000 proxbox-api:granian
+```
+
+### mkcert environment variables (nginx and granian images)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | Port the server listens on |
+| `MKCERT_CERT_DIR` | `/certs` | Directory where certs are stored |
+| `MKCERT_EXTRA_NAMES` | — | Extra SANs (commas or spaces), e.g. `proxbox.lan,10.0.0.5` |
+| `CAROOT` | — | Mount a volume here to persist the local CA across container restarts |
+
+```bash
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
-  emersonfelipesp/proxbox-api:latest-mkcert
+  emersonfelipesp/proxbox-api:latest-nginx
 ```
 
-Build the mkcert target from this repository:
+To run a shell instead of starting the server, pass a command (the entrypoint delegates to it):
 
 ```bash
-docker build --target mkcert -t proxbox-api:local-mkcert .
-docker run -d -p 8443:8000 proxbox-api:local-mkcert
+docker run --rm emersonfelipesp/proxbox-api:latest-nginx sh
 ```
-
-To run a shell or tests instead of starting nginx+uvicorn, pass a command (the entrypoint delegates to it), for example: `docker run --rm … emersonfelipesp/proxbox-api:latest-mkcert sh -c "mkcert -help"`.
 
 ## Using git repository
 

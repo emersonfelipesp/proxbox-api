@@ -7,7 +7,7 @@ on:
 
 jobs:
   verify-image:
-    name: verify Docker image on release
+    name: verify Docker images on release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -19,8 +19,10 @@ jobs:
           TAG="${REL#v}"
           docker pull emersonfelipesp/proxbox-api:"$TAG"
           docker pull emersonfelipesp/proxbox-api:latest
-          docker pull emersonfelipesp/proxbox-api:"${TAG}-mkcert"
-          docker pull emersonfelipesp/proxbox-api:latest-mkcert
+          docker pull emersonfelipesp/proxbox-api:"${TAG}-nginx"
+          docker pull emersonfelipesp/proxbox-api:latest-nginx
+          docker pull emersonfelipesp/proxbox-api:"${TAG}-granian"
+          docker pull emersonfelipesp/proxbox-api:latest-granian
 
       - name: Smoke-test published startup
         run: |
@@ -28,38 +30,59 @@ jobs:
           REL="${{ github.event.release.tag_name }}"
           TAG="${REL#v}"
 
-          docker rm -f proxbox-release-http 2>/dev/null || true
-          docker run -d --name proxbox-release-http \
+          # raw (HTTP)
+          docker rm -f proxbox-release-raw 2>/dev/null || true
+          docker run -d --name proxbox-release-raw \
             -p 127.0.0.1:18080:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
             emersonfelipesp/proxbox-api:"$TAG"
           for i in $(seq 1 40); do
             if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then
-              docker rm -f proxbox-release-http
+              docker rm -f proxbox-release-raw
               break
             fi
             sleep 2
             if [ "$i" -eq 40 ]; then
-              docker logs proxbox-release-http
-              docker rm -f proxbox-release-http
+              docker logs proxbox-release-raw
+              docker rm -f proxbox-release-raw
               exit 1
             fi
           done
 
-          docker rm -f proxbox-release-https 2>/dev/null || true
-          docker run -d --name proxbox-release-https \
+          # nginx (HTTPS)
+          docker rm -f proxbox-release-nginx 2>/dev/null || true
+          docker run -d --name proxbox-release-nginx \
             -p 127.0.0.1:18443:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
-            emersonfelipesp/proxbox-api:"${TAG}-mkcert"
+            emersonfelipesp/proxbox-api:"${TAG}-nginx"
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then
-              docker rm -f proxbox-release-https
+              docker rm -f proxbox-release-nginx
               break
             fi
             sleep 2
             if [ "$i" -eq 40 ]; then
-              docker logs proxbox-release-https
-              docker rm -f proxbox-release-https
+              docker logs proxbox-release-nginx
+              docker rm -f proxbox-release-nginx
+              exit 1
+            fi
+          done
+
+          # granian (HTTPS)
+          docker rm -f proxbox-release-granian 2>/dev/null || true
+          docker run -d --name proxbox-release-granian \
+            -p 127.0.0.1:18444:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            emersonfelipesp/proxbox-api:"${TAG}-granian"
+          for i in $(seq 1 40); do
+            if curl -kfsS --max-time 5 https://127.0.0.1:18444/ >/dev/null 2>&1; then
+              docker rm -f proxbox-release-granian
+              break
+            fi
+            sleep 2
+            if [ "$i" -eq 40 ]; then
+              docker logs proxbox-release-granian
+              docker rm -f proxbox-release-granian
               exit 1
             fi
           done
