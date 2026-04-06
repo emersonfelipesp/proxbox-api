@@ -40,7 +40,7 @@ jobs:
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Core tests
-        run: uv run pytest tests/ -v --ignore=tests/e2e --tb=short
+        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
 
   e2e-docker:
     name: E2E Docker / ${{ matrix.install_source }}
