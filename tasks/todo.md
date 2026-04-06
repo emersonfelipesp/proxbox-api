@@ -95,3 +95,17 @@
 	- `uv run pytest tests/test_vm_sync_reconciliation_queue.py` passed (2/2).
 	- `uv run pytest tests/test_qemu_guest_agent_sync.py` passed (12/12).
 	- `uv run python -m compileall proxbox_api/routes/virtualization/virtual_machines/sync_vm.py tests/test_vm_sync_reconciliation_queue.py` passed.
+
+## E2E NetBox/Proxbox Transport Matrix
+
+- [x] Replace E2E install-source matrix with transport matrix that validates protocol-crossed scenarios.
+- [x] Add NetBox transport modes: `http_manage`, `https_nginx`, and `https_granian`.
+- [x] Add runner CA trust installation for NetBox HTTPS modes and keep TLS verification enabled.
+- [x] Add Proxbox backend transport modes: `http_raw`, `https_nginx`, and `https_granian` as matrix combinations.
+- [x] Add explicit E2E preflight check where Proxbox reaches NetBox using the matrix-selected protocol and `verify_ssl` policy.
+
+## Review
+
+- Updated `.github/workflows/ci.yml` E2E job to run transport-focused matrix coverage instead of install-source variants.
+- NetBox HTTPS is validated via both nginx TLS termination and granian TLS-serving modes with runner trust store updated from generated CA.
+- Proxbox backend is now exercised in both HTTP and HTTPS image variants while still running repository E2E pytest suite against the selected NetBox transport URL.
