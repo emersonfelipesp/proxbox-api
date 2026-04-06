@@ -157,7 +157,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra e2e --group dev
 
-      - name: "E2E — published image for current commit (nginx + uvicorn, HTTP)"
+      - name: "E2E — published image for current commit (raw uvicorn, HTTP)"
         run: |
           set -eux
           IMAGE_REF="emersonfelipesp/proxbox-api:sha-${{ github.sha }}"
@@ -200,10 +200,10 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra e2e --group dev
 
-      - name: "E2E — published image for current commit (nginx + HTTPS + uvicorn)"
+      - name: "E2E — published image for current commit (nginx + mkcert HTTPS + uvicorn)"
         run: |
           set -eux
-          IMAGE_REF="emersonfelipesp/proxbox-api:sha-${{ github.sha }}-mkcert"
+          IMAGE_REF="emersonfelipesp/proxbox-api:sha-${{ github.sha }}-nginx"
           docker pull "$IMAGE_REF"
           docker rm -f proxbox-e2e-https 2>/dev/null || true
           docker run -d --name proxbox-e2e-https \
@@ -219,3 +219,47 @@ jobs:
           export PROXBOX_IMAGE_E2E_TLS_INSECURE=1
           uv run pytest tests/e2e/ -m image_http --tb=short -v
           docker rm -f proxbox-e2e-https
+
+  e2e-granian:
+    runs-on: ubuntu-latest
+    needs: [test, docker-images]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      needs.docker-images.result == 'success'
+    env:
+      PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra e2e --group dev
+
+      - name: "E2E — published image for current commit (granian + mkcert HTTPS)"
+        run: |
+          set -eux
+          IMAGE_REF="emersonfelipesp/proxbox-api:sha-${{ github.sha }}-granian"
+          docker pull "$IMAGE_REF"
+          docker rm -f proxbox-e2e-granian 2>/dev/null || true
+          docker run -d --name proxbox-e2e-granian \
+            -p 127.0.0.1:18444:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            "$IMAGE_REF"
+          for i in $(seq 1 40); do
+            if curl -kfsS --max-time 5 https://127.0.0.1:18444/ >/dev/null 2>&1; then break; fi
+            sleep 2
+            if [ "$i" -eq 40 ]; then echo "timeout granian"; docker logs proxbox-e2e-granian; exit 1; fi
+          done
+          export PROXBOX_IMAGE_E2E_BASE_URL=https://127.0.0.1:18444
+          export PROXBOX_IMAGE_E2E_TLS_INSECURE=1
+          uv run pytest tests/e2e/ -m image_http --tb=short -v
+          docker rm -f proxbox-e2e-granian
