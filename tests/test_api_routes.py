@@ -412,7 +412,9 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session):
     )
     assert updated.name == "netbox-primary-updated"
 
-    assert get_netbox_endpoint(endpoint_id, db_session).token == "token-2"
+    retrieved = get_netbox_endpoint(endpoint_id, db_session)
+    assert retrieved.name == "netbox-primary-updated"
+    assert not hasattr(retrieved, "token") or retrieved.token is None
     assert delete_netbox_endpoint(endpoint_id, db_session) == {
         "message": "NetBox Endpoint deleted."
     }
@@ -469,8 +471,8 @@ def test_netbox_endpoint_accepts_v2_token(db_session):
         db_session,
     )
     assert created.token_version == "v2"
-    assert created.token_key == "myid"
-    assert created.token == "secretpart"
+    assert not hasattr(created, "token_key") or created.token_key is None
+    assert not hasattr(created, "token") or created.token is None
 
 
 def test_netbox_status_and_openapi_routes_are_mocked(client_with_fake_netbox):

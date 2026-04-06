@@ -19,12 +19,19 @@ from proxbox_api.session.proxmox_core import ProxmoxSession
 
 async def proxmox_sessions(  # noqa: C901
     database_session: DatabaseSessionDep,
-    source: str = "database",
+    source: Annotated[
+        str,
+        Query(
+            title="Proxmox Endpoint Source",
+            description="Source of configured Proxmox endpoints (database or netbox).",
+        ),
+    ] = "database",
     name: Annotated[
         str | None,
         Query(
             title="Proxmox Name",
             description="Name of Proxmox Cluster or Proxmox Node (if standalone).",
+            max_length=255,
         ),
     ] = None,
     domain: Annotated[
@@ -32,6 +39,7 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox Domain",
             description="Domain of Proxmox Cluster or Proxmox Node (if standalone).",
+            max_length=255,
         ),
     ] = None,
     ip_address: Annotated[
@@ -39,6 +47,7 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox IP Address",
             description="IP Address of Proxmox Cluster or Proxmox Node (if standalone).",
+            max_length=45,
         ),
     ] = None,
     port: Annotated[
@@ -46,6 +55,8 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox HTTP Port",
             description="HTTP Port of Proxmox Cluster or Proxmox Node (if standalone).",
+            ge=1,
+            le=65535,
         ),
     ] = 8006,
     endpoint_ids: Annotated[
@@ -53,6 +64,7 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox Endpoint IDs",
             description="Comma-separated list of Proxmox endpoint database IDs to filter by.",
+            max_length=255,
         ),
     ] = None,
 ):
@@ -62,10 +74,27 @@ async def proxmox_sessions(  # noqa: C901
     If 'endpoint_ids' is provided, filter by those database IDs.
     """
 
+    if source not in ("database", "netbox"):
+        raise ProxboxException(
+            message="Invalid source parameter",
+            detail="source must be 'database' or 'netbox'.",
+        )
+
     endpoint_id_list = None
     if endpoint_ids is not None and endpoint_ids.strip():
+        if len(endpoint_ids) > 255:
+            raise ProxboxException(
+                message="Invalid Proxmox endpoint_ids query parameter",
+                detail="endpoint_ids exceeds maximum length.",
+            )
         try:
-            endpoint_id_list = [int(eid.strip()) for eid in endpoint_ids.split(",") if eid.strip()]
+            parts = [p.strip() for p in endpoint_ids.split(",") if p.strip()]
+            if len(parts) > 100:
+                raise ProxboxException(
+                    message="Invalid Proxmox endpoint_ids query parameter",
+                    detail="Too many endpoint IDs specified.",
+                )
+            endpoint_id_list = [int(eid) for eid in parts]
         except ValueError as error:
             raise ProxboxException(
                 message="Invalid Proxmox endpoint_ids query parameter",
@@ -140,11 +169,11 @@ def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
         domain=endpoint.domain,
         http_port=endpoint.port,
         user=endpoint.username,
-        password=endpoint.password,
+        password=endpoint.get_decrypted_password(),
         ssl=endpoint.verify_ssl,
         token=ProxmoxTokenSchema(
             name=endpoint.token_name,
-            value=endpoint.token_value,
+            value=endpoint.get_decrypted_token_value(),
         ),
     )
 

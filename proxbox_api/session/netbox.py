@@ -34,15 +34,20 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
     """Build netbox-sdk Config from a stored NetBox endpoint (v1 or v2 tokens)."""
     tv = (endpoint.token_version or "v1").strip().lower()
     if tv not in ("v1", "v2"):
-        tv = "v1"
-    key = endpoint.token_key.strip() if endpoint.token_key else None
+        raise ProxboxException(
+            message="Invalid token version in stored endpoint",
+            detail=f"Token version must be 'v1' or 'v2', got '{tv}'",
+        )
+    decrypted_key = endpoint.get_decrypted_token_key()
+    key = decrypted_key.strip() if decrypted_key else None
     if tv == "v1":
         key = None
+    decrypted_token = endpoint.get_decrypted_token()
     return Config(
         base_url=endpoint.url,
         token_version=tv,
         token_key=key,
-        token_secret=endpoint.token,
+        token_secret=decrypted_token,
         timeout=_resolve_netbox_timeout(),
         ssl_verify=endpoint.verify_ssl,
     )

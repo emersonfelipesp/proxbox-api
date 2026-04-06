@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
+
+os.environ.setdefault("PROXBOX_SSRF_PROTECTION", "false")
 
 from proxbox_api.database import get_session
 from proxbox_api.main import app

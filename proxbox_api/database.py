@@ -9,10 +9,8 @@ from fastapi import Depends
 from sqlalchemy import inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine
 
-# Get the path to the proxbox-api root directory (2 levels up from this file)
-# Current file: proxbox-api/proxbox_api/database.py
-# Root directory: proxbox-api/
-# The database is being created in the root directory of the proxbox-api project.
+from proxbox_api.credentials import decrypt_value, encrypt_value
+
 root_dir = Path(__file__).parent.parent
 sqlite_file_name = root_dir / "database.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
@@ -22,13 +20,13 @@ engine = create_engine(sqlite_url, connect_args=connect_args)
 
 
 class NetBoxEndpoint(SQLModel, table=True):
-    __table_args__ = {"extend_existing": True}  # Add this line to prevent redefinition errors
+    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     ip_address: str = Field(index=True)
     domain: str = Field(index=True)
-    port: int = Field(default=443)  # Default to HTTPS port
+    port: int = Field(default=443)
     token_version: str = Field(default="v1")
     token_key: str | None = Field(default=None)
     token: str = Field()
@@ -36,11 +34,21 @@ class NetBoxEndpoint(SQLModel, table=True):
 
     @property
     def url(self) -> str:
-        """Construct the full URL for the NetBox endpoint."""
-        # Use HTTPS if port is 443 or verify_ssl is True
         protocol = "https" if self.port == 443 or self.verify_ssl else "http"
         host = self.domain if self.domain else self.ip_address.split("/")[0]
         return f"{protocol}://{host}:{self.port}"
+
+    def get_decrypted_token(self) -> str:
+        return decrypt_value(self.token) or ""
+
+    def get_decrypted_token_key(self) -> str | None:
+        return decrypt_value(self.token_key)
+
+    def set_encrypted_token(self, value: str) -> None:
+        self.token = encrypt_value(value) or value
+
+    def set_encrypted_token_key(self, value: str | None) -> None:
+        self.token_key = encrypt_value(value)
 
 
 class ProxmoxEndpoint(SQLModel, table=True):
@@ -65,9 +73,20 @@ class ProxmoxEndpoint(SQLModel, table=True):
     def host(self) -> str:
         return self.domain or self.ip_address
 
+    def get_decrypted_password(self) -> str | None:
+        return decrypt_value(self.password)
+
+    def get_decrypted_token_value(self) -> str | None:
+        return decrypt_value(self.token_value)
+
+    def set_encrypted_password(self, value: str | None) -> None:
+        self.password = encrypt_value(value)
+
+    def set_encrypted_token_value(self, value: str | None) -> None:
+        self.token_value = encrypt_value(value)
+
 
 def _migrate_netbox_endpoint_columns() -> None:
-    """Add token_version / token_key to existing SQLite netboxendpoint rows."""
     table = NetBoxEndpoint.__tablename__
     try:
         insp = inspect(engine)
@@ -95,7 +114,6 @@ def _migrate_netbox_endpoint_columns() -> None:
 
 
 def create_db_and_tables():
-    # Create missing tables without deleting existing data.
     SQLModel.metadata.create_all(engine)
     _migrate_netbox_endpoint_columns()
 
