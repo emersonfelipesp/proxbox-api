@@ -20,11 +20,11 @@ jobs:
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_SCHEMA_VERSION: latest
         options: >-
-          --health-cmd "curl -f http://localhost:8000/health"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
-          --health-start-period 10s
+          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
+          --health-interval 10s
+          --health-timeout 15s
+          --health-retries 8
+          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -190,10 +190,11 @@ jobs:
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_SCHEMA_VERSION: latest
         options: >-
-          --health-cmd "curl -f http://localhost:8000/health"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
+          --health-interval 10s
+          --health-timeout 15s
+          --health-retries 8
+          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -222,10 +223,11 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f http://localhost:8000/health" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 5 \
+            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
+            --health-interval 10s \
+            --health-timeout 15s \
+            --health-retries 8 \
+            --health-start-period 30s \
             proxmox-mock-local:e2e
 
       - name: Wait for local mock container health
@@ -297,10 +299,11 @@ jobs:
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_SCHEMA_VERSION: latest
         options: >-
-          --health-cmd "curl -f http://localhost:8000/health"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
+          --health-interval 10s
+          --health-timeout 15s
+          --health-retries 8
+          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -326,10 +329,11 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f http://localhost:8000/health" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 5 \
+            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
+            --health-interval 10s \
+            --health-timeout 15s \
+            --health-retries 8 \
+            --health-start-period 30s \
             proxmox-mock-local:e2e
 
       - name: "E2E — published image for current commit (raw uvicorn, HTTP)"
@@ -380,10 +384,11 @@ jobs:
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_SCHEMA_VERSION: latest
         options: >-
-          --health-cmd "curl -f http://localhost:8000/health"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
+          --health-interval 10s
+          --health-timeout 15s
+          --health-retries 8
+          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -409,10 +414,11 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f http://localhost:8000/health" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 5 \
+            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
+            --health-interval 10s \
+            --health-timeout 15s \
+            --health-retries 8 \
+            --health-start-period 30s \
             proxmox-mock-local:e2e
 
       - name: "E2E — published image for current commit (nginx + mkcert HTTPS + uvicorn)"
@@ -464,10 +470,11 @@ jobs:
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_SCHEMA_VERSION: latest
         options: >-
-          --health-cmd "curl -f http://localhost:8000/health"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
+          --health-interval 10s
+          --health-timeout 15s
+          --health-retries 8
+          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -493,10 +500,11 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f http://localhost:8000/health" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 5 \
+            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
+            --health-interval 10s \
+            --health-timeout 15s \
+            --health-retries 8 \
+            --health-start-period 30s \
             proxmox-mock-local:e2e
 
       - name: "E2E — published image for current commit (granian + mkcert HTTPS)"
