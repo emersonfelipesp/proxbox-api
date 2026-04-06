@@ -1,114 +1,95 @@
-"""Authentication and authorization middleware for proxbox-api."""
+"""Authentication utilities with database-backed brute-force protection.
+
+Uses bcrypt for secure API key hashing with salt and iterations.
+"""
 
 from __future__ import annotations
 
 import os
-import secrets
-from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, Security
-from fastapi.security import APIKeyHeader
+import bcrypt
+from sqlalchemy.orm import Session
 
-PROXBOX_API_KEY_NAME = "X-Proxbox-API-Key"
+from proxbox_api.database import AuthLockout, engine
 
-_api_key_header = APIKeyHeader(name=PROXBOX_API_KEY_NAME, auto_error=False)
+_LOCKOUT_DURATION = 300
+_MAX_FAILED_ATTEMPTS = 5
 
 
-def get_hashed_api_key() -> str | None:
-    """Get the configured API key hash from environment.
+def _hash_api_key(raw_key: str) -> bytes:
+    return bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12))
 
-    The API key should be set via PROXBOX_API_KEY environment variable.
-    The value is hashed using SHA-256 before storage/comparison.
-    """
+
+def _verify_api_key_bcrypt(provided_key: str, stored_hash: bytes) -> bool:
+    try:
+        return bcrypt.checkpw(provided_key.encode(), stored_hash)
+    except Exception:
+        return False
+
+
+def verify_api_key(provided_key: str | None) -> bool:
     raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
     if not raw_key:
-        return None
-    import hashlib
-
-    return hashlib.sha256(raw_key.encode()).hexdigest()
-
-
-def verify_api_key(unverified_key: str | None) -> bool:
-    """Verify an API key against the configured hash."""
-    if not unverified_key:
         return False
-    stored_hash = get_hashed_api_key()
-    if not stored_hash:
+    if not provided_key:
         return False
-    import hashlib
+    stored_hash_bytes = os.environ.get("PROXBOX_API_KEY_HASH", "").strip()
+    if stored_hash_bytes:
+        try:
+            return _verify_api_key_bcrypt(provided_key, stored_hash_bytes.encode())
+        except Exception:
+            return False
+    stored_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12))
+    os.environ["PROXBOX_API_KEY_HASH"] = stored_hash.decode()
+    return bcrypt.checkpw(provided_key.encode(), stored_hash)
 
-    return secrets.compare_digest(hashlib.sha256(unverified_key.encode()).hexdigest(), stored_hash)
+
+def is_dev_mode() -> bool:
+    return os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
 
 
-async def verify_api_key_dependency(
-    request: Request,
-    api_key: Annotated[str | None, Security(_api_key_header)] = None,
-) -> str:
-    """FastAPI dependency that validates the API key.
+def is_locked_out(ip: str) -> bool:
+    with Session(engine) as session:
+        return AuthLockout.is_locked_out(session, ip, _MAX_FAILED_ATTEMPTS, _LOCKOUT_DURATION)
 
-    Raises HTTPException 401 if:
-    - No API key is configured (authentication is disabled - dev mode)
-    - No API key is provided in the request
-    - The provided API key is invalid
 
-    For development/testing, if PROXBOX_API_KEY is not set, authentication
-    is bypassed. In production, ensure PROXBOX_API_KEY is set.
-    """
-    stored_hash = get_hashed_api_key()
+def record_failed_attempt(ip: str) -> None:
+    with Session(engine) as session:
+        AuthLockout.record_failed_attempt(session, ip)
 
-    if stored_hash is None:
-        return "dev-mode-no-auth"
 
-    if api_key is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing API key. Provide X-Proxbox-API-Key header.",
-        )
+def clear_failed_attempts(ip: str) -> None:
+    with Session(engine) as session:
+        AuthLockout.clear_failed_attempts(session, ip)
+
+
+def _get_attempt_count(ip: str) -> int:
+    with Session(engine) as session:
+        lockout = session.get(AuthLockout, ip)
+        if lockout:
+            return lockout.attempts
+    return 0
+
+
+def check_auth_header(api_key: str | None, client_ip: str) -> tuple[bool, str | None]:
+    dev_mode = is_dev_mode()
+
+    if is_locked_out(client_ip):
+        return False, "Too many failed authentication attempts. Please try again later."
+
+    raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+
+    if not raw_key:
+        if dev_mode:
+            return True, None
+        return False, "API key not configured. Set PROXBOX_API_KEY environment variable."
 
     if not verify_api_key(api_key):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key.",
-        )
+        record_failed_attempt(client_ip)
+        remaining = _MAX_FAILED_ATTEMPTS - _get_attempt_count(client_ip)
+        if remaining > 0:
+            return False, f"Invalid API key. {remaining} attempts remaining."
+        return False, "Invalid or missing API key."
 
-    return api_key
-
-
-ApiKeyDep = Annotated[str, Depends(verify_api_key)]
-
-
-def is_auth_enabled() -> bool:
-    """Check if API authentication is enabled."""
-    return get_hashed_api_key() is not None
-
-
-class AuthenticationChecker:
-    """Dependency that optionally skips auth in development mode."""
-
-    async def __call__(
-        self,
-        request: Request,
-        api_key: Annotated[str | None, Security(_api_key_header)] = None,
-    ) -> str | None:
-        """Validate API key if authentication is enabled."""
-        stored_hash = get_hashed_api_key()
-
-        if stored_hash is None:
-            return None
-
-        if api_key is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Missing API key. Provide X-Proxbox-API-Key header.",
-            )
-
-        if not verify_api_key(api_key):
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid API key.",
-            )
-
-        return api_key
-
-
-OptionalAuthDep = Annotated[str | None, Depends(AuthenticationChecker())]
+    clear_failed_attempts(client_ip)
+    return True, None

@@ -297,8 +297,8 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
     created = create_proxmox_endpoint(
         ProxmoxEndpointCreate(
             name="pve-lab-1",
-            ip_address="10.0.0.10",
-            domain="pve-lab-1.local",
+            ip_address="1.1.1.1",
+            domain="pve-lab-1.example.com",
             port=8006,
             username="root@pam",
             password="supersecret",
@@ -311,8 +311,8 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
     assert created.model_dump() == {
         "id": endpoint_id,
         "name": "pve-lab-1",
-        "ip_address": "10.0.0.10",
-        "domain": "pve-lab-1.local",
+        "ip_address": "1.1.1.1",
+        "domain": "pve-lab-1.example.com",
         "port": 8006,
         "username": "root@pam",
         "verify_ssl": False,
@@ -338,8 +338,8 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
     assert updated.model_dump() == {
         "id": endpoint_id,
         "name": "pve-lab-1-updated",
-        "ip_address": "10.0.0.10",
-        "domain": "pve-lab-1.local",
+        "ip_address": "1.1.1.1",
+        "domain": "pve-lab-1.example.com",
         "port": 8006,
         "username": "root@pam",
         "verify_ssl": True,
@@ -360,7 +360,7 @@ def test_proxmox_endpoint_requires_complete_token_pair(db_session):
         create_proxmox_endpoint(
             ProxmoxEndpointCreate(
                 name="pve-lab-2",
-                ip_address="10.0.0.11",
+                ip_address="1.1.1.2",
                 port=8006,
                 username="root@pam",
                 token_name="sync",
@@ -373,8 +373,8 @@ def test_proxmox_endpoint_requires_complete_token_pair(db_session):
 def test_netbox_endpoint_crud_and_singleton_rule(db_session):
     payload = NetBoxEndpoint(
         name="netbox-primary",
-        ip_address="10.0.0.20",
-        domain="netbox.local",
+        ip_address="1.1.1.3",
+        domain="netbox.example.com",
         port=443,
         token="token-1",
         verify_ssl=True,
@@ -386,7 +386,7 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session):
         create_netbox_endpoint(
             NetBoxEndpoint(
                 name="netbox-secondary",
-                ip_address="10.0.0.21",
+                ip_address="1.1.1.4",
                 domain="netbox2.local",
                 port=443,
                 token="token-2",
@@ -402,8 +402,8 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session):
         endpoint_id,
         NetBoxEndpoint(
             name="netbox-primary-updated",
-            ip_address="10.0.0.20",
-            domain="netbox.local",
+            ip_address="1.1.1.3",
+            domain="netbox.example.com",
             port=443,
             token="token-2",
             verify_ssl=True,
@@ -425,8 +425,8 @@ def test_netbox_endpoint_rejects_v1_without_token(db_session):
         create_netbox_endpoint(
             NetBoxEndpoint(
                 name="netbox-primary",
-                ip_address="10.0.0.20",
-                domain="netbox.local",
+                ip_address="1.1.1.3",
+                domain="netbox.example.com",
                 port=443,
                 token_version="v1",
                 token="",
@@ -444,8 +444,8 @@ def test_netbox_endpoint_rejects_v2_incomplete_token(db_session):
         create_netbox_endpoint(
             NetBoxEndpoint(
                 name="netbox-primary",
-                ip_address="10.0.0.20",
-                domain="netbox.local",
+                ip_address="1.1.1.3",
+                domain="netbox.example.com",
                 port=443,
                 token_version="v2",
                 token_key="myid",
@@ -460,8 +460,8 @@ def test_netbox_endpoint_accepts_v2_token(db_session):
     created = create_netbox_endpoint(
         NetBoxEndpoint(
             name="netbox-v2",
-            ip_address="10.0.0.20",
-            domain="netbox.local",
+            ip_address="1.1.1.3",
+            domain="netbox.example.com",
             port=443,
             token_version="v2",
             token_key="myid",
@@ -849,7 +849,7 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
             "agent": 1,
             "unprivileged": 0,
             "searchdomain": "lab.local",
-            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=1.1.1.3/24",
             "scsi0": "local-lvm:vm-101-disk-0,size=20G",
         },
     )

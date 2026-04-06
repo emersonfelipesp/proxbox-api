@@ -1,12 +1,13 @@
-"""SSRF protection utilities for validating endpoint configurations."""
+"""SSRF protection utilities for validating endpoint configurations.
+
+SSRF protection is ALWAYS ENABLED to prevent Server-Side Request Forgery attacks.
+Do not attempt to disable this protection in production.
+"""
 
 from __future__ import annotations
 
 import ipaddress
-import os
 import re
-
-from proxbox_api.logger import logger
 
 INTERNAL_IP_RANGES = (
     ipaddress.ip_network("10.0.0.0/8"),
@@ -28,22 +29,6 @@ INTERNAL_IP_RANGES = (
 )
 
 
-def _is_ssrf_protection_enabled() -> bool:
-    """Check if SSRF protection is enabled via environment variable.
-
-    Returns True if enabled (default), False if explicitly disabled.
-    Logs a warning when SSRF protection is disabled.
-    """
-    flag = os.environ.get("PROXBOX_SSRF_PROTECTION", "true").lower()
-    enabled = flag in ("true", "1", "yes")
-    if not enabled:
-        logger.warning(
-            "SSRF protection is DISABLED. This is dangerous in production. "
-            "Set PROXBOX_SSRF_PROTECTION=true to enable."
-        )
-    return enabled
-
-
 def is_ip_blocked(ip: str) -> bool:
     """Check if an IP address is in a blocked/internal range."""
     try:
@@ -61,12 +46,8 @@ def validate_endpoint_host(host: str | None) -> tuple[bool, str]:
 
     Returns (is_safe, reason).
 
-    SSRF protection can be disabled via PROXBOX_SSRF_PROTECTION=false
-    environment variable (useful for development/testing with internal IPs).
+    SSRF protection is ALWAYS ENABLED.
     """
-    if not _is_ssrf_protection_enabled():
-        return True, "SSRF protection disabled"
-
     if not host:
         return False, "Host cannot be empty"
 

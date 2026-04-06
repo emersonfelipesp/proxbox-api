@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -84,6 +85,50 @@ class ProxmoxEndpoint(SQLModel, table=True):
 
     def set_encrypted_token_value(self, value: str | None) -> None:
         self.token_value = encrypt_value(value)
+
+
+class AuthLockout(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
+
+    ip_address: str = Field(primary_key=True)
+    attempts: int = Field(default=0)
+    first_attempt_time: float = Field(default=0)
+
+    @staticmethod
+    def is_locked_out(
+        session: Session, ip: str, max_attempts: int = 5, lockout_duration: float = 300
+    ) -> bool:
+        lockout = session.get(AuthLockout, ip)
+        if not lockout:
+            return False
+        if lockout.attempts >= max_attempts:
+            if time.time() - lockout.first_attempt_time < lockout_duration:
+                return True
+            session.delete(lockout)
+            session.commit()
+        return False
+
+    @staticmethod
+    def record_failed_attempt(session: Session, ip: str) -> None:
+        lockout = session.get(AuthLockout, ip)
+        now = time.time()
+        if not lockout:
+            lockout = AuthLockout(ip_address=ip, attempts=1, first_attempt_time=now)
+            session.add(lockout)
+        else:
+            if now - lockout.first_attempt_time > 300:
+                lockout.attempts = 1
+                lockout.first_attempt_time = now
+            else:
+                lockout.attempts += 1
+        session.commit()
+
+    @staticmethod
+    def clear_failed_attempts(session: Session, ip: str) -> None:
+        lockout = session.get(AuthLockout, ip)
+        if lockout:
+            session.delete(lockout)
+            session.commit()
 
 
 def _migrate_netbox_endpoint_columns() -> None:

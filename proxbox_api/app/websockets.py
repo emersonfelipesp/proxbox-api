@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import os
-import secrets
+import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from proxbox_api.app import bootstrap
+from proxbox_api.auth import check_auth_header
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.logger import logger
 from proxbox_api.routes.extras import CreateCustomFieldsDep
@@ -20,47 +19,53 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 websocket_router = APIRouter()
 
-
-def _verify_ws_api_key(api_key: str | None) -> bool:
-    """Verify WebSocket API key against configured key."""
-    raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
-    dev_mode = os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
-    if not raw_key:
-        return dev_mode
-    if not api_key:
-        return False
-    stored_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-    provided_hash = hashlib.sha256(api_key.encode()).hexdigest()
-    return secrets.compare_digest(provided_hash, stored_hash)
+AUTH_MESSAGE_SCHEMA = {"type": "object", "properties": {"api_key": {"type": "string"}}}
 
 
-async def _authenticate_websocket(websocket: WebSocket, api_key: str | None) -> bool:
-    """Authenticate a WebSocket connection. Returns True if authenticated."""
-    raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
-    dev_mode = os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
-    if not raw_key:
-        if dev_mode:
-            return True
-        await websocket.close(code=4001, reason="API key not configured")
-        return False
-    if not _verify_ws_api_key(api_key):
-        await websocket.close(code=4001, reason="Invalid or missing API key")
+async def _do_ws_auth(websocket: WebSocket, api_key: str | None, client_ip: str) -> bool:
+    authorized, error_message = check_auth_header(api_key, client_ip)
+    if not authorized:
+        await websocket.close(code=4001, reason=error_message or "Authentication failed")
         return False
     return True
+
+
+def _get_client_ip(websocket: WebSocket) -> str:
+    forwarded = websocket.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if websocket.client:
+        return websocket.client.host or "unknown"
+    return "unknown"
 
 
 @websocket_router.websocket("/")
 async def base_websocket(websocket: WebSocket) -> None:
     count = 0
-    api_key = websocket.query_params.get("api_key")
-
-    if not await _authenticate_websocket(websocket, api_key):
-        logger.warning("WebSocket / auth failed")
-        return
+    authenticated = False
 
     try:
         await websocket.accept()
     except Exception:  # noqa: BLE001
+        return
+
+    try:
+        try:
+            auth_msg = await websocket.receive_text()
+            auth_data = json.loads(auth_msg)
+            api_key = auth_data.get("api_key")
+        except Exception:  # noqa: BLE001
+            api_key = None
+
+        client_ip = _get_client_ip(websocket)
+
+        if not await _do_ws_auth(websocket, api_key, client_ip):
+            logger.warning("WebSocket / auth failed")
+            return
+
+        authenticated = True
+    except Exception:  # noqa: BLE001
+        logger.exception("Error in WebSocket / auth")
         return
 
     try:
@@ -70,7 +75,7 @@ async def base_websocket(websocket: WebSocket) -> None:
             await asyncio.sleep(2)
 
     except WebSocketDisconnect:
-        logger.info("WebSocket / connection closed")
+        logger.info("WebSocket / connection closed (authenticated: %s)", authenticated)
 
 
 @websocket_router.websocket("/ws/virtual-machines")
@@ -81,20 +86,27 @@ async def websocket_virtual_machines(
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     websocket: WebSocket,
-    api_key: str | None = None,
 ) -> None:
     logger.info("WebSocket /ws/virtual-machines connection attempt")
 
-    if not await _authenticate_websocket(websocket, api_key):
-        logger.warning("WebSocket /ws/virtual-machines auth failed")
-        try:
-            await websocket.close(code=4001, reason="Authentication failed")
-        except Exception:  # noqa: BLE001
-            pass
+    try:
+        await websocket.accept()
+    except Exception:  # noqa: BLE001
         return
 
     try:
-        await websocket.accept()
+        try:
+            auth_msg = await websocket.receive_text()
+            auth_data = json.loads(auth_msg)
+            api_key = auth_data.get("api_key")
+        except Exception:  # noqa: BLE001
+            api_key = None
+
+        client_ip = _get_client_ip(websocket)
+        if not await _do_ws_auth(websocket, api_key, client_ip):
+            logger.warning("WebSocket /ws/virtual-machines auth failed")
+            return
+
         await websocket.send_text("Connected!")
     except Exception:  # noqa: BLE001
         logger.exception("Error while accepting WebSocket /ws/virtual-machines")
@@ -137,7 +149,6 @@ async def websocket_sync_commands(  # noqa: C901
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     websocket: WebSocket,
-    api_key: str | None = None,
 ) -> None:
     connection_open = False
 
@@ -145,33 +156,41 @@ async def websocket_sync_commands(  # noqa: C901
 
     logger.info("WebSocket /ws connection attempt")
 
-    if not await _authenticate_websocket(websocket, api_key):
-        logger.warning("WebSocket /ws auth failed")
+    try:
+        await websocket.accept()
+    except Exception:  # noqa: BLE001
         try:
-            await websocket.close(code=4001, reason="Authentication failed")
+            await websocket.close(code=1011)
         except Exception:  # noqa: BLE001
             pass
         return
 
     try:
-        await websocket.accept()
-        connection_open = True
+        try:
+            auth_msg = await websocket.receive_text()
+            auth_data = json.loads(auth_msg)
+            api_key = auth_data.get("api_key")
+        except Exception:  # noqa: BLE001
+            api_key = None
 
+        client_ip = _get_client_ip(websocket)
+        if not await _do_ws_auth(websocket, api_key, client_ip):
+            logger.warning("WebSocket /ws auth failed")
+            return
+
+        connection_open = True
         await websocket.send_text("Connected!")
+
+        await websocket.send_text("Connected 2!")
     except Exception:  # noqa: BLE001
         logger.exception("Error while accepting WebSocket /ws")
         try:
             await websocket.close(code=1011)
         except Exception as close_err:  # noqa: BLE001
             logger.warning("Error while closing WebSocket after accept failure: %s", close_err)
-
-    if not connection_open:
         return
 
-    try:
-        await websocket.send_text("Connected 2!")
-    except Exception as error:  # noqa: BLE001
-        logger.warning("Could not send secondary WebSocket greeting: %s", error)
+    if not connection_open:
         return
 
     try:

@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
-os.environ.setdefault("PROXBOX_SSRF_PROTECTION", "false")
 os.environ.setdefault("PROXBOX_DEV_MODE", "true")
 
 from proxbox_api.database import get_session
