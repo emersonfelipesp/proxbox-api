@@ -105,6 +105,17 @@ Authentication rules for create and update:
 - Proxmox sessions default to local database endpoint records.
 - Legacy source mode (`source=netbox`) is still supported in Proxmox session dependency behavior.
 
+## Authentication
+
+All API requests (except bootstrap endpoints) require authentication via the `X-Proxbox-API-Key` header. Keys are stored in the SQLite database with bcrypt hashing.
+
+See [Authentication](./authentication.md) for complete documentation on:
+
+- Bootstrap flow for first-time setup
+- Key registration and management
+- Auth-exempt endpoints
+- Brute-force protection
+
 ## Environment Variables
 
 | Variable | Default | Description |
