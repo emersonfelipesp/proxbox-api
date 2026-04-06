@@ -9,7 +9,7 @@ from sqlmodel import select
 from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.settings_client import get_settings
-from proxbox_api.ssrf import validate_endpoint_host
+from proxbox_api.ssrf import clear_endpoint_cache, validate_endpoint_host
 
 router = APIRouter()
 
@@ -90,7 +90,7 @@ def create_proxmox_endpoint(
     if not ip_safe:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid IP address: {ip_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+            detail=f"Invalid IP address: {ip_reason}",
         )
 
     if endpoint.domain:
@@ -98,7 +98,7 @@ def create_proxmox_endpoint(
         if not domain_safe:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid domain: {domain_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+                detail=f"Invalid domain: {domain_reason}",
             )
 
     existing = session.exec(
@@ -117,6 +117,8 @@ def create_proxmox_endpoint(
     session.add(db_endpoint)
     session.commit()
     session.refresh(db_endpoint)
+
+    clear_endpoint_cache()
     return _to_public_endpoint(db_endpoint)
 
 
@@ -211,6 +213,8 @@ def update_proxmox_endpoint(
     session.add(db_endpoint)
     session.commit()
     session.refresh(db_endpoint)
+
+    clear_endpoint_cache()
     return _to_public_endpoint(db_endpoint)
 
 
@@ -222,4 +226,6 @@ def delete_proxmox_endpoint(endpoint_id: int, session: SessionDep) -> dict[str, 
 
     session.delete(endpoint)
     session.commit()
+
+    clear_endpoint_cache()
     return {"message": "Proxmox endpoint deleted."}

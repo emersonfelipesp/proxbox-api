@@ -13,7 +13,7 @@ from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.settings_client import get_settings
-from proxbox_api.ssrf import validate_endpoint_host
+from proxbox_api.ssrf import clear_endpoint_cache, validate_endpoint_host
 
 router = APIRouter()
 
@@ -131,6 +131,7 @@ def create_netbox_endpoint(
     session.add(db_endpoint)
     session.commit()
     session.refresh(db_endpoint)
+    clear_endpoint_cache()
     return NetBoxEndpointResponse.model_validate(db_endpoint)
 
 
@@ -196,6 +197,7 @@ def update_netbox_endpoint(
     session.add(db_netbox)
     session.commit()
     session.refresh(db_netbox)
+    clear_endpoint_cache()
     return NetBoxEndpointResponse.model_validate(db_netbox)
 
 
@@ -206,6 +208,7 @@ def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found.")
     session.delete(netbox_endpoint)
     session.commit()
+    clear_endpoint_cache()
     return {"message": "NetBox Endpoint deleted."}
 
 
