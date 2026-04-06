@@ -28,13 +28,14 @@ chgrp nginx "$CERT_DIR/key.pem" 2>/dev/null || true
 chmod 640 "$CERT_DIR/key.pem" 2>/dev/null || true
 
 PORT="${PORT:-8000}"
-mkdir -p /etc/nginx/conf.d
+NGINX_HTTP_DIR="/etc/nginx/http.d"
+mkdir -p "$NGINX_HTTP_DIR"
 
 CERT_ESC=$(echo "$CERT_DIR/cert.pem" | sed 's/[\/&]/\\&/g')
 KEY_ESC=$(echo "$CERT_DIR/key.pem" | sed 's/[\/&]/\\&/g')
 sed -e "s/__PORT__/${PORT}/g" \
     -e "s|__CERT__|${CERT_ESC}|g" \
     -e "s|__KEY__|${KEY_ESC}|g" \
-  /etc/proxbox/nginx-https.conf.template > /etc/nginx/conf.d/proxbox.conf
+  /etc/proxbox/nginx-https.conf.template > "$NGINX_HTTP_DIR/proxbox.conf"
 
 exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf

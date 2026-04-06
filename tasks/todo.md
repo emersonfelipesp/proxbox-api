@@ -125,4 +125,12 @@
 
 - [x] Fix Proxbox nginx HTTPS template to avoid invalid `map` directive placement in `conf.d` include context.
 - [x] Fix NetBox granian startup import target in CI by using a valid NetBox module path and matching granian interface.
-- [ ] Re-run CI matrix and validate previously failing jobs now pass readiness/startup.
+- [x] Re-run CI matrix and validate previously failing jobs now pass readiness/startup.
+
+## E2E Transport Stabilization (Round 3)
+
+- [x] Fix NetBox TLS certificates in CI to include CA/server key-usage extensions required by Python SSL verification.
+- [x] Fix NetBox HTTPS endpoint host for proxbox-to-netbox checks to use network-reachable container DNS (`netbox-e2e-nginx`) instead of runner localhost.
+- [x] Make preflight `/netbox/status` validation accept both `{"available": true}` and direct NetBox status payloads returned by current proxbox API route.
+- [x] Fix Proxbox nginx entrypoint to write generated config into Alpine nginx include path (`/etc/nginx/http.d/`).
+- [ ] Re-run CI and confirm all 6 transport combinations reach E2E pytest stage.
