@@ -120,3 +120,9 @@
 
 - Expanded E2E matrix in `.github/workflows/ci.yml` from 4 to 6 transport combinations.
 - Added explicit secure symmetric run (`https_granian`/`https_granian`) and insecure symmetric run (`http_manage`/`http_raw`).
+
+## E2E Transport Stabilization (Round 2)
+
+- [x] Fix Proxbox nginx HTTPS template to avoid invalid `map` directive placement in `conf.d` include context.
+- [x] Fix NetBox granian startup import target in CI by using a valid NetBox module path and matching granian interface.
+- [ ] Re-run CI matrix and validate previously failing jobs now pass readiness/startup.
