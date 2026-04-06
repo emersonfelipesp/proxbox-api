@@ -15,11 +15,11 @@ description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi[standard]>=0.135.2",
-    "proxmox-openapi>=0.0.1",
-    "netbox-sdk>=0.0.6",
-    "sqlmodel>=0.0.37",
-    "cryptography>=43.0.0",
+    "fastapi[standard]>=0.135.2,<1.0.0",
+    "proxmox-openapi>=0.0.1,<1.0.0",
+    "netbox-sdk>=0.0.6,<1.0.0",
+    "sqlmodel>=0.0.37,<1.0.0",
+    "cryptography>=43.0.0,<50.0.0",
 ]
 
 [project.optional-dependencies]
