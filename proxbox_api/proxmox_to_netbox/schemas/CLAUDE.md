@@ -26,3 +26,7 @@ That means:
 3. Export the new symbols from `schemas/__init__.py`.
 4. Import the schema in `proxmox_to_netbox/models.py` if the model needs to expose computed properties.
 5. Update `proxmox_to_netbox/CLAUDE.md` to document the new module.
+
+## Related Guides
+
+- Parent: `../CLAUDE.md`
