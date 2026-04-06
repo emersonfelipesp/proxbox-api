@@ -1667,7 +1667,6 @@ docs = [
 ]
 e2e = [
     { name = "httpx" },
-    { name = "playwright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-xdist" },
@@ -1704,7 +1703,6 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7.6" },
     { name = "mkdocs-static-i18n", marker = "extra == 'docs'", specifier = ">=1.3.1" },
     { name = "netbox-sdk", specifier = ">=0.0.6,<1.0.0" },
-    { name = "playwright", marker = "extra == 'e2e'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
     { name = "proxmox-openapi", specifier = ">=0.0.1,<1.0.0" },

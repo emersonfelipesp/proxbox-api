@@ -42,8 +42,7 @@ class TestBackupsSync:
 
     async def test_sync_vm_backups_with_e2e_tag(
         self,
-        require_proxbox_netbox_plugin,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -54,7 +53,7 @@ class TestBackupsSync:
         2. Backup has 'proxbox e2e testing' tag
         3. Backup is linked to correct VM
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster, backups = create_cluster_with_backups(prefix=unique_prefix)
 
@@ -193,8 +192,7 @@ class TestBackupsSync:
 
     async def test_sync_multiple_vm_backups(
         self,
-        require_proxbox_netbox_plugin,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -204,7 +202,7 @@ class TestBackupsSync:
         """
         import asyncio
 
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster, all_backups = create_cluster_with_backups(prefix=unique_prefix)
 

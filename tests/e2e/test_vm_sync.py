@@ -41,7 +41,7 @@ class TestVMSync:
 
     async def test_sync_qemu_vm_with_e2e_tag(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         e2e_shared_proxmox_site,
         unique_prefix,
@@ -54,7 +54,7 @@ class TestVMSync:
         3. VM has correct custom fields
         4. VM is linked to correct cluster and device
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster = create_minimal_cluster(prefix=unique_prefix)
 
@@ -159,7 +159,7 @@ class TestVMSync:
 
     async def test_sync_lxc_container_with_e2e_tag(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         e2e_shared_proxmox_site,
         unique_prefix,
@@ -171,7 +171,7 @@ class TestVMSync:
         2. Container has 'proxbox e2e testing' tag
         3. Container has correct custom fields
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster = create_minimal_cluster(prefix=unique_prefix)
 
@@ -281,7 +281,7 @@ class TestVMSync:
 
     async def test_sync_vm_creates_custom_fields(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         e2e_shared_proxmox_site,
         unique_prefix,
@@ -293,7 +293,7 @@ class TestVMSync:
         - proxmox_start_at_boot reflects onboot config
         - proxmox_unprivileged_container reflects unprivileged config
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster = create_minimal_cluster(prefix=unique_prefix)
 
@@ -403,7 +403,7 @@ class TestVMSync:
     )
     async def test_sync_multiple_vms_parallel(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         e2e_shared_proxmox_site,
         unique_prefix,
@@ -414,7 +414,7 @@ class TestVMSync:
         """
         import asyncio
 
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster = create_minimal_cluster(prefix=unique_prefix)
 

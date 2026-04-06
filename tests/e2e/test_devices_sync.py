@@ -39,7 +39,7 @@ class TestDevicesSync:
 
     async def test_sync_single_node_creates_device_with_e2e_tag(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -50,7 +50,7 @@ class TestDevicesSync:
         2. The device has the 'proxbox e2e testing' tag
         3. All dependent objects also have the e2e tag
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster = create_minimal_cluster(prefix=unique_prefix)
 
@@ -221,7 +221,7 @@ class TestDevicesSync:
 
     async def test_sync_creates_all_dependent_objects_with_e2e_tag(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -235,7 +235,7 @@ class TestDevicesSync:
         - Device type has e2e tag
         - Device role has e2e tag
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster = create_minimal_cluster(prefix=unique_prefix)
 
@@ -375,7 +375,7 @@ class TestDevicesSync:
 
     async def test_idempotent_sync_does_not_duplicate(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -384,7 +384,7 @@ class TestDevicesSync:
         Verifies that the sync is idempotent and updates existing
         objects instead of creating new ones.
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster = create_minimal_cluster(prefix=unique_prefix)
 
@@ -551,7 +551,7 @@ class TestDevicesSync:
 
     async def test_sync_with_multiple_nodes(
         self,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -562,7 +562,7 @@ class TestDevicesSync:
         """
         import asyncio
 
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         clusters = create_multi_cluster(prefix=unique_prefix)
 
