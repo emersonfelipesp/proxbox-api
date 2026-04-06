@@ -89,14 +89,14 @@ jobs:
       - name: "E2E — local workspace vs NetBox demo (MockBackend)"
         env:
           PROXMOX_API_MODE: mock
-        run: uv run pytest tests/e2e/ -m "not image_http and mock_backend" --tb=short -v
+        run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v
 
       - name: "E2E — local workspace vs NetBox demo (HTTP published)"
         env:
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_PUBLISHED_URL: http://localhost:8006
           PROXMOX_MOCK_LOCAL_URL: http://localhost:8007
-        run: uv run pytest tests/e2e/ -m "not image_http and mock_http" --tb=short -v --proxbox-mock-url-published=http://localhost:8006 --proxbox-mock-url-local=http://localhost:8007
+        run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v --proxbox-mock-url-published=http://localhost:8006 --proxbox-mock-url-local=http://localhost:8007
 
       - name: Upload Playwright Report
         if: failure()
