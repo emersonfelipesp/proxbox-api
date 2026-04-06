@@ -122,13 +122,12 @@ jobs:
 
   e2e-http:
     runs-on: ubuntu-latest
-    needs: [test, docker-images]
+    needs: [test]
     if: |
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       !cancelled() &&
-      needs.test.result == 'success' &&
-      needs.docker-images.result == 'success'
+      needs.test.result == 'success'
     env:
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
     steps:
@@ -192,13 +191,12 @@ jobs:
 
   e2e-https:
     runs-on: ubuntu-latest
-    needs: [test, docker-images]
+    needs: [test]
     if: |
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       !cancelled() &&
-      needs.test.result == 'success' &&
-      needs.docker-images.result == 'success'
+      needs.test.result == 'success'
     env:
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
     steps:
@@ -263,13 +261,12 @@ jobs:
 
   e2e-granian:
     runs-on: ubuntu-latest
-    needs: [test, docker-images]
+    needs: [test]
     if: |
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       !cancelled() &&
-      needs.test.result == 'success' &&
-      needs.docker-images.result == 'success'
+      needs.test.result == 'success'
     env:
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
     steps:
