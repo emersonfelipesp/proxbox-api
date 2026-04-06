@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -332,12 +333,18 @@ class _FailingVersionSession:
         self.ip_address = "10.0.0.10"
         self.session = SimpleNamespace(version=_ExplodingVersionResource())
 
+    def close(self):
+        return None
+
 
 class FakeMinimalClusterStatusSession:
     def __init__(self):
         self.name = "lab-cluster"
         self.mode = "cluster"
         self.session = FakeProxmoxAPI("127.0.0.1")
+
+    def close(self):
+        return None
 
 
 @dataclass
@@ -1433,6 +1440,8 @@ def test_proxmox_session_close_uses_resolve_sync(monkeypatch):
     calls = {"resolve_sync": 0, "closed": 0}
 
     def _fake_resolve_sync(value):
+        if inspect.iscoroutine(value):
+            value.close()
         calls["resolve_sync"] += 1
         return None
 
@@ -1525,6 +1534,30 @@ def test_get_raw_netbox_session_closes_database_session(monkeypatch):
 
     assert get_raw_netbox_session() is sentinel
     assert closed["value"] is True
+
+
+def test_get_settings_uses_raw_session_helper(monkeypatch):
+    from proxbox_api.settings_client import get_settings, invalidate_settings_cache
+
+    sentinel = object()
+    called = {"session": None}
+
+    monkeypatch.setattr("proxbox_api.app.netbox_session.get_raw_netbox_session", lambda: sentinel)
+    monkeypatch.setattr(
+        "proxbox_api.settings_client.fetch_settings_from_netbox",
+        lambda session: {"ok": True, "session_is_sentinel": session is sentinel},
+    )
+    monkeypatch.setattr(
+        "proxbox_api.settings_client.get_default_settings",
+        lambda: {"ok": False},
+    )
+
+    invalidate_settings_cache()
+    result = get_settings(netbox_session=None, use_cache=False)
+    called["session"] = result.get("session_is_sentinel")
+
+    assert result["ok"] is True
+    assert called["session"] is True
 
 
 def test_get_node_network_requires_explicit_cluster_for_multi_session():

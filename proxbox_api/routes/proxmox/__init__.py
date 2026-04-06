@@ -23,7 +23,7 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.proxmox_helpers import (
     get_vm_config as get_typed_vm_config,
 )
-from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.session.proxmox import ProxmoxSessionsDep, close_proxmox_sessions
 
 router = APIRouter()
 
@@ -87,44 +87,47 @@ async def proxmox_version(pxs: ProxmoxSessionsDep):
     """
     json_response = []
 
-    for px in pxs:
-        if not getattr(px, "CONNECTED", False):
-            continue
+    try:
+        for px in pxs:
+            if not getattr(px, "CONNECTED", False):
+                continue
 
-        session = getattr(px, "session", None)
-        if session is None:
-            raise ProxboxException(
-                message="Invalid Proxmox session state",
-                detail="Connected session is missing SDK client instance.",
+            session = getattr(px, "session", None)
+            if session is None:
+                raise ProxboxException(
+                    message="Invalid Proxmox session state",
+                    detail="Connected session is missing SDK client instance.",
+                )
+
+            try:
+                version = await resolve_async(session.version.get())
+                json_response.append({getattr(px, "name", None): version})
+            except ResourceException as error:
+                target = getattr(px, "domain", None) or getattr(px, "ip_address", None)
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Failed to query Proxmox version "
+                        f"for endpoint '{getattr(px, 'name', 'unknown')}' ({target}). "
+                        f"Upstream responded with HTTP {error.status_code} {error.status_message}."
+                    ),
+                ) from error
+            except Exception as error:
+                raise ProxboxException(
+                    message="Error retrieving Proxmox version",
+                    detail="Unexpected error while querying upstream Proxmox API.",
+                    python_exception=str(error),
+                ) from error
+
+        if not json_response:
+            raise HTTPException(
+                status_code=404,
+                detail="No Proxmox active connections found, not able to retrieve version information",
             )
 
-        try:
-            version = await resolve_async(session.version.get())
-            json_response.append({getattr(px, "name", None): version})
-        except ResourceException as error:
-            target = getattr(px, "domain", None) or getattr(px, "ip_address", None)
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "Failed to query Proxmox version "
-                    f"for endpoint '{getattr(px, 'name', 'unknown')}' ({target}). "
-                    f"Upstream responded with HTTP {error.status_code} {error.status_message}."
-                ),
-            ) from error
-        except Exception as error:
-            raise ProxboxException(
-                message="Error retrieving Proxmox version",
-                detail="Unexpected error while querying upstream Proxmox API.",
-                python_exception=str(error),
-            ) from error
-
-    if not json_response:
-        raise HTTPException(
-            status_code=404,
-            detail="No Proxmox active connections found, not able to retrieve version information",
-        )
-
-    return json_response
+        return json_response
+    finally:
+        await close_proxmox_sessions(pxs)
 
 
 @router.get("/")
@@ -182,35 +185,38 @@ async def proxmox(pxs: ProxmoxSessionsDep):
 
         return endpoint_list
 
-    for px in pxs:
-        nodes = await resolve_async(px.session.nodes.get())
-        pools = await resolve_async(px.session.pools.get())
-        storage = await resolve_async(px.session.storage.get())
-        version = await resolve_async(px.session.version.get())
-        json_response.append(
-            {
-                f"{px.name}": {
-                    "access": await minimize_result("access"),
-                    "cluster": await minimize_result("cluster"),
-                    "nodes": nodes,
-                    "pools": pools,
-                    "storage": storage,
-                    "version": version,
+    try:
+        for px in pxs:
+            nodes = await resolve_async(px.session.nodes.get())
+            pools = await resolve_async(px.session.pools.get())
+            storage = await resolve_async(px.session.storage.get())
+            version = await resolve_async(px.session.version.get())
+            json_response.append(
+                {
+                    f"{px.name}": {
+                        "access": await minimize_result("access"),
+                        "cluster": await minimize_result("cluster"),
+                        "nodes": nodes,
+                        "pools": pools,
+                        "storage": storage,
+                        "version": version,
+                    }
                 }
-            }
-        )
+            )
 
-    return {
-        "message": "Proxmox API",
-        "proxmox_api_viewer": "https://pve.proxmox.com/pve-docs/api-viewer/",
-        "github": {
-            "netbox": "https://github.com/netbox-community/netbox",
-            "netbox-sdk": "https://github.com/netbox-community/netbox-sdk",
-            "proxmox-openapi": "https://github.com/emersonfelipesp/proxmox-openapi",
-            "proxbox": "https://github.com/netdevopsbr/netbox-proxbox",
-        },
-        "clusters": json_response,
-    }
+        return {
+            "message": "Proxmox API",
+            "proxmox_api_viewer": "https://pve.proxmox.com/pve-docs/api-viewer/",
+            "github": {
+                "netbox": "https://github.com/netbox-community/netbox",
+                "netbox-sdk": "https://github.com/netbox-community/netbox-sdk",
+                "proxmox-openapi": "https://github.com/emersonfelipesp/proxmox-openapi",
+                "proxbox": "https://github.com/netdevopsbr/netbox-proxbox",
+            },
+            "clusters": json_response,
+        }
+    finally:
+        await close_proxmox_sessions(pxs)
 
 
 class BackupVerification(BaseModel):
@@ -360,10 +366,13 @@ async def top_level_endpoint(
 
     json_response = []
 
-    for px in pxs:
-        json_response.append({px.name: await resolve_async(px.session(top_level).get())})
+    try:
+        for px in pxs:
+            json_response.append({px.name: await resolve_async(px.session(top_level).get())})
 
-    return json_response
+        return json_response
+    finally:
+        await close_proxmox_sessions(pxs)
 
 
 @router.get(
