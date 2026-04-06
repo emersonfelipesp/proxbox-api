@@ -24,30 +24,6 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra test --group dev
 
-      - name: Start proxmox-mock-published service
-        run: |
-          docker rm -f proxmox-mock-published 2>/dev/null || true
-          docker pull emersonfelipesp/proxmox-openapi:latest
-          docker run -d --name proxmox-mock-published \
-            -p 8006:8000 \
-            -e PROXMOX_API_MODE=mock \
-            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            emersonfelipesp/proxmox-openapi:latest
-
-      - name: Wait for proxmox-mock-published to be ready
-        run: |
-          for i in {1..30}; do
-            if curl -sf http://localhost:8006/health > /dev/null 2>&1 || curl -sf http://localhost:8006/ > /dev/null 2>&1; then
-              echo "proxmox-mock-published is ready"
-              exit 0
-            fi
-            echo "Waiting for proxmox-mock-published... ($i/30)"
-            sleep 2
-          done
-          echo "Timeout waiting for proxmox-mock-published"
-          docker logs proxmox-mock-published
-          exit 1
-
       - name: Ruff (lint + format check)
         run: |
           ruff check . &
@@ -63,62 +39,8 @@ jobs:
           uv run python -c "import proxmox_openapi.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
-      - name: Start local mock container (for HTTP tests)
-        run: |
-          docker rm -f proxmox-mock-local 2>/dev/null || true
-          docker run -d --name proxmox-mock-local \
-            -p 8007:8000 \
-            -e PROXMOX_API_MODE=mock \
-            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            emersonfelipesp/proxmox-openapi:latest
-
-      - name: Wait for local mock container to be ready
-        run: |
-          for i in {1..15}; do
-            if curl -sf http://localhost:8007/health > /dev/null 2>&1 || curl -sf http://localhost:8007/ > /dev/null 2>&1; then
-              echo "Local mock container is ready"
-              exit 0
-            fi
-            echo "Waiting for local mock container... ($i/15)"
-            sleep 2
-          done
-          echo "Timeout waiting for local mock container"
-          docker logs proxmox-mock-local
-          exit 1
-
-      - name: "E2E — local workspace vs NetBox demo (MockBackend)"
-        env:
-          PROXMOX_API_MODE: mock
-        run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v
-
-      - name: "E2E — local workspace vs NetBox demo (HTTP published)"
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_PUBLISHED_URL: http://localhost:8006
-          PROXMOX_MOCK_LOCAL_URL: http://localhost:8007
-        run: uv run pytest tests/e2e/ -m "not image_http" --tb=short -v --proxbox-mock-url-published=http://localhost:8006 --proxbox-mock-url-local=http://localhost:8007
-
-      - name: Upload Playwright Report
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report-demo
-          path: |
-            playwright-report/
-            test-results/
-          retention-days: 7
-
-      - name: Upload Playwright Trace
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-trace-demo
-          path: .playwright/trace/
-          retention-days: 7
-
-      - name: Cleanup local container
-        if: always()
-        run: docker rm -f proxmox-mock-local
+      - name: Core tests
+        run: uv run pytest tests/ -v --ignore=tests/e2e --tb=short
 
   e2e-http:
     runs-on: ubuntu-latest
