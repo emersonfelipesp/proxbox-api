@@ -292,7 +292,7 @@ jobs:
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir --upgrade netbox-proxbox granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface asgi --host 0.0.0.0 --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.core.asgi:application"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir --upgrade netbox-proxbox granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface asgi --host 0.0.0.0 --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.asgi:application"
           fi
 
       - name: Trust E2E NetBox CA on runner
@@ -346,6 +346,7 @@ jobs:
 
           docker run -d --name proxbox-e2e --network proxbox-e2e -p "${{ matrix.proxbox_host_port }}:8000" \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_BIND_HOST=0.0.0.0 \
             -e SSL_CERT_FILE=/ci-tls/ca.crt \
             -v "$GITHUB_WORKSPACE/.ci-tls:/ci-tls:ro" \
             "proxbox-e2e:${{ matrix.proxbox_transport }}"
