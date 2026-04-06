@@ -8,6 +8,9 @@ Encryption is applied to sensitive fields stored in the SQLite database:
 
 The encryption key is derived from the PROXBOX_ENCRYPTION_KEY environment
 variable. If not set, credentials are stored in plaintext (dev mode only).
+
+WARNING: Running without encryption key is insecure and should never happen
+in production. All credentials will be stored in plaintext in the database.
 """
 
 from __future__ import annotations
@@ -19,11 +22,14 @@ from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet
 
+from proxbox_api.logger import logger
+
 if TYPE_CHECKING:
     pass
 
 _ENCRYPTION_KEY: bytes | None = None
 _FERNET: Fernet | None = None
+_ENCRYPTION_WARNING_LOGGED: bool = False
 
 
 def _get_encryption_key() -> bytes | None:
@@ -48,12 +54,19 @@ def _get_encryption_key() -> bytes | None:
 
 def _get_fernet() -> Fernet | None:
     """Get or create the Fernet instance."""
-    global _FERNET
+    global _FERNET, _ENCRYPTION_WARNING_LOGGED
     if _FERNET is not None:
         return _FERNET
 
     key = _get_encryption_key()
     if key is None:
+        if not _ENCRYPTION_WARNING_LOGGED:
+            logger.warning(
+                "CRITICAL: Credential encryption is DISABLED. "
+                "Set PROXBOX_ENCRYPTION_KEY to encrypt credentials at rest. "
+                "Without encryption, all credentials will be stored in plaintext."
+            )
+            _ENCRYPTION_WARNING_LOGGED = True
         _FERNET = None
         return None
 
@@ -104,7 +117,8 @@ def decrypt_value(ciphertext: str | None) -> str | None:
         encrypted = base64.urlsafe_b64decode(ciphertext[4:])
         decrypted = fernet.decrypt(encrypted)
         return decrypted.decode()
-    except Exception:
+    except Exception as e:
+        logger.warning("Decryption failed for a value (may be corrupted or using wrong key): %s", e)
         return ciphertext
 
 

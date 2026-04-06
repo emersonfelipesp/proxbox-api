@@ -48,7 +48,11 @@ async def _authenticate_websocket(websocket: WebSocket, api_key: str | None) -> 
 async def base_websocket(websocket: WebSocket) -> None:
     count = 0
 
-    await websocket.accept()
+    try:
+        await websocket.accept()
+    except Exception:  # noqa: BLE001
+        return
+
     try:
         while True:
             count = count + 1
@@ -73,6 +77,10 @@ async def websocket_virtual_machines(
 
     if not await _authenticate_websocket(websocket, api_key):
         logger.warning("WebSocket /ws/virtual-machines auth failed")
+        try:
+            await websocket.close(code=4001, reason="Authentication failed")
+        except Exception:  # noqa: BLE001
+            pass
         return
 
     try:
@@ -129,6 +137,10 @@ async def websocket_sync_commands(  # noqa: C901
 
     if not await _authenticate_websocket(websocket, api_key):
         logger.warning("WebSocket /ws auth failed")
+        try:
+            await websocket.close(code=4001, reason="Authentication failed")
+        except Exception:  # noqa: BLE001
+            pass
         return
 
     try:
@@ -157,11 +169,11 @@ async def websocket_sync_commands(  # noqa: C901
             try:
                 data = await websocket.receive_text()
                 logger.debug("WebSocket /ws received: %s", data)
-                await websocket.send_text(f"Received message: {data}")
             except Exception as error:  # noqa: BLE001
                 logger.warning("Error while receiving WebSocket /ws data: %s", error)
                 break
 
+            data = data.strip()
             if data in {"Full Update Sync", "Full Update"}:
                 sync_nodes = await create_proxmox_devices(
                     netbox_session=nb,

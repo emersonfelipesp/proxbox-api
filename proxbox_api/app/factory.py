@@ -114,6 +114,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """Middleware to enforce API key authentication on protected routes."""
 
+    _failed_attempts: dict[str, tuple[int, float]] = {}
+    _lockout_duration = 300
+    _max_failed_attempts = 5
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
@@ -121,21 +125,72 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         api_key = request.headers.get("X-Proxbox-API-Key")
+        client_ip = self._get_client_ip(request)
+
+        if self._is_locked_out(client_ip):
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Too many failed authentication attempts. Please try again later."
+                },
+                headers={"Retry-After": "300"},
+            )
 
         raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+        dev_mode = os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
+
         if not raw_key:
-            return await call_next(request)
+            if dev_mode:
+                return await call_next(request)
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "API key not configured. Set PROXBOX_API_KEY environment variable or enable PROXBOX_DEV_MODE for development."
+                },
+            )
 
         stored_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         provided_hash = hashlib.sha256(api_key.encode()).hexdigest() if api_key else ""
 
         if not secrets.compare_digest(provided_hash, stored_hash):
+            self._record_failed_attempt(client_ip)
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key."},
             )
 
+        self._clear_failed_attempts(client_ip)
         return await call_next(request)
+
+    def _get_client_ip(self, request: Request) -> str:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else "unknown"
+
+    def _is_locked_out(self, ip: str) -> bool:
+        if ip not in self._failed_attempts:
+            return False
+        attempts, first_attempt_time = self._failed_attempts[ip]
+        if attempts >= self._max_failed_attempts:
+            if time.time() - first_attempt_time < self._lockout_duration:
+                return True
+            self._clear_failed_attempts(ip)
+        return False
+
+    def _record_failed_attempt(self, ip: str) -> None:
+        now = time.time()
+        if ip not in self._failed_attempts:
+            self._failed_attempts[ip] = (1, now)
+        else:
+            attempts, first_attempt_time = self._failed_attempts[ip]
+            if now - first_attempt_time > self._lockout_duration:
+                self._failed_attempts[ip] = (1, now)
+            else:
+                self._failed_attempts[ip] = (attempts + 1, first_attempt_time)
+
+    def _clear_failed_attempts(self, ip: str) -> None:
+        self._failed_attempts.pop(ip, None)
 
 
 # Legacy module-level placeholders (some tooling may read these names).
@@ -195,13 +250,23 @@ def create_app() -> FastAPI:
         allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
+        allow_headers=[
+            "Accept",
+            "Accept-Language",
+            "Content-Type",
+            "X-Proxbox-API-Key",
+            "X-Requested-With",
+        ],
     )
 
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(APIKeyAuthMiddleware)
 
-    rate_limit = int(os.environ.get("PROXBOX_RATE_LIMIT", "60"))
+    rate_limit_str = os.environ.get("PROXBOX_RATE_LIMIT", "60")
+    try:
+        rate_limit = max(1, int(rate_limit_str))
+    except ValueError:
+        rate_limit = 60
     app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit)
 
     register_exception_handlers(app)
