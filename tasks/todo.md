@@ -109,3 +109,14 @@
 - Updated `.github/workflows/ci.yml` E2E job to run transport-focused matrix coverage instead of install-source variants.
 - NetBox HTTPS is validated via both nginx TLS termination and granian TLS-serving modes with runner trust store updated from generated CA.
 - Proxbox backend is now exercised in both HTTP and HTTPS image variants while still running repository E2E pytest suite against the selected NetBox transport URL.
+
+## E2E Matrix Expansion (HTTPS↔HTTPS + HTTP↔HTTP)
+
+- [x] Add `NB:https_granian` + `PB:https_granian` transport entry.
+- [x] Ensure HTTPS↔HTTPS uses granian on both NetBox and Proxbox sides.
+- [x] Add `NB:http_manage` + `PB:http_raw` transport entry.
+
+## Review
+
+- Expanded E2E matrix in `.github/workflows/ci.yml` from 4 to 6 transport combinations.
+- Added explicit secure symmetric run (`https_granian`/`https_granian`) and insecure symmetric run (`http_manage`/`http_raw`).
