@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep as SessionDep
@@ -14,27 +14,27 @@ router = APIRouter()
 
 
 class ProxmoxEndpointCreate(BaseModel):
-    name: str
-    ip_address: str
-    domain: str | None = None
-    port: int = 8006
-    username: str
-    password: str | None = None
+    name: str = Field(max_length=255)
+    ip_address: str = Field(max_length=45)
+    domain: str | None = Field(default=None, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    username: str = Field(max_length=255)
+    password: str | None = Field(default=None, max_length=1000)
     verify_ssl: bool = True
-    token_name: str | None = None
-    token_value: str | None = None
+    token_name: str | None = Field(default=None, max_length=255)
+    token_value: str | None = Field(default=None, max_length=1000)
 
 
 class ProxmoxEndpointUpdate(BaseModel):
-    name: str | None = None
-    ip_address: str | None = None
-    domain: str | None = None
-    port: int | None = None
-    username: str | None = None
-    password: str | None = None
+    name: str | None = Field(default=None, max_length=255)
+    ip_address: str | None = Field(default=None, max_length=45)
+    domain: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=1000)
     verify_ssl: bool | None = None
-    token_name: str | None = None
-    token_value: str | None = None
+    token_name: str | None = Field(default=None, max_length=255)
+    token_value: str | None = Field(default=None, max_length=1000)
 
 
 class ProxmoxEndpointPublic(BaseModel):
