@@ -33,6 +33,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
+from proxbox_api.schemas.stream_messages import ErrorCategory
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.replications import sync_all_replications
@@ -386,6 +387,33 @@ async def full_update_sync_stream(  # noqa: C901
                     "step": "stream",
                     "status": "started",
                     "message": f"Full update stream connected (operation_id={operation_id})",
+                },
+            )
+            stage_items = [
+                {"name": "devices", "type": "stage"},
+                {"name": "storage", "type": "stage"},
+                {"name": "virtual-machines", "type": "stage"},
+                {"name": "virtual-disks", "type": "stage"},
+                {"name": "task-history", "type": "stage"},
+                {"name": "backups", "type": "stage"},
+                {"name": "snapshots", "type": "stage"},
+                {"name": "replications", "type": "stage"},
+                {"name": "backup-routines", "type": "stage"},
+                {"name": "node-interfaces", "type": "stage"},
+                {"name": "vm-interfaces", "type": "stage"},
+                {"name": "vm-ip-addresses", "type": "stage"},
+            ]
+            yield sse_event(
+                "discovery",
+                {
+                    "event": "discovery",
+                    "phase": "full-update",
+                    "status": "discovered",
+                    "message": f"Discovered {len(stage_items)} sync stage(s) for full update",
+                    "count": len(stage_items),
+                    "items": stage_items,
+                    "progress": {"current": 0, "total": len(stage_items), "percent": 0},
+                    "metadata": {"operation_id": operation_id},
                 },
             )
             yield sse_event(
@@ -880,6 +908,17 @@ async def full_update_sync_stream(  # noqa: C901
             )
         except ProxboxException as error:
             yield sse_event(
+                "error_detail",
+                {
+                    "event": "error_detail",
+                    "phase": "full-update",
+                    "category": ErrorCategory.INTERNAL.value,
+                    "message": "Full update synchronization failed",
+                    "detail": error.detail or error.message,
+                    "suggestion": "Review backend logs and retry the full update",
+                },
+            )
+            yield sse_event(
                 "error",
                 {
                     "step": "full-update",
@@ -897,6 +936,17 @@ async def full_update_sync_stream(  # noqa: C901
                 },
             )
         except Exception as error:  # noqa: BLE001
+            yield sse_event(
+                "error_detail",
+                {
+                    "event": "error_detail",
+                    "phase": "full-update",
+                    "category": ErrorCategory.INTERNAL.value,
+                    "message": "Unexpected error during full update",
+                    "detail": str(error),
+                    "suggestion": "Check backend logs for stack trace and retry",
+                },
+            )
             yield sse_event(
                 "error",
                 {

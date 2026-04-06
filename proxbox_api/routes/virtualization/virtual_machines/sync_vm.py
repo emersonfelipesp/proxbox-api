@@ -38,6 +38,7 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
     resolve_netbox_write_concurrency,
     resolve_vm_sync_concurrency,
 )
+from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
 from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
@@ -1081,6 +1082,9 @@ async def create_virtual_machines(  # noqa: C901
     """
 
     filtered_cluster_resources = cluster_resources
+    bridge: WebSocketSSEBridge | None = (
+        websocket if isinstance(websocket, WebSocketSSEBridge) else None
+    )
 
     if netbox_vm_ids and isinstance(netbox_vm_ids, str):
         vm_ids = parse_comma_separated_ints(netbox_vm_ids)
@@ -1450,10 +1454,39 @@ async def create_virtual_machines(  # noqa: C901
         return results
 
     if not sync_vm_network:
+        if bridge:
+            vm_items: list[dict[str, object]] = []
+            for cluster in filtered_cluster_resources:
+                for cluster_name, resources in cluster.items():
+                    for resource in resources:
+                        if resource.get("type") in ("qemu", "lxc"):
+                            vm_items.append(
+                                {
+                                    "name": str(
+                                        resource.get("name") or resource.get("vmid") or "unknown"
+                                    ),
+                                    "type": str(resource.get("type") or "unknown"),
+                                    "cluster": str(cluster_name),
+                                    "node": str(resource.get("node") or ""),
+                                }
+                            )
+            await bridge.emit_discovery(
+                phase="virtual-machines",
+                items=vm_items,
+                message=f"Discovered {len(vm_items)} virtual machine(s) to synchronize",
+                metadata={"sync_vm_network": False},
+            )
         flattened_results = await _run_full_update_vm_batch()
         total_vms = len(flattened_results)
         successful_vms = len(flattened_results)
         failed_vms = 0
+        if bridge:
+            await bridge.emit_phase_summary(
+                phase="virtual-machines",
+                created=successful_vms,
+                failed=failed_vms,
+                message=(f"Virtual machine sync completed: {successful_vms} synchronized"),
+            )
         if all([use_websocket, websocket]):
             await websocket.send_json({"object": "virtual_machine", "end": True})
         global_cache.clear_cache()
@@ -1509,12 +1542,39 @@ async def create_virtual_machines(  # noqa: C901
             "device": str(resource.get("node")),
         }
 
+        vm_name = str(resource.get("name") or resource.get("vmid") or "unknown")
+        timing_key = f"vm_{cluster_name}_{resource.get('vmid')}"
+        if bridge:
+            bridge.start_timer(timing_key)
+            await bridge.emit_item_progress(
+                phase="virtual-machines",
+                item={
+                    "name": vm_name,
+                    "type": str(resource.get("type") or "unknown"),
+                    "cluster": str(cluster_name),
+                    "node": str(resource.get("node") or ""),
+                },
+                operation=ItemOperation.CREATED,
+                status="processing",
+                message=f"Processing VM '{vm_name}'",
+                progress_current=0,
+                progress_total=0,
+            )
+
         if all([use_websocket, websocket]):
             await websocket.send_json(
                 {"object": "virtual_machine", "type": "create", "data": initial_vm_json}
             )
 
         try:
+            if bridge:
+                await bridge.emit_substep(
+                    phase="virtual-machines",
+                    substep="resolve_dependencies",
+                    status=SubstepStatus.PROCESSING,
+                    message=f"Resolving dependencies for VM '{vm_name}'",
+                    item={"name": vm_name},
+                )
             cluster_dependencies = cluster_dependency_cache.get(str(cluster_name), {})
             cluster = cluster_dependencies.get("cluster")
 
@@ -1568,8 +1628,26 @@ async def create_virtual_machines(  # noqa: C901
                 vm_role_cache[vm_type_key] = role
 
             logger.debug("VM deps cluster=%s device=%s role=%s", cluster, device, role)
+            if bridge:
+                await bridge.emit_substep(
+                    phase="virtual-machines",
+                    substep="resolve_dependencies",
+                    status=SubstepStatus.COMPLETED,
+                    message=f"Dependencies ready for VM '{vm_name}'",
+                    item={"name": vm_name},
+                    timing_key=timing_key,
+                )
 
         except Exception as error:
+            if bridge:
+                await bridge.emit_error_detail(
+                    message="Failed to resolve VM dependencies",
+                    category=ErrorCategory.VALIDATION,
+                    phase="virtual-machines",
+                    item={"name": vm_name},
+                    detail=str(error),
+                    suggestion="Check cluster, node device, and VM role mappings in NetBox",
+                )
             raise ProxboxException(
                 message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
                 python_exception=f"Error: {str(error)}",
@@ -1586,6 +1664,15 @@ async def create_virtual_machines(  # noqa: C901
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
             last_updated=now,
         )
+
+        if bridge:
+            await bridge.emit_substep(
+                phase="virtual-machines",
+                substep="reconcile_vm",
+                status=SubstepStatus.PROCESSING,
+                message=f"Reconciling VM '{vm_name}' in NetBox",
+                item={"name": vm_name},
+            )
 
         virtual_machine = await rest_reconcile_async(
             nb,
@@ -1612,6 +1699,15 @@ async def create_virtual_machines(  # noqa: C901
         )
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)
+        if bridge:
+            await bridge.emit_substep(
+                phase="virtual-machines",
+                substep="reconcile_vm",
+                status=SubstepStatus.COMPLETED,
+                message=f"VM '{vm_name}' reconciled in NetBox",
+                item={"name": vm_name},
+                timing_key=timing_key,
+            )
 
         """
         except ProxboxException:
@@ -1798,6 +1894,26 @@ async def create_virtual_machines(  # noqa: C901
                 error,
             )
 
+        if bridge:
+            await bridge.emit_item_progress(
+                phase="virtual-machines",
+                item={
+                    "name": vm_name,
+                    "type": str(resource.get("type") or "unknown"),
+                    "cluster": str(cluster_name),
+                    "node": str(resource.get("node") or ""),
+                    "netbox_id": virtual_machine.get("id"),
+                    "netbox_url": virtual_machine.get("display_url"),
+                },
+                operation=ItemOperation.CREATED,
+                status="completed",
+                message=f"Synced VM '{vm_name}'",
+                progress_current=0,
+                progress_total=0,
+                timing_key=timing_key,
+            )
+            bridge.clear_timer(timing_key)
+
         return virtual_machine
 
     max_concurrency = resolve_vm_sync_concurrency()
@@ -1827,13 +1943,33 @@ async def create_virtual_machines(  # noqa: C901
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
     try:
+        vm_items: list[dict[str, object]] = []
         # Process each cluster
         for cluster in filtered_cluster_resources:
             cluster_name = list(cluster.keys())[0]
             resources = cluster[cluster_name]
-            vm_count = len([r for r in resources if r.get("type") in ("qemu", "lxc")])
+            vm_resources = [r for r in resources if r.get("type") in ("qemu", "lxc")]
+            vm_count = len(vm_resources)
+
+            for resource in vm_resources:
+                vm_items.append(
+                    {
+                        "name": str(resource.get("name") or resource.get("vmid") or "unknown"),
+                        "type": str(resource.get("type") or "unknown"),
+                        "cluster": str(cluster_name),
+                        "node": str(resource.get("node") or ""),
+                    }
+                )
 
             total_vms += vm_count
+
+        if bridge:
+            await bridge.emit_discovery(
+                phase="virtual-machines",
+                items=vm_items,
+                message=f"Discovered {total_vms} virtual machine(s) to synchronize",
+                metadata={"sync_vm_network": sync_vm_network},
+            )
 
         # Return the created virtual machines.
         result_list = await asyncio.gather(
@@ -1865,6 +2001,16 @@ async def create_virtual_machines(  # noqa: C901
                         successful_vms += 1
                         flattened_results.append(vm_result)
 
+        if bridge:
+            await bridge.emit_phase_summary(
+                phase="virtual-machines",
+                created=successful_vms,
+                failed=failed_vms,
+                message=(
+                    f"Virtual machine sync completed: {successful_vms} synchronized, {failed_vms} failed"
+                ),
+            )
+
         # Send end message to websocket
         if all([use_websocket, websocket]):
             await websocket.send_json({"object": "virtual_machine", "end": True})
@@ -1881,6 +2027,14 @@ async def create_virtual_machines(  # noqa: C901
 
     except Exception as error:
         error_msg = f"Error during VM sync: {str(error)}"
+        if bridge:
+            await bridge.emit_error_detail(
+                message="Virtual machine sync failed",
+                category=ErrorCategory.INTERNAL,
+                phase="virtual-machines",
+                detail=str(error),
+                suggestion="Review backend logs and retry the synchronization",
+            )
         raise ProxboxException(message=error_msg)
 
     return flattened_results
