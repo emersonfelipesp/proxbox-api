@@ -2,6 +2,8 @@
 
 SSRF protection validates that endpoints do not point to restricted IP addresses.
 Settings can be configured via NetBox plugin (ProxboxPluginSettings) with caching.
+
+IPs that are already registered in ProxmoxEndpoint or NetBoxEndpoint are automatically allowed.
 """
 
 from __future__ import annotations
@@ -38,6 +40,76 @@ PRIVATE_IP_RANGES = (
     ipaddress.ip_network("192.168.0.0/16"),
 )
 
+_registered_ips_cache: set[str] = set()
+_registered_domains_cache: set[str] = set()
+
+
+def get_registered_endpoints() -> tuple[set[str], set[str]]:
+    """Get all IPs and domains from registered endpoints in the database.
+
+    Returns (ips, domains) tuple of sets.
+    Cached in memory to avoid repeated DB queries.
+    """
+    global _registered_ips_cache, _registered_domains_cache
+
+    if _registered_ips_cache or _registered_domains_cache:
+        return _registered_ips_cache, _registered_domains_cache
+
+    from sqlmodel import Session, select
+
+    from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint, engine
+
+    ips: set[str] = set()
+    domains: set[str] = set()
+
+    try:
+        with Session(engine) as session:
+            for endpoint in session.exec(select(ProxmoxEndpoint)).all():
+                if endpoint.ip_address:
+                    ips.add(endpoint.ip_address.split("/")[0])
+                if endpoint.domain:
+                    domains.add(endpoint.domain.strip().lower())
+
+            for endpoint in session.exec(select(NetBoxEndpoint)).all():
+                if endpoint.ip_address:
+                    ips.add(endpoint.ip_address.split("/")[0])
+                if endpoint.domain:
+                    domains.add(endpoint.domain.strip().lower())
+
+    except Exception:
+        pass
+
+    _registered_ips_cache = ips
+    _registered_domains_cache = domains
+    return ips, domains
+
+
+def clear_endpoint_cache() -> None:
+    """Clear the registered endpoints cache.
+
+    Call this after creating/updating/deleting endpoints.
+    """
+    global _registered_ips_cache, _registered_domains_cache
+    _registered_ips_cache = set()
+    _registered_domains_cache = set()
+
+
+def is_registered_endpoint(host: str) -> bool:
+    """Check if host is already registered in ProxmoxEndpoint or NetBoxEndpoint."""
+    ips, domains = get_registered_endpoints()
+    host_lower = host.strip().lower()
+
+    if host_lower in domains:
+        return True
+
+    try:
+        ipaddress.ip_address(host)
+        return host in ips
+    except ValueError:
+        pass
+
+    return False
+
 
 def is_ip_blocked(  # noqa: C901
     ip: str,
@@ -50,6 +122,10 @@ def is_ip_blocked(  # noqa: C901
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
+        return False, "OK"
+
+    # If IP is already registered, allow it
+    if is_registered_endpoint(ip):
         return False, "OK"
 
     if settings is None:
@@ -77,7 +153,10 @@ def is_ip_blocked(  # noqa: C901
 
     for network in INTERNAL_IP_RANGES:
         if addr in network:
-            return True, f"Host '{ip}' is a reserved/internal IP address"
+            return (
+                True,
+                f"Host '{ip}' is a reserved/internal IP address. Either add it to ProxmoxEndpoint first, or adjust SSRF settings in ProxboxPluginSettings.",
+            )
 
     return False, "OK"
 
@@ -95,11 +174,17 @@ def validate_endpoint_host(
     - allow_private_ips: bool (default True for on-premises)
     - allowed_ip_ranges: list of CIDR strings
     - blocked_ip_ranges: list of CIDR strings
+
+    IPs already registered in ProxmoxEndpoint or NetBoxEndpoint are automatically allowed.
     """
     if not host:
         return False, "Host cannot be empty"
 
     host = host.strip()
+
+    # If domain/host is already registered, allow it
+    if is_registered_endpoint(host):
+        return True, "OK"
 
     blocked, reason = is_ip_blocked(host, settings)
     if blocked:
