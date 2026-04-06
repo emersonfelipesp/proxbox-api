@@ -11,20 +11,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      proxmox-mock-published:
-        image: emersonfelipesp/proxmox-openapi:latest
-        ports:
-          - 8006:8000
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_SCHEMA_VERSION: latest
-        options: >-
-          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
-          --health-interval 10s
-          --health-timeout 15s
-          --health-retries 8
-          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,6 +23,30 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync --frozen --extra test --group dev
+
+      - name: Start proxmox-mock-published service
+        run: |
+          docker rm -f proxmox-mock-published 2>/dev/null || true
+          docker pull emersonfelipesp/proxmox-openapi:latest
+          docker run -d --name proxmox-mock-published \
+            -p 8006:8000 \
+            -e PROXMOX_API_MODE=mock \
+            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
+            emersonfelipesp/proxmox-openapi:latest
+
+      - name: Wait for proxmox-mock-published to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -sf http://localhost:8006/health > /dev/null 2>&1 || curl -sf http://localhost:8006/ > /dev/null 2>&1; then
+              echo "proxmox-mock-published is ready"
+              exit 0
+            fi
+            echo "Waiting for proxmox-mock-published... ($i/30)"
+            sleep 2
+          done
+          echo "Timeout waiting for proxmox-mock-published"
+          docker logs proxmox-mock-published
+          exit 1
 
       - name: Ruff (lint + format check)
         run: |
@@ -223,27 +233,21 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
-            --health-interval 10s \
-            --health-timeout 15s \
-            --health-retries 8 \
-            --health-start-period 30s \
             proxmox-mock-local:e2e
 
-      - name: Wait for local mock container health
+      - name: Wait for local mock container to be ready
         run: |
-          for i in {1..30}; do
-            if docker inspect --format='{{.State.Health.Status}}' proxmox-mock-local 2>/dev/null | grep -q "healthy"; then
-              echo "Local mock container is healthy"
-              break
+          for i in {1..15}; do
+            if curl -sf http://localhost:8007/health > /dev/null 2>&1 || curl -sf http://localhost:8007/ > /dev/null 2>&1; then
+              echo "Local mock container is ready"
+              exit 0
             fi
-            if [ "$i" -eq 30 ]; then
-              echo "Timeout waiting for local mock container"
-              docker logs proxmox-mock-local
-              exit 1
-            fi
+            echo "Waiting for local mock container... ($i/15)"
             sleep 2
           done
+          echo "Timeout waiting for local mock container"
+          docker logs proxmox-mock-local
+          exit 1
 
       - name: "E2E — local workspace vs NetBox demo (MockBackend)"
         env:
