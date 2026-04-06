@@ -2,8 +2,6 @@ server {
     listen __PORT__ ssl http2;
     ssl_certificate __CERT__;
     ssl_certificate_key __KEY__;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
 
     location / {
         proxy_pass http://127.0.0.1:8001;

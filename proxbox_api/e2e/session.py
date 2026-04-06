@@ -6,6 +6,8 @@ the 'proxbox e2e testing' tag.
 
 from __future__ import annotations
 
+import os
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -55,7 +57,7 @@ async def create_netbox_e2e_session(base_url: str, token: str) -> "Api":
     config = Config(
         base_url=base_url,
         token=token,
-        token_version="v1",
+        token_version=(os.environ.get("PROXBOX_E2E_NETBOX_TOKEN_VERSION") or "v1").strip().lower(),
     )
 
     client = E2ENetBoxApiClient(config)
