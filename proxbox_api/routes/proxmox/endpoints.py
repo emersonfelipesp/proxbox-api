@@ -159,18 +159,40 @@ def update_proxmox_endpoint(
         if existing and existing.id != endpoint_id:
             raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
-    new_password = update_data.get("password", db_endpoint.password)
-    new_token_name = update_data.get("token_name", db_endpoint.token_name)
-    new_token_value = update_data.get("token_value", db_endpoint.token_value)
-    _validate_auth_fields(new_password, new_token_name, new_token_value)
+    # Determine auth fields being changed in this update
+    updating_password = "password" in update_data
+    updating_token_name = "token_name" in update_data
+    updating_token_value = "token_value" in update_data
+
+    if updating_password or updating_token_name or updating_token_value:
+        new_password = update_data.get("password")
+        new_token_name = update_data.get("token_name")
+        new_token_value = update_data.get("token_value")
+
+        has_password = bool(new_password)
+        has_token_name = bool(new_token_name)
+        has_token_value = bool(new_token_value)
+
+        if has_token_name ^ has_token_value:
+            raise HTTPException(
+                status_code=400,
+                detail="token_name and token_value must be provided together",
+            )
+
+        if not has_password and not (has_token_name and has_token_value):
+            raise HTTPException(
+                status_code=400,
+                detail="Provide password or both token_name/token_value",
+            )
+
+        if updating_password:
+            db_endpoint.set_encrypted_password(update_data["password"])
+        if updating_token_value:
+            db_endpoint.set_encrypted_token_value(update_data["token_value"])
 
     for key, value in update_data.items():
-        setattr(db_endpoint, key, value)
-
-    if "password" in update_data:
-        db_endpoint.set_encrypted_password(update_data["password"])
-    if "token_value" in update_data:
-        db_endpoint.set_encrypted_token_value(update_data["token_value"])
+        if key not in ("password", "token_value"):
+            setattr(db_endpoint, key, value)
 
     session.add(db_endpoint)
     session.commit()
