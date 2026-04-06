@@ -133,4 +133,11 @@
 - [x] Fix NetBox HTTPS endpoint host for proxbox-to-netbox checks to use network-reachable container DNS (`netbox-e2e-nginx`) instead of runner localhost.
 - [x] Make preflight `/netbox/status` validation accept both `{"available": true}` and direct NetBox status payloads returned by current proxbox API route.
 - [x] Fix Proxbox nginx entrypoint to write generated config into Alpine nginx include path (`/etc/nginx/http.d/`).
-- [ ] Re-run CI and confirm all 6 transport combinations reach E2E pytest stage.
+- [x] Re-run CI and confirm all 6 transport combinations reach E2E pytest stage.
+
+## E2E Transport Stabilization (Round 4)
+
+- [x] Fix Proxbox nginx TLS template conflict with Alpine default SSL session cache zone.
+- [x] Force E2E suite to use NetBox token v1 against CI-generated legacy tokens.
+- [x] Add E2E token-version env propagation into NetBox E2E session helper.
+- [ ] Re-run CI and confirm transport matrix advances past E2E setup failures.

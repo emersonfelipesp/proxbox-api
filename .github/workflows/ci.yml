@@ -421,6 +421,7 @@ jobs:
         env:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
           PROXBOX_E2E_NETBOX_TOKEN: ${{ env.NETBOX_API_TOKEN }}
+          PROXBOX_E2E_NETBOX_TOKEN_VERSION: v1
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_PUBLISHED_URL: http://localhost:18006
         run: |
@@ -431,6 +432,7 @@ jobs:
         env:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
           PROXBOX_E2E_NETBOX_TOKEN: ${{ env.NETBOX_API_TOKEN }}
+          PROXBOX_E2E_NETBOX_TOKEN_VERSION: v1
           PROXMOX_API_MODE: mock
         run: |
           uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v
