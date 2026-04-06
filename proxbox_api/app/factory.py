@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
-import secrets
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -23,6 +21,7 @@ from proxbox_api.app.exceptions import register_exception_handlers
 from proxbox_api.app.full_update import register_full_update_routes
 from proxbox_api.app.root_meta import root_meta_router
 from proxbox_api.app.websockets import register_websocket_routes
+from proxbox_api.auth import check_auth_header
 from proxbox_api.exception import ProxboxException
 from proxbox_api.log_buffer import configure_buffer_logger
 from proxbox_api.logger import logger
@@ -116,10 +115,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """Middleware to enforce API key authentication on protected routes."""
 
-    _failed_attempts: dict[str, tuple[int, float]] = {}
-    _lockout_duration = 300
-    _max_failed_attempts = 5
-
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
@@ -129,39 +124,16 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         api_key = request.headers.get("X-Proxbox-API-Key")
         client_ip = self._get_client_ip(request)
 
-        if self._is_locked_out(client_ip):
+        authorized, error_message = check_auth_header(api_key, client_ip)
+
+        if not authorized:
+            status_code = 429 if "Too many failed" in (error_message or "") else 401
             return JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "Too many failed authentication attempts. Please try again later."
-                },
-                headers={"Retry-After": "300"},
+                status_code=status_code,
+                content={"detail": error_message},
+                headers={"Retry-After": "300"} if status_code == 429 else {},
             )
 
-        raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
-        dev_mode = os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
-
-        if not raw_key:
-            if dev_mode:
-                return await call_next(request)
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "detail": "API key not configured. Set PROXBOX_API_KEY environment variable or enable PROXBOX_DEV_MODE for development."
-                },
-            )
-
-        stored_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        provided_hash = hashlib.sha256(api_key.encode()).hexdigest() if api_key else ""
-
-        if not secrets.compare_digest(provided_hash, stored_hash):
-            self._record_failed_attempt(client_ip)
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or missing API key."},
-            )
-
-        self._clear_failed_attempts(client_ip)
         return await call_next(request)
 
     def _get_client_ip(self, request: Request) -> str:
@@ -169,30 +141,6 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if forwarded:
             return forwarded.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
-
-    def _is_locked_out(self, ip: str) -> bool:
-        if ip not in self._failed_attempts:
-            return False
-        attempts, first_attempt_time = self._failed_attempts[ip]
-        if attempts >= self._max_failed_attempts:
-            if time.time() - first_attempt_time < self._lockout_duration:
-                return True
-            self._clear_failed_attempts(ip)
-        return False
-
-    def _record_failed_attempt(self, ip: str) -> None:
-        now = time.time()
-        if ip not in self._failed_attempts:
-            self._failed_attempts[ip] = (1, now)
-        else:
-            attempts, first_attempt_time = self._failed_attempts[ip]
-            if now - first_attempt_time > self._lockout_duration:
-                self._failed_attempts[ip] = (1, now)
-            else:
-                self._failed_attempts[ip] = (attempts + 1, first_attempt_time)
-
-    def _clear_failed_attempts(self, ip: str) -> None:
-        self._failed_attempts.pop(ip, None)
 
 
 # Legacy module-level placeholders (some tooling may read these names).
