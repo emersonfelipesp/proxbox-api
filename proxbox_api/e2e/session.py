@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from netbox_sdk.config import Config
     from netbox_sdk.facade import Api
 
 from netbox_sdk.client import NetBoxApiClient
@@ -40,20 +39,24 @@ class E2ENetBoxApiClient(NetBoxApiClient):
         return None
 
 
-async def create_netbox_demo_session(config: "Config") -> "Api":
-    """Create an async NetBox API session from demo credentials.
+async def create_netbox_e2e_session(base_url: str, token: str) -> "Api":
+    """Create an async NetBox API session from URL and token.
 
     Args:
-        config: NetBox SDK Config with demo token and credentials.
+        base_url: NetBox base URL (e.g., http://127.0.0.1:18080)
+        token: NetBox API token.
 
     Returns:
         Async NetBox API instance ready for requests.
     """
-    from netbox_sdk.config import resolved_token
+    from netbox_sdk.config import Config
     from netbox_sdk.facade import Api
 
-    if not resolved_token(config):
-        raise ValueError("Config must have valid token for demo session")
+    config = Config(
+        base_url=base_url,
+        token=token,
+        token_version="v1",
+    )
 
     client = E2ENetBoxApiClient(config)
     return Api(client=client)
