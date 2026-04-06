@@ -290,3 +290,29 @@ def mock_proxmox_session(minimal_cluster: MockProxmoxCluster):
         "resources": minimal_cluster.to_cluster_resources(),
         "storage": minimal_cluster.storage,
     }
+
+
+@pytest.fixture(params=["backend", "http_published", "http_local"])
+async def proxmox_mock_client(
+    request, proxmox_mock_backend, proxmox_mock_http_published, proxmox_mock_http_local
+):
+    """Parametrized fixture that provides Proxmox SDK in all mock modes.
+
+    This fixture runs tests against all three mock backends:
+    - backend: In-process MockBackend (fastest)
+    - http_published: HTTP container (published image, port 8006)
+    - http_local: HTTP container (local build, port 8007)
+
+    Usage:
+        @pytest.mark.mock_backend
+        @pytest.mark.mock_http
+        async def test_something(proxmox_mock_client):
+            # Test runs 3 times: once per mock backend
+            vms = await proxmox_mock_client.nodes.get()
+    """
+    if request.param == "backend":
+        yield proxmox_mock_backend
+    elif request.param == "http_published":
+        yield proxmox_mock_http_published
+    else:
+        yield proxmox_mock_http_local
