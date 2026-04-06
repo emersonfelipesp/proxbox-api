@@ -56,6 +56,7 @@ Fix failures locally before finishing the task.
 - `scripts/CLAUDE.md`
 - `tasks/CLAUDE.md`
 - `automation/CLAUDE.md`
+- `proxmox-mock/CLAUDE.md`
 
 ### proxbox_api subpackages
 - `proxbox_api/app/CLAUDE.md`

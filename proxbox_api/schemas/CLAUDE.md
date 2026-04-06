@@ -9,6 +9,7 @@ Top-level Pydantic schema package for plugin and API contracts.
 - `__init__.py`: top-level schema exports and plugin configuration schema.
 - `_base.py`: shared Proxbox base model.
 - `proxmox.py`: Pydantic schemas for Proxmox sessions, cluster resources, node payloads, and resource payloads.
+- `stream_messages.py`: typed stream event payload schemas used by SSE and WebSocket progress reporting.
 - `netbox/`: NetBox session, endpoint, and payload schemas.
 - `virtualization/`: VM config and summary schemas.
 
@@ -17,6 +18,7 @@ Top-level Pydantic schema package for plugin and API contracts.
 - Route modules consume these schemas directly for request validation and response models.
 - Session modules use them for connection and configuration payloads.
 - Sync services rely on them as the contract boundary before any data is handed to NetBox or Proxmox clients.
+- Streaming helpers in `proxbox_api/utils/streaming.py` and `proxbox_api/app/full_update.py` use `stream_messages.py` models to keep event shapes stable across transports.
 
 ## Extension Guidance
 

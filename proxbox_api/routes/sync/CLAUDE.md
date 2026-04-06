@@ -21,5 +21,5 @@ routes/sync/
 
 ## Related Guides
 
-- `proxbox_api/services/sync/individual/CLAUDE.md` — the service implementations behind these routes
-- `proxbox_api/routes/virtualization/virtual_machines/CLAUDE.md` — VM-specific sync routes
+- `../../services/sync/individual/CLAUDE.md` — the service implementations behind these routes
+- `../virtualization/virtual_machines/CLAUDE.md` — VM-specific sync routes

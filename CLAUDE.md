@@ -24,6 +24,7 @@ Open the nearest scoped guide for the code you are changing.
 - `scripts/CLAUDE.md` — Utility and maintenance scripts
 - `tasks/CLAUDE.md` — Development task tracking
 - `automation/CLAUDE.md` — Automation entry points
+- `proxmox-mock/CLAUDE.md` — Mock Proxmox service used in tests
 
 ### proxbox_api subpackages
 
