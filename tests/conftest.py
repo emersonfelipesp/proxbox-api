@@ -7,8 +7,6 @@ from typing import Any
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
-os.environ.setdefault("PROXBOX_DEV_MODE", "true")
-
 from proxbox_api.database import get_session
 from proxbox_api.main import app
 from proxbox_api.routes.proxmox.runtime_generated import (
@@ -86,6 +84,19 @@ def reset_fastapi_state():
     clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
+
+
+@pytest.fixture
+def test_api_key(db_session):
+    """Create a test API key for authenticated tests.
+
+    Returns the raw key value for use in X-Proxbox-API-Key header.
+    """
+    from proxbox_api.database import ApiKey
+
+    raw_key = "test-api-key-for-unit-tests-0000000000000000"
+    ApiKey.store_key(db_session, raw_key, label="test-key")
+    return raw_key
 
 
 @pytest.fixture

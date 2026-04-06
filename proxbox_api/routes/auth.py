@@ -1,11 +1,15 @@
-"""Bootstrap API key registration and management endpoints."""
+"""API key registration and management endpoints.
+
+All keys are stored in the database with bcrypt hashing.
+The first key registration is auth-exempt (bootstrap).
+Subsequent operations require authentication.
+"""
 
 from __future__ import annotations
 
-import os
 import secrets
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -32,53 +36,46 @@ class CreateKeyResponse(ApiKeyResponse):
 
 class ApiKeyListResponse(BaseModel):
     keys: list[ApiKeyResponse]
-    has_env_key: bool
 
 
 class BootstrapStatusResponse(BaseModel):
     needs_bootstrap: bool
-    has_env_key: bool
     has_db_keys: bool
 
 
 @router.get("/bootstrap-status", response_model=BootstrapStatusResponse)
 def get_bootstrap_status(session: DatabaseSessionDep):
-    """Check if bootstrap is needed (no API keys configured).
-
-    This endpoint is auth-exempt to allow initial setup.
-    """
-    env_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+    """Check if initial bootstrap is needed (no API keys exist)."""
     has_db_keys = ApiKey.has_any_key(session)
     return BootstrapStatusResponse(
-        needs_bootstrap=not env_key and not has_db_keys,
-        has_env_key=bool(env_key),
+        needs_bootstrap=not has_db_keys,
         has_db_keys=has_db_keys,
     )
 
 
 @router.post("/register-key", status_code=201)
 def register_key(body: RegisterKeyRequest, session: DatabaseSessionDep):
-    """One-time key bootstrap.
+    """One-time bootstrap to register the first API key.
 
-    Only succeeds when no API key is configured (neither env var nor database).
-    Subsequent calls return 409 so this endpoint cannot be used to rotate keys.
+    Only succeeds when no API keys exist in the database.
+    Returns 409 if a key already exists.
     """
     if len(body.api_key) < 32:
         raise HTTPException(status_code=400, detail="API key must be at least 32 characters.")
-    env_key = os.environ.get("PROXBOX_API_KEY", "").strip()
-    if env_key or ApiKey.has_any_key(session):
+
+    if ApiKey.has_any_key(session):
         raise HTTPException(status_code=409, detail="An API key is already configured.")
+
     ApiKey.store_key(session, body.api_key, label=body.label)
     return {"detail": "API key registered."}
 
 
 @router.post("/keys", status_code=201, response_model=CreateKeyResponse)
 def create_key(session: DatabaseSessionDep):
-    """Create a new API key.
+    """Create a new API key (requires existing authentication).
 
     Generates a random 64-character API key and returns it.
     The key is stored hashed - this is the only time the raw key is visible.
-    Requires authentication via existing API key or env var.
     """
     raw_key = secrets.token_urlsafe(48)
     obj = ApiKey.store_key(session, raw_key, label="")
@@ -96,7 +93,6 @@ def create_key(session: DatabaseSessionDep):
 def list_keys(session: DatabaseSessionDep):
     """List all configured API keys (key values are not returned for security)."""
     keys = session.exec(select(ApiKey).order_by(ApiKey.created_at.desc())).all()
-    env_key = os.environ.get("PROXBOX_API_KEY", "").strip()
     return ApiKeyListResponse(
         keys=[
             ApiKeyResponse(
@@ -107,7 +103,6 @@ def list_keys(session: DatabaseSessionDep):
             )
             for k in keys
         ],
-        has_env_key=bool(env_key),
     )
 
 
@@ -156,7 +151,3 @@ def activate_key(key_id: int, session: DatabaseSessionDep):
         is_active=key.is_active,
         created_at=key.created_at,
     )
-
-
-# Alias for backward compatibility
-router_tags = ["auth"]

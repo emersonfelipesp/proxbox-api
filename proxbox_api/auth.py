@@ -1,51 +1,18 @@
-"""Authentication utilities with database-backed brute-force protection.
+"""Authentication utilities with database-backed API key storage.
 
-Uses bcrypt for secure API key hashing with salt and iterations.
+All API keys are stored in the database using bcrypt hashing.
+The first key can be registered via /auth/register-key (auth-exempt bootstrap).
+Subsequent key management requires authentication via /auth/keys endpoints.
 """
 
 from __future__ import annotations
 
-import os
-
-import bcrypt
 from sqlmodel import Session
 
 from proxbox_api.database import ApiKey, AuthLockout, engine
 
 _LOCKOUT_DURATION = 300
 _MAX_FAILED_ATTEMPTS = 5
-
-
-def _hash_api_key(raw_key: str) -> bytes:
-    return bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12))
-
-
-def _verify_api_key_bcrypt(provided_key: str, stored_hash: bytes) -> bool:
-    try:
-        return bcrypt.checkpw(provided_key.encode(), stored_hash)
-    except Exception:
-        return False
-
-
-def verify_api_key(provided_key: str | None) -> bool:
-    raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
-    if not raw_key:
-        return False
-    if not provided_key:
-        return False
-    stored_hash_bytes = os.environ.get("PROXBOX_API_KEY_HASH", "").strip()
-    if stored_hash_bytes:
-        try:
-            return _verify_api_key_bcrypt(provided_key, stored_hash_bytes.encode())
-        except Exception:
-            return False
-    stored_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12))
-    os.environ["PROXBOX_API_KEY_HASH"] = stored_hash.decode()
-    return bcrypt.checkpw(provided_key.encode(), stored_hash)
-
-
-def is_dev_mode() -> bool:
-    return os.environ.get("PROXBOX_DEV_MODE", "false").lower() in ("true", "1", "yes")
 
 
 def is_locked_out(ip: str) -> bool:
@@ -72,34 +39,33 @@ def _get_attempt_count(ip: str) -> int:
 
 
 def check_auth_header(api_key: str | None, client_ip: str) -> tuple[bool, str | None]:
-    dev_mode = is_dev_mode()
+    """Validate API key from database.
 
+    Returns (authorized, error_message) tuple.
+    """
     if is_locked_out(client_ip):
         return False, "Too many failed authentication attempts. Please try again later."
 
-    raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
+    with Session(engine) as session:
+        if not ApiKey.has_any_key(session):
+            return False, (
+                "No API key configured. "
+                "Register a key via POST /auth/register-key or use an existing key."
+            )
 
-    if not raw_key:
-        with Session(engine) as session:
-            if ApiKey.has_any_key(session):
-                if not api_key or not ApiKey.verify_any(session, api_key):
-                    record_failed_attempt(client_ip)
-                    remaining = _MAX_FAILED_ATTEMPTS - _get_attempt_count(client_ip)
-                    if remaining > 0:
-                        return False, f"Invalid API key. {remaining} attempts remaining."
-                    return False, "Invalid or missing API key."
-                clear_failed_attempts(client_ip)
-                return True, None
-        if dev_mode:
-            return True, None
-        return False, "API key not configured. Set PROXBOX_API_KEY environment variable."
+        if not api_key:
+            record_failed_attempt(client_ip)
+            remaining = _MAX_FAILED_ATTEMPTS - _get_attempt_count(client_ip)
+            if remaining > 0:
+                return False, f"API key required. {remaining} attempts remaining."
+            return False, "API key required."
 
-    if not verify_api_key(api_key):
-        record_failed_attempt(client_ip)
-        remaining = _MAX_FAILED_ATTEMPTS - _get_attempt_count(client_ip)
-        if remaining > 0:
-            return False, f"Invalid API key. {remaining} attempts remaining."
-        return False, "Invalid or missing API key."
+        if not ApiKey.verify_any(session, api_key):
+            record_failed_attempt(client_ip)
+            remaining = _MAX_FAILED_ATTEMPTS - _get_attempt_count(client_ip)
+            if remaining > 0:
+                return False, f"Invalid API key. {remaining} attempts remaining."
+            return False, "Invalid API key."
 
     clear_failed_attempts(client_ip)
     return True, None
