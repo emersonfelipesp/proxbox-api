@@ -12,6 +12,7 @@ from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import validate_endpoint_host
 
 router = APIRouter()
@@ -103,14 +104,21 @@ def create_netbox_endpoint(
     if session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.name == netbox.name)).first():
         raise HTTPException(status_code=400, detail="NetBox endpoint name already exists")
 
-    ip_safe, ip_reason = validate_endpoint_host(netbox.ip_address)
+    settings = get_settings()
+    ip_safe, ip_reason = validate_endpoint_host(netbox.ip_address, settings)
     if not ip_safe:
-        raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid IP address: {ip_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+        )
 
     if netbox.domain:
-        domain_safe, domain_reason = validate_endpoint_host(netbox.domain)
+        domain_safe, domain_reason = validate_endpoint_host(netbox.domain, settings)
         if not domain_safe:
-            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid domain: {domain_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+            )
 
     db_endpoint = NetBoxEndpoint(**netbox.model_dump())
     _normalize_netbox_endpoint_fields(db_endpoint)
@@ -155,15 +163,22 @@ def update_netbox_endpoint(
 
     update_data = netbox.model_dump(exclude_unset=True)
 
+    settings = get_settings()
     if "ip_address" in update_data:
-        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"])
+        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"], settings)
         if not ip_safe:
-            raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid IP address: {ip_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+            )
 
     if "domain" in update_data and update_data["domain"]:
-        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"])
+        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"], settings)
         if not domain_safe:
-            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid domain: {domain_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+            )
 
     if "token" in update_data:
         update_data["token"] = (update_data["token"] or "").strip()

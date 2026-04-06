@@ -8,6 +8,7 @@ from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import validate_endpoint_host
 
 router = APIRouter()
@@ -84,14 +85,21 @@ def create_proxmox_endpoint(
 ) -> ProxmoxEndpointPublic:
     _validate_auth_fields(endpoint.password, endpoint.token_name, endpoint.token_value)
 
-    ip_safe, ip_reason = validate_endpoint_host(endpoint.ip_address)
+    settings = get_settings()
+    ip_safe, ip_reason = validate_endpoint_host(endpoint.ip_address, settings)
     if not ip_safe:
-        raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid IP address: {ip_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+        )
 
     if endpoint.domain:
-        domain_safe, domain_reason = validate_endpoint_host(endpoint.domain)
+        domain_safe, domain_reason = validate_endpoint_host(endpoint.domain, settings)
         if not domain_safe:
-            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid domain: {domain_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+            )
 
     existing = session.exec(
         select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == endpoint.name)
@@ -142,15 +150,22 @@ def update_proxmox_endpoint(
 
     update_data = endpoint.model_dump(exclude_unset=True)
 
+    settings = get_settings()
     if "ip_address" in update_data:
-        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"])
+        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"], settings)
         if not ip_safe:
-            raise HTTPException(status_code=400, detail=f"Invalid IP address: {ip_reason}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid IP address: {ip_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+            )
 
     if "domain" in update_data and update_data["domain"]:
-        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"])
+        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"], settings)
         if not domain_safe:
-            raise HTTPException(status_code=400, detail=f"Invalid domain: {domain_reason}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid domain: {domain_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
+            )
 
     if "name" in update_data:
         existing = session.exec(
@@ -159,7 +174,6 @@ def update_proxmox_endpoint(
         if existing and existing.id != endpoint_id:
             raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
-    # Determine auth fields being changed in this update
     updating_password = "password" in update_data
     updating_token_name = "token_name" in update_data
     updating_token_value = "token_value" in update_data
