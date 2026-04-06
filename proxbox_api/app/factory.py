@@ -53,6 +53,7 @@ AUTH_EXEMPT_PATHS = frozenset(
         "/health",
         "/meta",
         "/auth/register-key",
+        "/auth/bootstrap-status",
     }
 )
 
