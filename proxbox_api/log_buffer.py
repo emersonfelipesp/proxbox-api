@@ -91,6 +91,29 @@ _ERROR_MESSAGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PII_PATTERNS = [
+    (
+        re.compile(
+            r'(?:token|password|secret|key|auth)[=:]\s*["\']?([a-zA-Z0-9_\-]{8,})["\']?',
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
+    (re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]+"), "Bearer [REDACTED]"),
+    (re.compile(r"Basic\s+[a-zA-Z0-9+\/=]+"), "Basic [REDACTED]"),
+    (
+        re.compile(r"X-Proxbox-API-Key:\s*[a-zA-Z0-9]+", re.IGNORECASE),
+        "X-Proxbox-API-Key: [REDACTED]",
+    ),
+]
+
+
+def _redact_pii(text: str) -> str:
+    """Redact personally identifiable information and secrets from text."""
+    for pattern, replacement in _PII_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
 
 def _entry_sort_key(entry: BufferedLogEntry) -> int:
     """Return a numeric sort key for a buffered log entry."""
@@ -159,8 +182,9 @@ class LogBufferHandler(logging.Handler):
 
             expandable = None
             if record.exc_info:
+                raw_traceback = "".join(traceback.format_exception(*record.exc_info))
                 expandable = {
-                    "traceback": "".join(traceback.format_exception(*record.exc_info)),
+                    "traceback": _redact_pii(raw_traceback),
                 }
 
             entry = BufferedLogEntry(
@@ -168,7 +192,7 @@ class LogBufferHandler(logging.Handler):
                 timestamp=timestamp,
                 level=level,
                 module=record.module,
-                message=record.getMessage(),
+                message=_redact_pii(record.getMessage()),
                 operation_id=operation_id,
                 operation=operation,
                 phase=phase,

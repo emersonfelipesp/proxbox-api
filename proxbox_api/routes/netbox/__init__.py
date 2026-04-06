@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep as SessionDep
@@ -18,24 +18,24 @@ router = APIRouter()
 
 
 class NetBoxEndpointCreate(BaseModel):
-    name: str
-    ip_address: str
-    domain: str = ""
-    port: int = 443
-    token_version: str = "v1"
-    token_key: str | None = None
-    token: str
+    name: str = Field(max_length=255)
+    ip_address: str = Field(max_length=45)
+    domain: str = Field(default="", max_length=255)
+    port: int = Field(default=443, ge=1, le=65535)
+    token_version: str = Field(default="v1", max_length=2)
+    token_key: str | None = Field(default=None, max_length=1000)
+    token: str = Field(max_length=1000)
     verify_ssl: bool = True
 
 
 class NetBoxEndpointUpdate(BaseModel):
-    name: str | None = None
-    ip_address: str | None = None
-    domain: str | None = None
-    port: int | None = None
-    token_version: str | None = None
-    token_key: str | None = None
-    token: str | None = None
+    name: str | None = Field(default=None, max_length=255)
+    ip_address: str | None = Field(default=None, max_length=45)
+    domain: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    token_version: str | None = Field(default=None, max_length=2)
+    token_key: str | None = Field(default=None, max_length=1000)
+    token: str | None = Field(default=None, max_length=1000)
     verify_ssl: bool | None = None
 
 
