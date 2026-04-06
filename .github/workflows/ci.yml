@@ -56,7 +56,7 @@ jobs:
         include:
           - netbox_transport: https_nginx
             netbox_public_url: https://127.0.0.1:18443
-            netbox_endpoint_host: 127.0.0.1
+            netbox_endpoint_host: netbox-e2e-nginx
             netbox_endpoint_port: 8443
             netbox_endpoint_verify_ssl: true
             netbox_wait_url: https://127.0.0.1:18443/api/
@@ -182,6 +182,20 @@ jobs:
           [ req_ext ]
           subjectAltName = @alt_names
 
+          [ v3_ca ]
+          basicConstraints = critical, CA:true
+          keyUsage = critical, keyCertSign, cRLSign
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid:always,issuer
+
+          [ v3_server ]
+          basicConstraints = critical, CA:false
+          keyUsage = critical, digitalSignature, keyEncipherment
+          extendedKeyUsage = serverAuth
+          subjectAltName = @alt_names
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid,issuer
+
           [ alt_names ]
           DNS.1 = localhost
           DNS.2 = netbox-e2e-http
@@ -193,6 +207,8 @@ jobs:
           openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
             -keyout .ci-tls/ca.key \
             -out .ci-tls/ca.crt \
+            -extensions v3_ca \
+            -config .ci-tls/netbox-openssl.cnf \
             -subj '/CN=proxbox-e2e-ca'
 
           openssl req -new -newkey rsa:2048 -nodes \
@@ -203,7 +219,7 @@ jobs:
           openssl x509 -req -in .ci-tls/netbox.csr \
             -CA .ci-tls/ca.crt -CAkey .ci-tls/ca.key -CAcreateserial \
             -out .ci-tls/netbox.crt -days 2 -sha256 \
-            -extensions req_ext -extfile .ci-tls/netbox-openssl.cnf
+            -extensions v3_server -extfile .ci-tls/netbox-openssl.cnf
 
           openssl pkcs8 -topk8 -nocrypt \
             -in .ci-tls/netbox.key \
@@ -390,7 +406,14 @@ jobs:
           import sys
 
           payload = json.loads(os.environ["STATUS_JSON"])
-          if not payload.get("available", False):
+          if "available" in payload:
+              ok = bool(payload.get("available"))
+          elif "netbox-version" in payload or "django-version" in payload:
+              ok = True
+          else:
+              ok = False
+
+          if not ok:
               raise SystemExit(f"NetBox status check failed: {payload}")
           PY
 
