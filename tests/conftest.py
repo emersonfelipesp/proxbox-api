@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlmodel import Session, SQLModel, create_engine
 
 from proxbox_api.database import get_session
@@ -87,8 +88,11 @@ def reset_fastapi_state():
 
 
 @pytest.fixture
-def test_api_key(db_session):
+def test_api_key(db_engine, db_session):
     """Create a test API key for authenticated tests.
+
+    This fixture sets up the dependency override for get_session so that
+    the authentication middleware uses the test database.
 
     Returns the raw key value for use in X-Proxbox-API-Key header.
     """
@@ -96,7 +100,41 @@ def test_api_key(db_session):
 
     raw_key = "test-api-key-for-unit-tests-0000000000000000"
     ApiKey.store_key(db_session, raw_key, label="test-key")
-    return raw_key
+
+    def override_get_session():
+        with Session(db_engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    yield raw_key
+    app.dependency_overrides.pop(get_session, None)
+
+
+@pytest.fixture
+def auth_headers(test_api_key):
+    """Return headers dict with test API key for authenticated requests.
+
+    Usage:
+        async with AsyncClient(...) as client:
+            resp = await client.get("/protected", headers=auth_headers)
+    """
+    return {"X-Proxbox-API-Key": test_api_key}
+
+
+@pytest.fixture
+async def authenticated_client(test_api_key, client_with_fake_netbox):
+    """AsyncClient with test API key pre-configured in headers.
+
+    Usage:
+        async with authenticated_client as client:
+            resp = await client.get("/protected")
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
+        yield client
 
 
 @pytest.fixture

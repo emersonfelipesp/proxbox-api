@@ -115,8 +115,12 @@ async def test_backend_logs_view_forwards_id_cursors(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_backend_logs_route_rejects_invalid_level():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def test_backend_logs_route_rejects_invalid_level(test_api_key):
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.get("/admin/logs?level=bogus")
 
     assert response.status_code == 422
