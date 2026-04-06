@@ -35,6 +35,8 @@ from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_mach
 
 
 @pytest.mark.asyncio
+@pytest.mark.mock_backend
+@pytest.mark.mock_http
 class TestBackupsSync:
     """E2E tests for backup synchronization."""
 
