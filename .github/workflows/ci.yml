@@ -63,177 +63,14 @@ jobs:
           uv run python -c "import proxmox_openapi.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
-      - name: Build local proxmox-openapi image
-        run: |
-          cd proxmox-openapi
-          docker build -t proxmox-mock-local:ci .
-
-      - name: Start local mock container
+      - name: Start local mock container (for HTTP tests)
         run: |
           docker rm -f proxmox-mock-local 2>/dev/null || true
           docker run -d --name proxmox-mock-local \
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f http://localhost:8000/health" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 5 \
-            --health-start-period 10s \
-            proxmox-mock-local:ci
-
-      - name: Wait for local mock container health
-        run: |
-          for i in {1..30}; do
-            if docker inspect --format='{{.State.Health.Status}}' proxmox-mock-local 2>/dev/null | grep -q "healthy"; then
-              echo "Local mock container is healthy"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "Timeout waiting for local mock container"
-              docker logs proxmox-mock-local
-              exit 1
-            fi
-            sleep 2
-          done
-
-      - name: Run MockBackend tests (fast fail)
-        env:
-          PROXMOX_API_MODE: mock
-        run: |
-          uv run pytest -n auto --cov=proxbox_api --cov-report=term-missing --cov-report=xml \
-            tests --ignore=tests/e2e \
-            -m "mock_backend and not mock_http" \
-            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
-            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
-            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
-            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80 \
-            --deselect=tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists \
-            -v
-
-      - name: Run HTTP tests (published image)
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_PUBLISHED_URL: http://localhost:8006
-        run: |
-          uv run pytest -n auto \
-            tests --ignore=tests/e2e \
-            -m "mock_http and not mock_backend" \
-            --proxbox-mock-url=http://localhost:8006 \
-            -v
-
-      - name: Run HTTP tests (local build)
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_LOCAL_URL: http://localhost:8007
-        run: |
-          uv run pytest -n auto \
-            tests --ignore=tests/e2e \
-            -m "mock_http and not mock_backend" \
-            --proxbox-mock-url=http://localhost:8007 \
-            -v
-
-      - name: Cleanup local container
-        if: always()
-        run: docker rm -f proxmox-mock-local
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v7
-        with:
-          name: proxbox-api-coverage
-          path: coverage.xml
-
-  benchmark:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: "3.12"
-
-      - name: Sync dependencies
-        run: uv sync --frozen --extra test --group dev
-
-      - name: Run cache performance benchmarks
-        run: |
-          uv run pytest tests/test_session_and_helpers.py -k "cache" -v --tb=short 2>&1 | tee benchmark_cache.log
-          echo "Cache benchmark metrics:"
-          grep -E "(PASSED|FAILED|test_cache)" benchmark_cache.log || true
-
-      - name: Upload benchmark logs
-        uses: actions/upload-artifact@v7
-        with:
-          name: benchmark-cache-logs
-          path: benchmark_cache.log
-          retention-days: 7
-
-  # Publish Docker images only from main branch pushes.
-  docker-images:
-    name: Publish Docker images (Hub)
-    needs: [test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/docker-hub-publish.yml
-    with:
-      source_ref: ${{ github.sha }}
-      mode: publish
-    secrets: inherit
-
-  # Three parallel E2E test jobs: local NetBox demo, HTTP Docker image, HTTPS Docker image.
-  # Each uses different mock data to avoid conflicts.
-  e2e-demo:
-    runs-on: ubuntu-latest
-    needs: [test, docker-images]
-    if: |
-      !cancelled() &&
-      needs.test.result == 'success' &&
-      (needs.docker-images.result == 'success' || needs.docker-images.result == 'skipped')
-    services:
-      proxmox-mock-published:
-        image: emersonfelipesp/proxmox-openapi:latest
-        ports:
-          - 8006:8000
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_SCHEMA_VERSION: latest
-        options: >-
-          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
-          --health-interval 10s
-          --health-timeout 15s
-          --health-retries 8
-          --health-start-period 30s
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: "3.12"
-
-      - name: Sync dependencies
-        run: uv sync --frozen --extra e2e --group dev
-
-      - name: Install Playwright browsers
-        run: uv run playwright install chromium --with-deps
-
-      - name: Build local proxmox-openapi image
-        run: |
-          cd proxmox-openapi
-          docker build -t proxmox-mock-local:e2e .
-
-      - name: Start local mock container
-        run: |
-          docker rm -f proxmox-mock-local 2>/dev/null || true
-          docker run -d --name proxmox-mock-local \
-            -p 8007:8000 \
-            -e PROXMOX_API_MODE=mock \
-            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            proxmox-mock-local:e2e
+            emersonfelipesp/proxmox-openapi:latest
 
       - name: Wait for local mock container to be ready
         run: |
@@ -294,20 +131,6 @@ jobs:
       needs.docker-images.result == 'success'
     env:
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
-    services:
-      proxmox-mock-published:
-        image: emersonfelipesp/proxmox-openapi:latest
-        ports:
-          - 8006:8000
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_SCHEMA_VERSION: latest
-        options: >-
-          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
-          --health-interval 10s
-          --health-timeout 15s
-          --health-retries 8
-          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -321,10 +144,14 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra e2e --group dev
 
-      - name: Build local proxmox-openapi image
+      - name: Start proxmox-mock service
         run: |
-          cd proxmox-openapi
-          docker build -t proxmox-mock-local:e2e .
+          docker rm -f proxmox-mock-published 2>/dev/null || true
+          docker run -d --name proxmox-mock-published \
+            -p 8006:8000 \
+            -e PROXMOX_API_MODE=mock \
+            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
+            emersonfelipesp/proxmox-openapi:latest
 
       - name: Start local mock container
         run: |
@@ -333,12 +160,7 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
-            --health-interval 10s \
-            --health-timeout 15s \
-            --health-retries 8 \
-            --health-start-period 30s \
-            proxmox-mock-local:e2e
+            emersonfelipesp/proxmox-openapi:latest
 
       - name: "E2E — published image for current commit (raw uvicorn, HTTP)"
         run: |
@@ -379,20 +201,6 @@ jobs:
       needs.docker-images.result == 'success'
     env:
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
-    services:
-      proxmox-mock-published:
-        image: emersonfelipesp/proxmox-openapi:latest
-        ports:
-          - 8006:8000
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_SCHEMA_VERSION: latest
-        options: >-
-          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
-          --health-interval 10s
-          --health-timeout 15s
-          --health-retries 8
-          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -406,10 +214,14 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra e2e --group dev
 
-      - name: Build local proxmox-openapi image
+      - name: Start proxmox-mock service
         run: |
-          cd proxmox-openapi
-          docker build -t proxmox-mock-local:e2e .
+          docker rm -f proxmox-mock-published 2>/dev/null || true
+          docker run -d --name proxmox-mock-published \
+            -p 8006:8000 \
+            -e PROXMOX_API_MODE=mock \
+            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
+            emersonfelipesp/proxmox-openapi:latest
 
       - name: Start local mock container
         run: |
@@ -418,12 +230,7 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
-            --health-interval 10s \
-            --health-timeout 15s \
-            --health-retries 8 \
-            --health-start-period 30s \
-            proxmox-mock-local:e2e
+            emersonfelipesp/proxmox-openapi:latest
 
       - name: "E2E — published image for current commit (nginx + mkcert HTTPS + uvicorn)"
         run: |
@@ -465,20 +272,6 @@ jobs:
       needs.docker-images.result == 'success'
     env:
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
-    services:
-      proxmox-mock-published:
-        image: emersonfelipesp/proxmox-openapi:latest
-        ports:
-          - 8006:8000
-        env:
-          PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_SCHEMA_VERSION: latest
-        options: >-
-          --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8006/"
-          --health-interval 10s
-          --health-timeout 15s
-          --health-retries 8
-          --health-start-period 30s
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -492,10 +285,14 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra e2e --group dev
 
-      - name: Build local proxmox-openapi image
+      - name: Start proxmox-mock service
         run: |
-          cd proxmox-openapi
-          docker build -t proxmox-mock-local:e2e .
+          docker rm -f proxmox-mock-published 2>/dev/null || true
+          docker run -d --name proxmox-mock-published \
+            -p 8006:8000 \
+            -e PROXMOX_API_MODE=mock \
+            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
+            emersonfelipesp/proxmox-openapi:latest
 
       - name: Start local mock container
         run: |
@@ -504,12 +301,7 @@ jobs:
             -p 8007:8000 \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            --health-cmd "curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/health || curl -f --connect-timeout 5 --max-time 10 http://localhost:8007/" \
-            --health-interval 10s \
-            --health-timeout 15s \
-            --health-retries 8 \
-            --health-start-period 30s \
-            proxmox-mock-local:e2e
+            emersonfelipesp/proxmox-openapi:latest
 
       - name: "E2E — published image for current commit (granian + mkcert HTTPS)"
         run: |
