@@ -32,6 +32,8 @@ from proxbox_api.proxmox_to_netbox.models import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.mock_backend
+@pytest.mark.mock_http
 class TestDevicesSync:
     """E2E tests for device synchronization."""
 
