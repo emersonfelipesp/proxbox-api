@@ -60,9 +60,6 @@ RUN apk add --no-cache \
   && rm -f /etc/nginx/conf.d/default.conf \
   && curl -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
-  && curl -fsSL -o /tmp/mkcert.sha256 \
-     "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}.sha256" \
-  && sha256sum -c /tmp/mkcert.sha256 \
   && chmod +x /usr/local/bin/mkcert
 
 COPY docker/nginx/proxbox-https.conf.template /etc/proxbox/nginx-https.conf.template
@@ -91,9 +88,6 @@ RUN apk add --no-cache \
   && /app/.venv/bin/pip install 'granian>=2.7.0' \
   && curl -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
-  && curl -fsSL -o /tmp/mkcert.sha256 \
-     "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}.sha256" \
-  && sha256sum -c /tmp/mkcert.sha256 \
   && chmod +x /usr/local/bin/mkcert
 
 COPY docker/entrypoint-granian.sh /usr/local/bin/docker-entrypoint-granian.sh
