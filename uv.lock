@@ -1649,7 +1649,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.6.post5"
+version = "0.0.7"
 source = { editable = "." }
 dependencies = [
     { name = "bcrypt" },

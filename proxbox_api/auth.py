@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 
 import bcrypt
-from sqlalchemy.orm import Session
+from sqlmodel import Session
 
 from proxbox_api.database import ApiKey, AuthLockout, engine
 
@@ -80,7 +80,6 @@ def check_auth_header(api_key: str | None, client_ip: str) -> tuple[bool, str | 
     raw_key = os.environ.get("PROXBOX_API_KEY", "").strip()
 
     if not raw_key:
-        # Fall back to database-stored keys.
         with Session(engine) as session:
             if ApiKey.has_any_key(session):
                 if not api_key or not ApiKey.verify_any(session, api_key):
