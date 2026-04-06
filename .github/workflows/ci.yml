@@ -56,7 +56,7 @@ jobs:
         include:
           - netbox_transport: https_nginx
             netbox_public_url: https://127.0.0.1:18443
-            netbox_endpoint_host: netbox-e2e-nginx
+            netbox_endpoint_host: 127.0.0.1
             netbox_endpoint_port: 8443
             netbox_endpoint_verify_ssl: true
             netbox_wait_url: https://127.0.0.1:18443/api/
@@ -379,9 +379,20 @@ jobs:
             -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}" \
             --data "{\"name\":\"e2e-netbox\",\"ip_address\":\"${{ matrix.netbox_endpoint_host }}\",\"domain\":\"\",\"port\":${{ matrix.netbox_endpoint_port }},\"token_version\":\"v1\",\"token\":\"${NETBOX_API_TOKEN}\",\"verify_ssl\":${{ matrix.netbox_endpoint_verify_ssl }}}"
 
-          curl ${{ matrix.proxbox_curl_flags }} -fsS \
+          STATUS_JSON=$(curl ${{ matrix.proxbox_curl_flags }} -sS \
             "${{ matrix.proxbox_base_url }}/netbox/status" \
-            -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}" >/dev/null
+            -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}")
+          echo "$STATUS_JSON"
+          export STATUS_JSON
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          payload = json.loads(os.environ["STATUS_JSON"])
+          if not payload.get("available", False):
+              raise SystemExit(f"NetBox status check failed: {payload}")
+          PY
 
       - name: Run E2E tests (Docker proxmox mock)
         env:

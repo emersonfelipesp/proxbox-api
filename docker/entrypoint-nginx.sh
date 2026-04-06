@@ -28,6 +28,7 @@ chgrp nginx "$CERT_DIR/key.pem" 2>/dev/null || true
 chmod 640 "$CERT_DIR/key.pem" 2>/dev/null || true
 
 PORT="${PORT:-8000}"
+mkdir -p /etc/nginx/conf.d
 
 CERT_ESC=$(echo "$CERT_DIR/cert.pem" | sed 's/[\/&]/\\&/g')
 KEY_ESC=$(echo "$CERT_DIR/key.pem" | sed 's/[\/&]/\\&/g')
