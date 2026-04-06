@@ -6,6 +6,8 @@ import ipaddress
 import os
 import re
 
+from proxbox_api.logger import logger
+
 INTERNAL_IP_RANGES = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -27,9 +29,19 @@ INTERNAL_IP_RANGES = (
 
 
 def _is_ssrf_protection_enabled() -> bool:
-    """Check if SSRF protection is enabled via environment variable."""
+    """Check if SSRF protection is enabled via environment variable.
+
+    Returns True if enabled (default), False if explicitly disabled.
+    Logs a warning when SSRF protection is disabled.
+    """
     flag = os.environ.get("PROXBOX_SSRF_PROTECTION", "true").lower()
-    return flag in ("true", "1", "yes")
+    enabled = flag in ("true", "1", "yes")
+    if not enabled:
+        logger.warning(
+            "SSRF protection is DISABLED. This is dangerous in production. "
+            "Set PROXBOX_SSRF_PROTECTION=true to enable."
+        )
+    return enabled
 
 
 def is_ip_blocked(ip: str) -> bool:

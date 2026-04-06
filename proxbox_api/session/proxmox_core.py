@@ -11,6 +11,29 @@ from proxbox_api.proxmox_async import resolve_sync
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 
 
+class SensitiveString:
+    """Wrapper for sensitive string values to prevent accidental exposure in logs/serialization."""
+
+    def __init__(self, value: str | None):
+        self._value = value
+
+    def __str__(self) -> str:
+        return "[REDACTED]"
+
+    def __repr__(self) -> str:
+        return "[REDACTED]"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, SensitiveString):
+            return self._value == other._value
+        if isinstance(other, str):
+            return self._value == other
+        return False
+
+    def get(self) -> str | None:
+        return self._value
+
+
 def _proxmox_api_factory() -> object:
     """Return ``ProxmoxAPI`` from ``session.proxmox`` so tests can monkeypatch it."""
     import proxbox_api.session.proxmox as prox_mod
@@ -42,7 +65,7 @@ class ProxmoxSession:
                     detail="ProxmoxSession failed to parse string input as JSON.",
                     python_exception=str(error),
                 ) from error
-            logger.info("json.loads: %s — type: %s", cluster_config, type(cluster_config))
+            logger.debug("json.loads parsed: type=%s", type(cluster_config))
         elif isinstance(cluster_config, Mapping):
             logger.info("INPUT is dict")
             cluster_config = dict(cluster_config)
@@ -57,9 +80,9 @@ class ProxmoxSession:
             self.domain = cluster_config["domain"]
             self.http_port = cluster_config["http_port"]
             self.user = cluster_config["user"]
-            self.password = cluster_config["password"]
+            self.password = SensitiveString(cluster_config["password"])
             self.token_name = cluster_config["token"]["name"]
-            self.token_value = cluster_config["token"]["value"]
+            self.token_value = SensitiveString(cluster_config["token"]["value"])
             self.ssl = cluster_config["ssl"]
 
             self._normalize_token_auth_fields()
@@ -81,10 +104,14 @@ class ProxmoxSession:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
             # Prefer using token to authenticate
-
+            token_val = (
+                self.token_value.get()
+                if isinstance(self.token_value, SensitiveString)
+                else self.token_value
+            )
             self.proxmox = (
                 self._auth(auth_method="token")
-                if self.token_name and self.token_value
+                if self.token_name and token_val
                 else self._auth(auth_method="password")
             )
             if self.proxmox:
@@ -193,14 +220,18 @@ class ProxmoxSession:
                     "port": self.http_port,
                     "user": self.user,
                     "token_name": self.token_name,
-                    "token_value": self.token_value,
+                    "token_value": self.token_value.get()
+                    if isinstance(self.token_value, SensitiveString)
+                    else self.token_value,
                     "verify_ssl": self.ssl,
                 }
                 if auth_method == "token"
                 else {
                     "port": self.http_port,
                     "user": self.user,
-                    "password": self.password,
+                    "password": self.password.get()
+                    if isinstance(self.password, SensitiveString)
+                    else self.password,
                     "verify_ssl": self.ssl,
                 }
             )
@@ -253,8 +284,13 @@ class ProxmoxSession:
     def _normalize_token_auth_fields(self) -> None:
         """Normalize token fields from common Proxmox token string formats."""
 
+        raw_token_value = (
+            self.token_value.get()
+            if isinstance(self.token_value, SensitiveString)
+            else self.token_value
+        )
         token_name = (self.token_name or "").strip()
-        token_value = (self.token_value or "").strip()
+        token_value = (raw_token_value or "").strip()
 
         if token_name and token_name.startswith("PVEAPIToken=") and "!" in token_name:
             token_name = token_name.split("!", 1)[1].strip()
@@ -275,7 +311,7 @@ class ProxmoxSession:
                 token_value = parsed_value
 
         self.token_name = token_name or None
-        self.token_value = token_value or None
+        self.token_value = SensitiveString(token_value) if token_value else None
 
     @staticmethod
     def _is_permission_denied_error(error: Exception) -> bool:

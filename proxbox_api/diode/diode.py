@@ -1,5 +1,7 @@
 """Experimental Diode client integration example script."""
 
+import os
+
 from netboxlabs.diode.sdk import DiodeClient
 from netboxlabs.diode.sdk.ingester import (
     Device,
@@ -11,11 +13,16 @@ from proxbox_api.logger import logger
 
 
 def main() -> None:
+    api_key = os.environ.get("DIODE_API_KEY", "")
+    if not api_key:
+        logger.error("DIODE_API_KEY environment variable is not set")
+        return
+
     with DiodeClient(
         target="grpc://localhost:8081",
         app_name="my-test-app",
         app_version="0.0.1",
-        api_key="5a52c45ee8231156cb620d193b0291912dd15433",
+        api_key=api_key,
     ) as client:
         entities = []
 
