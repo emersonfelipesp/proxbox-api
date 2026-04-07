@@ -166,4 +166,8 @@
 ## E2E Transport Stabilization (Round 9)
 
 - [x] Fix backup E2E subtype payloads to use NetBox choice-compatible values (`qemu`/`lxc`) instead of unsupported `private`.
+
+## E2E Transport Stabilization (Round 10)
+
+- [x] Align backup sync payload with plugin model by including legacy `storage` alongside `proxmox_storage`.
 - [ ] Re-run CI matrix and verify all 6 transport combinations pass E2E backup tests.

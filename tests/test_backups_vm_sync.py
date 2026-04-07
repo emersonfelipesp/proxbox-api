@@ -87,6 +87,7 @@ def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
 
     assert result is not None
     assert reconciled[0][1]["proxmox_storage"] == 99
+    assert reconciled[0][1]["storage"] == "local-zfs"
     assert journal_entries[0]["assigned_object_type"] == "netbox_proxbox.vmbackup"
     assert journal_entries[0]["assigned_object_id"] == 55
 
