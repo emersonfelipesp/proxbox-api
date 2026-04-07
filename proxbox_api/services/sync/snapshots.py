@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from datetime import datetime
 
@@ -284,12 +285,15 @@ async def _collect_snapshot_tasks_for_vm(
 
     async def _fetch_snapshots_for_endpoint(proxmox):
         async with fetch_semaphore:
-            return await get_vm_snapshots(
+            result = get_vm_snapshots(
                 session=proxmox.session,
                 node=node_name,
                 vm_type=proxmox_type,
                 vmid=int(vmid),
             )
+            if inspect.isawaitable(result):
+                return await result
+            return result
 
     snapshot_results = await asyncio.gather(
         *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],

@@ -11,7 +11,7 @@ from fastapi import Depends
 from netbox_sdk.client import NetBoxApiClient
 from netbox_sdk.config import Config
 from netbox_sdk.facade import Api
-from sqlmodel import Session, select
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
@@ -96,7 +96,7 @@ async def _maybe_await(value):
 
 
 def get_netbox_session(
-    database_session: DatabaseSessionDep | Session,
+    database_session: DatabaseSessionDep,
     netbox_id: int | None = None,
 ) -> Api:
     """
@@ -221,8 +221,8 @@ async def get_netbox_async_session(
         )
 
 
-NetBoxSessionDep = Annotated[Api, Depends(get_netbox_async_session)]
-NetBoxAsyncSessionDep = Annotated[Api, Depends(get_netbox_async_session)]
+NetBoxSessionDep = Annotated[object, Depends(get_netbox_session)]
+NetBoxAsyncSessionDep = Annotated[object, Depends(get_netbox_async_session)]
 
 
 async def check_netbox_connection(nb: Api) -> dict[str, object]:

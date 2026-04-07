@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import re
@@ -10,6 +11,7 @@ from typing import Any
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 
 
@@ -46,8 +48,14 @@ def _proxmox_api_factory() -> Any:
 class ProxmoxSession:
     """Proxmox API session wrapper with async factory pattern."""
 
-    def __init__(self) -> None:
-        """Initialize empty session. Use create() factory method for async initialization."""
+    def __init__(
+        self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str | None = None
+    ) -> None:
+        """Initialize empty session.
+
+        If ``cluster_config`` is provided, perform eager initialization for
+        backwards-compatible sync call sites.
+        """
         self.CONNECTED = False
         self.permission_limited = False
         self.ip_address: str | None = None
@@ -67,6 +75,12 @@ class ProxmoxSession:
         self.node_name: str | None = None
         self.fingerprints: list[str] | None = None
         self.name: str | None = None
+
+        if cluster_config is not None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(self._initialize(cluster_config))
 
     def __repr__(self) -> str:
         return f"Proxmox Connection Object. URL: {self.domain}:{self.http_port}"
@@ -157,7 +171,7 @@ class ProxmoxSession:
     async def _post_connect_init(self) -> None:
         """Async post-connection initialization."""
         try:
-            self.cluster_status = await self.session("cluster/status").get()
+            self.cluster_status = await resolve_async(self.session("cluster/status").get())
         except Exception as error:
             if self._is_permission_denied_error(error):
                 logger.warning(
@@ -208,7 +222,7 @@ class ProxmoxSession:
             logger.info("Using domain %s to authenticate with Proxmox", self.domain)
             proxmox_session = _proxmox_api_factory()(self.domain, **kwargs)
             try:
-                self.version = await proxmox_session.version.get()
+                self.version = await resolve_async(proxmox_session.version.get())
                 return proxmox_session
             except Exception as error:
                 logger.info(
@@ -221,7 +235,7 @@ class ProxmoxSession:
         try:
             logger.info("Using IP %s to authenticate with Proxmox", self.ip_address)
             proxmox_session = _proxmox_api_factory()(self.ip_address, **kwargs)
-            self.version = await proxmox_session.version.get()
+            self.version = await resolve_async(proxmox_session.version.get())
             return proxmox_session
         except Exception as error:
             raise ProxboxException(
@@ -333,7 +347,8 @@ class ProxmoxSession:
     async def _get_node_fingerprints_async(self, px: Any) -> list[str]:
         """Get Nodes Fingerprints asynchronously."""
         try:
-            join_info = await px("cluster/config/join").get()
+            join_info = px("cluster/config/join").get()
+            join_info = await resolve_async(join_info)
             fingerprints: list[str] = []
             for node in join_info.get("nodelist", []):
                 fingerprints.append(node.get("pve_fp"))
