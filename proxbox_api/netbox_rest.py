@@ -7,6 +7,7 @@ import json
 import os
 import random
 import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -992,6 +993,481 @@ async def rest_patch_async(
 
     # Should not reach here
     return await _do_request()
+
+
+async def rest_bulk_create_async(
+    nb: object,
+    path: str,
+    payloads: list[dict[str, object]],
+) -> list[RestRecord]:
+    """Bulk-create NetBox records via a single POST with a JSON array."""
+    if not payloads:
+        return []
+    api = _unwrap_api(nb)
+    semaphore = _get_netbox_semaphore()
+    normalized_path = _normalize_path(path)
+
+    async def _do_request() -> list[RestRecord]:
+        try:
+            response = await api.client.request("POST", normalized_path, payload=payloads)
+        except Exception as e:
+            _handle_netbox_error(e, f"bulk create {path}")
+            raise
+        body = _extract_payload(response)
+        items: list[dict[str, object]]
+        if isinstance(body, list):
+            items = body
+        elif isinstance(body, dict):
+            items = body.get("results", [body]) if "results" in body else [body]
+        else:
+            raise ProxboxException(message="NetBox bulk create response was not JSON")
+        records = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            _invalidate_get_cache_for_record(api, normalized_path, item)
+            records.append(RestRecord(api, normalized_path, item))
+        return records
+
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                return await _do_request()
+            except Exception as e:
+                if attempt == max_retries or not _is_transient_netbox_error(e):
+                    raise
+                delay = _compute_retry_delay(base_delay, attempt, e)
+                logger.warning(
+                    "NetBox bulk create failed (attempt %s/%s), retrying in %ss: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    str(e)[:200],
+                )
+        await asyncio.sleep(delay)
+
+    return await _do_request()
+
+
+async def rest_bulk_patch_async(
+    nb: object,
+    path: str,
+    updates: list[dict[str, object]],
+) -> list[RestRecord]:
+    """Bulk-update NetBox records via a single PATCH with a JSON array of {id, ...fields}."""
+    if not updates:
+        return []
+    api = _unwrap_api(nb)
+    semaphore = _get_netbox_semaphore()
+    normalized_path = _normalize_path(path)
+
+    async def _do_request() -> list[RestRecord]:
+        try:
+            response = await api.client.request("PATCH", normalized_path, payload=updates)
+        except Exception as e:
+            _handle_netbox_error(e, f"bulk patch {path}")
+            raise
+        body = _extract_payload(response)
+        items: list[dict[str, object]]
+        if isinstance(body, list):
+            items = body
+        elif isinstance(body, dict):
+            items = body.get("results", [body]) if "results" in body else [body]
+        else:
+            raise ProxboxException(message="NetBox bulk patch response was not JSON")
+        records = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            _invalidate_get_cache_for_record(api, normalized_path, item)
+            records.append(RestRecord(api, normalized_path, item))
+        return records
+
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                return await _do_request()
+            except Exception as e:
+                if attempt == max_retries or not _is_transient_netbox_error(e):
+                    raise
+                delay = _compute_retry_delay(base_delay, attempt, e)
+                logger.warning(
+                    "NetBox bulk patch failed (attempt %s/%s), retrying in %ss: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    str(e)[:200],
+                )
+        await asyncio.sleep(delay)
+
+    return await _do_request()
+
+
+async def rest_bulk_delete_async(
+    nb: object,
+    path: str,
+    ids: list[int],
+) -> int:
+    """Bulk-delete NetBox records by ID via DELETE with query params ?id=1&id=2&..."""
+    if not ids:
+        return 0
+    api = _unwrap_api(nb)
+    semaphore = _get_netbox_semaphore()
+    normalized_path = _normalize_path(path)
+    query: dict[str, object] = {"id": ",".join(str(i) for i in ids)}
+
+    async def _do_request() -> int:
+        try:
+            response = await api.client.request(
+                "DELETE",
+                normalized_path,
+                query=query,
+                expect_json=False,
+            )
+        except Exception as e:
+            _handle_netbox_error(e, f"bulk delete {path}")
+            raise
+        if response.status < 200 or response.status >= 300:
+            detail = response.text
+            try:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    detail = str(payload.get("detail") or payload.get("message") or detail)
+            except json.JSONDecodeError:
+                pass
+            raise ProxboxException(message="NetBox REST bulk delete failed", detail=detail)
+        _invalidate_get_cache_for_path(api, normalized_path)
+        return len(ids)
+
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                return await _do_request()
+            except Exception as e:
+                if attempt == max_retries or not _is_transient_netbox_error(e):
+                    raise
+                delay = _compute_retry_delay(base_delay, attempt, e)
+                logger.warning(
+                    "NetBox bulk delete failed (attempt %s/%s), retrying in %ss: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    str(e)[:200],
+                )
+        await asyncio.sleep(delay)
+
+    return await _do_request()
+
+
+@dataclass(slots=True)
+class BulkReconcileResult:
+    records: list[RestRecord]
+    created: int
+    updated: int
+    unchanged: int
+
+
+@dataclass(slots=True)
+class BulkReconcilePhase:
+    name: str
+    path: str
+    payloads: list[dict[str, object]]
+    lookup_fields: list[str]
+    schema: type[BaseModel] | type[dict]
+    current_normalizer: Any
+    patchable_fields: set[str] | frozenset[str] | None = None
+    batch_size: int | None = None
+    batch_delay_ms: int | None = None
+    selector: Any = None
+
+
+def _normalize_bulk_batch_size(batch_size: int | None) -> int:
+    if batch_size is not None:
+        return max(1, int(batch_size))
+    raw = os.environ.get("PROXBOX_BULK_BATCH_SIZE", "").strip()
+    if not raw:
+        return 50
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 50
+
+
+def _normalize_bulk_batch_delay_ms(delay_ms: int | None) -> int:
+    if delay_ms is not None:
+        return max(0, int(delay_ms))
+    raw = os.environ.get("PROXBOX_BULK_BATCH_DELAY_MS", "").strip()
+    if not raw:
+        return 500
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 500
+
+
+def _build_lookup_dict_from_fields(
+    payload: dict[str, object],
+    lookup_fields: list[str],
+) -> dict[str, object]:
+    lookup: dict[str, object] = {}
+    for field in lookup_fields:
+        value = payload.get(field)
+        if value not in (None, ""):
+            lookup[field] = value
+    return lookup
+
+
+def _lookup_tuple(lookup: dict[str, object]) -> tuple[tuple[str, object], ...] | None:
+    normalized = {key: value for key, value in lookup.items() if value not in (None, "")}
+    if not normalized:
+        return None
+    try:
+        return tuple(sorted(normalized.items()))
+    except TypeError:
+        return tuple(sorted((key, str(value)) for key, value in normalized.items()))
+
+
+async def rest_list_paginated_async(
+    nb: object,
+    path: str,
+    *,
+    base_query: dict[str, object] | None = None,
+    page_size: int = 200,
+    max_offset: int = 10_000,
+) -> list[RestRecord]:
+    records: list[RestRecord] = []
+    offset = 0
+    while offset <= max_offset:
+        query = dict(base_query or {})
+        query["limit"] = page_size
+        query["offset"] = offset
+        page = await rest_list_async(nb, path, query=query)
+        if not page:
+            break
+        records.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return records
+
+
+async def rest_bulk_reconcile_async(  # noqa: C901
+    nb: object,
+    path: str,
+    *,
+    payloads: list[dict[str, object]],
+    lookup_fields: list[str],
+    schema: type[BaseModel] | type[dict],
+    current_normalizer,
+    patchable_fields: set[str] | frozenset[str] | None = None,
+    batch_size: int | None = None,
+    batch_delay_ms: int | None = None,
+    selector=None,
+) -> BulkReconcileResult:
+    if not payloads:
+        return BulkReconcileResult(records=[], created=0, updated=0, unchanged=0)
+
+    supports_model_validation = hasattr(schema, "model_validate") and hasattr(schema, "model_dump")
+    resolved_batch_size = _normalize_bulk_batch_size(batch_size)
+    resolved_batch_delay_ms = _normalize_bulk_batch_delay_ms(batch_delay_ms)
+
+    desired_entries: list[tuple[dict[str, object], dict[str, object]]] = []
+    seen_desired: set[tuple[tuple[str, object], ...]] = set()
+    for payload in payloads:
+        if supports_model_validation:
+            desired_model = schema.model_validate(payload)
+            desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
+        else:
+            desired_payload = {key: value for key, value in payload.items() if value is not None}
+        lookup = _build_lookup_dict_from_fields(desired_payload, lookup_fields)
+        lookup_key = _lookup_tuple(lookup)
+        if lookup_key is None or lookup_key in seen_desired:
+            continue
+        seen_desired.add(lookup_key)
+        desired_entries.append((desired_payload, lookup))
+
+    existing_records = await rest_list_paginated_async(nb, path)
+    existing_groups: dict[tuple[tuple[str, object], ...], list[RestRecord]] = {}
+    for record in existing_records:
+        try:
+            current_normalized = current_normalizer(record.serialize())
+            if supports_model_validation:
+                current_model = schema.model_validate(current_normalized)
+                current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+            else:
+                current_payload = {
+                    key: value
+                    for key, value in dict(current_normalized or {}).items()
+                    if value is not None
+                }
+        except Exception:
+            logger.debug(
+                "Skipping NetBox record during bulk reconcile (validation failed)",
+                exc_info=True,
+            )
+            continue
+        existing_lookup = _build_lookup_dict_from_fields(current_payload, lookup_fields)
+        existing_lookup_key = _lookup_tuple(existing_lookup)
+        if existing_lookup_key is None:
+            continue
+        existing_groups.setdefault(existing_lookup_key, []).append(record)
+
+    def _select_existing(lookup_key: tuple[tuple[str, object], ...]) -> RestRecord | None:
+        candidates = existing_groups.get(lookup_key, [])
+        if not candidates:
+            return None
+        if selector is not None:
+            selected = selector(candidates)
+            if selected is not None:
+                return selected
+        return candidates[0]
+
+    to_create: list[tuple[dict[str, object], dict[str, object]]] = []
+    to_patch: list[tuple[RestRecord, dict[str, object], dict[str, object]]] = []
+    records: list[RestRecord] = []
+    unchanged = 0
+
+    for desired_payload, lookup in desired_entries:
+        lookup_key = _lookup_tuple(lookup)
+        if lookup_key is None:
+            continue
+        existing_record = _select_existing(lookup_key)
+        if existing_record is None:
+            to_create.append((desired_payload, lookup))
+            continue
+        current_normalized = current_normalizer(existing_record.serialize())
+        if supports_model_validation:
+            current_model = schema.model_validate(current_normalized)
+            current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+        else:
+            current_payload = {
+                key: value
+                for key, value in dict(current_normalized or {}).items()
+                if value is not None
+            }
+        patch_payload = {
+            key: value
+            for key, value in desired_payload.items()
+            if current_payload.get(key) != value
+        }
+        if patchable_fields is not None:
+            allowed = {str(field) for field in patchable_fields}
+            patch_payload = {key: value for key, value in patch_payload.items() if key in allowed}
+        if patch_payload:
+            to_patch.append((existing_record, patch_payload, lookup))
+        else:
+            records.append(existing_record)
+            unchanged += 1
+
+    created = 0
+    for offset in range(0, len(to_create), resolved_batch_size):
+        batch = to_create[offset : offset + resolved_batch_size]
+        try:
+            created_records = await rest_bulk_create_async(
+                nb,
+                path,
+                [payload for payload, _lookup in batch],
+            )
+            records.extend(created_records)
+            created += len(created_records)
+        except Exception:
+            logger.warning(
+                "Bulk create fallback triggered for %s (%s item(s))",
+                path,
+                len(batch),
+                exc_info=True,
+            )
+            for payload, lookup in batch:
+                record = await rest_reconcile_async(
+                    nb,
+                    path,
+                    lookup=lookup,
+                    payload=payload,
+                    schema=schema,
+                    current_normalizer=current_normalizer,
+                    patchable_fields=patchable_fields,
+                )
+                records.append(record)
+                created += 1
+        if offset + resolved_batch_size < len(to_create) and resolved_batch_delay_ms > 0:
+            await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
+
+    updated = 0
+    for offset in range(0, len(to_patch), resolved_batch_size):
+        batch = to_patch[offset : offset + resolved_batch_size]
+        try:
+            patched_records = await rest_bulk_patch_async(
+                nb,
+                path,
+                [
+                    {"id": record.id, **patch_payload}
+                    for record, patch_payload, _lookup in batch
+                    if record.id is not None
+                ],
+            )
+            records.extend(patched_records)
+            updated += len(patched_records)
+        except Exception:
+            logger.warning(
+                "Bulk patch fallback triggered for %s (%s item(s))",
+                path,
+                len(batch),
+                exc_info=True,
+            )
+            for record, patch_payload, _lookup in batch:
+                if not patch_payload:
+                    records.append(record)
+                    continue
+                for field, value in patch_payload.items():
+                    setattr(record, field, value)
+                await record.save()
+                records.append(record)
+                updated += 1
+        if offset + resolved_batch_size < len(to_patch) and resolved_batch_delay_ms > 0:
+            await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
+
+    return BulkReconcileResult(
+        records=records,
+        created=created,
+        updated=updated,
+        unchanged=unchanged,
+    )
+
+
+async def rest_bulk_reconcile_phases_async(
+    nb: object,
+    phases: list[BulkReconcilePhase],
+) -> dict[str, BulkReconcileResult]:
+    results: dict[str, BulkReconcileResult] = {}
+    for phase in phases:
+        logger.info(
+            "Executing bulk reconcile phase '%s' for %s with %s payload(s)",
+            phase.name,
+            phase.path,
+            len(phase.payloads),
+        )
+        results[phase.name] = await rest_bulk_reconcile_async(
+            nb,
+            phase.path,
+            payloads=phase.payloads,
+            lookup_fields=phase.lookup_fields,
+            schema=phase.schema,
+            current_normalizer=phase.current_normalizer,
+            patchable_fields=phase.patchable_fields,
+            batch_size=phase.batch_size,
+            batch_delay_ms=phase.batch_delay_ms,
+            selector=phase.selector,
+        )
+    return results
 
 
 def nested_tag_payload(tag: object) -> list[dict[str, object]]:

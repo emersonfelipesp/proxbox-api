@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timezone
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
 from proxbox_api.services.proxmox_helpers import (
     dump_models,
@@ -415,21 +415,18 @@ async def sync_virtual_machine_task_history(
     normalized_tags = [tag for tag in (tag_refs or []) if tag.get("name") and tag.get("slug")]
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
     seen_upids: set[str] = set()
-    reconciled = 0
     now = datetime.now(timezone.utc)
+    task_payloads: list[dict[str, object]] = []
 
     for node_name in node_names:
         try:
             async with fetch_semaphore:
-                tasks = await asyncio.to_thread(
-                    lambda: dump_models(
-                        get_node_tasks(
-                            proxmox_session,
-                            node=node_name,
-                            vmid=virtual_machine_id,
-                        )
-                    )
+                raw_tasks = await get_node_tasks(
+                    proxmox_session,
+                    node=node_name,
+                    vmid=virtual_machine_id,
                 )
+                tasks = dump_models(raw_tasks)
         except Exception as error:
             logger.warning(
                 "Error fetching task history for VM %s on node %s: %s",
@@ -447,8 +444,8 @@ async def sync_virtual_machine_task_history(
 
             try:
                 async with fetch_semaphore:
-                    task_status = await asyncio.to_thread(
-                        lambda: get_node_task_status(proxmox_session, node=node_name, upid=upid)
+                    task_status = await get_node_task_status(
+                        proxmox_session, node=node_name, upid=upid
                     )
                 status_payload = task_status.model_dump(
                     mode="python",
@@ -474,41 +471,45 @@ async def sync_virtual_machine_task_history(
                 now=now,
             )
 
-            try:
-                await rest_reconcile_async(
-                    nb,
-                    "/api/plugins/proxbox/task-history/",
-                    lookup={"upid": upid},
-                    payload=payload,
-                    schema=NetBoxTaskHistorySyncState,
-                    current_normalizer=lambda record: {
-                        "virtual_machine": record.get("virtual_machine"),
-                        "vm_type": record.get("vm_type"),
-                        "upid": record.get("upid"),
-                        "node": record.get("node"),
-                        "pid": record.get("pid"),
-                        "pstart": record.get("pstart"),
-                        "task_id": record.get("task_id"),
-                        "task_type": record.get("task_type"),
-                        "username": record.get("username"),
-                        "start_time": record.get("start_time"),
-                        "end_time": record.get("end_time"),
-                        "description": record.get("description"),
-                        "status": record.get("status"),
-                        "task_state": record.get("task_state"),
-                        "exitstatus": record.get("exitstatus"),
-                        "tags": record.get("tags"),
-                        "custom_fields": record.get("custom_fields"),
-                    },
-                    patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
-                )
-                reconciled += 1
-            except Exception as error:
-                logger.warning(
-                    "Error reconciling task history for VM %s task %s: %s",
-                    virtual_machine_id,
-                    upid,
-                    error,
-                )
+            task_payloads.append(payload)
 
-    return reconciled
+    if not task_payloads:
+        return 0
+
+    try:
+        result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/plugins/proxbox/task-history/",
+            payloads=task_payloads,
+            lookup_fields=["upid"],
+            schema=NetBoxTaskHistorySyncState,
+            current_normalizer=lambda record: {
+                "virtual_machine": record.get("virtual_machine"),
+                "vm_type": record.get("vm_type"),
+                "upid": record.get("upid"),
+                "node": record.get("node"),
+                "pid": record.get("pid"),
+                "pstart": record.get("pstart"),
+                "task_id": record.get("task_id"),
+                "task_type": record.get("task_type"),
+                "username": record.get("username"),
+                "start_time": record.get("start_time"),
+                "end_time": record.get("end_time"),
+                "description": record.get("description"),
+                "status": record.get("status"),
+                "task_state": record.get("task_state"),
+                "exitstatus": record.get("exitstatus"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+            patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
+        )
+    except Exception as error:
+        logger.warning(
+            "Error bulk reconciling task history for VM %s: %s",
+            virtual_machine_id,
+            error,
+        )
+        return 0
+
+    return result.created + result.updated + result.unchanged
