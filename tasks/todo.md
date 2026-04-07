@@ -161,4 +161,9 @@
 ## E2E Transport Stabilization (Round 8)
 
 - [x] Fix remaining backup test payload/normalizer keys in `test_sync_vm_backups_with_e2e_tag` to use `proxmox_storage` consistently.
-- [ ] Re-run CI and verify backup E2E failures are resolved.
+- [x] Re-run CI and verify backup E2E failures are resolved.
+
+## E2E Transport Stabilization (Round 9)
+
+- [x] Fix backup E2E subtype payloads to use NetBox choice-compatible values (`qemu`/`lxc`) instead of unsupported `private`.
+- [ ] Re-run CI matrix and verify all 6 transport combinations pass E2E backup tests.
