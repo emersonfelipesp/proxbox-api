@@ -389,37 +389,38 @@ def _build_generated_endpoint(  # noqa: C901
         domain = kwargs.pop("target_domain", None)
         ip_address = kwargs.pop("target_ip_address", None)
 
-        target = await resolve_proxmox_target_session(
-            database_session=database_session,
-            source=source,
-            name=name,
-            domain=domain,
-            ip_address=ip_address,
-        )
-
-        path_values = {
-            original_name: kwargs.pop(python_name)
-            for python_name, original_name in path_param_map.items()
-        }
-        query_values = {
-            original_name: kwargs.get(python_name)
-            for python_name, original_name in query_param_map.items()
-            if kwargs.get(python_name) is not None
-        }
-
-        resource = target.session(_render_proxmox_path(openapi_path, path_values).lstrip("/"))
-        handler = getattr(resource, method.lower())
-
-        payload: dict[str, object] = {}
-        if request_body is not None:
-            payload.update(request_body.model_dump(by_alias=True, exclude_none=True))
-        payload.update(query_values)
-
+        target = None
         try:
+            target = await resolve_proxmox_target_session(
+                database_session=database_session,
+                source=source,
+                name=name,
+                domain=domain,
+                ip_address=ip_address,
+            )
+
+            path_values = {
+                original_name: kwargs.pop(python_name)
+                for python_name, original_name in path_param_map.items()
+            }
+            query_values = {
+                original_name: kwargs.get(python_name)
+                for python_name, original_name in query_param_map.items()
+                if kwargs.get(python_name) is not None
+            }
+
+            resource = target.session(_render_proxmox_path(openapi_path, path_values).lstrip("/"))
+            handler = getattr(resource, method.lower())
+
+            payload: dict[str, object] = {}
+            if request_body is not None:
+                payload.update(request_body.model_dump(by_alias=True, exclude_none=True))
+            payload.update(query_values)
+
             if method.upper() == "GET":
-                result = handler(**query_values)
+                result = await handler(**query_values)
             else:
-                result = handler(**payload)
+                result = await handler(**payload)
         except ProxboxException:
             raise
         except Exception as error:
@@ -428,6 +429,10 @@ def _build_generated_endpoint(  # noqa: C901
                 detail=f"Operation ID: {operation_id}",
                 python_exception=str(error),
             )
+        finally:
+            close_method = getattr(target, "aclose", None)
+            if callable(close_method):
+                await close_method()
 
         if response_model is None:
             return result
