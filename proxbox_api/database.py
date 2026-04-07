@@ -9,8 +9,9 @@ from typing import Annotated
 import bcrypt
 from fastapi import Depends
 from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.credentials import decrypt_value, encrypt_value
 
@@ -185,6 +186,15 @@ class ApiKey(SQLModel, table=True):
     created_at: float = Field(default_factory=time.time)
 
     @staticmethod
+    async def has_any_key_async(session: AsyncSession) -> bool:
+        result = await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
+        return result.first() is not None
+
+    @staticmethod
+    def has_any_key(session: Session) -> bool:
+        return session.exec(select(ApiKey).where(ApiKey.is_active == True)).first() is not None  # noqa: E712
+
+    @staticmethod
     def store_key(session: Session, raw_key: str, label: str = "") -> "ApiKey":
         key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
         obj = ApiKey(label=label, key_hash=key_hash)
@@ -194,8 +204,13 @@ class ApiKey(SQLModel, table=True):
         return obj
 
     @staticmethod
-    def has_any_key(session: Session) -> bool:
-        return session.exec(select(ApiKey).where(ApiKey.is_active == True)).first() is not None  # noqa: E712
+    async def store_key_async(session: AsyncSession, raw_key: str, label: str = "") -> "ApiKey":
+        key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+        obj = ApiKey(label=label, key_hash=key_hash)
+        session.add(obj)
+        await session.commit()
+        await session.refresh(obj)
+        return obj
 
     @staticmethod
     def verify_any(session: Session, provided_key: str) -> bool:
@@ -206,11 +221,6 @@ class ApiKey(SQLModel, table=True):
             except Exception:
                 continue
         return False
-
-    @staticmethod
-    async def has_any_key_async(session: AsyncSession) -> bool:
-        result = await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
-        return result.first() is not None
 
     @staticmethod
     async def verify_any_async(session: AsyncSession, provided_key: str) -> bool:

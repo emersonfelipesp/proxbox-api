@@ -71,6 +71,12 @@ class ProxmoxSession:
     def __repr__(self) -> str:
         return f"Proxmox Connection Object. URL: {self.domain}:{self.http_port}"
 
+    async def __aenter__(self) -> "ProxmoxSession":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.aclose()
+
     @classmethod
     async def create(
         cls, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import ssl
 from urllib.error import URLError
@@ -23,6 +24,23 @@ def fetch_apidoc_js(url: str = PROXMOX_APIDOC_JS_URL, timeout: int = 60) -> str:
         insecure_context = ssl._create_unverified_context()
         with urlopen(url, timeout=timeout, context=insecure_context) as response:
             return response.read().decode("utf-8")
+
+
+async def fetch_apidoc_js_async(url: str = PROXMOX_APIDOC_JS_URL, timeout: int = 60) -> str:
+    """Async version: Download the upstream Proxmox `apidoc.js` source file."""
+
+    def _fetch():
+        try:
+            with urlopen(url, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except URLError as error:
+            if not isinstance(getattr(error, "reason", None), ssl.SSLError):
+                raise
+            insecure_context = ssl._create_unverified_context()
+            with urlopen(url, timeout=timeout, context=insecure_context) as response:
+                return response.read().decode("utf-8")
+
+    return await asyncio.to_thread(_fetch)
 
 
 def extract_api_schema_text(apidoc_source: str) -> str:  # noqa: C901
