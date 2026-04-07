@@ -56,7 +56,7 @@ async def create_netbox_e2e_session(base_url: str, token: str) -> "Api":
 
     config = Config(
         base_url=base_url,
-        token=token,
+        token_secret=token,
         token_version=(os.environ.get("PROXBOX_E2E_NETBOX_TOKEN_VERSION") or "v1").strip().lower(),
     )
 

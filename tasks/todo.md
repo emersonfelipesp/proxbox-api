@@ -140,4 +140,9 @@
 - [x] Fix Proxbox nginx TLS template conflict with Alpine default SSL session cache zone.
 - [x] Force E2E suite to use NetBox token v1 against CI-generated legacy tokens.
 - [x] Add E2E token-version env propagation into NetBox E2E session helper.
-- [ ] Re-run CI and confirm transport matrix advances past E2E setup failures.
+- [x] Re-run CI and confirm transport matrix advances past E2E setup failures.
+
+## E2E Transport Stabilization (Round 5)
+
+- [x] Fix E2E NetBox SDK session config to pass token via `token_secret` (compatible with current netbox-sdk `Config`).
+- [ ] Re-run CI and verify E2E tests progress beyond NetBox tag setup.
