@@ -9,6 +9,7 @@ from typing import Annotated
 import bcrypt
 from fastapi import Depends
 from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from proxbox_api.credentials import decrypt_value, encrypt_value
@@ -16,9 +17,15 @@ from proxbox_api.credentials import decrypt_value, encrypt_value
 root_dir = Path(__file__).parent.parent
 sqlite_file_name = root_dir / "database.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
+async_sqlite_url = f"sqlite+aiosqlite:///{sqlite_file_name}"
 
 connect_args = {"check_same_thread": False}
 engine = create_engine(sqlite_url, connect_args=connect_args)
+
+async_engine = create_async_engine(async_sqlite_url, connect_args=connect_args)
+async_session_factory = async_sessionmaker(
+    async_engine, class_=AsyncSession, expire_on_commit=False
+)
 
 
 class NetBoxEndpoint(SQLModel, table=True):
@@ -131,6 +138,42 @@ class AuthLockout(SQLModel, table=True):
             session.delete(lockout)
             session.commit()
 
+    @staticmethod
+    async def is_locked_out_async(
+        session: AsyncSession, ip: str, max_attempts: int = 5, lockout_duration: float = 300
+    ) -> bool:
+        lockout = await session.get(AuthLockout, ip)
+        if not lockout:
+            return False
+        if lockout.attempts >= max_attempts:
+            if time.time() - lockout.first_attempt_time < lockout_duration:
+                return True
+            await session.delete(lockout)
+            await session.commit()
+        return False
+
+    @staticmethod
+    async def record_failed_attempt_async(session: AsyncSession, ip: str) -> None:
+        lockout = await session.get(AuthLockout, ip)
+        now = time.time()
+        if not lockout:
+            lockout = AuthLockout(ip_address=ip, attempts=1, first_attempt_time=now)
+            session.add(lockout)
+        else:
+            if now - lockout.first_attempt_time > 300:
+                lockout.attempts = 1
+                lockout.first_attempt_time = now
+            else:
+                lockout.attempts += 1
+        await session.commit()
+
+    @staticmethod
+    async def clear_failed_attempts_async(session: AsyncSession, ip: str) -> None:
+        lockout = await session.get(AuthLockout, ip)
+        if lockout:
+            await session.delete(lockout)
+            await session.commit()
+
 
 class ApiKey(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
@@ -157,6 +200,22 @@ class ApiKey(SQLModel, table=True):
     @staticmethod
     def verify_any(session: Session, provided_key: str) -> bool:
         for row in session.exec(select(ApiKey).where(ApiKey.is_active == True)):  # noqa: E712
+            try:
+                if bcrypt.checkpw(provided_key.encode(), row.key_hash.encode()):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    @staticmethod
+    async def has_any_key_async(session: AsyncSession) -> bool:
+        result = await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
+        return result.first() is not None
+
+    @staticmethod
+    async def verify_any_async(session: AsyncSession, provided_key: str) -> bool:
+        result = await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
+        for row in result:
             try:
                 if bcrypt.checkpw(provided_key.encode(), row.key_hash.encode()):
                     return True
@@ -202,4 +261,10 @@ def get_session():
         yield session
 
 
+async def get_async_session():
+    async with async_session_factory() as session:
+        yield session
+
+
 DatabaseSessionDep = Annotated[Session, Depends(get_session)]
+AsyncDatabaseSessionDep = Annotated[AsyncSession, Depends(get_async_session)]

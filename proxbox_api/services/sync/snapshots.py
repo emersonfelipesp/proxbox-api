@@ -10,7 +10,6 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     RestRecord,
     rest_create_async,
-    rest_list,
     rest_list_async,
     rest_reconcile_async,
 )
@@ -612,7 +611,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
 
     if delete_nonexistent_snapshot and proxmox_snapshot_names_by_vmid:
         try:
-            netbox_snapshots = rest_list(nb, "/api/plugins/proxbox/snapshots/")
+            netbox_snapshots = await rest_list_async(nb, "/api/plugins/proxbox/snapshots/")
             for nb_snapshot in netbox_snapshots or []:
                 snapshot_vmid = nb_snapshot.vmid
                 snapshot_name = nb_snapshot.name

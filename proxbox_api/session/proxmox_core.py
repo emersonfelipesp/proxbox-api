@@ -1,13 +1,15 @@
 """Proxmox API session wrapper (single cluster / node)."""
 
+from __future__ import annotations
+
 import inspect
 import json
 import re
 from collections.abc import Mapping
+from typing import Any
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.proxmox_async import resolve_sync
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 
 
@@ -34,7 +36,7 @@ class SensitiveString:
         return self._value
 
 
-def _proxmox_api_factory() -> object:
+def _proxmox_api_factory() -> Any:
     """Return ``ProxmoxAPI`` from ``session.proxmox`` so tests can monkeypatch it."""
     import proxbox_api.session.proxmox as prox_mod
 
@@ -42,20 +44,74 @@ def _proxmox_api_factory() -> object:
 
 
 class ProxmoxSession:
-    def __init__(self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str) -> None:  # noqa: C901
+    """Proxmox API session wrapper with async factory pattern."""
+
+    def __init__(self) -> None:
+        """Initialize empty session. Use create() factory method for async initialization."""
         self.CONNECTED = False
         self.permission_limited = False
-        #
-        # Validate cluster_config type
-        #
+        self.ip_address: str | None = None
+        self.domain: str | None = None
+        self.http_port: int = 8006
+        self.user: str | None = None
+        self.password: SensitiveString | None = None
+        self.token_name: str | None = None
+        self.token_value: SensitiveString | None = None
+        self.ssl: bool = True
+        self.proxmox: Any = None
+        self.session: Any = None
+        self.version: str | None = None
+        self.cluster_status: list[dict[str, Any]] = []
+        self.mode: str | None = None
+        self.cluster_name: str | None = None
+        self.node_name: str | None = None
+        self.fingerprints: list[str] | None = None
+        self.name: str | None = None
+
+    def __repr__(self) -> str:
+        return f"Proxmox Connection Object. URL: {self.domain}:{self.http_port}"
+
+    @classmethod
+    async def create(
+        cls, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str
+    ) -> "ProxmoxSession":
+        """Async factory method to create and initialize a ProxmoxSession."""
+        instance = cls()
+        await instance._initialize(cluster_config)
+        return instance
+
+    async def _initialize(
+        self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str
+    ) -> None:
+        """Async initialization of the session."""
+        config = self._parse_config(cluster_config)
+        self._set_attributes_from_config(config)
+
+        if not self.ssl:
+            import urllib3
+
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        self.proxmox = await self._auth_async()
+        if self.proxmox:
+            self.session = self.proxmox
+            self.CONNECTED = True
+
+        if self.CONNECTED:
+            await self._post_connect_init()
+
+    def _parse_config(
+        self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str
+    ) -> dict[str, Any]:
+        """Parse and validate cluster configuration."""
         if isinstance(cluster_config, ProxmoxSessionSchema):
             logger.info("INPUT is Pydantic Model ProxmoxSessionSchema")
-            cluster_config = cluster_config.model_dump(mode="python")
+            return cluster_config.model_dump(mode="python")
 
-        elif isinstance(cluster_config, str):
+        if isinstance(cluster_config, str):
             logger.info("INPUT is string")
             try:
-                cluster_config = json.loads(cluster_config)
+                return json.loads(cluster_config)
             except json.JSONDecodeError as error:
                 raise ProxboxException(
                     message=(
@@ -65,102 +121,56 @@ class ProxmoxSession:
                     detail="ProxmoxSession failed to parse string input as JSON.",
                     python_exception=str(error),
                 ) from error
-            logger.debug("json.loads parsed: type=%s", type(cluster_config))
-        elif isinstance(cluster_config, Mapping):
+
+        if isinstance(cluster_config, Mapping):
             logger.info("INPUT is dict")
-            cluster_config = dict(cluster_config)
-        else:
-            raise ProxboxException(
-                message=f"INPUT of ProxmoxSession() must be a pydantic model or dict (either one will work). Input type provided: {type(cluster_config)}",
-            )
+            return dict(cluster_config)
 
+        raise ProxboxException(
+            message=f"INPUT of ProxmoxSession() must be a pydantic model or dict (either one will work). Input type provided: {type(cluster_config)}",
+        )
+
+    def _set_attributes_from_config(self, config: dict[str, Any]) -> None:
+        """Set instance attributes from parsed config."""
         try:
-            # Save cluster_config as class attributes
-            self.ip_address = cluster_config["ip_address"]
-            self.domain = cluster_config["domain"]
-            self.http_port = cluster_config["http_port"]
-            self.user = cluster_config["user"]
-            self.password = SensitiveString(cluster_config["password"])
-            self.token_name = cluster_config["token"]["name"]
-            self.token_value = SensitiveString(cluster_config["token"]["value"])
-            self.ssl = cluster_config["ssl"]
-
+            self.ip_address = config["ip_address"]
+            self.domain = config["domain"]
+            self.http_port = config["http_port"]
+            self.user = config["user"]
+            self.password = SensitiveString(config["password"])
+            self.token_name = config["token"]["name"]
+            self.token_value = SensitiveString(config["token"]["value"])
+            self.ssl = config["ssl"]
             self._normalize_token_auth_fields()
-
         except KeyError:
             raise ProxboxException(
                 message="ProxmoxSession class wasn't able to find all required parameters to establish Proxmox connection. Check if you provided all required parameters.",
                 detail="Python KeyError raised",
             )
 
-        #
-        # Establish Proxmox Session
-        #
+    async def _post_connect_init(self) -> None:
+        """Async post-connection initialization."""
         try:
-            # DISABLE SSL WARNING
-            if not self.ssl:
-                import urllib3
-
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-            # Prefer using token to authenticate
-            token_val = (
-                self.token_value.get()
-                if isinstance(self.token_value, SensitiveString)
-                else self.token_value
-            )
-            self.proxmox = (
-                self._auth(auth_method="token")
-                if self.token_name and token_val
-                else self._auth(auth_method="password")
-            )
-            if self.proxmox:
-                self.session = self.proxmox
-                self.CONNECTED = True
-
-        except ProxboxException:
-            raise
-
+            self.cluster_status = await self.session("cluster/status").get()
         except Exception as error:
-            raise ProxboxException(
-                message=f"Could not establish Proxmox connection to '{self.domain}:{self.http_port}' using token name '{self.token_name}'.",
-                detail="Unknown error.",
-                python_exception=f"{error}",
-            )
+            if self._is_permission_denied_error(error):
+                logger.warning(
+                    "Connected to Proxmox %s:%s but cluster/status is forbidden; continuing in restricted mode",
+                    self.domain or self.ip_address,
+                    self.http_port,
+                )
+                self.permission_limited = True
+                self.cluster_status = []
+            else:
+                raise ProxboxException(
+                    message=(
+                        "After initializing object connection, could not make API call to "
+                        f"Proxmox '{self.domain}:{self.http_port}' using token name '{self.token_name}'."
+                    ),
+                    detail="Unknown error.",
+                    python_exception=f"{__name__}: {error}",
+                )
 
-        #
-        # Test Connection and Return Cluster Status if succeeded.
-        #
-        if self.CONNECTED:
-            try:
-                """Test Proxmox Connection and return Cluster Status API response as class attribute"""
-                self.cluster_status = resolve_sync(self.session("cluster/status").get())
-            except Exception as error:
-                if self._is_permission_denied_error(error):
-                    logger.warning(
-                        "Connected to Proxmox %s:%s but cluster/status is forbidden; continuing in restricted mode",
-                        self.domain or self.ip_address,
-                        self.http_port,
-                    )
-                    self.permission_limited = True
-                    self.cluster_status = []
-                else:
-                    raise ProxboxException(
-                        message=(
-                            "After instatiating object connection, could not make API call to "
-                            f"Proxmox '{self.domain}:{self.http_port}' using token name '{self.token_name}'."
-                        ),
-                        detail="Unknown error.",
-                        python_exception=f"{__name__}: {error}",
-                    )
-
-        #
-        # Add more attributes to class about Proxmox Session
-        #
-        self.mode = None
-        self.cluster_name = None
-        self.node_name = None
-        self.fingerprints = None
         self.name = self.domain or self.ip_address
 
         if self.CONNECTED:
@@ -168,145 +178,90 @@ class ProxmoxSession:
                 self.mode = "restricted"
                 self.fingerprints = []
             else:
-                self.mode = self.get_cluster_mode()
+                self.mode = self._get_cluster_mode()
                 if self.mode == "cluster":
-                    cluster_name: str = self.get_cluster_name()
-
-                    self.cluster_name = cluster_name
-                    self.name = cluster_name
-                    self.fingerprints: list = self.get_node_fingerprints(self.proxmox)
-
+                    self.cluster_name = self._get_cluster_name()
+                    self.name = self.cluster_name
+                    self.fingerprints = await self._get_node_fingerprints_async(self.proxmox)
                 elif self.mode == "standalone":
-                    standalone_node_name: str = self.get_standalone_name()
-
-                    self.node_name = standalone_node_name
-                    self.name = standalone_node_name
+                    self.node_name = self._get_standalone_name()
+                    self.name = self.node_name
                     self.fingerprints = None
 
-    def __repr__(self) -> str:
-        return f"Proxmox Connection Object. URL: {self.domain}:{self.http_port}"
-
-    def close(self) -> None:
-        """Close underlying SDK resources when available."""
-
-        try:
-            if hasattr(self, "session") and hasattr(self.session, "close"):
-                close_result = self.session.close()
-                if inspect.isawaitable(close_result):
-                    resolve_sync(close_result)
-        except Exception as error:
-            logger.debug("Failed to close Proxmox session cleanly: %s", error)
-
-    async def aclose(self) -> None:
-        """Async close for request-loop-safe session cleanup."""
-        sdk_session = getattr(self, "session", None)
-        if sdk_session is not None and hasattr(sdk_session, "close"):
-            close_result = sdk_session.close()
-            if inspect.isawaitable(close_result):
-                await close_result
-        self.session = None
-
-    #
-    # Proxmox Authentication Modes: TOKEN-BASED & PASSWORD-BASED
-    #
-
-    def _auth(self, auth_method: str) -> object:
-        if auth_method != "token" and auth_method != "password":
-            raise ProxboxException(
-                message=f"Invalid authentication method provided: {auth_method}",
-                detail="ProxmoxSession class only accepts 'token' or 'password' as authentication method",
-            )
-
+    async def _auth_async(self) -> Any:
+        """Async authentication to Proxmox."""
+        auth_method = "token" if (self.token_name and self._get_token_value()) else "password"
         target = self.domain or self.ip_address
         error_message = f"Error trying to initialize Proxmox API connection to '{target}:{self.http_port}' using {auth_method} authentication"
 
-        # Establish Proxmox Session with Token
-        USE_IP_ADDRESS = False
-        try:
-            logger.info(f"Using {auth_method} to authenticate with Proxmox")
-            kwargs = (
-                {
-                    "port": self.http_port,
-                    "user": self.user,
-                    "token_name": self.token_name,
-                    "token_value": self.token_value.get()
-                    if isinstance(self.token_value, SensitiveString)
-                    else self.token_value,
-                    "verify_ssl": self.ssl,
-                }
-                if auth_method == "token"
-                else {
-                    "port": self.http_port,
-                    "user": self.user,
-                    "password": self.password.get()
-                    if isinstance(self.password, SensitiveString)
-                    else self.password,
-                    "verify_ssl": self.ssl,
-                }
-            )
+        kwargs = self._build_auth_kwargs(auth_method)
 
-            # Initialize Proxmox Session using Token or Password
-            if self.domain:
-                logger.info(f"Using domain {self.domain} to authenticate with Proxmox")
-                proxmox_session = _proxmox_api_factory()(self.domain, **kwargs)
-
-                # Get Proxmox Version to test connection.
-                # Object instatiation does not actually connect to Proxmox, need to make an API call to test connection.
-                self.version = resolve_sync(proxmox_session.version.get())
-                return proxmox_session
-            else:
-                logger.info(
-                    f"Using IP {self.ip_address} address to authenticate with Proxmox as domain is not provided"
-                )
-                proxmox_session = _proxmox_api_factory()(self.ip_address, **kwargs)
-
-                # Get Proxmox Version to test connection.
-                # Object instatiation does not actually connect to Proxmox, need to make an API call to test connection.
-                self.version = resolve_sync(proxmox_session.version.get())
-                return proxmox_session
-
-        except Exception as error:
-            logger.info(
-                f"Proxmox connection using domain failed, trying to connect using IP address {self.ip_address}\n{error}"
-            )
-            USE_IP_ADDRESS = True
-
-        if USE_IP_ADDRESS:
-            # If domain connection failed, try to connect using IP address.
+        # Try domain first, then IP address
+        if self.domain:
+            logger.info("Using %s to authenticate with Proxmox", auth_method)
+            logger.info("Using domain %s to authenticate with Proxmox", self.domain)
+            proxmox_session = _proxmox_api_factory()(self.domain, **kwargs)
             try:
-                proxmox_session = _proxmox_api_factory()(self.ip_address, **kwargs)
-
-                # Get Proxmox Version to test connection.
-                # Object instatiation does not actually connect to Proxmox, need to make an API call to test connection.
-                self.version = resolve_sync(proxmox_session.version.get())
+                self.version = await proxmox_session.version.get()
                 return proxmox_session
-
             except Exception as error:
-                raise ProxboxException(
-                    message=error_message,
-                    detail="Unknown error.",
-                    python_exception=f"{error}",
+                logger.info(
+                    "Proxmox connection using domain failed, trying IP %s: %s",
+                    self.ip_address,
+                    error,
                 )
 
-        return None
+        # Fallback to IP address
+        try:
+            logger.info("Using IP %s to authenticate with Proxmox", self.ip_address)
+            proxmox_session = _proxmox_api_factory()(self.ip_address, **kwargs)
+            self.version = await proxmox_session.version.get()
+            return proxmox_session
+        except Exception as error:
+            raise ProxboxException(
+                message=error_message,
+                detail="Unknown error.",
+                python_exception=f"{error}",
+            ) from error
 
-    def _normalize_token_auth_fields(self) -> None:
-        """Normalize token fields from common Proxmox token string formats."""
+    def _build_auth_kwargs(self, auth_method: str) -> dict[str, Any]:
+        """Build authentication kwargs for Proxmox API."""
+        if auth_method == "token":
+            return {
+                "port": self.http_port,
+                "user": self.user,
+                "token_name": self.token_name,
+                "token_value": self._get_token_value(),
+                "verify_ssl": self.ssl,
+            }
+        return {
+            "port": self.http_port,
+            "user": self.user,
+            "password": self._get_password(),
+            "verify_ssl": self.ssl,
+        }
 
-        raw_token_value = (
+    def _get_token_value(self) -> str | None:
+        """Get token value from SensitiveString."""
+        return (
             self.token_value.get()
             if isinstance(self.token_value, SensitiveString)
             else self.token_value
         )
+
+    def _get_password(self) -> str | None:
+        """Get password from SensitiveString."""
+        return self.password.get() if isinstance(self.password, SensitiveString) else self.password
+
+    def _normalize_token_auth_fields(self) -> None:
+        """Normalize token fields from common Proxmox token string formats."""
+        raw_token_value = self._get_token_value()
         token_name = (self.token_name or "").strip()
         token_value = (raw_token_value or "").strip()
 
         if token_name and token_name.startswith("PVEAPIToken=") and "!" in token_name:
             token_name = token_name.split("!", 1)[1].strip()
 
-        # Accept full token strings like:
-        # - PVEAPIToken=root@pam!tokenid=secret
-        # - root@pam!tokenid=secret
         if token_value and ("!" in token_value or token_value.startswith("PVEAPIToken=")):
             full_token_match = re.match(
                 r"^(?:PVEAPIToken=)?(?P<user>[^!]+)!(?P<name>[^=]+)=(?P<value>.+)$",
@@ -324,30 +279,12 @@ class ProxmoxSession:
 
     @staticmethod
     def _is_permission_denied_error(error: Exception) -> bool:
+        """Check if error is a permission denied error."""
         text = str(error).lower()
         return "permission check failed" in text or "403 forbidden" in text
 
-    #
-    # Get Proxmox Details about Cluster and Nodes
-    #
-    def get_node_fingerprints(self, px: object) -> list[str]:
-        """Get Nodes Fingerprints. It is the way I better found to differentiate clusters."""
-        try:
-            join_info = resolve_sync(px("cluster/config/join").get())
-
-            fingerprints: list[str] = []
-            for node in join_info.get("nodelist"):
-                fingerprints.append(node.get("pve_fp"))
-
-            return fingerprints
-
-        except Exception as error:
-            raise ProxboxException(
-                message="Could not get Nodes Fingerprints", python_exception=f"{error}"
-            )
-
-    def get_cluster_mode(self) -> str | None:
-        """Get Proxmox Cluster Mode (Standalone or Cluster)"""
+    def _get_cluster_mode(self) -> str | None:
+        """Get Proxmox Cluster Mode (Standalone or Cluster)."""
         if not self.CONNECTED:
             logger.info("Proxmox Session is not connected, so not able to get Cluster Mode")
             return None
@@ -356,36 +293,62 @@ class ProxmoxSession:
             if len(self.cluster_status) == 1 and self.cluster_status[0].get("type") == "node":
                 return "standalone"
             return "cluster"
-
         except Exception as error:
             raise ProxboxException(
                 message="Could not get Proxmox Cluster Mode (Standalone or Cluster)",
                 python_exception=f"{error}",
-            )
+            ) from error
 
-    def get_cluster_name(self) -> str | None:
-        """Get Proxmox Cluster Name"""
+    def _get_cluster_name(self) -> str | None:
+        """Get Proxmox Cluster Name."""
         try:
             for item in self.cluster_status:
                 if item.get("type") == "cluster":
                     return item.get("name")
             return None
-
         except Exception as error:
             raise ProxboxException(
                 message="Could not get Proxmox Cluster Name and Nodes Fingerprints",
                 python_exception=f"{error}",
-            )
+            ) from error
 
-    def get_standalone_name(self) -> str | None:
-        """Get Proxmox Standalone Node Name"""
+    def _get_standalone_name(self) -> str | None:
+        """Get Proxmox Standalone Node Name."""
         try:
             if len(self.cluster_status) == 1 and self.cluster_status[0].get("type") == "node":
                 return self.cluster_status[0].get("name")
             return None
-
         except Exception as error:
             raise ProxboxException(
                 message="Could not get Proxmox Standalone Node Name",
                 python_exception=f"{error}",
-            )
+            ) from error
+
+    async def _get_node_fingerprints_async(self, px: Any) -> list[str]:
+        """Get Nodes Fingerprints asynchronously."""
+        try:
+            join_info = await px("cluster/config/join").get()
+            fingerprints: list[str] = []
+            for node in join_info.get("nodelist", []):
+                fingerprints.append(node.get("pve_fp"))
+            return fingerprints
+        except Exception as error:
+            raise ProxboxException(
+                message="Could not get Nodes Fingerprints",
+                python_exception=f"{error}",
+            ) from error
+
+    async def aclose(self) -> None:
+        """Async close for session cleanup."""
+        sdk_session = getattr(self, "session", None)
+        if sdk_session is not None and hasattr(sdk_session, "close"):
+            close_result = sdk_session.close()
+            if inspect.isawaitable(close_result):
+                await close_result
+        self.session = None
+
+    def close(self) -> None:
+        """Sync close - logs warning if called (use aclose() in async contexts)."""
+        logger.warning(
+            "close() called on ProxmoxSession; use aclose() in async contexts for proper cleanup"
+        )
