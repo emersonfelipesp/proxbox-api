@@ -147,34 +147,35 @@ async def retry_async(
         except Exception as e:
             last_exception = e
             is_transient = _is_transient_netbox_error(e)
+            can_retry = attempt < max_retries and is_transient
+            is_final = not can_retry
 
-            if attempt < max_retries and is_transient:
-                is_conn_refused = _is_connection_refused_error(e)
-                is_overwhelmed = _is_netbox_overwhelmed_error(e)
-                delay = _compute_delay(attempt, base_delay, is_conn_refused, is_overwhelmed)
-                errors.append(f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}")
-                logger.warning(
-                    "%s failed (attempt %d/%d): %s. Retrying in %.1fs...",
-                    operation_name,
-                    attempt + 1,
-                    max_retries + 1,
-                    e,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-            else:
+            if is_final:
                 error_msg = f"{operation_name} failed after {attempt + 1} attempt(s)"
-                if attempt < max_retries and not is_transient:
+                if not is_transient:
                     error_msg += f" (non-transient error: {e})"
                 errors.append(f"Attempt {attempt + 1} failed: {e}")
                 logger.error("%s: %s", operation_name, "; ".join(errors))
-
                 detail = f"Failed after {attempt + 1} attempts. Errors: " + "; ".join(errors)
                 raise ProxboxException(
                     message=error_msg,
                     detail=detail,
                     python_exception=str(last_exception),
                 ) from last_exception
+
+            is_conn_refused = _is_connection_refused_error(e)
+            is_overwhelmed = _is_netbox_overwhelmed_error(e)
+            delay = _compute_delay(attempt, base_delay, is_conn_refused, is_overwhelmed)
+            errors.append(f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}")
+            logger.warning(
+                "%s failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                operation_name,
+                attempt + 1,
+                max_retries + 1,
+                e,
+                delay,
+            )
+            await asyncio.sleep(delay)
 
     raise ProxboxException(
         message=f"{operation_name} failed",

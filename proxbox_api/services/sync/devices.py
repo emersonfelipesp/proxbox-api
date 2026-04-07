@@ -25,7 +25,52 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge
 from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
 
-async def create_proxmox_devices(  # noqa: C901
+async def _emit_substep_with_retry(
+    bridge: WebSocketSSEBridge | None,
+    substep: str,
+    status: SubstepStatus,
+    message: str,
+    item: dict,
+    coro,
+):
+    """Execute a substep with emit_substep, retry logic, and error handling.
+
+    Returns the result of the coroutine.
+    Raises _wrap_device_phase_error on failure.
+    """
+    if bridge:
+        await bridge.emit_substep(
+            phase="devices",
+            substep=substep,
+            status=status,
+            message=message,
+            item=item,
+        )
+    try:
+        result = await coro()
+        if bridge and status == SubstepStatus.PROCESSING:
+            await bridge.emit_substep(
+                phase="devices",
+                substep=substep,
+                status=SubstepStatus.COMPLETED,
+                message=message,
+                item=item,
+            )
+        return result
+    except Exception as error:
+        if bridge:
+            await bridge.emit_error_detail(
+                message=f"Failed {substep}",
+                category=ErrorCategory.VALIDATION,
+                phase="devices",
+                item=item,
+                detail=str(error),
+                suggestion="Check NetBox permissions and configuration",
+            )
+        raise _wrap_device_phase_error(substep, error) from error
+
+
+async def create_proxmox_devices(
     netbox_session: object,
     clusters_status: list[object] | None,
     tag: ProxboxTagDep,
