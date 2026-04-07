@@ -380,6 +380,7 @@ class NetBoxBackupSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     proxmox_storage: int | None = None
+    storage: str | None = None
     virtual_machine: int
     subtype: str | None = None
     creation_time: str | None = None
