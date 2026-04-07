@@ -12,13 +12,34 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
-from proxbox_api.services.sync.device_ensure import ensure_proxmox_devices_bulk
+from proxbox_api.services.sync.device_ensure import (
+    _ensure_cluster,
+    _ensure_cluster_type,
+    _ensure_device,
+    _ensure_device_role,
+    _ensure_device_type,
+    _ensure_manufacturer,
+    _ensure_site,
+    ensure_proxmox_devices_bulk,
+)
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
+
+__all__ = [
+    "_ensure_cluster",
+    "_ensure_cluster_type",
+    "_ensure_device",
+    "_ensure_device_role",
+    "_ensure_device_type",
+    "_ensure_manufacturer",
+    "_ensure_site",
+    "create_proxmox_devices",
+    "ProxmoxCreateDevicesDep",
+]
 
 
 async def create_proxmox_devices(  # noqa: C901
