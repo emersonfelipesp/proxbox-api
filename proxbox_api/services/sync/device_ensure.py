@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    BulkReconcilePhase,
+    rest_bulk_reconcile_phases_async,
+    rest_list_async,
+    rest_reconcile_async,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxClusterSyncState,
     NetBoxClusterTypeSyncState,
@@ -28,6 +33,15 @@ def _slugify(value: str) -> str:
 
 def _last_updated_cf() -> dict[str, str]:
     return {"proxmox_last_updated": datetime.now(timezone.utc).isoformat()}
+
+
+def _relation_id_or_none(value: object) -> int | None:
+    if isinstance(value, dict):
+        value = value.get("id")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _record_has_tag(record: Any, tag_slug: str) -> bool:
@@ -55,6 +69,314 @@ def _prefer_existing_device(records: list[Any]) -> NetBoxRecord | None:
     if proxbox_records:
         return proxbox_records[0]
     return records[0] if records else None
+
+
+def _cluster_type_payload(mode: str, tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "name": mode.capitalize(),
+        "slug": mode,
+        "description": f"Proxmox {mode} mode",
+        "tags": tag_refs,
+        "custom_fields": _last_updated_cf(),
+    }
+
+
+def _cluster_payload(
+    cluster_name: str,
+    *,
+    cluster_type_id: int | None,
+    mode: str,
+    tag_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "name": cluster_name,
+        "type": cluster_type_id,
+        "description": f"Proxmox {mode} cluster.",
+        "tags": tag_refs,
+        "custom_fields": _last_updated_cf(),
+    }
+
+
+def _manufacturer_payload(tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "name": "Proxmox",
+        "slug": "proxmox",
+        "tags": tag_refs,
+        "custom_fields": _last_updated_cf(),
+    }
+
+
+def _device_type_payload(
+    manufacturer_id: int | None,
+    tag_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "model": "Proxmox Generic Device",
+        "slug": "proxmox-generic-device",
+        "manufacturer": manufacturer_id,
+        "tags": tag_refs,
+        "custom_fields": _last_updated_cf(),
+    }
+
+
+def _device_role_payload(tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "name": "Proxmox Node",
+        "slug": "proxmox-node",
+        "color": "00bcd4",
+        "tags": tag_refs,
+        "custom_fields": _last_updated_cf(),
+    }
+
+
+def _site_payload(cluster_name: str, tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+    site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
+    return {
+        "name": f"Proxmox Default Site - {cluster_name}",
+        "slug": site_slug,
+        "status": "active",
+        "tags": tag_refs,
+        "custom_fields": _last_updated_cf(),
+    }
+
+
+def _device_payload(
+    device_name: str,
+    *,
+    cluster_id: int | None,
+    device_type_id: int | None,
+    role_id: int | None,
+    site_id: int | None,
+    tag_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "name": device_name,
+        "tags": tag_refs,
+        "cluster": cluster_id,
+        "status": "active",
+        "description": f"Proxmox Node {device_name}",
+        "device_type": device_type_id,
+        "role": role_id,
+        "site": site_id,
+        "custom_fields": _last_updated_cf(),
+    }
+
+
+def _device_selector(records: list[Any]) -> NetBoxRecord | None:
+    return _prefer_existing_device(records)
+
+
+async def ensure_proxmox_devices_bulk(
+    nb: Any,
+    *,
+    clusters_status: list[Any] | None,
+    tag_refs: list[dict[str, Any]],
+) -> dict[str, NetBoxRecord]:
+    """Create/update Proxmox prerequisite NetBox objects in dependency order."""
+    if not clusters_status:
+        return {}
+
+    cluster_modes: dict[str, str] = {}
+    node_names: list[str] = []
+    for cluster_status in clusters_status:
+        cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
+        cluster_mode = str(getattr(cluster_status, "mode", "") or "").strip().lower() or "cluster"
+        if cluster_name:
+            cluster_modes[cluster_name] = cluster_mode
+        for node in getattr(cluster_status, "node_list", None) or []:
+            node_name = str(getattr(node, "name", "") or "").strip()
+            if node_name:
+                node_names.append(node_name)
+
+    if not cluster_modes and not node_names:
+        return {}
+
+    phase_results = await rest_bulk_reconcile_phases_async(
+        nb,
+        [
+            BulkReconcilePhase(
+                name="cluster_types",
+                path="/api/virtualization/cluster-types/",
+                payloads=[
+                    _cluster_type_payload(mode, tag_refs)
+                    for mode in sorted(set(cluster_modes.values()))
+                ],
+                lookup_fields=["slug"],
+                schema=NetBoxClusterTypeSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "description": record.get("description"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            ),
+            BulkReconcilePhase(
+                name="manufacturers",
+                path="/api/dcim/manufacturers/",
+                payloads=[_manufacturer_payload(tag_refs)],
+                lookup_fields=["slug"],
+                schema=NetBoxManufacturerSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            ),
+            BulkReconcilePhase(
+                name="device_roles",
+                path="/api/dcim/device-roles/",
+                payloads=[_device_role_payload(tag_refs)],
+                lookup_fields=["slug"],
+                schema=NetBoxDeviceRoleSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "color": record.get("color"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            ),
+            BulkReconcilePhase(
+                name="sites",
+                path="/api/dcim/sites/",
+                payloads=[
+                    _site_payload(cluster_name, tag_refs) for cluster_name in sorted(cluster_modes)
+                ],
+                lookup_fields=["slug"],
+                schema=NetBoxSiteSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "status": record.get("status"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            ),
+        ],
+    )
+
+    cluster_type_by_slug = {
+        str(record.get("slug")): record for record in phase_results["cluster_types"].records
+    }
+    manufacturer = (
+        phase_results["manufacturers"].records[0]
+        if phase_results["manufacturers"].records
+        else None
+    )
+    role = (
+        phase_results["device_roles"].records[0] if phase_results["device_roles"].records else None
+    )
+    site_by_slug = {str(record.get("slug")): record for record in phase_results["sites"].records}
+
+    dependency_phase_results = await rest_bulk_reconcile_phases_async(
+        nb,
+        [
+            BulkReconcilePhase(
+                name="clusters",
+                path="/api/virtualization/clusters/",
+                payloads=[
+                    _cluster_payload(
+                        cluster_name,
+                        cluster_type_id=_relation_id_or_none(
+                            cluster_type_by_slug[cluster_modes[cluster_name]].get("id")
+                            if cluster_modes[cluster_name] in cluster_type_by_slug
+                            else None
+                        ),
+                        mode=cluster_modes[cluster_name],
+                        tag_refs=tag_refs,
+                    )
+                    for cluster_name in sorted(cluster_modes)
+                ],
+                lookup_fields=["name"],
+                schema=NetBoxClusterSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "type": _relation_id_or_none(record.get("type")),
+                    "description": record.get("description"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            ),
+            BulkReconcilePhase(
+                name="device_types",
+                path="/api/dcim/device-types/",
+                payloads=[
+                    _device_type_payload(
+                        _relation_id_or_none(getattr(manufacturer, "id", None)), tag_refs
+                    )
+                ],
+                lookup_fields=["model"],
+                schema=NetBoxDeviceTypeSyncState,
+                current_normalizer=lambda record: {
+                    "model": record.get("model"),
+                    "slug": record.get("slug"),
+                    "manufacturer": _relation_id_or_none(record.get("manufacturer")),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+            ),
+        ],
+    )
+
+    cluster_by_name = {
+        str(record.get("name")): record for record in dependency_phase_results["clusters"].records
+    }
+    device_type = (
+        dependency_phase_results["device_types"].records[0]
+        if dependency_phase_results["device_types"].records
+        else None
+    )
+
+    device_payloads: list[dict[str, Any]] = []
+    for cluster_status in clusters_status:
+        cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
+        site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
+        cluster_record = cluster_by_name.get(cluster_name)
+        site_record = site_by_slug.get(site_slug)
+        for node in getattr(cluster_status, "node_list", None) or []:
+            node_name = str(getattr(node, "name", "") or "").strip()
+            if not node_name:
+                continue
+            device_payloads.append(
+                _device_payload(
+                    node_name,
+                    cluster_id=_relation_id_or_none(getattr(cluster_record, "id", None)),
+                    device_type_id=_relation_id_or_none(getattr(device_type, "id", None)),
+                    role_id=_relation_id_or_none(getattr(role, "id", None)),
+                    site_id=_relation_id_or_none(getattr(site_record, "id", None)),
+                    tag_refs=tag_refs,
+                )
+            )
+
+    device_results = await rest_bulk_reconcile_phases_async(
+        nb,
+        [
+            BulkReconcilePhase(
+                name="devices",
+                path="/api/dcim/devices/",
+                payloads=device_payloads,
+                lookup_fields=["name"],
+                schema=NetBoxDeviceSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "status": record.get("status"),
+                    "cluster": _relation_id_or_none(record.get("cluster")),
+                    "device_type": _relation_id_or_none(record.get("device_type")),
+                    "role": _relation_id_or_none(record.get("role")),
+                    "site": _relation_id_or_none(record.get("site")),
+                    "description": record.get("description"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+                selector=_device_selector,
+            )
+        ],
+    )
+
+    devices = {str(record.get("name")): record for record in device_results["devices"].records}
+    return devices
 
 
 async def _ensure_cluster_type(

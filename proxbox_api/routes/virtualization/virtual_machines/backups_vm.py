@@ -12,6 +12,10 @@ from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
+    RestRecord,
+    rest_bulk_create_async,
+    rest_bulk_delete_async,
+    rest_bulk_patch_async,
     rest_create_async,
     rest_list_async,
     rest_reconcile_async,
@@ -22,7 +26,6 @@ from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.proxmox_helpers import dump_models, get_node_storage_content
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
-    find_storage_record,
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
@@ -33,6 +36,8 @@ router = APIRouter()
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
 _DEFAULT_BACKUP_BATCH_SIZE = max(1, int(os.getenv("PROXBOX_BACKUP_BATCH_SIZE", "5")))
 _DEFAULT_BACKUP_BATCH_DELAY_MS = max(0, int(os.getenv("PROXBOX_BACKUP_BATCH_DELAY_MS", "200")))
+_DEFAULT_BULK_BATCH_SIZE = max(1, int(os.getenv("PROXBOX_BULK_BATCH_SIZE", "50")))
+_DEFAULT_BULK_BATCH_DELAY_MS = max(0, int(os.getenv("PROXBOX_BULK_BATCH_DELAY_MS", "500")))
 
 _BACKUP_SUBTYPE_ALIASES: dict[str, str] = {
     "ct": "lxc",
@@ -116,6 +121,75 @@ async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
     return build_storage_index(storage_records)
 
 
+def _build_backup_normalizer():
+    return lambda record: {
+        "storage": record.get("storage"),
+        "virtual_machine": _relation_id_or_none(record.get("virtual_machine")),
+        "subtype": record.get("subtype"),
+        "creation_time": record.get("creation_time"),
+        "size": record.get("size"),
+        "verification_state": record.get("verification_state"),
+        "verification_upid": record.get("verification_upid"),
+        "volume_id": record.get("volume_id"),
+        "notes": record.get("notes"),
+        "vmid": record.get("vmid"),
+        "format": record.get("format"),
+    }
+
+
+def compute_backup_payload(
+    backup: dict,
+    vm_cache: dict[int, dict | None] | None = None,
+    storage_index: dict[tuple[str, str], dict] | None = None,
+    cluster_name: str | None = None,
+) -> dict | None:
+    """Pure function: transform a Proxmox backup dict into a NetBox payload dict.
+
+    Returns None if the backup cannot be processed (no vmid, no VM found).
+    Does NOT perform any HTTP requests.
+    """
+    if not isinstance(backup, dict):
+        return None
+
+    vmid = backup.get("vmid", None)
+    if not vmid:
+        return None
+
+    vmid_int = int(vmid)
+    virtual_machine = vm_cache.get(vmid_int) if vm_cache is not None else None
+    if virtual_machine is None:
+        return None
+
+    if not virtual_machine:
+        return None
+
+    verification = backup.get("verification", {})
+    verification_state = verification.get("state")
+    verification_upid = verification.get("upid")
+
+    volume_id = backup.get("volid", None)
+    storage_name = storage_name_from_volume_id(volume_id)
+
+    creation_time = None
+    ctime = backup.get("ctime", None)
+    if ctime:
+        creation_time = datetime.fromtimestamp(ctime).isoformat()
+
+    return {
+        "storage": storage_name,
+        "virtual_machine": virtual_machine.get("id"),
+        "subtype": _normalize_backup_subtype(backup.get("subtype"), volume_id),
+        "creation_time": creation_time,
+        "size": backup.get("size"),
+        "verification_state": verification_state,
+        "verification_upid": verification_upid,
+        "volume_id": volume_id,
+        "notes": backup.get("notes"),
+        "vmid": vmid,
+        "format": _normalize_backup_format(backup.get("format"), volume_id),
+    }
+
+
 async def create_netbox_backups(
     backup,
     netbox_session: NetBoxSessionDep,
@@ -159,13 +233,7 @@ async def create_netbox_backups(
         # Process storage and volume data
         volume_id = backup.get("volid", None)
         storage_name = storage_name_from_volume_id(volume_id)
-        storage_record = find_storage_record(
-            storage_index or {},
-            cluster_name=cluster_name,
-            storage_name=storage_name,
-        )
 
-        # Process creation time
         creation_time = None
         ctime = backup.get("ctime", None)
         if ctime:
@@ -227,6 +295,202 @@ async def create_netbox_backups(
         return None
 
 
+def _normalize_existing_backup(
+    record: RestRecord | dict,
+) -> dict[str, object]:
+    raw = record.serialize() if isinstance(record, RestRecord) else record
+    return {
+        "storage": raw.get("storage"),
+        "virtual_machine": _relation_id_or_none(raw.get("virtual_machine")),
+        "subtype": raw.get("subtype"),
+        "creation_time": raw.get("creation_time"),
+        "size": raw.get("size"),
+        "verification_state": raw.get("verification_state"),
+        "verification_upid": raw.get("verification_upid"),
+        "volume_id": raw.get("volume_id"),
+        "notes": raw.get("notes"),
+        "vmid": raw.get("vmid"),
+        "format": raw.get("format"),
+    }
+
+
+def _compute_backup_diff(
+    desired: dict[str, object],
+    current: dict[str, object],
+) -> dict[str, object]:
+    diff: dict[str, object] = {}
+    for key, value in desired.items():
+        if current.get(key) != value:
+            diff[key] = value
+    return diff
+
+
+async def _bulk_reconcile_backups(  # noqa: C901
+    nb,
+    proxmox_backup_payloads: list[dict],
+    proxmox_volume_ids: set[str],
+    bulk_batch_size: int | None = None,
+    bulk_batch_delay_ms: int | None = None,
+) -> tuple[list[dict], int, int]:
+    """Two-pass bulk reconcile: pre-fetch all existing, diff in memory, dispatch bulk ops.
+
+    Returns (results, create_count, patch_count).
+    """
+    batch_size = bulk_batch_size or _DEFAULT_BULK_BATCH_SIZE
+    delay_ms = (
+        bulk_batch_delay_ms if bulk_batch_delay_ms is not None else _DEFAULT_BULK_BATCH_DELAY_MS
+    )
+    normalizer = _build_backup_normalizer()
+
+    existing_backups_raw = await rest_list_async(nb, "/api/plugins/proxbox/backups/")
+    existing_by_volume_id: dict[str, RestRecord] = {}
+    for rec in existing_backups_raw:
+        vid = rec.get("volume_id")
+        if vid:
+            existing_by_volume_id[str(vid)] = rec
+
+    to_create: list[dict] = []
+    to_patch: list[tuple[RestRecord, dict]] = []
+    results_payloads: list[dict] = []
+    journal_entries: list[dict] = []
+
+    for payload in proxmox_backup_payloads:
+        volume_id = payload.get("volume_id")
+        existing = existing_by_volume_id.get(str(volume_id)) if volume_id else None
+
+        if existing is None:
+            validated = NetBoxBackupSyncState.model_validate(payload)
+            to_create.append(validated.model_dump(exclude_none=True, by_alias=True))
+            continue
+
+        current_normalized = _normalize_existing_backup(existing)
+        desired_model = NetBoxBackupSyncState.model_validate(payload)
+        desired_normalized = desired_model.model_dump(exclude_none=True, by_alias=True)
+        diff = _compute_backup_diff(desired_normalized, current_normalized)
+        if diff:
+            to_patch.append((existing, diff))
+        else:
+            results_payloads.append(existing.serialize())
+
+    created_count = 0
+    for i in range(0, len(to_create), batch_size):
+        batch = to_create[i : i + batch_size]
+        try:
+            created = await rest_bulk_create_async(nb, "/api/plugins/proxbox/backups/", batch)
+            created_count += len(created)
+            for rec in created:
+                results_payloads.append(rec.serialize())
+                journal_entries.append(
+                    {
+                        "assigned_object_type": "netbox_proxbox.vmbackup",
+                        "assigned_object_id": rec.id,
+                        "kind": "info",
+                        "comments": f"Backup created for VM {rec.get('vmid')} in storage {rec.get('storage')}",
+                    }
+                )
+        except Exception:
+            logger.warning(
+                "Bulk create batch failed (%s items), falling back to individual creates",
+                len(batch),
+                exc_info=True,
+            )
+            for single_payload in batch:
+                try:
+                    rec = await rest_reconcile_async(
+                        nb,
+                        "/api/plugins/proxbox/backups/",
+                        lookup={"volume_id": single_payload.get("volume_id")},
+                        payload=single_payload,
+                        schema=NetBoxBackupSyncState,
+                        current_normalizer=normalizer,
+                    )
+                    created_count += 1
+                    results_payloads.append(rec.serialize())
+                    journal_entries.append(
+                        {
+                            "assigned_object_type": "netbox_proxbox.vmbackup",
+                            "assigned_object_id": rec.id,
+                            "kind": "info",
+                            "comments": f"Backup created for VM {rec.get('vmid')} in storage {rec.get('storage')}",
+                        }
+                    )
+                except Exception:
+                    logger.warning(
+                        "Individual backup create failed for volume_id=%s",
+                        single_payload.get("volume_id"),
+                        exc_info=True,
+                    )
+
+        if i + batch_size < len(to_create) and delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000.0)
+
+    patched_count = 0
+    for i in range(0, len(to_patch), batch_size):
+        batch = to_patch[i : i + batch_size]
+        bulk_updates = []
+        for existing_rec, diff in batch:
+            patch_payload = dict(diff)
+            patch_payload["id"] = existing_rec.id
+            bulk_updates.append(patch_payload)
+
+        try:
+            patched = await rest_bulk_patch_async(nb, "/api/plugins/proxbox/backups/", bulk_updates)
+            patched_count += len(patched)
+            for rec in patched:
+                results_payloads.append(rec.serialize())
+                journal_entries.append(
+                    {
+                        "assigned_object_type": "netbox_proxbox.vmbackup",
+                        "assigned_object_id": rec.id,
+                        "kind": "info",
+                        "comments": f"Backup updated for VM {rec.get('vmid')} in storage {rec.get('storage')}",
+                    }
+                )
+        except Exception:
+            logger.warning(
+                "Bulk patch batch failed (%s items), falling back to individual patches",
+                len(batch),
+                exc_info=True,
+            )
+            for existing_rec, diff in batch:
+                try:
+                    for field, value in diff.items():
+                        setattr(existing_rec, field, value)
+                    await existing_rec.save()
+                    patched_count += 1
+                    results_payloads.append(existing_rec.serialize())
+                except Exception:
+                    logger.warning(
+                        "Individual backup patch failed for id=%s",
+                        existing_rec.id,
+                        exc_info=True,
+                    )
+
+        if i + batch_size < len(to_patch) and delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000.0)
+
+    for i in range(0, len(journal_entries), batch_size):
+        batch = journal_entries[i : i + batch_size]
+        try:
+            await rest_bulk_create_async(nb, "/api/extras/journal-entries/", batch)
+        except Exception:
+            logger.warning(
+                "Bulk journal create failed (%s items), falling back to individual creates",
+                len(batch),
+                exc_info=True,
+            )
+            for entry in batch:
+                try:
+                    await rest_create_async(nb, "/api/extras/journal-entries/", entry)
+                except Exception:
+                    logger.debug("Individual journal create failed", exc_info=True)
+
+        if i + batch_size < len(journal_entries) and delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000.0)
+
+    return results_payloads, created_count, patched_count
+
+
 async def process_backups_batch(
     backup_tasks: list,
     batch_size: int = 10,
@@ -282,32 +546,25 @@ async def get_node_backups(
     netbox_session: NetBoxSessionDep,
     storage_index: dict[tuple[str, str], dict] | None = None,
     vmid: str | None = None,
-) -> tuple[list, set[str]]:
-    nb = netbox_session
-    vm_cache: dict[int, dict | None] = {}
-    """
-    Get backups for a specific node and storage.
+) -> tuple[list[dict], set[str]]:
+    """Get raw backup dicts for a specific node and storage.
 
     Returns:
-        (async tasks for NetBox reconcile, set of Proxmox volid strings seen on storage)
+        (list of Proxmox backup dicts, set of Proxmox volid strings seen on storage)
     """
     for proxmox, cluster in zip(pxs, cluster_status):
         if cluster and cluster.node_list:
-            cluster_name = getattr(cluster, "name", None)
             for cluster_node in cluster.node_list:
                 if cluster_node.name == node:
                     try:
-                        backups = await asyncio.to_thread(
-                            lambda: dump_models(
-                                get_node_storage_content(
-                                    proxmox,
-                                    node=node,
-                                    storage=storage,
-                                    vmid=vmid,
-                                    content="backup",
-                                )
-                            )
+                        raw_backups = await get_node_storage_content(
+                            proxmox,
+                            node=node,
+                            storage=storage,
+                            vmid=vmid,
+                            content="backup",
                         )
+                        backups = dump_models(raw_backups)
 
                         if vmid is not None:
                             filtered_vmid = str(vmid).strip()
@@ -318,18 +575,8 @@ async def get_node_backups(
                             ]
 
                         volids = _volids_from_proxmox_storage_backup_items(backups)
-                        tasks = [
-                            create_netbox_backups(
-                                backup,
-                                nb,
-                                cluster_name=cluster_name,
-                                storage_index=storage_index,
-                                vm_cache=vm_cache,
-                            )
-                            for backup in backups
-                            if backup.get("content") == "backup"
-                        ]
-                        return tasks, volids
+                        filtered = [b for b in backups if b.get("content") == "backup"]
+                        return filtered, volids
                     except Exception as error:
                         logger.warning("Error getting backups for node %s: %s", node, error)
                         continue
@@ -360,8 +607,9 @@ async def create_virtual_machine_backups(
         Query(title="VM ID", description="The ID of the VM to retrieve the content for."),
     ] = None,
 ):
-    storage_index = await _load_storage_index(netbox_session)
-    backup_tasks, _volids = await get_node_backups(
+    nb = netbox_session
+    storage_index = await _load_storage_index(nb)
+    raw_backups, volids = await get_node_backups(
         pxs,
         cluster_status,
         node,
@@ -370,11 +618,41 @@ async def create_virtual_machine_backups(
         storage_index=storage_index,
         vmid=vmid,
     )
-    if not backup_tasks:
+    if not raw_backups:
         raise ProxboxException(message="Node or Storage not found.")
 
-    reconciled, _failures = await process_backups_batch(backup_tasks)
-    return reconciled
+    vm_cache = await _prefetch_vm_cache(nb)
+    payloads: list[dict] = []
+    for backup in raw_backups:
+        payload = compute_backup_payload(
+            backup,
+            vm_cache=vm_cache,
+            storage_index=storage_index,
+        )
+        if payload is not None:
+            payloads.append(payload)
+
+    if not payloads:
+        raise ProxboxException(message="No valid backups to process.")
+
+    results, _created, _patched = await _bulk_reconcile_backups(nb, payloads, volids)
+    return results
+
+
+async def _prefetch_vm_cache(nb) -> dict[int, dict | None]:
+    """Load all VMs from NetBox into a cache keyed by cf_proxmox_vm_id."""
+    vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
+    cache: dict[int, dict | None] = {}
+    for vm in vms:
+        cf = vm.get("custom_fields", {}) or {}
+        raw_vmid = cf.get("proxmox_vm_id")
+        if raw_vmid is not None:
+            try:
+                vmid_int = int(str(raw_vmid).strip())
+                cache[vmid_int] = vm.serialize() if hasattr(vm, "serialize") else vm.dict()
+            except (ValueError, TypeError):
+                continue
+    return cache
 
 
 async def _create_all_virtual_machine_backups(  # noqa: C901
@@ -390,6 +668,10 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
 ):
     """Internal function that handles backup sync with optional websocket support.
 
+    Uses a two-pass bulk reconcile pattern:
+    1. Discovery: fetch Proxmox backups and build payloads (no NetBox writes)
+    2. Reconcile: pre-fetch all existing NetBox backups, diff in memory, bulk dispatch
+
     When ``vmid_filter`` is provided only backups belonging to that Proxmox VMID
     are fetched and synced.
     """
@@ -399,7 +681,6 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
     deleted_count = 0
     backup_sync_ok = False
     storage_index = await _load_storage_index(nb)
-    vm_cache: dict[int, dict | None] = {}
 
     try:
         if use_websocket and websocket:
@@ -411,8 +692,10 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 }
             )
 
-        all_backup_tasks = []
-        proxmox_backups = set()
+        vm_cache = await _prefetch_vm_cache(nb)
+
+        all_raw_backups: list[dict] = []
+        proxmox_backups: set[str] = set()
         discovery_tasks: list[asyncio.Task] = []
         fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
 
@@ -421,22 +704,19 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
             cluster_name: str,
             node_name: str,
             storage_name: str,
-        ) -> tuple[list, set[str]]:
+        ) -> tuple[list[dict], set[str]]:
             async with fetch_semaphore:
                 _extra: dict = {}
                 if vmid_filter is not None:
                     _extra["vmid"] = vmid_filter
-                backups = await asyncio.to_thread(
-                    lambda: dump_models(
-                        get_node_storage_content(
-                            proxmox,
-                            node=node_name,
-                            storage=storage_name,
-                            content="backup",
-                            **_extra,
-                        )
-                    )
+                raw_backups = await get_node_storage_content(
+                    proxmox,
+                    node=node_name,
+                    storage=storage_name,
+                    content="backup",
+                    **_extra,
                 )
+                backups = dump_models(raw_backups)
                 if vmid_filter is not None:
                     filtered_vmid = str(vmid_filter).strip()
                     backups = [
@@ -445,18 +725,8 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                         if str(backup.get("vmid", "")).strip() == filtered_vmid
                     ]
                 volids = _volids_from_proxmox_storage_backup_items(backups)
-                tasks = [
-                    create_netbox_backups(
-                        backup,
-                        nb,
-                        cluster_name=cluster_name,
-                        storage_index=storage_index,
-                        vm_cache=vm_cache,
-                    )
-                    for backup in backups
-                    if backup.get("content") == "backup"
-                ]
-            return tasks, volids
+                filtered = [b for b in backups if b.get("content") == "backup"]
+            return filtered, volids
 
         for proxmox, cluster in zip(pxs, cluster_status):
             cluster_name = getattr(cluster, "name", None) if cluster else None
@@ -493,11 +763,21 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 if isinstance(result, Exception):
                     logger.warning("Backup discovery failed: %s", result, exc_info=True)
                     continue
-                node_backup_tasks, node_volids = result
-                all_backup_tasks.extend(node_backup_tasks)
+                node_backups, node_volids = result
+                all_raw_backups.extend(node_backups)
                 proxmox_backups.update(node_volids)
 
-        if not all_backup_tasks:
+        all_payloads: list[dict] = []
+        for backup in all_raw_backups:
+            payload = compute_backup_payload(
+                backup,
+                vm_cache=vm_cache,
+                storage_index=storage_index,
+            )
+            if payload is not None:
+                all_payloads.append(payload)
+
+        if not all_payloads:
             error_msg = "No backups found to process"
             if use_websocket and websocket:
                 await websocket.send_json(
@@ -514,22 +794,35 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 {
                     "step": "backups",
                     "status": "discovered",
-                    "message": f"Found {len(all_backup_tasks)} backups to process.",
-                    "count": len(all_backup_tasks),
+                    "message": f"Found {len(all_payloads)} backups to reconcile.",
+                    "count": len(all_payloads),
                 }
             )
 
-        results, failure_count = await process_backups_batch(
-            all_backup_tasks,
-            batch_size=_DEFAULT_BACKUP_BATCH_SIZE,
-            delay_ms=_DEFAULT_BACKUP_BATCH_DELAY_MS,
+        logger.info(
+            "Starting bulk backup reconcile: %s payloads, batch_size=%s, delay_ms=%s",
+            len(all_payloads),
+            _DEFAULT_BULK_BATCH_SIZE,
+            _DEFAULT_BULK_BATCH_DELAY_MS,
         )
-        if failure_count:
-            logger.warning("Backup batch reported %s task error(s)", failure_count)
+
+        results, created_count, patched_count = await _bulk_reconcile_backups(
+            nb,
+            all_payloads,
+            proxmox_backups,
+        )
+
+        logger.info(
+            "Bulk reconcile completed: %s created, %s patched, %s total results",
+            created_count,
+            patched_count,
+            len(results),
+        )
 
         if delete_nonexistent_backup:
             try:
                 netbox_backups = await rest_list_async(nb, "/api/plugins/proxbox/backups/")
+                ids_to_delete: list[int] = []
                 skipped_no_volid = 0
 
                 for backup in netbox_backups:
@@ -538,15 +831,44 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                         skipped_no_volid += 1
                         continue
                     if vid not in proxmox_backups:
+                        backup_id = backup.id
+                        if backup_id is not None:
+                            ids_to_delete.append(int(backup_id))
+
+                if ids_to_delete:
+                    batch_size = _DEFAULT_BULK_BATCH_SIZE
+                    for i in range(0, len(ids_to_delete), batch_size):
+                        batch_ids = ids_to_delete[i : i + batch_size]
                         try:
-                            backup.delete()
-                            deleted_count += 1
+                            deleted = await rest_bulk_delete_async(
+                                nb,
+                                "/api/plugins/proxbox/backups/",
+                                batch_ids,
+                            )
+                            deleted_count += deleted
                         except Exception:
                             logger.warning(
-                                "Failed to delete backup for VM %s",
-                                backup.vmid,
+                                "Bulk delete failed (%s items), falling back to individual deletes",
+                                len(batch_ids),
                                 exc_info=True,
                             )
+                            for bid in batch_ids:
+                                try:
+                                    await rest_bulk_delete_async(
+                                        nb,
+                                        "/api/plugins/proxbox/backups/",
+                                        [bid],
+                                    )
+                                    deleted_count += 1
+                                except Exception:
+                                    logger.warning(
+                                        "Failed to delete backup id=%s",
+                                        bid,
+                                        exc_info=True,
+                                    )
+
+                        if i + batch_size < len(ids_to_delete) and _DEFAULT_BULK_BATCH_DELAY_MS > 0:
+                            await asyncio.sleep(_DEFAULT_BULK_BATCH_DELAY_MS / 1000.0)
 
                 if skipped_no_volid:
                     logger.info(
