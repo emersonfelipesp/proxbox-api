@@ -1242,21 +1242,30 @@ async def rest_list_paginated_async(
     *,
     base_query: dict[str, object] | None = None,
     page_size: int = 200,
-    max_offset: int = 10_000,
+    max_offset: int | None = None,
 ) -> list[RestRecord]:
     records: list[RestRecord] = []
+    resolved_page_size = max(1, int(page_size))
     offset = 0
-    while offset <= max_offset:
+    while True:
+        if max_offset is not None and offset > max_offset:
+            logger.warning(
+                "Pagination cap reached for %s at offset=%s; returning %s collected record(s)",
+                path,
+                offset,
+                len(records),
+            )
+            break
         query = dict(base_query or {})
-        query["limit"] = page_size
+        query["limit"] = resolved_page_size
         query["offset"] = offset
         page = await rest_list_async(nb, path, query=query)
         if not page:
             break
         records.extend(page)
-        if len(page) < page_size:
+        if len(page) < resolved_page_size:
             break
-        offset += page_size
+        offset += resolved_page_size
     return records
 
 
