@@ -300,7 +300,7 @@ class TestBackupsSync:
                     "/api/plugins/proxbox/backups/",
                     lookup={"volume_id": backup.volid},
                     payload={
-                        "storage": storage.id,
+                        "proxmox_storage": storage.id,
                         "virtual_machine": virtual_machine.id,
                         "subtype": backup.subtype,
                         "creation_time": None,
@@ -315,7 +315,7 @@ class TestBackupsSync:
                     },
                     schema=NetBoxBackupSyncState,
                     current_normalizer=lambda record: {
-                        "storage": _relation_id(record.get("storage")),
+                        "proxmox_storage": _relation_id(record.get("proxmox_storage")),
                         "virtual_machine": record.get("virtual_machine"),
                         "subtype": record.get("subtype"),
                         "creation_time": record.get("creation_time"),

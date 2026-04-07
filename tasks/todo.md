@@ -150,4 +150,10 @@
 ## E2E Transport Stabilization (Round 6)
 
 - [x] Fix E2E tag fixture to handle `RestRecord` returned by `ensure_tag_async` (serialize/object-attribute fallback).
-- [ ] Re-run CI and verify E2E suite exits setup and executes test bodies.
+- [x] Re-run CI and verify E2E suite exits setup and executes test bodies.
+
+## E2E Transport Stabilization (Round 7)
+
+- [x] Fix E2E backup test payload mapping from `storage` to `proxmox_storage` for `NetBoxBackupSyncState` schema compatibility.
+- [x] Fix NetBox REST global semaphore to be event-loop-aware and avoid cross-loop binding failures in async E2E tests.
+- [ ] Re-run CI and verify reduced E2E failures across all 6 transport combinations.
