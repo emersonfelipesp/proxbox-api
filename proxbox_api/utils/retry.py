@@ -181,29 +181,3 @@ async def retry_async(
         message=f"{operation_name} failed",
         detail="Unexpected: no error was raised but no result returned",
     )
-
-
-def retry_sync(
-    coro: Callable[..., object],
-    *args: object,
-    max_retries: int | None = None,
-    base_delay: float | None = None,
-    operation_name: str = "operation",
-    **kwargs: object,
-) -> object:
-    """
-    Synchronous wrapper for retry_async using run_coroutine_blocking.
-    """
-    from proxbox_api.netbox_async_bridge import run_coroutine_blocking
-
-    async def wrapped():
-        return await retry_async(
-            coro,
-            *args,
-            max_retries=max_retries,
-            base_delay=base_delay,
-            operation_name=operation_name,
-            **kwargs,
-        )
-
-    return run_coroutine_blocking(wrapped())

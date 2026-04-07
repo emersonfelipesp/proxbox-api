@@ -21,12 +21,13 @@ from proxbox_api.app.exceptions import register_exception_handlers
 from proxbox_api.app.full_update import register_full_update_routes
 from proxbox_api.app.root_meta import root_meta_router
 from proxbox_api.app.websockets import register_websocket_routes
-from proxbox_api.auth import check_auth_header_with_session, get_session_factory
+from proxbox_api.auth import check_auth_header_with_session_async, get_async_session_factory
 from proxbox_api.exception import ProxboxException
 from proxbox_api.log_buffer import configure_buffer_logger
 from proxbox_api.logger import logger
 from proxbox_api.openapi_custom import custom_openapi_builder
 from proxbox_api.routes.admin import router as admin_router
+from proxbox_api.routes.auth import router as auth_router
 from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.routes.extras import router as extras_router
 from proxbox_api.routes.netbox import router as netbox_router
@@ -35,7 +36,6 @@ from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
-from proxbox_api.routes.auth import router as auth_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
@@ -127,9 +127,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         api_key = request.headers.get("X-Proxbox-API-Key")
         client_ip = self._get_client_ip(request)
 
-        session_factory = get_session_factory(request.app)
-        with session_factory() as session:
-            authorized, error_message = check_auth_header_with_session(session, api_key, client_ip)
+        session_factory = get_async_session_factory(request.app)
+        async with session_factory() as session:
+            authorized, error_message = await check_auth_header_with_session_async(
+                session, api_key, client_ip
+            )
 
         if not authorized:
             status_code = 429 if "Too many failed" in (error_message or "") else 401

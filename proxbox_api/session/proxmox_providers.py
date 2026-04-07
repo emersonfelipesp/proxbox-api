@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from json import JSONDecodeError
 from typing import Annotated
 
@@ -108,10 +109,11 @@ async def proxmox_sessions(  # noqa: C901
         endpoint_ids=endpoint_id_list,
     )
 
-    def return_single_session(field, value):
+    async def return_single_session(field: str, value: str) -> list[ProxmoxSession]:
         for proxmox_schema in proxmox_schemas:
             if value == getattr(proxmox_schema, field, None):
-                return [ProxmoxSession(proxmox_schema)]
+                session = await ProxmoxSession.create(proxmox_schema)
+                return [session]
 
         raise ProxboxException(
             message=f"No result found for Proxmox Sessions based on the provided {field}",
@@ -120,18 +122,21 @@ async def proxmox_sessions(  # noqa: C901
 
     try:
         if ip_address is not None:
-            return return_single_session("ip_address", ip_address)
+            return await return_single_session("ip_address", ip_address)
 
         if domain is not None:
-            return return_single_session("domain", domain)
+            return await return_single_session("domain", domain)
 
         if name is not None:
-            return return_single_session("name", name)
+            return await return_single_session("name", name)
     except ProxboxException as error:
         raise error
 
     try:
-        return [ProxmoxSession(px_schema) for px_schema in proxmox_schemas]
+        sessions = await asyncio.gather(
+            *[ProxmoxSession.create(px_schema) for px_schema in proxmox_schemas]
+        )
+        return list(sessions)
     except Exception as error:
         raise ProxboxException(
             message="Could not return Proxmox Sessions", python_exception=f"{error}"
@@ -145,10 +150,10 @@ async def proxmox_sessions_dep(
         yield sessions
     finally:
         for session in sessions:
-            close_method = getattr(session, "close", None)
+            close_method = getattr(session, "aclose", None)
             if callable(close_method):
                 try:
-                    close_method()
+                    await close_method()
                 except Exception as error:  # pragma: no cover
                     logger.debug("Failed to clean up proxmox session: %s", error)
 
@@ -165,14 +170,6 @@ async def close_proxmox_sessions(pxs: list[ProxmoxSession]) -> None:
         if callable(close_method):
             try:
                 await close_method()
-                continue
-            except Exception as error:  # pragma: no cover
-                logger.debug("Failed to clean up proxmox session: %s", error)
-
-        close_method = getattr(session, "close", None)
-        if callable(close_method):
-            try:
-                close_method()
             except Exception as error:  # pragma: no cover
                 logger.debug("Failed to clean up proxmox session: %s", error)
 
@@ -286,7 +283,7 @@ async def resolve_proxmox_target_session(
             continue
         for proxmox_schema in proxmox_schemas:
             if value == getattr(proxmox_schema, field, None):
-                return ProxmoxSession(proxmox_schema)
+                return await ProxmoxSession.create(proxmox_schema)
         raise ProxboxException(
             message=f"No result found for Proxmox Sessions based on the provided {field}",
             detail="Check if the provided parameters are correct",
@@ -304,4 +301,4 @@ async def resolve_proxmox_target_session(
             detail="Generated Proxmox proxy routes require an explicit target when more than one endpoint is configured.",
         )
 
-    return ProxmoxSession(proxmox_schemas[0])
+    return await ProxmoxSession.create(proxmox_schemas[0])

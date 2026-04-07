@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import os
 import random
 import time
-from collections.abc import AsyncIterable, AsyncIterator
 from urllib.parse import urlsplit
 
 from netbox_sdk.client import ApiResponse
@@ -16,9 +14,7 @@ from pydantic import BaseModel
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_async_bridge import run_coroutine_blocking
 from proxbox_api.netbox_sdk_helpers import to_dict
-from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.schemas.netbox.extras import TagSchema
 from proxbox_api.utils.retry import (
     _is_connection_refused_error,
@@ -441,32 +437,7 @@ def _get_netbox_semaphore() -> asyncio.Semaphore:
 
 
 def _unwrap_api(nb: object) -> object:
-    if isinstance(nb, SyncProxy):
-        return object.__getattribute__(nb, "_obj")
     return nb
-
-
-def _wrap_sync(value: object) -> object:
-    if inspect.iscoroutine(value):
-        return _wrap_sync(run_coroutine_blocking(value))
-    if isinstance(value, list):
-        return [_wrap_sync(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_wrap_sync(item) for item in value)
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, (AsyncIterator, AsyncIterable)):
-        return _wrap_sync(_collect_async_iter(value))
-    if hasattr(value, "serialize") or hasattr(value, "__dict__"):
-        return SyncProxy(value)
-    return value
-
-
-def _collect_async_iter(it: object) -> list[object]:
-    async def _collect() -> list[object]:
-        return [item async for item in it]
-
-    return run_coroutine_blocking(_collect())
 
 
 def _normalize_path(path: str) -> str:
@@ -766,10 +737,6 @@ async def rest_list_async(
     return await _do_request()
 
 
-def rest_list(nb: object, path: str, *, query: dict[str, object] | None = None) -> list[object]:
-    return _wrap_sync(run_coroutine_blocking(rest_list_async(nb, path, query=query)))
-
-
 async def rest_first_async(
     nb: object,
     path: str,
@@ -832,10 +799,6 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
 
     # Should not reach here
     return await _do_request()
-
-
-def rest_create(nb: object, path: str, payload: dict[str, object]) -> object:
-    return _wrap_sync(run_coroutine_blocking(rest_create_async(nb, path, payload)))
 
 
 async def rest_ensure_async(
@@ -1028,43 +991,6 @@ async def rest_patch_async(
 
     # Should not reach here
     return await _do_request()
-
-
-def rest_ensure(
-    nb: object,
-    path: str,
-    *,
-    lookup: dict[str, object],
-    payload: dict[str, object],
-) -> object:
-    return _wrap_sync(
-        run_coroutine_blocking(rest_ensure_async(nb, path, lookup=lookup, payload=payload))
-    )
-
-
-def rest_reconcile(
-    nb: object,
-    path: str,
-    *,
-    lookup: dict[str, object],
-    payload: dict[str, object],
-    schema: type[BaseModel],
-    current_normalizer,
-    patchable_fields: set[str] | frozenset[str] | None = None,
-) -> object:
-    return _wrap_sync(
-        run_coroutine_blocking(
-            rest_reconcile_async(
-                nb,
-                path,
-                lookup=lookup,
-                payload=payload,
-                schema=schema,
-                current_normalizer=current_normalizer,
-                patchable_fields=patchable_fields,
-            )
-        )
-    )
 
 
 def nested_tag_payload(tag: object) -> list[dict[str, object]]:

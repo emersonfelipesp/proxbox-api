@@ -7,12 +7,83 @@ Subsequent key management requires authentication via /auth/keys endpoints.
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Callable
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session
 
-from proxbox_api.database import ApiKey, AuthLockout, engine, get_session
+from proxbox_api.database import ApiKey, AuthLockout, async_session_factory, engine, get_session
+
+_LOCKOUT_DURATION = 300
+_MAX_FAILED_ATTEMPTS = 5
+
+
+async def is_locked_out_async(session: AsyncSession, ip: str) -> bool:
+    return await AuthLockout.is_locked_out_async(
+        session, ip, _MAX_FAILED_ATTEMPTS, _LOCKOUT_DURATION
+    )
+
+
+async def record_failed_attempt_async(session: AsyncSession, ip: str) -> None:
+    await AuthLockout.record_failed_attempt_async(session, ip)
+
+
+async def clear_failed_attempts_async(session: AsyncSession, ip: str) -> None:
+    await AuthLockout.clear_failed_attempts_async(session, ip)
+
+
+async def _get_attempt_count_async(session: AsyncSession, ip: str) -> int:
+    lockout = await session.get(AuthLockout, ip)
+    if lockout:
+        return lockout.attempts
+    return 0
+
+
+async def check_auth_header_with_session_async(
+    session: AsyncSession, api_key: str | None, client_ip: str
+) -> tuple[bool, str | None]:
+    """Validate API key using the provided async session.
+
+    Returns (authorized, error_message) tuple.
+    """
+    if await is_locked_out_async(session, client_ip):
+        return False, "Too many failed authentication attempts. Please try again later."
+
+    if not await ApiKey.has_any_key_async(session):
+        return False, (
+            "No API key configured. "
+            "Register a key via POST /auth/register-key or use an existing key."
+        )
+
+    if not api_key:
+        await record_failed_attempt_async(session, client_ip)
+        remaining = _MAX_FAILED_ATTEMPTS - await _get_attempt_count_async(session, client_ip)
+        if remaining > 0:
+            return False, f"API key required. {remaining} attempts remaining."
+        return False, "API key required."
+
+    if not await ApiKey.verify_any_async(session, api_key):
+        await record_failed_attempt_async(session, client_ip)
+        remaining = _MAX_FAILED_ATTEMPTS - await _get_attempt_count_async(session, client_ip)
+        if remaining > 0:
+            return False, f"Invalid API key. {remaining} attempts remaining."
+        return False, "Invalid API key."
+
+    await clear_failed_attempts_async(session, client_ip)
+    return True, None
+
+
+async def check_auth_header_async(api_key: str | None, client_ip: str) -> tuple[bool, str | None]:
+    """Validate API key from database (using async engine).
+
+    Returns (authorized, error_message) tuple.
+    """
+    async with async_session_factory() as session:
+        return await check_auth_header_with_session_async(session, api_key, client_ip)
+
+
+# Sync versions for backward compatibility during migration
 
 _LOCKOUT_DURATION = 300
 _MAX_FAILED_ATTEMPTS = 5
@@ -91,3 +162,29 @@ def get_session_factory(app) -> Callable[[], Session]:
         original = app.dependency_overrides[get_session]
         return contextmanager(original)
     return contextmanager(get_session)
+
+
+@contextmanager
+def _async_context_manager_wrapper(async_gen):
+    """Wrap an async context manager for use in sync contexts (not recommended)."""
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        yield loop.run_until_complete(async_gen.__aenter__())
+    finally:
+        loop.run_until_complete(async_gen.__aexit__(None, None, None))
+        loop.close()
+
+
+def get_async_session_factory(app) -> Callable[[], AsyncSession]:
+    """Get the async session factory respecting dependency overrides.
+
+    Returns an async context manager that yields an AsyncSession.
+    """
+
+    from proxbox_api.database import get_async_session
+
+    if hasattr(app, "dependency_overrides") and get_async_session in app.dependency_overrides:
+        return app.dependency_overrides[get_async_session]
+    return get_async_session

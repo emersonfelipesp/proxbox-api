@@ -13,7 +13,6 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     rest_create_async,
-    rest_list,
     rest_list_async,
     rest_reconcile_async,
 )
@@ -530,7 +529,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
 
         if delete_nonexistent_backup:
             try:
-                netbox_backups = rest_list(nb, "/api/plugins/proxbox/backups/")
+                netbox_backups = await rest_list_async(nb, "/api/plugins/proxbox/backups/")
                 skipped_no_volid = 0
 
                 for backup in netbox_backups:

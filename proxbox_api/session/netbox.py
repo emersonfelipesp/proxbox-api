@@ -14,7 +14,6 @@ from sqlmodel import select
 
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_sdk_sync import SyncProxy
 
 _DEFAULT_NETBOX_TIMEOUT = 120.0
 
@@ -87,13 +86,10 @@ def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     )
 
 
-NetBoxClient = Api | SyncProxy
-
-
 def get_netbox_session(
     database_session: DatabaseSessionDep,
     netbox_id: int | None = None,
-) -> NetBoxClient:
+) -> Api:
     """
     Get NetBox API parameters from database and establish a netbox-sdk API session.
 
@@ -104,69 +100,7 @@ def get_netbox_session(
             one exists.
 
     Returns:
-        NetBoxClient session for the endpoint.
-
-    Raises:
-        ProxboxException: If no endpoint found or on error.
-    """
-    try:
-        if netbox_id is not None:
-            netbox_endpoint = database_session.get(NetBoxEndpoint, netbox_id)
-            if not netbox_endpoint:
-                raise ProxboxException(
-                    message=f"NetBox endpoint {netbox_id} not found",
-                    detail=f"No endpoint with ID {netbox_id}",
-                )
-            return SyncProxy(netbox_api_from_endpoint(netbox_endpoint))
-
-        count = database_session.exec(select(NetBoxEndpoint)).all()
-        count = len(count) if count else 0
-
-        if count == 0:
-            raise ProxboxException(
-                message="No NetBox endpoint found",
-                detail="Please add a NetBox endpoint in the database",
-            )
-
-        if count == 1:
-            netbox_endpoint = database_session.exec(select(NetBoxEndpoint)).first()
-        else:
-            netbox_endpoint = database_session.exec(
-                select(NetBoxEndpoint).order_by(NetBoxEndpoint.id)
-            ).first()
-
-        if not netbox_endpoint:
-            raise ProxboxException(
-                message="Could not resolve NetBox endpoint",
-                detail="Unable to select endpoint from database",
-            )
-
-        return SyncProxy(netbox_api_from_endpoint(netbox_endpoint))
-
-    except ProxboxException:
-        raise
-
-    except Exception as error:
-        raise ProxboxException(
-            message="Error establishing NetBox API session", python_exception=str(error)
-        )
-
-
-def get_netbox_async_session(
-    database_session: DatabaseSessionDep,
-    netbox_id: int | None = None,
-) -> Api:
-    """
-    Get NetBox API parameters from database and establish an async netbox-sdk API session.
-
-    Args:
-        database_session: Database session dependency.
-        netbox_id: Optional specific NetBox endpoint ID. If not provided, selects by
-            ID when multiple endpoints exist, or returns the only endpoint when only
-            one exists.
-
-    Returns:
-        NetBox async API session for the endpoint.
+        NetBox API session for the endpoint.
 
     Raises:
         ProxboxException: If no endpoint found or on error.
@@ -214,11 +148,35 @@ def get_netbox_async_session(
         )
 
 
-NetBoxSessionDep = Annotated[NetBoxClient, Depends(get_netbox_session)]
+def get_netbox_async_session(
+    database_session: DatabaseSessionDep,
+    netbox_id: int | None = None,
+) -> Api:
+    """
+    Get NetBox API parameters from database and establish an async netbox-sdk API session.
+
+    This is an alias for get_netbox_session since the SDK is now fully async.
+
+    Args:
+        database_session: Database session dependency.
+        netbox_id: Optional specific NetBox endpoint ID. If not provided, selects by
+            ID when multiple endpoints exist, or returns the only endpoint when only
+            one exists.
+
+    Returns:
+        NetBox async API session for the endpoint.
+
+    Raises:
+        ProxboxException: If no endpoint found or on error.
+    """
+    return get_netbox_session(database_session, netbox_id)
+
+
+NetBoxSessionDep = Annotated[Api, Depends(get_netbox_session)]
 NetBoxAsyncSessionDep = Annotated[Api, Depends(get_netbox_async_session)]
 
 
-async def check_netbox_connection(nb: NetBoxClient) -> dict[str, object]:
+async def check_netbox_connection(nb: Api) -> dict[str, object]:
     """
     Check NetBox connectivity and return status information.
 
@@ -228,17 +186,15 @@ async def check_netbox_connection(nb: NetBoxClient) -> dict[str, object]:
     from proxbox_api.netbox_rest import rest_list_async
 
     try:
-        api = nb
-        if isinstance(nb, SyncProxy):
-            api = object.__getattribute__(nb, "_obj")
-
-        url = api.config.base_url
+        url = nb.config.base_url
         await rest_list_async(nb, "/api/", query={"limit": 1})
         return {"available": True, "url": url, "error": None}
     except ProxboxException as e:
         return {
             "available": False,
-            "url": getattr(getattr(nb, "config", None), "base_url", "unknown"),
+            "url": getattr(nb, "config", None)
+            and getattr(nb.config, "base_url", "unknown")
+            or "unknown",
             "error": e.detail or e.message,
         }
     except Exception as e:
