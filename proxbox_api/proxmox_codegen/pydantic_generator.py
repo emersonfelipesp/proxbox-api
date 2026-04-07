@@ -153,11 +153,14 @@ def generate_pydantic_models_from_openapi(openapi: dict[str, object]) -> str:  #
         "",
         "from __future__ import annotations",
         "",
+        "import warnings",
+        "",
         "from pydantic import BaseModel, ConfigDict, Field, RootModel",
         "",
+        "warnings.filterwarnings('ignore', message='Field name \"schema\".*shadows an attribute.*')",
         "",
         "class ProxmoxBaseModel(BaseModel):",
-        "    model_config = ConfigDict(populate_by_name=True, extra='allow')",
+        "    model_config = ConfigDict(populate_by_name=True, extra='allow', protected_namespaces=())",
         "",
     ]
 

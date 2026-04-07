@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
+warnings.filterwarnings("ignore", message=".*shadows an attribute.*")
+
 # Re-exports for tests and callers that patch ``proxbox_api.main.*``.
 from fastapi.responses import StreamingResponse
 
