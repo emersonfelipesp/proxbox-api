@@ -153,7 +153,7 @@ class TestBackupsSync:
                 payload={
                     "proxmox_storage": storage.id,
                     "virtual_machine": virtual_machine.id,
-                    "subtype": backup.subtype,
+                    "subtype": vm.type,
                     "creation_time": None,
                     "size": backup.size,
                     "verification_state": None,
@@ -302,7 +302,7 @@ class TestBackupsSync:
                     payload={
                         "proxmox_storage": storage.id,
                         "virtual_machine": virtual_machine.id,
-                        "subtype": backup.subtype,
+                        "subtype": vm.type,
                         "creation_time": None,
                         "size": backup.size,
                         "verification_state": None,
