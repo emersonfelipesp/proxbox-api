@@ -119,7 +119,7 @@ Testes podem executar contra MockBackend E containers HTTP:
 ```python
 @pytest.mark.mock_backend
 @pytest.mark.mock_http
-async def test_vm_sync_all_modes(request, proxmox_mock_backend, 
+async def test_vm_sync_all_modes(request, proxmox_mock_backend,
                                    proxmox_mock_http_published,
                                    proxmox_mock_http_local):
     """Teste executa 3 vezes: backend, HTTP published, e HTTP local."""
@@ -139,7 +139,7 @@ services:
     environment:
       - PROXMOX_API_MODE=mock
       - PROXMOX_MOCK_SCHEMA_VERSION=latest
-    
+
   proxmox-mock-local:
     build:
       context: ./proxmox-openapi

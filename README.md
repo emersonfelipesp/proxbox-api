@@ -1,8 +1,8 @@
 # Installing proxbox-api (Plugin backend made using FastAPI)
 
-## Tooling: uv + Ruff
+## Tooling: uv + Ruff + ty
 
-This repo uses [uv](https://docs.astral.sh/uv/) to install Python and dependencies, and [Ruff](https://docs.astral.sh/ruff/) for linting and formatting.
+This repo uses [uv](https://docs.astral.sh/uv/) to install Python and dependencies, [Ruff](https://docs.astral.sh/ruff/) for linting and formatting, and [ty](https://github.com/astral-sh/ty) for type checking.
 
 ```bash
 # Runtime only
@@ -18,6 +18,7 @@ uv sync --extra docs --group dev
 ```bash
 uv run ruff check .
 uv run ruff format .
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py
 uv run pytest tests
 uv run mkdocs serve   # after syncing with --extra docs
 ```
@@ -132,7 +133,7 @@ git clone https://github.com/netdevopsbr/netbox-proxbox.git
 ### Change to 'proxbox_api' project root folder
 
 ```
-cd proxbox_api 
+cd proxbox_api
 ```
 
 ### Install dependencies

@@ -151,6 +151,7 @@ rtk ruff format --check .
 uv run python -m compileall proxbox_api tests
 uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+rtk mypy proxbox_api  # Check type annotations (non-strict mode)
 rtk pytest tests
 ```
 
@@ -161,6 +162,50 @@ cd nextjs-ui
 npm run lint
 npm run build
 ```
+
+## Type System
+
+The project uses Python's type hints with optional `mypy` checking. Type system conventions:
+
+### Domain Types (Type Aliases)
+
+Use `TypeAlias` for semantic clarity on primitive values:
+
+```python
+from proxbox_api.types import RecordID, VMID, ClusterName
+
+def process_device(device_id: RecordID, cluster: ClusterName) -> None:
+    """Type-safe device processing with semantic naming."""
+```
+
+### Protocols for Duck-Typing
+
+Use `@runtime_checkable` Protocols when working with multiple object types:
+
+```python
+from proxbox_api.types import NetBoxRecord, SyncResult
+
+def update_record(record: NetBoxRecord) -> SyncResult:
+    """Works with any NetBox object having record interface."""
+```
+
+### TypedDicts for Data Structures
+
+Use `TypedDict` when dictionary structure matters:
+
+```python
+from proxbox_api.types import VMPayloadDict, DevicePayloadDict
+
+def build_vm_payload(...) -> VMPayloadDict:
+    """Type-safe NetBox VM payload with documented fields."""
+    return {
+        "name": "vm-name",
+        "cluster": cluster_id,
+        "vcpus": 4,
+    }
+```
+
+See `proxbox_api/types/CLAUDE.md` for complete typing guidelines.
 
 ## Extension Rules
 

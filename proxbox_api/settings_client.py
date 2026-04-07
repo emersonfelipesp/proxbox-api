@@ -7,11 +7,12 @@ import time
 from typing import TYPE_CHECKING
 
 from proxbox_api.logger import logger
+from proxbox_api.types import ProxboxSettingsDict
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
 
-_SETTINGS_CACHE: dict | None = None
+_SETTINGS_CACHE: ProxboxSettingsDict | None = None
 _SETTINGS_CACHE_TIME: float = 0.0
 _SETTINGS_CACHE_TTL: float = 300.0  # 5 minutes
 
@@ -32,7 +33,7 @@ def parse_cidr_list(text: str | None) -> list[ipaddress.IPv4Network | ipaddress.
     return networks
 
 
-def get_default_settings() -> dict:
+def get_default_settings() -> ProxboxSettingsDict:
     """Return default settings when NetBox is unavailable."""
     return {
         "ssrf_protection_enabled": True,
@@ -42,7 +43,7 @@ def get_default_settings() -> dict:
     }
 
 
-def fetch_settings_from_netbox(netbox_session: "Api") -> dict | None:
+def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | None:
     """Fetch ProxboxPluginSettings from NetBox plugin API.
 
     Returns None if fetch fails.
@@ -80,7 +81,9 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> dict | None:
         return None
 
 
-def get_settings(netbox_session: "Api | None" = None, use_cache: bool = True) -> dict:
+def get_settings(
+    netbox_session: "Api | None" = None, use_cache: bool = True
+) -> ProxboxSettingsDict:
     """Get ProxboxPluginSettings with caching.
 
     Falls back to defaults if NetBox is unavailable.

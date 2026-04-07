@@ -1,6 +1,9 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
-from typing import Annotated
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 
 from fastapi import Depends
 
@@ -24,15 +27,20 @@ from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
+if TYPE_CHECKING:
+    from netbox_sdk.facade import Api
+
+T = TypeVar("T")
+
 
 async def _emit_substep_with_retry(
     bridge: WebSocketSSEBridge | None,
     substep: str,
     status: SubstepStatus,
     message: str,
-    item: dict,
-    coro,
-):
+    item: dict[str, Any],
+    coro: Callable[[], Awaitable[T]],
+) -> T:
     """Execute a substep with emit_substep, retry logic, and error handling.
 
     Returns the result of the coroutine.
@@ -71,14 +79,14 @@ async def _emit_substep_with_retry(
 
 
 async def create_proxmox_devices(
-    netbox_session: object,
-    clusters_status: list[object] | None,
+    netbox_session: Api,
+    clusters_status: list[Any] | None,
     tag: ProxboxTagDep,
-    websocket: object | None = None,
+    websocket: WebSocketSSEBridge | None = None,
     node: str | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
-) -> list[dict[str, object]]:
+) -> list[dict[str, Any]]:
     """Create and synchronize devices from Proxmox cluster nodes to NetBox.
 
     This function iterates through cluster status objects, extracts node information,
@@ -110,7 +118,7 @@ async def create_proxmox_devices(
     phase_logger = SyncPhaseLogger("device_sync", cluster_mode="proxmox")
     phase_logger.log_phase("initialization", "Device sync process starting")
 
-    device_list: list[dict[str, object]] = []
+    device_list: list[dict[str, Any]] = []
 
     if not clusters_status:
         phase_logger.log_phase("validation", "No cluster status data provided", level="warning")
@@ -123,7 +131,7 @@ async def create_proxmox_devices(
 
     try:
         # Collect all devices to process for discovery message
-        all_devices: list[dict[str, object]] = []
+        all_devices: list[dict[str, Any]] = []
         for cluster_status in clusters_status:
             if cluster_status and cluster_status.node_list:
                 for node_obj in cluster_status.node_list:

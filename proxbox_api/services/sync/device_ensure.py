@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
@@ -16,6 +17,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxManufacturerSyncState,
     NetBoxSiteSyncState,
 )
+from proxbox_api.types import NetBoxRecord
 
 
 def _slugify(value: str) -> str:
@@ -28,7 +30,7 @@ def _last_updated_cf() -> dict[str, str]:
     return {"proxmox_last_updated": datetime.now(timezone.utc).isoformat()}
 
 
-def _record_has_tag(record: object, tag_slug: str) -> bool:
+def _record_has_tag(record: Any, tag_slug: str) -> bool:
     if record is None:
         return False
     if hasattr(record, "serialize"):
@@ -47,7 +49,7 @@ def _record_has_tag(record: object, tag_slug: str) -> bool:
     )
 
 
-def _prefer_existing_device(records: list[object]) -> object | None:
+def _prefer_existing_device(records: list[Any]) -> NetBoxRecord | None:
     """Prefer the ProxBox-managed record when multiple same-name devices exist."""
     proxbox_records = [record for record in records if _record_has_tag(record, "proxbox")]
     if proxbox_records:
@@ -56,11 +58,11 @@ def _prefer_existing_device(records: list[object]) -> object | None:
 
 
 async def _ensure_cluster_type(
-    nb: object,
+    nb: Any,
     *,
     mode: str,
-    tag_refs: list[dict[str, object]],
-) -> object:
+    tag_refs: list[dict[str, Any]],
+) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/virtualization/cluster-types/",
@@ -84,13 +86,13 @@ async def _ensure_cluster_type(
 
 
 async def _ensure_cluster(
-    nb: object,
+    nb: Any,
     *,
     cluster_name: str,
     cluster_type_id: int | None,
     mode: str,
-    tag_refs: list[dict[str, object]],
-) -> object:
+    tag_refs: list[dict[str, Any]],
+) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/virtualization/clusters/",
@@ -113,7 +115,7 @@ async def _ensure_cluster(
     )
 
 
-async def _ensure_manufacturer(nb: object, *, tag_refs: list[dict[str, object]]) -> object:
+async def _ensure_manufacturer(nb: Any, *, tag_refs: list[dict[str, Any]]) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/manufacturers/",
@@ -135,11 +137,11 @@ async def _ensure_manufacturer(nb: object, *, tag_refs: list[dict[str, object]])
 
 
 async def _ensure_device_type(
-    nb: object,
+    nb: Any,
     *,
     manufacturer_id: int | None,
-    tag_refs: list[dict[str, object]],
-) -> object:
+    tag_refs: list[dict[str, Any]],
+) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/device-types/",
@@ -162,7 +164,7 @@ async def _ensure_device_type(
     )
 
 
-async def _ensure_device_role(nb: object, *, tag_refs: list[dict[str, object]]) -> object:
+async def _ensure_device_role(nb: Any, *, tag_refs: list[dict[str, Any]]) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/device-roles/",
@@ -186,8 +188,8 @@ async def _ensure_device_role(nb: object, *, tag_refs: list[dict[str, object]]) 
 
 
 async def _ensure_site(
-    nb: object, *, cluster_name: str, tag_refs: list[dict[str, object]]
-) -> object:
+    nb: Any, *, cluster_name: str, tag_refs: list[dict[str, Any]]
+) -> NetBoxRecord:
     site_name = f"Proxmox Default Site - {cluster_name}"
     site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
     return await rest_reconcile_async(
@@ -213,15 +215,15 @@ async def _ensure_site(
 
 
 async def _ensure_device(
-    nb: object,
+    nb: Any,
     *,
     device_name: str,
     cluster_id: int | None,
     device_type_id: int | None,
     role_id: int | None,
     site_id: int | None,
-    tag_refs: list[dict[str, object]],
-) -> object:
+    tag_refs: list[dict[str, Any]],
+) -> NetBoxRecord:
     existing_devices = await rest_list_async(
         nb,
         "/api/dcim/devices/",
@@ -295,6 +297,15 @@ async def _ensure_device(
 
 
 def _wrap_device_phase_error(phase: str, error: Exception) -> ProxboxException:
+    """Wrap a device sync phase error in ProxboxException with context.
+
+    Args:
+        phase: The phase name (e.g., "device_type", "cluster").
+        error: The original exception.
+
+    Returns:
+        ProxboxException with context about the failed phase.
+    """
     if isinstance(error, ProxboxException):
         return ProxboxException(
             message=f"Error creating NetBox {phase}",

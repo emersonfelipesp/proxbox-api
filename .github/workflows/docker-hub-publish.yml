@@ -110,6 +110,7 @@ jobs:
           uv sync --frozen --extra test --group dev
           uv run ruff check .
           uv run ruff format --check .
+          uv run ty check proxbox_api/types proxbox_api/utils/retry.py
           uv run python -m compileall proxbox_api scripts tests
           uv run python -c "import proxbox_api.main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"

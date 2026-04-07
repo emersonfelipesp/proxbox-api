@@ -149,9 +149,7 @@ async def get_qemu_guest_agent_network_interfaces(
                 error,
             )
             payload = await resolve_async(
-                session.session.nodes(node).qemu(vmid).agent.get(
-                    command="network-get-interfaces"
-                )
+                session.session.nodes(node).qemu(vmid).agent.get(command="network-get-interfaces")
             )
         return _normalize_guest_agent_interfaces(payload)
     except Exception as error:
@@ -212,7 +210,9 @@ async def get_node_storage_content(
     """Get storage content from a specific node."""
     try:
         params = {key: value for key, value in kwargs.items() if value is not None}
-        result = await resolve_async(session.session.nodes(node).storage(storage).content.get(**params))
+        result = await resolve_async(
+            session.session.nodes(node).storage(storage).content.get(**params)
+        )
         validated = generated_models.GetNodesNodeStorageStorageContentResponse.model_validate(
             result
         )
