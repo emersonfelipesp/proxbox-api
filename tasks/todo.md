@@ -156,4 +156,9 @@
 
 - [x] Fix E2E backup test payload mapping from `storage` to `proxmox_storage` for `NetBoxBackupSyncState` schema compatibility.
 - [x] Fix NetBox REST global semaphore to be event-loop-aware and avoid cross-loop binding failures in async E2E tests.
-- [ ] Re-run CI and verify reduced E2E failures across all 6 transport combinations.
+- [x] Re-run CI and verify reduced E2E failures across all 6 transport combinations.
+
+## E2E Transport Stabilization (Round 8)
+
+- [x] Fix remaining backup test payload/normalizer keys in `test_sync_vm_backups_with_e2e_tag` to use `proxmox_storage` consistently.
+- [ ] Re-run CI and verify backup E2E failures are resolved.
