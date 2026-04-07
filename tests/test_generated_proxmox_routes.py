@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import ProxmoxEndpoint, get_session
+from proxbox_api.database import ProxmoxEndpoint, get_async_session, get_session
 from proxbox_api.main import app
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
@@ -598,6 +600,18 @@ def _override_db_session(db_engine):
     return override_get_session
 
 
+def _override_async_db_session(db_engine):
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_async_session():
+        async with session_factory() as session:
+            yield session
+
+    return async_engine, override_get_async_session
+
+
 def test_generated_routes_appear_in_openapi():
     register_generated_proxmox_routes(
         app,
@@ -652,7 +666,9 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
         )
         session.commit()
 
+    async_engine, override_get_async_session = _override_async_db_session(db_engine)
     app.dependency_overrides[get_session] = _override_db_session(db_engine)
+    app.dependency_overrides[get_async_session] = override_get_async_session
     register_generated_proxmox_routes(
         app,
         openapi_documents={"latest": TEST_GENERATED_OPENAPI},
@@ -675,6 +691,8 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
                 "groups-autocreate": True,
             },
         )
+
+    asyncio.run(async_engine.dispose())
 
     assert response.status_code == 200
     assert alias_response.status_code == 200
@@ -726,7 +744,9 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
         )
         session.commit()
 
+    async_engine, override_get_async_session = _override_async_db_session(db_engine)
     app.dependency_overrides[get_session] = _override_db_session(db_engine)
+    app.dependency_overrides[get_async_session] = override_get_async_session
     register_generated_proxmox_routes(
         app,
         openapi_documents={"latest": TEST_GENERATED_OPENAPI},
@@ -738,6 +758,8 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
             "/proxmox/api2/latest/cluster/resources",
             params={"target_domain": "pve02.local", "type": "vm"},
         )
+
+    asyncio.run(async_engine.dispose())
 
     assert missing_selector.status_code == 400
     assert "Multiple Proxmox endpoints configured" in missing_selector.json()["message"]

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from json import JSONDecodeError
 from typing import Annotated
 
 from fastapi import Depends, Query
-from sqlmodel import select
+from sqlmodel import Session, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import DatabaseSessionDep, ProxmoxEndpoint
+from proxbox_api.database import ProxmoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
@@ -19,7 +21,7 @@ from proxbox_api.session.proxmox_core import ProxmoxSession
 
 
 async def proxmox_sessions(  # noqa: C901
-    database_session: DatabaseSessionDep,
+    database_session: AsyncSession = Depends(get_async_session),
     source: Annotated[
         str,
         Query(
@@ -226,14 +228,14 @@ def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
 
 
 async def load_proxmox_session_schemas(
-    database_session: DatabaseSessionDep,
+    database_session: AsyncSession | Session,
     source: str = "database",
     endpoint_ids: list[int] | None = None,
 ) -> list[ProxmoxSessionSchema]:
     """Load configured Proxmox endpoint schemas without creating Proxmox API sessions."""
 
     if source == "netbox":
-        netbox_session = get_netbox_async_session(database_session=database_session)
+        netbox_session = await get_netbox_async_session(database_session=database_session)
 
         try:
             url = "/api/plugins/proxbox/endpoints/proxmox/"
@@ -254,12 +256,15 @@ async def load_proxmox_session_schemas(
     query = select(ProxmoxEndpoint)
     if endpoint_ids:
         query = query.where(ProxmoxEndpoint.id.in_(endpoint_ids))
-    db_endpoints = database_session.exec(query).all()
+    result = database_session.exec(query)
+    if inspect.isawaitable(result):
+        result = await result
+    db_endpoints = result.all()
     return [_parse_db_endpoint(endpoint) for endpoint in db_endpoints]
 
 
 async def resolve_proxmox_target_session(
-    database_session: DatabaseSessionDep,
+    database_session: AsyncSession | Session,
     *,
     source: str = "database",
     name: str | None = None,
