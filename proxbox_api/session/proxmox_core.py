@@ -220,8 +220,8 @@ class ProxmoxSession:
         if self.domain:
             logger.info("Using %s to authenticate with Proxmox", auth_method)
             logger.info("Using domain %s to authenticate with Proxmox", self.domain)
-            proxmox_session = _proxmox_api_factory()(self.domain, **kwargs)
             try:
+                proxmox_session = _proxmox_api_factory()(self.domain, **kwargs)
                 self.version = await resolve_async(proxmox_session.version.get())
                 return proxmox_session
             except Exception as error:
