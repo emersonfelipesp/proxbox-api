@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_bulk_reconcile_async, rest_list_async
+from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
 from proxbox_api.schemas.stream_messages import ItemOperation
 from proxbox_api.services.proxmox_helpers import dump_models, get_storage_config, get_storage_list
@@ -62,7 +63,10 @@ async def create_storages(  # noqa: C901
     async def _fetch_cluster_storage_items(proxmox: object) -> tuple[str, list[dict[str, object]]]:
         cluster_name = str(getattr(proxmox, "name", "") or "").strip() or "unknown"
         async with fetch_sem:
-            return cluster_name, dump_models(await get_storage_list(proxmox))
+            storage_items = get_storage_list(proxmox)
+            if inspect.isawaitable(storage_items):
+                storage_items = await storage_items
+            return cluster_name, dump_models(storage_items)
 
     cluster_storage_items = await asyncio.gather(
         *[_fetch_cluster_storage_items(proxmox) for proxmox in pxs],
@@ -90,7 +94,9 @@ async def create_storages(  # noqa: C901
             if proxmox and _needs_storage_config(config):
                 try:
                     async with fetch_sem:
-                        fetched_config = await get_storage_config(proxmox, storage_name)
+                        fetched_config = get_storage_config(proxmox, storage_name)
+                        if inspect.isawaitable(fetched_config):
+                            fetched_config = await fetched_config
                 except Exception as error:
                     logger.warning(
                         "Error fetching storage config for %s/%s: %s",
@@ -159,46 +165,37 @@ async def create_storages(  # noqa: C901
         )
         ordered_items.append((cluster_name, storage_name))
 
-    reconcile_result = await rest_bulk_reconcile_async(
-        nb,
-        "/api/plugins/proxbox/storage/",
-        payloads=storage_payloads,
-        lookup_fields=["cluster", "name"],
-        schema=NetBoxStorageSyncState,
-        current_normalizer=lambda item: {
-            "cluster": item.get("cluster", {}).get("id")
-            if isinstance(item.get("cluster"), dict)
-            else item.get("cluster"),
-            "name": item.get("name"),
-            "storage_type": item.get("storage_type"),
-            "content": item.get("content"),
-            "path": item.get("path"),
-            "nodes": item.get("nodes"),
-            "shared": item.get("shared"),
-            "enabled": item.get("enabled"),
-            "backups": item.get("backups"),
-            "tags": item.get("tags"),
-        },
-    )
-
-    synced_by_key = {
-        (
-            str(
-                record.get("cluster", {}).get("name")
-                if isinstance(record.get("cluster"), dict)
-                else ""
-            ),
-            str(record.get("name") or ""),
-        ): record.serialize()
-        for record in reconcile_result.records
-    }
-
     failed_count = 0
     processed_count = skipped_count
-    for cluster_name, storage_name in ordered_items:
+    for index, (cluster_name, storage_name) in enumerate(ordered_items):
         processed_count += 1
-        data = synced_by_key.get((cluster_name, storage_name))
-        if data is None:
+        payload = storage_payloads[index]
+        lookup = {"cluster": payload["cluster"], "name": payload["name"]}
+
+        try:
+            record = await rest_reconcile_async(
+                nb,
+                "/api/plugins/proxbox/storage/",
+                lookup=lookup,
+                payload=payload,
+                schema=NetBoxStorageSyncState,
+                current_normalizer=lambda item: {
+                    "cluster": item.get("cluster", {}).get("id")
+                    if isinstance(item.get("cluster"), dict)
+                    else item.get("cluster"),
+                    "name": item.get("name"),
+                    "storage_type": item.get("storage_type"),
+                    "content": item.get("content"),
+                    "path": item.get("path"),
+                    "nodes": item.get("nodes"),
+                    "shared": item.get("shared"),
+                    "enabled": item.get("enabled"),
+                    "backups": item.get("backups"),
+                    "tags": item.get("tags"),
+                },
+            )
+            data = record.serialize()
+        except Exception:
             failed_count += 1
             if bridge:
                 await bridge.emit_item_progress(

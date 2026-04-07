@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
 from fastapi import Depends
 
@@ -26,9 +26,6 @@ from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
-if TYPE_CHECKING:
-    from netbox_sdk.facade import Api
-
 __all__ = [
     "_ensure_cluster",
     "_ensure_cluster_type",
@@ -43,7 +40,7 @@ __all__ = [
 
 
 async def create_proxmox_devices(  # noqa: C901
-    netbox_session: Api,
+    netbox_session: object,
     clusters_status: list[Any] | None,
     tag: ProxboxTagDep,
     websocket: Any = None,

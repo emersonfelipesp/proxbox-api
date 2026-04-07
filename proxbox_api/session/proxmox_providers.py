@@ -235,7 +235,9 @@ async def load_proxmox_session_schemas(
     """Load configured Proxmox endpoint schemas without creating Proxmox API sessions."""
 
     if source == "netbox":
-        netbox_session = await get_netbox_async_session(database_session=database_session)
+        netbox_session = get_netbox_async_session(database_session=database_session)
+        if inspect.isawaitable(netbox_session):
+            netbox_session = await netbox_session
 
         try:
             url = "/api/plugins/proxbox/endpoints/proxmox/"

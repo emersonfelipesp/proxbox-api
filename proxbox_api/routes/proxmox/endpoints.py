@@ -1,5 +1,6 @@
 """CRUD routes for local Proxmox endpoint records."""
 
+import inspect
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
@@ -12,6 +13,12 @@ from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, validate_endpoint_host
 
 router = APIRouter()
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 class ProxmoxEndpointCreate(BaseModel):
@@ -101,9 +108,10 @@ async def create_proxmox_endpoint(
                 detail=f"Invalid domain: {domain_reason}",
             )
 
-    existing = (
-        await session.exec(select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == endpoint.name))
-    ).first()
+    existing_result = await _maybe_await(
+        session.exec(select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == endpoint.name))
+    )
+    existing = existing_result.first()
     if existing:
         raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
@@ -115,8 +123,8 @@ async def create_proxmox_endpoint(
         db_endpoint.set_encrypted_token_value(db_endpoint.token_value)
 
     session.add(db_endpoint)
-    await session.commit()
-    await session.refresh(db_endpoint)
+    await _maybe_await(session.commit())
+    await _maybe_await(session.refresh(db_endpoint))
 
     clear_endpoint_cache()
     return _to_public_endpoint(db_endpoint)
@@ -128,13 +136,14 @@ async def get_proxmox_endpoints(
     offset: int = 0,
     limit: Annotated[int, Query(le=100)] = 100,
 ) -> list[ProxmoxEndpointPublic]:
-    endpoints = (await session.exec(select(ProxmoxEndpoint).offset(offset).limit(limit))).all()
+    result = await _maybe_await(session.exec(select(ProxmoxEndpoint).offset(offset).limit(limit)))
+    endpoints = result.all()
     return [_to_public_endpoint(endpoint) for endpoint in endpoints]
 
 
 @router.get("/endpoints/{endpoint_id}")
 async def get_proxmox_endpoint(endpoint_id: int, session: SessionDep) -> ProxmoxEndpointPublic:
-    endpoint = await session.get(ProxmoxEndpoint, endpoint_id)
+    endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
     if not endpoint:
         raise HTTPException(status_code=404, detail="Proxmox endpoint not found")
     return _to_public_endpoint(endpoint)
@@ -146,7 +155,7 @@ async def update_proxmox_endpoint(  # noqa: C901
     endpoint: ProxmoxEndpointUpdate,
     session: SessionDep,
 ) -> ProxmoxEndpointPublic:
-    db_endpoint = await session.get(ProxmoxEndpoint, endpoint_id)
+    db_endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
     if not db_endpoint:
         raise HTTPException(status_code=404, detail="Proxmox Endpoint not found")
 
@@ -170,11 +179,10 @@ async def update_proxmox_endpoint(  # noqa: C901
             )
 
     if "name" in update_data:
-        existing = (
-            await session.exec(
-                select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == update_data["name"])
-            )
-        ).first()
+        existing_result = await _maybe_await(
+            session.exec(select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == update_data["name"]))
+        )
+        existing = existing_result.first()
         if existing and existing.id != endpoint_id:
             raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
@@ -213,8 +221,8 @@ async def update_proxmox_endpoint(  # noqa: C901
             setattr(db_endpoint, key, value)
 
     session.add(db_endpoint)
-    await session.commit()
-    await session.refresh(db_endpoint)
+    await _maybe_await(session.commit())
+    await _maybe_await(session.refresh(db_endpoint))
 
     clear_endpoint_cache()
     return _to_public_endpoint(db_endpoint)
@@ -222,12 +230,12 @@ async def update_proxmox_endpoint(  # noqa: C901
 
 @router.delete("/endpoints/{endpoint_id}")
 async def delete_proxmox_endpoint(endpoint_id: int, session: SessionDep) -> dict[str, str]:
-    endpoint = await session.get(ProxmoxEndpoint, endpoint_id)
+    endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
     if not endpoint:
         raise HTTPException(status_code=404, detail="Proxmox endpoint not found")
 
-    await session.delete(endpoint)
-    await session.commit()
+    await _maybe_await(session.delete(endpoint))
+    await _maybe_await(session.commit())
 
     clear_endpoint_cache()
     return {"message": "Proxmox endpoint deleted."}

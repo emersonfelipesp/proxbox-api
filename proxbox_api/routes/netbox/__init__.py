@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,12 @@ from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, validate_endpoint_host
 
 router = APIRouter()
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 class NetBoxEndpointCreate(BaseModel):
@@ -97,13 +104,15 @@ def _encrypt_credentials(nb: NetBoxEndpoint) -> None:
 async def create_netbox_endpoint(
     netbox: NetBoxEndpointCreate, session: SessionDep
 ) -> NetBoxEndpointResponse:
-    existing_any = (await session.exec(select(NetBoxEndpoint))).first()
+    existing_any_result = await _maybe_await(session.exec(select(NetBoxEndpoint)))
+    existing_any = existing_any_result.first()
     if existing_any:
         raise HTTPException(status_code=400, detail="Only one NetBox endpoint is allowed")
 
-    if (
-        await session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.name == netbox.name))
-    ).first():
+    existing_name_result = await _maybe_await(
+        session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.name == netbox.name))
+    )
+    if existing_name_result.first():
         raise HTTPException(status_code=400, detail="NetBox endpoint name already exists")
 
     settings = get_settings()
@@ -131,8 +140,8 @@ async def create_netbox_endpoint(
         db_endpoint.set_encrypted_token_key(db_endpoint.token_key)
 
     session.add(db_endpoint)
-    await session.commit()
-    await session.refresh(db_endpoint)
+    await _maybe_await(session.commit())
+    await _maybe_await(session.refresh(db_endpoint))
     clear_endpoint_cache()
     return NetBoxEndpointResponse.model_validate(db_endpoint)
 
@@ -141,7 +150,7 @@ async def create_netbox_endpoint(
 async def get_netbox_endpoints(
     session: SessionDep, offset: int = 0, limit: Annotated[int, Query(le=100)] = 100
 ) -> list[NetBoxEndpointResponse]:
-    result = await session.exec(select(NetBoxEndpoint).offset(offset).limit(limit))
+    result = await _maybe_await(session.exec(select(NetBoxEndpoint).offset(offset).limit(limit)))
     netbox_endpoints = result.all()
     return [NetBoxEndpointResponse.model_validate(ep) for ep in netbox_endpoints]
 
@@ -151,7 +160,7 @@ GetNetBoxEndpoint = Annotated[list[NetBoxEndpointResponse], Depends(get_netbox_e
 
 @router.get("/endpoint/{netbox_id}", response_model=NetBoxEndpointResponse)
 async def get_netbox_endpoint(netbox_id: int, session: SessionDep) -> NetBoxEndpointResponse:
-    netbox_endpoint = await session.get(NetBoxEndpoint, netbox_id)
+    netbox_endpoint = await _maybe_await(session.get(NetBoxEndpoint, netbox_id))
     if not netbox_endpoint:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found")
     return NetBoxEndpointResponse.model_validate(netbox_endpoint)
@@ -161,7 +170,7 @@ async def get_netbox_endpoint(netbox_id: int, session: SessionDep) -> NetBoxEndp
 async def update_netbox_endpoint(
     netbox_id: int, netbox: NetBoxEndpointUpdate, session: SessionDep
 ) -> NetBoxEndpointResponse:
-    db_netbox = await session.get(NetBoxEndpoint, netbox_id)
+    db_netbox = await _maybe_await(session.get(NetBoxEndpoint, netbox_id))
     if not db_netbox:
         raise HTTPException(status_code=404, detail="NetBox Endpoint not found")
 
@@ -198,19 +207,19 @@ async def update_netbox_endpoint(
         db_netbox.set_encrypted_token_key(db_netbox.token_key)
 
     session.add(db_netbox)
-    await session.commit()
-    await session.refresh(db_netbox)
+    await _maybe_await(session.commit())
+    await _maybe_await(session.refresh(db_netbox))
     clear_endpoint_cache()
     return NetBoxEndpointResponse.model_validate(db_netbox)
 
 
 @router.delete("/endpoint/{netbox_id}")
 async def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
-    netbox_endpoint = await session.get(NetBoxEndpoint, netbox_id)
+    netbox_endpoint = await _maybe_await(session.get(NetBoxEndpoint, netbox_id))
     if not netbox_endpoint:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found.")
-    await session.delete(netbox_endpoint)
-    await session.commit()
+    await _maybe_await(session.delete(netbox_endpoint))
+    await _maybe_await(session.commit())
     clear_endpoint_cache()
     return {"message": "NetBox Endpoint deleted."}
 

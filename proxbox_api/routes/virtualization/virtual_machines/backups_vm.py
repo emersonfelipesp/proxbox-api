@@ -1,6 +1,7 @@
 """VM backup discovery, batch processing, and sync routes."""
 
 import asyncio
+import inspect
 import os
 from datetime import datetime
 from typing import Annotated
@@ -548,23 +549,25 @@ async def get_node_backups(
     storage_index: dict[tuple[str, str], dict] | None = None,
     vmid: str | None = None,
 ) -> tuple[list[dict], set[str]]:
-    """Get raw backup dicts for a specific node and storage.
+    """Build backup sync tasks for a specific node and storage.
 
     Returns:
-        (list of Proxmox backup dicts, set of Proxmox volid strings seen on storage)
+        (list of backup sync tasks, set of Proxmox volid strings seen on storage)
     """
     for proxmox, cluster in zip(pxs, cluster_status):
         if cluster and cluster.node_list:
             for cluster_node in cluster.node_list:
                 if cluster_node.name == node:
                     try:
-                        raw_backups = await get_node_storage_content(
+                        raw_backups = get_node_storage_content(
                             proxmox,
                             node=node,
                             storage=storage,
                             vmid=vmid,
                             content="backup",
                         )
+                        if inspect.isawaitable(raw_backups):
+                            raw_backups = await raw_backups
                         backups = dump_models(raw_backups)
 
                         if vmid is not None:
@@ -577,7 +580,16 @@ async def get_node_backups(
 
                         volids = _volids_from_proxmox_storage_backup_items(backups)
                         filtered = [b for b in backups if b.get("content") == "backup"]
-                        return filtered, volids
+                        tasks = [
+                            create_netbox_backups(
+                                backup,
+                                netbox_session=netbox_session,
+                                cluster_name=getattr(cluster, "name", None),
+                                storage_index=storage_index,
+                            )
+                            for backup in filtered
+                        ]
+                        return tasks, volids
                     except Exception as error:
                         logger.warning("Error getting backups for node %s: %s", node, error)
                         continue
@@ -610,7 +622,7 @@ async def create_virtual_machine_backups(
 ):
     nb = netbox_session
     storage_index = await _load_storage_index(nb)
-    raw_backups, volids = await get_node_backups(
+    backup_tasks, volids = await get_node_backups(
         pxs,
         cluster_status,
         node,
@@ -619,25 +631,21 @@ async def create_virtual_machine_backups(
         storage_index=storage_index,
         vmid=vmid,
     )
-    if not raw_backups:
+    if not backup_tasks:
         raise ProxboxException(message="Node or Storage not found.")
 
-    vm_cache = await _prefetch_vm_cache(nb)
-    payloads: list[dict] = []
-    for backup in raw_backups:
-        payload = compute_backup_payload(
-            backup,
-            vm_cache=vm_cache,
-            storage_index=storage_index,
-        )
-        if payload is not None:
-            payloads.append(payload)
-
-    if not payloads:
+    results = await asyncio.gather(*backup_tasks)
+    normalized_results = []
+    for result in results:
+        if result is None:
+            continue
+        if hasattr(result, "serialize"):
+            normalized_results.append(result.serialize())
+        else:
+            normalized_results.append(result)
+    if not normalized_results:
         raise ProxboxException(message="No valid backups to process.")
-
-    results, _created, _patched = await _bulk_reconcile_backups(nb, payloads, volids)
-    return results
+    return normalized_results
 
 
 async def _prefetch_vm_cache(nb) -> dict[int, dict | None]:

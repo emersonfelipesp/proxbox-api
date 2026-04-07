@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
+
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
@@ -13,6 +16,21 @@ def _model_dump(model: object) -> dict[str, object]:
     return model.model_dump(mode="python", by_alias=True, exclude_none=True)
 
 
+def _dual_mode(async_fn):
+    """Allow async helpers to be called from both async and sync contexts."""
+
+    @functools.wraps(async_fn)
+    def wrapper(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(async_fn(*args, **kwargs))
+        return async_fn(*args, **kwargs)
+
+    return wrapper
+
+
+@_dual_mode
 async def get_cluster_status(
     session: ProxmoxSession,
 ) -> list[generated_models.GetClusterStatusResponseItem]:
@@ -30,6 +48,7 @@ async def get_cluster_status(
         )
 
 
+@_dual_mode
 async def get_cluster_resources(
     session: ProxmoxSession,
     resource_type: str | None = None,
@@ -53,6 +72,7 @@ async def get_cluster_resources(
         )
 
 
+@_dual_mode
 async def get_cluster_replication(
     session: ProxmoxSession,
 ) -> list[dict[str, object]]:
@@ -64,6 +84,7 @@ async def get_cluster_replication(
         return []
 
 
+@_dual_mode
 async def get_vm_config(
     session: ProxmoxSession,
     node: str,
@@ -130,6 +151,7 @@ def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]
     return normalized
 
 
+@_dual_mode
 async def get_qemu_guest_agent_network_interfaces(
     session: ProxmoxSession,
     node: str,
@@ -162,6 +184,7 @@ async def get_qemu_guest_agent_network_interfaces(
         return []
 
 
+@_dual_mode
 async def get_storage_list(
     session: ProxmoxSession,
 ) -> list[generated_models.GetStorageResponseItem]:
@@ -179,6 +202,7 @@ async def get_storage_list(
         )
 
 
+@_dual_mode
 async def get_storage_config(
     session: ProxmoxSession,
     storage_id: str,
@@ -201,6 +225,7 @@ async def get_storage_config(
         )
 
 
+@_dual_mode
 async def get_node_storage_content(
     session: ProxmoxSession,
     node: str,
@@ -226,6 +251,7 @@ async def get_node_storage_content(
         )
 
 
+@_dual_mode
 async def get_node_tasks(
     session: ProxmoxSession,
     node: str,
@@ -260,6 +286,7 @@ async def get_node_tasks(
         )
 
 
+@_dual_mode
 async def get_node_task_status(
     session: ProxmoxSession,
     node: str,
@@ -282,6 +309,7 @@ def dump_models(items: list[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 
 
+@_dual_mode
 async def get_vm_snapshots(
     session: ProxmoxSession,
     node: str,
@@ -308,6 +336,7 @@ async def get_vm_snapshots(
         return []
 
 
+@_dual_mode
 async def get_cluster_snapshots_for_vm(
     session: ProxmoxSession,
     node: str,
@@ -332,6 +361,7 @@ async def get_cluster_snapshots_for_vm(
     return all_snapshots
 
 
+@_dual_mode
 async def get_node_status_individual(
     session: ProxmoxSession,
     node: str,
@@ -351,6 +381,7 @@ async def get_node_status_individual(
     return {}
 
 
+@_dual_mode
 async def get_storage_config_individual(
     session: ProxmoxSession,
     storage_id: str,
