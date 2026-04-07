@@ -1,3 +1,5 @@
+"""Tests for QEMU guest-agent driven VM sync behavior."""
+
 from __future__ import annotations
 
 import asyncio

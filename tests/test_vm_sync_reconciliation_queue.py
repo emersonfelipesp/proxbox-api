@@ -1,3 +1,5 @@
+"""Tests for VM reconciliation queue processing."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

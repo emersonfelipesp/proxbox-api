@@ -1,3 +1,5 @@
+"""Tests for proxmox-openapi dependency wiring."""
+
 from __future__ import annotations
 
 

@@ -1,3 +1,5 @@
+"""Tests for health and metadata endpoints."""
+
 from __future__ import annotations
 
 import pytest

@@ -1,3 +1,5 @@
+"""Tests for plugin settings fetch and fallback behavior."""
+
 from __future__ import annotations
 
 from proxbox_api import settings_client

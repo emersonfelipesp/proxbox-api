@@ -1,3 +1,5 @@
+"""Contract tests for generated Proxmox passthrough routes."""
+
 from __future__ import annotations
 
 import asyncio

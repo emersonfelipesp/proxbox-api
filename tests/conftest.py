@@ -1,3 +1,5 @@
+"""Shared pytest fixtures and environment setup for proxbox-api tests."""
+
 from __future__ import annotations
 
 import asyncio

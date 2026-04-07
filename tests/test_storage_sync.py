@@ -1,3 +1,5 @@
+"""Tests for storage sync orchestration and payload mapping."""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,5 @@
+"""Reusable fixture payloads for Proxmox and NetBox mapping tests."""
+
 from __future__ import annotations
 
 from typing import Any
