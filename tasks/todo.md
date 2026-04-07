@@ -170,4 +170,8 @@
 ## E2E Transport Stabilization (Round 10)
 
 - [x] Align backup sync payload with plugin model by including legacy `storage` alongside `proxmox_storage`.
+
+## E2E Transport Stabilization (Round 11)
+
+- [x] Fix backup sync payload incompatibility by sending plugin-accepted `storage` (string) field and avoiding `proxmox_storage` write path that crashes in plugin serializer.
 - [ ] Re-run CI matrix and verify all 6 transport combinations pass E2E backup tests.
