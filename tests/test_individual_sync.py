@@ -360,6 +360,10 @@ async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeyp
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
         "proxbox_api.services.sync.individual.backup_sync.rest_reconcile_async",
         _fake_rest_reconcile_async,
     )
