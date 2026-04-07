@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
 
-from proxbox_api.database import ApiKey, DatabaseSessionDep
+from proxbox_api.database import ApiKey, AsyncDatabaseSessionDep
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -44,9 +44,9 @@ class BootstrapStatusResponse(BaseModel):
 
 
 @router.get("/bootstrap-status", response_model=BootstrapStatusResponse)
-def get_bootstrap_status(session: DatabaseSessionDep):
+async def get_bootstrap_status(session: AsyncDatabaseSessionDep):
     """Check if initial bootstrap is needed (no API keys exist)."""
-    has_db_keys = ApiKey.has_any_key(session)
+    has_db_keys = await ApiKey.has_any_key_async(session)
     return BootstrapStatusResponse(
         needs_bootstrap=not has_db_keys,
         has_db_keys=has_db_keys,
@@ -54,7 +54,7 @@ def get_bootstrap_status(session: DatabaseSessionDep):
 
 
 @router.post("/register-key", status_code=201)
-def register_key(body: RegisterKeyRequest, session: DatabaseSessionDep):
+async def register_key(body: RegisterKeyRequest, session: AsyncDatabaseSessionDep):
     """One-time bootstrap to register the first API key.
 
     Only succeeds when no API keys exist in the database.
@@ -63,22 +63,22 @@ def register_key(body: RegisterKeyRequest, session: DatabaseSessionDep):
     if len(body.api_key) < 32:
         raise HTTPException(status_code=400, detail="API key must be at least 32 characters.")
 
-    if ApiKey.has_any_key(session):
+    if await ApiKey.has_any_key_async(session):
         raise HTTPException(status_code=409, detail="An API key is already configured.")
 
-    ApiKey.store_key(session, body.api_key, label=body.label)
+    await ApiKey.store_key_async(session, body.api_key, label=body.label)
     return {"detail": "API key registered."}
 
 
 @router.post("/keys", status_code=201, response_model=CreateKeyResponse)
-def create_key(session: DatabaseSessionDep):
+async def create_key(session: AsyncDatabaseSessionDep):
     """Create a new API key (requires existing authentication).
 
     Generates a random 64-character API key and returns it.
     The key is stored hashed - this is the only time the raw key is visible.
     """
     raw_key = secrets.token_urlsafe(48)
-    obj = ApiKey.store_key(session, raw_key, label="")
+    obj = await ApiKey.store_key_async(session, raw_key, label="")
 
     return CreateKeyResponse(
         id=obj.id,
@@ -90,9 +90,10 @@ def create_key(session: DatabaseSessionDep):
 
 
 @router.get("/keys", response_model=ApiKeyListResponse)
-def list_keys(session: DatabaseSessionDep):
+async def list_keys(session: AsyncDatabaseSessionDep):
     """List all configured API keys (key values are not returned for security)."""
-    keys = session.exec(select(ApiKey).order_by(ApiKey.created_at.desc())).all()
+    result = await session.exec(select(ApiKey).order_by(ApiKey.created_at.desc()))
+    keys = result.all()
     return ApiKeyListResponse(
         keys=[
             ApiKeyResponse(
@@ -107,26 +108,26 @@ def list_keys(session: DatabaseSessionDep):
 
 
 @router.delete("/keys/{key_id}", status_code=204)
-def delete_key(key_id: int, session: DatabaseSessionDep):
+async def delete_key(key_id: int, session: AsyncDatabaseSessionDep):
     """Delete an API key by ID."""
-    key = session.get(ApiKey, key_id)
+    key = await session.get(ApiKey, key_id)
     if not key:
         raise HTTPException(status_code=404, detail="API key not found.")
-    session.delete(key)
-    session.commit()
+    await session.delete(key)
+    await session.commit()
     return None
 
 
 @router.post("/keys/{key_id}/deactivate", response_model=ApiKeyResponse)
-def deactivate_key(key_id: int, session: DatabaseSessionDep):
+async def deactivate_key(key_id: int, session: AsyncDatabaseSessionDep):
     """Deactivate an API key (keeps it in DB but marks as inactive)."""
-    key = session.get(ApiKey, key_id)
+    key = await session.get(ApiKey, key_id)
     if not key:
         raise HTTPException(status_code=404, detail="API key not found.")
     key.is_active = False
     session.add(key)
-    session.commit()
-    session.refresh(key)
+    await session.commit()
+    await session.refresh(key)
     return ApiKeyResponse(
         id=key.id,
         label=key.label,
@@ -136,15 +137,15 @@ def deactivate_key(key_id: int, session: DatabaseSessionDep):
 
 
 @router.post("/keys/{key_id}/activate", response_model=ApiKeyResponse)
-def activate_key(key_id: int, session: DatabaseSessionDep):
+async def activate_key(key_id: int, session: AsyncDatabaseSessionDep):
     """Re-activate a deactivated API key."""
-    key = session.get(ApiKey, key_id)
+    key = await session.get(ApiKey, key_id)
     if not key:
         raise HTTPException(status_code=404, detail="API key not found.")
     key.is_active = True
     session.add(key)
-    session.commit()
-    session.refresh(key)
+    await session.commit()
+    await session.refresh(key)
     return ApiKeyResponse(
         id=key.id,
         label=key.label,

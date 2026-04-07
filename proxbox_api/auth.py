@@ -156,25 +156,10 @@ def get_session_factory(app) -> Callable[[], Session]:
 
     Returns a context manager that yields a Session.
     """
-    from contextlib import contextmanager
-
     if hasattr(app, "dependency_overrides") and get_session in app.dependency_overrides:
         original = app.dependency_overrides[get_session]
         return contextmanager(original)
     return contextmanager(get_session)
-
-
-@contextmanager
-def _async_context_manager_wrapper(async_gen):
-    """Wrap an async context manager for use in sync contexts (not recommended)."""
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    try:
-        yield loop.run_until_complete(async_gen.__aenter__())
-    finally:
-        loop.run_until_complete(async_gen.__aexit__(None, None, None))
-        loop.close()
 
 
 def get_async_session_factory(app) -> Callable[[], AsyncSession]:

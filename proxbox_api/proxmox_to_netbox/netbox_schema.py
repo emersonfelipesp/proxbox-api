@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from urllib.error import URLError
@@ -55,6 +56,38 @@ def fetch_live_netbox_openapi(timeout: int = 20) -> dict[str, object] | None:
             request = Request(url=url, headers=headers)
             with urlopen(request, timeout=timeout) as response:
                 body = response.read().decode("utf-8")
+            data = json.loads(body)
+            if isinstance(data, dict) and "paths" in data:
+                return data
+        except (URLError, TimeoutError, json.JSONDecodeError, ValueError):
+            continue
+        except Exception as error:
+            logger.warning("Unexpected error fetching NetBox OpenAPI from %s: %s", url, error)
+            continue
+    return None
+
+
+async def fetch_live_netbox_openapi_async(timeout: int = 20) -> dict[str, object] | None:
+    """Async version: Fetch live NetBox OpenAPI from configured endpoint."""
+
+    endpoint = _extract_netbox_endpoint_from_db()
+    if endpoint is None:
+        return None
+
+    headers = {"Accept": "application/json"}
+    auth = authorization_header_value(netbox_config_from_endpoint(endpoint))
+    if auth:
+        headers["Authorization"] = auth
+
+    for url in _candidate_schema_urls(endpoint.url):
+        try:
+            request = Request(url=url, headers=headers)
+
+            def _fetch():
+                with urlopen(request, timeout=timeout) as response:
+                    return response.read().decode("utf-8")
+
+            body = await asyncio.to_thread(_fetch)
             data = json.loads(body)
             if isinstance(data, dict) and "paths" in data:
                 return data
