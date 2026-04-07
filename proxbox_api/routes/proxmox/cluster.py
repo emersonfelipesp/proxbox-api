@@ -158,7 +158,10 @@ async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
 
     return ClusterStatusSchemaList(
         [
-            await parse_cluster_status(proxmox_object=px, data=get_typed_cluster_status(px))
+            await parse_cluster_status(
+                proxmox_object=px,
+                data=await get_typed_cluster_status(px),
+            )
             for px in pxs
         ]
     )
@@ -197,11 +200,12 @@ async def cluster_resources(
     json_response = []
 
     for px in pxs:
+        resources = await get_typed_cluster_resources(px, resource_type=resource_type)
         json_response.append(
             {
                 px.name: [
                     resource.model_dump(mode="python", by_alias=True, exclude_none=True)
-                    for resource in get_typed_cluster_resources(px, resource_type=resource_type)
+                    for resource in resources
                 ]
             }
         )

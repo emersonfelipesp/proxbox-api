@@ -282,7 +282,7 @@ async def get_proxmox_storage(
     """
     result = []
     for proxmox in pxs:
-        result.append({proxmox.name: dump_models(get_storage_list(proxmox))})
+        result.append({proxmox.name: dump_models(await get_storage_list(proxmox))})
 
     return result
 
@@ -336,7 +336,7 @@ async def get_proxmox_node_storage_content(
         for cluster_node in cluster.node_list:
             if cluster_node.name == node:
                 return dump_models(
-                    get_typed_node_storage_content(
+                    await get_typed_node_storage_content(
                         proxmox,
                         node=node,
                         storage=storage,
@@ -407,9 +407,13 @@ async def get_vm_config(  # noqa: C901
                 for cluster_node in cluster.node_list:
                     if str(node) == str(cluster_node.name):
                         if type == "qemu":
-                            config = get_typed_vm_config(px, node=node, vm_type=type, vmid=vmid)
+                            config = await get_typed_vm_config(
+                                px, node=node, vm_type=type, vmid=vmid
+                            )
                         elif type == "lxc":
-                            config = get_typed_vm_config(px, node=node, vm_type=type, vmid=vmid)
+                            config = await get_typed_vm_config(
+                                px, node=node, vm_type=type, vmid=vmid
+                            )
 
                         if config:
                             return config.model_dump(
