@@ -90,17 +90,55 @@ def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
 NetBoxClient = Api | SyncProxy
 
 
-def get_netbox_session(database_session: DatabaseSessionDep) -> NetBoxClient:
+def get_netbox_session(
+    database_session: DatabaseSessionDep,
+    netbox_id: int | None = None,
+) -> NetBoxClient:
     """
     Get NetBox API parameters from database and establish a netbox-sdk API session.
+
+    Args:
+        database_session: Database session dependency.
+        netbox_id: Optional specific NetBox endpoint ID. If not provided, selects by
+            ID when multiple endpoints exist, or returns the only endpoint when only
+            one exists.
+
+    Returns:
+        NetBoxClient session for the endpoint.
+
+    Raises:
+        ProxboxException: If no endpoint found or on error.
     """
     try:
-        netbox_endpoint = database_session.exec(select(NetBoxEndpoint)).first()
+        if netbox_id is not None:
+            netbox_endpoint = database_session.get(NetBoxEndpoint, netbox_id)
+            if not netbox_endpoint:
+                raise ProxboxException(
+                    message=f"NetBox endpoint {netbox_id} not found",
+                    detail=f"No endpoint with ID {netbox_id}",
+                )
+            return SyncProxy(netbox_api_from_endpoint(netbox_endpoint))
 
-        if not netbox_endpoint:
+        count = database_session.exec(select(NetBoxEndpoint)).all()
+        count = len(count) if count else 0
+
+        if count == 0:
             raise ProxboxException(
                 message="No NetBox endpoint found",
                 detail="Please add a NetBox endpoint in the database",
+            )
+
+        if count == 1:
+            netbox_endpoint = database_session.exec(select(NetBoxEndpoint)).first()
+        else:
+            netbox_endpoint = database_session.exec(
+                select(NetBoxEndpoint).order_by(NetBoxEndpoint.id)
+            ).first()
+
+        if not netbox_endpoint:
+            raise ProxboxException(
+                message="Could not resolve NetBox endpoint",
+                detail="Unable to select endpoint from database",
             )
 
         return SyncProxy(netbox_api_from_endpoint(netbox_endpoint))
@@ -114,17 +152,55 @@ def get_netbox_session(database_session: DatabaseSessionDep) -> NetBoxClient:
         )
 
 
-def get_netbox_async_session(database_session: DatabaseSessionDep) -> Api:
+def get_netbox_async_session(
+    database_session: DatabaseSessionDep,
+    netbox_id: int | None = None,
+) -> Api:
     """
     Get NetBox API parameters from database and establish an async netbox-sdk API session.
+
+    Args:
+        database_session: Database session dependency.
+        netbox_id: Optional specific NetBox endpoint ID. If not provided, selects by
+            ID when multiple endpoints exist, or returns the only endpoint when only
+            one exists.
+
+    Returns:
+        NetBox async API session for the endpoint.
+
+    Raises:
+        ProxboxException: If no endpoint found or on error.
     """
     try:
-        netbox_endpoint = database_session.exec(select(NetBoxEndpoint)).first()
+        if netbox_id is not None:
+            netbox_endpoint = database_session.get(NetBoxEndpoint, netbox_id)
+            if not netbox_endpoint:
+                raise ProxboxException(
+                    message=f"NetBox endpoint {netbox_id} not found",
+                    detail=f"No endpoint with ID {netbox_id}",
+                )
+            return netbox_api_from_endpoint(netbox_endpoint)
 
-        if not netbox_endpoint:
+        count = database_session.exec(select(NetBoxEndpoint)).all()
+        count = len(count) if count else 0
+
+        if count == 0:
             raise ProxboxException(
                 message="No NetBox endpoint found",
                 detail="Please add a NetBox endpoint in the database",
+            )
+
+        if count == 1:
+            netbox_endpoint = database_session.exec(select(NetBoxEndpoint)).first()
+        else:
+            netbox_endpoint = database_session.exec(
+                select(NetBoxEndpoint).order_by(NetBoxEndpoint.id)
+            ).first()
+
+        if not netbox_endpoint:
+            raise ProxboxException(
+                message="Could not resolve NetBox endpoint",
+                detail="Unable to select endpoint from database",
             )
 
         return netbox_api_from_endpoint(netbox_endpoint)

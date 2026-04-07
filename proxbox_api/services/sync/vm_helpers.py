@@ -137,7 +137,28 @@ def best_guest_agent_ip(
     return None
 
 
-def filter_cluster_resources_for_vm(  # noqa: C901
+def _matches_vm_criteria(
+    resource: dict[str, object],
+    vm_name: str,
+    proxmox_vm_id: int | None,
+    cluster_id: int | None,
+) -> bool:
+    """Check if a resource matches VM filtering criteria."""
+    if resource.get("type") not in ("qemu", "lxc"):
+        return False
+    if str(resource.get("name", "")).strip() != vm_name:
+        if proxmox_vm_id is None:
+            return False
+        if str(resource.get("vmid", "")).strip() != str(proxmox_vm_id):
+            return False
+    if cluster_id is not None:
+        resource_cluster_id = relation_id(resource.get("cluster"))
+        if resource_cluster_id is not None and resource_cluster_id != cluster_id:
+            return False
+    return True
+
+
+def filter_cluster_resources_for_vm(
     cluster_resources: list[dict[str, object]],
     *,
     vm_name: str,
@@ -157,23 +178,12 @@ def filter_cluster_resources_for_vm(  # noqa: C901
             cluster_key_str = str(cluster_key)
             if cluster_hint and cluster_key_str.strip().lower() != cluster_hint:
                 continue
-            selected = []
-            for resource in resources:
-                if not isinstance(resource, dict):
-                    continue
-                if resource.get("type") not in ("qemu", "lxc"):
-                    continue
-                same_name = str(resource.get("name", "")).strip() == vm_name
-                same_vmid = proxmox_vm_id is not None and str(
-                    resource.get("vmid", "")
-                ).strip() == str(proxmox_vm_id)
-                if not (same_name or same_vmid):
-                    continue
-                if cluster_id is not None:
-                    resource_cluster_id = relation_id(resource.get("cluster"))
-                    if resource_cluster_id is not None and resource_cluster_id != cluster_id:
-                        continue
-                selected.append(resource)
+            selected = [
+                r
+                for r in resources
+                if isinstance(r, dict)
+                and _matches_vm_criteria(r, vm_name, proxmox_vm_id, cluster_id)
+            ]
             if selected:
                 filtered.append({cluster_key_str: selected})
     return filtered
