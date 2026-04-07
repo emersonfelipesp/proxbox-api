@@ -1,3 +1,5 @@
+"""Tests for individual sync flows and status reporting."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

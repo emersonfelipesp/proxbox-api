@@ -1,3 +1,5 @@
+"""Tests for admin log endpoints and log rendering behavior."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

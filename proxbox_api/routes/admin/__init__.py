@@ -1,3 +1,5 @@
+"""Admin route registration and templates for proxbox-api."""
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 

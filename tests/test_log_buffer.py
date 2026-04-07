@@ -1,3 +1,5 @@
+"""Tests for in-memory log buffering and filtering utilities."""
+
 from __future__ import annotations
 
 import logging

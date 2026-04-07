@@ -1,3 +1,5 @@
+"""Schema contract tests for generated API artifacts."""
+
 from __future__ import annotations
 
 import importlib.util
