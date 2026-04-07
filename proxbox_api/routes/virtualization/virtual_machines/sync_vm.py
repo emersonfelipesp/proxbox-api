@@ -1141,6 +1141,38 @@ async def create_virtual_machines(  # noqa: C901
         },
     }
 
+    # Emit discovery event immediately if using bridge/SSE streaming.
+    # This prevents the stream consumer from hanging while waiting for the first event.
+    if bridge:
+        vm_items: list[dict[str, object]] = []
+        for cluster in filtered_cluster_resources:
+            if isinstance(cluster, dict):
+                for cluster_name, resources in cluster.items():
+                    if isinstance(resources, list):
+                        for resource in resources:
+                            if isinstance(resource, dict) and resource.get("type") in (
+                                "qemu",
+                                "lxc",
+                            ):
+                                vm_items.append(
+                                    {
+                                        "name": str(
+                                            resource.get("name")
+                                            or resource.get("vmid")
+                                            or "unknown"
+                                        ),
+                                        "type": str(resource.get("type") or "unknown"),
+                                        "cluster": str(cluster_name),
+                                        "node": str(resource.get("node") or ""),
+                                    }
+                                )
+        await bridge.emit_discovery(
+            phase="virtual-machines",
+            items=vm_items,
+            message=f"Discovered {len(vm_items)} virtual machine(s) to synchronize",
+            metadata={"sync_vm_network": sync_vm_network},
+        )
+
     async def _precompute_vm_dependencies() -> None:
         """Ensure shared dependencies in strict parent-to-child order.
 
@@ -1454,28 +1486,6 @@ async def create_virtual_machines(  # noqa: C901
         return results
 
     if not sync_vm_network:
-        if bridge:
-            vm_items: list[dict[str, object]] = []
-            for cluster in filtered_cluster_resources:
-                for cluster_name, resources in cluster.items():
-                    for resource in resources:
-                        if resource.get("type") in ("qemu", "lxc"):
-                            vm_items.append(
-                                {
-                                    "name": str(
-                                        resource.get("name") or resource.get("vmid") or "unknown"
-                                    ),
-                                    "type": str(resource.get("type") or "unknown"),
-                                    "cluster": str(cluster_name),
-                                    "node": str(resource.get("node") or ""),
-                                }
-                            )
-            await bridge.emit_discovery(
-                phase="virtual-machines",
-                items=vm_items,
-                message=f"Discovered {len(vm_items)} virtual machine(s) to synchronize",
-                metadata={"sync_vm_network": False},
-            )
         flattened_results = await _run_full_update_vm_batch()
         total_vms = len(flattened_results)
         successful_vms = len(flattened_results)
@@ -2651,12 +2661,6 @@ async def create_virtual_machines_stream(
 
         sync_task = asyncio.create_task(_run_sync())
         try:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
             yield sse_event(
                 "step",
                 {
