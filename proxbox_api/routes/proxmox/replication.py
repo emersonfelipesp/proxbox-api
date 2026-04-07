@@ -1,11 +1,15 @@
 """Proxmox cluster replication endpoints and response schemas."""
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.services.sync.replications import sync_all_replications
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.utils.streaming import sse_event
 
 router = APIRouter()
 
@@ -106,3 +110,67 @@ async def cluster_replication(pxs: ProxmoxSessionsDep):
             )
 
     return results
+
+
+@router.get("/replication/stream", response_model=None)
+async def cluster_replication_stream(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+):
+    """Stream replication sync progress and terminal status via SSE."""
+
+    async def event_stream():
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "replications",
+                    "status": "started",
+                    "message": "Starting replications synchronization.",
+                },
+            )
+            result = await sync_all_replications(netbox_session=netbox_session, pxs=pxs)
+            yield sse_event(
+                "step",
+                {
+                    "step": "replications",
+                    "status": "completed",
+                    "message": "Replications synchronization finished.",
+                    "result": result,
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Replications sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:  # noqa: BLE001
+            yield sse_event(
+                "error",
+                {
+                    "step": "replications",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Replications sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
