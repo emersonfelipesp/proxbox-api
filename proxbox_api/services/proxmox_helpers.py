@@ -5,6 +5,7 @@ from __future__ import annotations
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSession
 
 
@@ -17,7 +18,7 @@ async def get_cluster_status(
 ) -> list[generated_models.GetClusterStatusResponseItem]:
     """Get cluster status from Proxmox."""
     try:
-        result = await session.session("cluster/status").get()
+        result = await resolve_async(session.session("cluster/status").get())
         validated = generated_models.GetClusterStatusResponse.model_validate(result)
         return validated.root
     except ProxboxException:
@@ -36,9 +37,11 @@ async def get_cluster_resources(
     """Get cluster resources from Proxmox."""
     try:
         if resource_type:
-            result = await session.session("cluster/resources").get(type=resource_type)
+            result = await resolve_async(
+                session.session("cluster/resources").get(type=resource_type)
+            )
         else:
-            result = await session.session("cluster/resources").get()
+            result = await resolve_async(session.session("cluster/resources").get())
         validated = generated_models.GetClusterResourcesResponse.model_validate(result)
         return validated.root
     except ProxboxException:
@@ -55,7 +58,7 @@ async def get_cluster_replication(
 ) -> list[dict[str, object]]:
     """Get cluster replication jobs from Proxmox."""
     try:
-        result = await session.session("cluster/replication").get()
+        result = await resolve_async(session.session("cluster/replication").get())
         return result if isinstance(result, list) else []
     except Exception:
         return []
@@ -73,10 +76,10 @@ async def get_vm_config(
     """Get VM configuration from Proxmox."""
     try:
         if vm_type == "qemu":
-            payload = await session.session.nodes(node).qemu(vmid).config.get()
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).config.get())
             return generated_models.GetNodesNodeQemuVmidConfigResponse.model_validate(payload)
         if vm_type == "lxc":
-            payload = await session.session.nodes(node).lxc(vmid).config.get()
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).config.get())
             return generated_models.GetNodesNodeLxcVmidConfigResponse.model_validate(payload)
         raise ValueError(f"Unsupported VM type: {vm_type}")
     except ProxboxException:
@@ -135,8 +138,8 @@ async def get_qemu_guest_agent_network_interfaces(
     """Return normalized guest-agent interfaces or [] when unavailable."""
     try:
         try:
-            payload = (
-                await session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
             )
         except Exception as error:
             logger.debug(
@@ -145,10 +148,10 @@ async def get_qemu_guest_agent_network_interfaces(
                 vmid,
                 error,
             )
-            payload = (
-                await session.session.nodes(node)
-                .qemu(vmid)
-                .agent.get(command="network-get-interfaces")
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).agent.get(
+                    command="network-get-interfaces"
+                )
             )
         return _normalize_guest_agent_interfaces(payload)
     except Exception as error:
@@ -166,7 +169,7 @@ async def get_storage_list(
 ) -> list[generated_models.GetStorageResponseItem]:
     """Get storage list from Proxmox."""
     try:
-        result = await session.session.storage.get()
+        result = await resolve_async(session.session.storage.get())
         validated = generated_models.GetStorageResponse.model_validate(result)
         return validated.root
     except ProxboxException:
@@ -188,7 +191,7 @@ async def get_storage_config(
     the full configuration including type, content, path, nodes, shared, etc.
     """
     try:
-        result = await session.session.storage(storage_id).get()
+        result = await resolve_async(session.session.storage(storage_id).get())
         validated = generated_models.GetStorageStorageResponse.model_validate(result)
         return _model_dump(validated)
     except ProxboxException:
@@ -209,7 +212,7 @@ async def get_node_storage_content(
     """Get storage content from a specific node."""
     try:
         params = {key: value for key, value in kwargs.items() if value is not None}
-        result = await session.session.nodes(node).storage(storage).content.get(**params)
+        result = await resolve_async(session.session.nodes(node).storage(storage).content.get(**params))
         validated = generated_models.GetNodesNodeStorageStorageContentResponse.model_validate(
             result
         )
@@ -245,7 +248,7 @@ async def get_node_tasks(
             "userfilter": userfilter,
         }
         filtered = {key: value for key, value in params.items() if value is not None}
-        result = await session.session.nodes(node).tasks.get(**filtered)
+        result = await resolve_async(session.session.nodes(node).tasks.get(**filtered))
         validated = generated_models.GetNodesNodeTasksResponse.model_validate(result)
         return validated.root
     except ProxboxException:
@@ -264,7 +267,7 @@ async def get_node_task_status(
 ) -> generated_models.GetNodesNodeTasksUpidStatusResponse:
     """Get status of a specific task."""
     try:
-        result = await session.session.nodes(node).tasks(upid).status.get()
+        result = await resolve_async(session.session.nodes(node).tasks(upid).status.get())
         return generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(result)
     except ProxboxException:
         raise
@@ -288,9 +291,9 @@ async def get_vm_snapshots(
     """Get snapshots for a specific VM from Proxmox."""
     try:
         if vm_type == "qemu":
-            payload = await session.session.nodes(node).qemu(vmid).snapshot.get()
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).snapshot.get())
         elif vm_type == "lxc":
-            payload = await session.session.nodes(node).lxc(vmid).snapshot.get()
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).snapshot.get())
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
         return payload if isinstance(payload, list) else []
