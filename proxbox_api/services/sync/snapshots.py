@@ -284,13 +284,11 @@ async def _collect_snapshot_tasks_for_vm(
 
     async def _fetch_snapshots_for_endpoint(proxmox):
         async with fetch_semaphore:
-            return await asyncio.to_thread(
-                lambda: get_vm_snapshots(
-                    session=proxmox.session,
-                    node=node_name,
-                    vm_type=proxmox_type,
-                    vmid=int(vmid),
-                )
+            return await get_vm_snapshots(
+                session=proxmox.session,
+                node=node_name,
+                vm_type=proxmox_type,
+                vmid=int(vmid),
             )
 
     snapshot_results = await asyncio.gather(
