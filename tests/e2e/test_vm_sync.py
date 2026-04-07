@@ -398,9 +398,6 @@ class TestVMSync:
             config.get("unprivileged", 0) == 1
         )
 
-    @pytest.mark.skip(
-        reason="known event loop issue with global semaphore - needs fix in netbox_rest.py"
-    )
     async def test_sync_multiple_vms_parallel(
         self,
         netbox_e2e_session,

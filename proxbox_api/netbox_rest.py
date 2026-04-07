@@ -52,6 +52,25 @@ _cache_metrics_evictions_size: int = 0
 _cache_metrics_evictions_bytes: int = 0
 
 
+def _reset_netbox_globals() -> None:
+    """Reset all module-level state. Call between tests to prevent cache and semaphore leaks."""
+    global _netbox_request_semaphore, _netbox_request_semaphore_loop_id
+    global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
+    global \
+        _cache_metrics_evictions_ttl, \
+        _cache_metrics_evictions_size, \
+        _cache_metrics_evictions_bytes
+    _netbox_request_semaphore = None
+    _netbox_request_semaphore_loop_id = None
+    _netbox_get_cache.clear()
+    _cache_metrics_hits = 0
+    _cache_metrics_misses = 0
+    _cache_metrics_invalidations = 0
+    _cache_metrics_evictions_ttl = 0
+    _cache_metrics_evictions_size = 0
+    _cache_metrics_evictions_bytes = 0
+
+
 def get_cache_metrics() -> dict[str, object]:
     """Return current cache metrics for observability."""
     global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations

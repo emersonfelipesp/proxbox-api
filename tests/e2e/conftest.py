@@ -37,6 +37,15 @@ from proxbox_api.e2e.session import (
     build_e2e_tag_refs,
     create_netbox_e2e_session,
 )
+from proxbox_api.netbox_rest import _reset_netbox_globals
+
+
+@pytest.fixture(scope="session", autouse=True)
+def reset_netbox_globals_session():
+    """Reset netbox_rest module globals before and after the E2E session."""
+    _reset_netbox_globals()
+    yield
+    _reset_netbox_globals()
 
 
 @pytest.fixture(scope="session")

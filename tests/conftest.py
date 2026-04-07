@@ -10,6 +10,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from proxbox_api.database import get_session
 from proxbox_api.main import app
+from proxbox_api.netbox_rest import _reset_netbox_globals
 from proxbox_api.routes.proxmox.runtime_generated import (
     clear_generated_proxmox_route_cache,
     clear_generated_proxmox_routes,
@@ -80,11 +81,13 @@ def reset_fastapi_state():
     clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
+    _reset_netbox_globals()
     yield
     app.dependency_overrides.clear()
     clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
+    _reset_netbox_globals()
 
 
 @pytest.fixture
@@ -270,8 +273,7 @@ async def proxmox_mock_backend():
         async def test_something(proxmox_mock_backend):
             vms = await proxmox_mock_backend.request("GET", "/api2/json/nodes/pve01/qemu")
     """
-    import os
-
+    _prior = os.environ.get("PROXMOX_API_MODE")
     os.environ["PROXMOX_API_MODE"] = "mock"
 
     from proxmox_openapi.sdk.backends.mock import MockBackend
@@ -284,6 +286,10 @@ async def proxmox_mock_backend():
             backend._store.reset()
         except Exception:
             pass
+    if _prior is None:
+        os.environ.pop("PROXMOX_API_MODE", None)
+    else:
+        os.environ["PROXMOX_API_MODE"] = _prior
 
 
 @pytest.fixture
@@ -298,8 +304,7 @@ async def proxmox_mock_http_published():
             async with ProxmoxSDK.mock() as sdk:
                 vms = await sdk.nodes.get()
     """
-    import os
-
+    _prior = os.environ.get("PROXMOX_API_MODE")
     os.environ["PROXMOX_API_MODE"] = "mock"
 
     from proxmox_openapi import ProxmoxSDK
@@ -311,6 +316,10 @@ async def proxmox_mock_http_published():
         await sdk.close()
     except Exception:
         pass
+    if _prior is None:
+        os.environ.pop("PROXMOX_API_MODE", None)
+    else:
+        os.environ["PROXMOX_API_MODE"] = _prior
 
 
 @pytest.fixture
@@ -325,8 +334,7 @@ async def proxmox_mock_http_local():
             async with ProxmoxSDK.mock() as sdk:
                 vms = await sdk.nodes.get()
     """
-    import os
-
+    _prior = os.environ.get("PROXMOX_API_MODE")
     os.environ["PROXMOX_API_MODE"] = "mock"
 
     from proxmox_openapi import ProxmoxSDK
@@ -338,3 +346,7 @@ async def proxmox_mock_http_local():
         await sdk.close()
     except Exception:
         pass
+    if _prior is None:
+        os.environ.pop("PROXMOX_API_MODE", None)
+    else:
+        os.environ["PROXMOX_API_MODE"] = _prior
