@@ -41,6 +41,7 @@ def _resolve_netbox_max_concurrent() -> int:
 
 
 _netbox_request_semaphore: asyncio.Semaphore | None = None
+_netbox_request_semaphore_loop_id: int | None = None
 _netbox_get_cache: dict[tuple[int, str, str], tuple[float, int, list[dict[str, object]]]] = {}
 
 _cache_metrics_hits: int = 0
@@ -410,9 +411,13 @@ def _invalidate_get_cache_for_record(
 
 def _get_netbox_semaphore() -> asyncio.Semaphore:
     """Get or create the global NetBox request semaphore."""
-    global _netbox_request_semaphore
-    if _netbox_request_semaphore is None:
+    global _netbox_request_semaphore, _netbox_request_semaphore_loop_id
+
+    current_loop = asyncio.get_running_loop()
+    current_loop_id = id(current_loop)
+    if _netbox_request_semaphore is None or _netbox_request_semaphore_loop_id != current_loop_id:
         _netbox_request_semaphore = asyncio.Semaphore(_resolve_netbox_max_concurrent())
+        _netbox_request_semaphore_loop_id = current_loop_id
     return _netbox_request_semaphore
 
 
