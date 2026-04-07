@@ -18,6 +18,7 @@ from proxbox_api.netbox_rest import (
     rest_bulk_patch_async,
     rest_create_async,
     rest_list_async,
+    rest_list_paginated_async,
     rest_reconcile_async,
 )
 from proxbox_api.proxmox_async import resolve_async
@@ -342,7 +343,7 @@ async def _bulk_reconcile_backups(  # noqa: C901
     )
     normalizer = _build_backup_normalizer()
 
-    existing_backups_raw = await rest_list_async(nb, "/api/plugins/proxbox/backups/")
+    existing_backups_raw = await rest_list_paginated_async(nb, "/api/plugins/proxbox/backups/")
     existing_by_volume_id: dict[str, RestRecord] = {}
     for rec in existing_backups_raw:
         vid = rec.get("volume_id")
@@ -821,7 +822,10 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
 
         if delete_nonexistent_backup:
             try:
-                netbox_backups = await rest_list_async(nb, "/api/plugins/proxbox/backups/")
+                netbox_backups = await rest_list_paginated_async(
+                    nb,
+                    "/api/plugins/proxbox/backups/",
+                )
                 ids_to_delete: list[int] = []
                 skipped_no_volid = 0
 
