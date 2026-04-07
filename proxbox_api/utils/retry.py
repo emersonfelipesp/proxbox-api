@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 import random
-from typing import Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -111,13 +112,13 @@ def _compute_delay(
 
 
 async def retry_async(
-    coro: Callable[..., object],
-    *args: object,
+    coro: Callable[..., Awaitable[T]],
+    *args: Any,
     max_retries: int | None = None,
     base_delay: float | None = None,
     operation_name: str = "operation",
-    **kwargs: object,
-) -> object:
+    **kwargs: Any,
+) -> T:
     """
     Retry an async operation with exponential backoff for transient failures.
 

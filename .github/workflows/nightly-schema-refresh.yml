@@ -21,6 +21,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra test --group dev
 
+      - name: Ty (type check)
+        run: uv run ty check proxbox_api/types proxbox_api/utils/retry.py
+
       - name: Install Playwright browser
         run: uv run playwright install chromium
 

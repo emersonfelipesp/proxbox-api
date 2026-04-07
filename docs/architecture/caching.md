@@ -30,7 +30,7 @@ sequenceDiagram
     participant Svc as Sync Service
     participant Cache as NetBox GET Cache
     participant NetBox as NetBox API
-    
+
     Svc->>Cache: Request GET /api/dcim/devices/
     Note over Cache: Prune expired entries (TTL)
     Cache->>Cache: Check if cached
@@ -54,7 +54,7 @@ sequenceDiagram
     participant Svc as Sync Service
     participant Cache as NetBox GET Cache
     participant NetBox as NetBox API
-    
+
     Svc->>NetBox: PATCH /api/dcim/devices/55/
     NetBox-->>Svc: Success
     Svc->>Cache: Invalidate /api/dcim/devices/55/
@@ -155,7 +155,7 @@ This logs:
 The cache is integrated at the REST helper layer in `proxbox_api/netbox_rest.py`:
 
 - `rest_list_async()` - List resources with caching
-- `rest_first_async()` - Get first result with caching  
+- `rest_first_async()` - Get first result with caching
 - `rest_get_async()` - Get single resource with caching
 - `rest_create_async()` - Create with cache invalidation
 - `rest_update_async()` - Update with cache invalidation

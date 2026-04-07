@@ -30,7 +30,7 @@ sequenceDiagram
     participant Svc as Serviço de Sync
     participant Cache as Cache GET NetBox
     participant NetBox as API NetBox
-    
+
     Svc->>Cache: Requisição GET /api/dcim/devices/
     Note over Cache: Remove entradas expiradas (TTL)
     Cache->>Cache: Verifica se está em cache
@@ -54,7 +54,7 @@ sequenceDiagram
     participant Svc as Serviço de Sync
     participant Cache as Cache GET NetBox
     participant NetBox as API NetBox
-    
+
     Svc->>NetBox: PATCH /api/dcim/devices/55/
     NetBox-->>Svc: Sucesso
     Svc->>Cache: Invalida /api/dcim/devices/55/

@@ -7,6 +7,7 @@ import json
 import os
 import random
 import time
+from typing import Any
 from urllib.parse import urlsplit
 
 from netbox_sdk.client import ApiResponse
@@ -38,7 +39,7 @@ def _resolve_netbox_max_concurrent() -> int:
 
 _netbox_request_semaphore: asyncio.Semaphore | None = None
 _netbox_request_semaphore_loop_id: int | None = None
-_netbox_get_cache: dict[tuple[int, str, str], tuple[float, int, list[dict[str, object]]]] = {}
+_netbox_get_cache: dict[tuple[int, str, str], tuple[float, int, list[dict[str, Any]]]] = {}
 
 _cache_metrics_hits: int = 0
 _cache_metrics_misses: int = 0
@@ -67,7 +68,7 @@ def _reset_netbox_globals() -> None:
     _cache_metrics_evictions_bytes = 0
 
 
-def get_cache_metrics() -> dict[str, object]:
+def get_cache_metrics() -> dict[str, Any]:
     """Return current cache metrics for observability."""
     global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
     global \
@@ -193,7 +194,7 @@ def _resolve_get_cache_max_bytes() -> int:
         return 50 * 1024 * 1024
 
 
-def _calculate_cache_entry_size(records: list[dict[str, object]]) -> int:
+def _calculate_cache_entry_size(records: list[dict[str, Any]]) -> int:
     """Calculate approximate memory size of cache entry in bytes."""
     try:
         return len(json.dumps(records, default=str))

@@ -38,19 +38,19 @@ for i in {1..30}; do
             PUBLISHED_HEALTHY=1
         fi
     fi
-    
+
     if [ -z "$LOCAL_HEALTHY" ]; then
         if docker inspect --format='{{.State.Health.Status}}' proxmox-mock-local 2>/dev/null | grep -q "healthy"; then
             echo "✓ proxmox-mock-local is healthy"
             LOCAL_HEALTHY=1
         fi
     fi
-    
+
     if [ -n "$PUBLISHED_HEALTHY" ] && [ -n "$LOCAL_HEALTHY" ]; then
         echo "✓ Both mock containers are healthy"
         break
     fi
-    
+
     if [ "$i" -eq 30 ]; then
         echo "✗ Timeout waiting for containers"
         echo "Container statuses:"

@@ -14,12 +14,13 @@ from proxbox_api.netbox_compat import NetBoxBase
 from proxbox_api.session.netbox import get_netbox_session
 
 if TYPE_CHECKING:
+    from netbox_sdk.facade import Api
     from sqlmodel import Session
 
 # Populated by init_database_and_netbox(); used by WebSocket handlers and helpers.
-netbox_session: object | None = None
+netbox_session: Api | None = None
 database_session: Session | None = None
-netbox_endpoints: list[object] = []
+netbox_endpoints: list[NetBoxEndpoint] = []
 init_ok: bool = False
 last_init_error: str | None = None
 

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
+from typing import Any
 
 from proxbox_api.logger import logger
 
 
-def to_mapping(value: object) -> dict[str, object]:
+def to_mapping(value: Any) -> dict[str, Any]:
     """Coerce any value to a dictionary mapping."""
     if isinstance(value, dict):
         return value
@@ -30,7 +31,7 @@ def to_mapping(value: object) -> dict[str, object]:
     return {}
 
 
-def relation_name(value: object) -> str | None:
+def relation_name(value: Any) -> str | None:
     """Extract relation name from a value."""
     if isinstance(value, dict):
         for key in ("name", "display", "label", "value"):
@@ -42,7 +43,7 @@ def relation_name(value: object) -> str | None:
     return None
 
 
-def relation_id(value: object) -> int | None:
+def relation_id(value: Any) -> int | None:
     """Extract relation ID from a value."""
     if isinstance(value, int):
         return value
@@ -63,7 +64,7 @@ def normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def parse_comma_separated_ints(value: object) -> list[int]:
+def parse_comma_separated_ints(value: Any) -> list[int]:
     """Parse a comma-separated list of ints from any value.
 
     Non-string values are treated as absent instead of raising on `.split()`.
@@ -77,7 +78,7 @@ def parse_comma_separated_ints(value: object) -> list[int]:
     return result
 
 
-def parse_key_value_string(value: object) -> dict[str, str]:
+def parse_key_value_string(value: Any) -> dict[str, str]:
     """Parse comma-separated `key=value` text into a mapping."""
     if not isinstance(value, str):
         return {}
@@ -94,7 +95,7 @@ def parse_key_value_string(value: object) -> dict[str, str]:
 
 
 def guest_agent_ip_with_prefix(
-    addr: dict[str, object], ignore_ipv6_link_local: bool = True
+    addr: dict[str, Any], ignore_ipv6_link_local: bool = True
 ) -> str | None:
     """Extract and format guest agent IP with prefix."""
     ip_text = str(addr.get("ip_address") or "").strip()

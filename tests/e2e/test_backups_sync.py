@@ -10,10 +10,10 @@ from typing import Any
 
 import pytest
 
-from proxbox_api.exception import ProxboxException
 from proxbox_api.e2e.fixtures.proxmox_openapi_mock import (
     create_cluster_with_backups,
 )
+from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
     nested_tag_payload,
     rest_reconcile_async,
