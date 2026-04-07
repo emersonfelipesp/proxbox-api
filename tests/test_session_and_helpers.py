@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +18,6 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
     clear_rest_get_cache,
     ensure_tag_async,
-    rest_create,
     rest_create_async,
     rest_ensure_async,
     rest_list_async,
@@ -27,7 +25,6 @@ from proxbox_api.netbox_rest import (
     rest_reconcile_async,
 )
 from proxbox_api.netbox_sdk_helpers import ensure_record, ensure_tag, to_dict
-from proxbox_api.netbox_sdk_sync import SyncProxy
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceSyncState,
     NetBoxSiteSyncState,
@@ -111,15 +108,6 @@ class AsyncIterableEndpoint:
     async def all(self):
         for item in self._items:
             yield item
-
-
-class FauxAsyncNamespace:
-    child = SimpleNamespace(value=1)
-
-    def __getattr__(self, name):
-        if name == "__aiter__":
-            return object()
-        raise AttributeError(name)
 
 
 class RestClientStub:
@@ -582,19 +570,21 @@ def test_rest_create_returns_tag_record_that_can_save_and_delete():
         }
     )
 
-    record = rest_create(
-        SyncProxy(api),
-        "/api/extras/tags/",
-        {
-            "name": "proxbox-test",
-            "slug": "proxbox-test",
-            "color": "9e9e9e",
-        },
+    record = asyncio.run(
+        rest_create_async(
+            api,
+            "/api/extras/tags/",
+            {
+                "name": "proxbox-test",
+                "slug": "proxbox-test",
+                "color": "9e9e9e",
+            },
+        )
     )
 
     record.color = "ffffff"
-    assert record.save().color == "ffffff"
-    assert record.delete() is True
+    assert asyncio.run(record.save()).color == "ffffff"
+    assert asyncio.run(record.delete()) is True
 
 
 def test_rest_list_async_reuses_cached_get_results():
@@ -1213,21 +1203,7 @@ def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
     ]
 
 
-def test_sync_proxy_runs_async_methods_synchronously():
-    facade = SyncProxy(AsyncNetBoxFacade())
-    assert facade.status() == {"netbox": "ok"}
-
-
-def test_sync_proxy_does_not_treat_plain_namespace_as_async_iterable():
-    proxy = SyncProxy(SimpleNamespace(app=FauxAsyncNamespace()))
-
-    app = proxy.app
-
-    assert isinstance(app, SyncProxy)
-    assert app.child.value == 1
-
-
-def test_get_netbox_session_wraps_async_facade(monkeypatch, db_engine):
+def test_get_netbox_session_returns_facade(monkeypatch, db_engine):
     with Session(db_engine) as session:
         session.add(
             NetBoxEndpoint(
@@ -1246,9 +1222,9 @@ def test_get_netbox_session_wraps_async_facade(monkeypatch, db_engine):
             "netbox_api_from_endpoint",
             lambda ep: AsyncNetBoxFacade(),
         )
-        wrapped = netbox_session_module.get_netbox_session(session)
+        facade = netbox_session_module.get_netbox_session(session)
 
-    assert wrapped.status() == {"netbox": "ok"}
+    assert asyncio.run(facade.status()) == {"netbox": "ok"}
 
 
 def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
@@ -1314,7 +1290,7 @@ def test_get_netbox_async_session_returns_async_facade(monkeypatch, db_engine):
             "netbox_api_from_endpoint",
             lambda ep: async_facade,
         )
-        returned = get_netbox_async_session(session)
+        returned = asyncio.run(get_netbox_async_session(session))
 
     assert returned is async_facade
 
@@ -1436,26 +1412,19 @@ def test_proxmox_session_allows_version_when_cluster_status_permission_denied(mo
     assert session.version == {"version": "8.3.0"}
 
 
-def test_proxmox_session_close_uses_resolve_sync(monkeypatch):
-    calls = {"resolve_sync": 0, "closed": 0}
-
-    def _fake_resolve_sync(value):
-        if inspect.iscoroutine(value):
-            value.close()
-        calls["resolve_sync"] += 1
-        return None
+def test_proxmox_session_aclose_awaits_async_close():
+    calls = {"closed": 0}
 
     class AsyncCloseSession:
         async def close(self):
             calls["closed"] += 1
 
-    monkeypatch.setattr("proxbox_api.session.proxmox_core.resolve_sync", _fake_resolve_sync)
-
     session = ProxmoxSession.__new__(ProxmoxSession)
     session.session = AsyncCloseSession()
-    session.close()
+    asyncio.run(session.aclose())
 
-    assert calls["resolve_sync"] == 1
+    assert calls["closed"] == 1
+    assert session.session is None
 
 
 def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from functools import lru_cache
 from typing import Annotated
@@ -10,9 +11,10 @@ from fastapi import Depends
 from netbox_sdk.client import NetBoxApiClient
 from netbox_sdk.config import Config
 from netbox_sdk.facade import Api
-from sqlmodel import select
+from sqlmodel import Session, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint
+from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
 
 _DEFAULT_NETBOX_TIMEOUT = 120.0
@@ -86,8 +88,15 @@ def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     )
 
 
+async def _maybe_await(value):
+    """Await async SQLModel results while tolerating sync test sessions."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
 def get_netbox_session(
-    database_session: DatabaseSessionDep,
+    database_session: DatabaseSessionDep | Session,
     netbox_id: int | None = None,
 ) -> Api:
     """
@@ -148,14 +157,12 @@ def get_netbox_session(
         )
 
 
-def get_netbox_async_session(
-    database_session: DatabaseSessionDep,
+async def get_netbox_async_session(
+    database_session: AsyncSession = Depends(get_async_session),
     netbox_id: int | None = None,
 ) -> Api:
     """
     Get NetBox API parameters from database and establish an async netbox-sdk API session.
-
-    This is an alias for get_netbox_session since the SDK is now fully async.
 
     Args:
         database_session: Database session dependency.
@@ -169,10 +176,52 @@ def get_netbox_async_session(
     Raises:
         ProxboxException: If no endpoint found or on error.
     """
-    return get_netbox_session(database_session, netbox_id)
+    try:
+        if netbox_id is not None:
+            netbox_endpoint = await _maybe_await(database_session.get(NetBoxEndpoint, netbox_id))
+            if not netbox_endpoint:
+                raise ProxboxException(
+                    message=f"NetBox endpoint {netbox_id} not found",
+                    detail=f"No endpoint with ID {netbox_id}",
+                )
+            return netbox_api_from_endpoint(netbox_endpoint)
+
+        endpoint_rows = await _maybe_await(database_session.exec(select(NetBoxEndpoint)))
+        count = len(endpoint_rows.all()) if endpoint_rows else 0
+
+        if count == 0:
+            raise ProxboxException(
+                message="No NetBox endpoint found",
+                detail="Please add a NetBox endpoint in the database",
+            )
+
+        if count == 1:
+            result = await _maybe_await(database_session.exec(select(NetBoxEndpoint)))
+            netbox_endpoint = result.first()
+        else:
+            result = await _maybe_await(
+                database_session.exec(select(NetBoxEndpoint).order_by(NetBoxEndpoint.id))
+            )
+            netbox_endpoint = result.first()
+
+        if not netbox_endpoint:
+            raise ProxboxException(
+                message="Could not resolve NetBox endpoint",
+                detail="Unable to select endpoint from database",
+            )
+
+        return netbox_api_from_endpoint(netbox_endpoint)
+
+    except ProxboxException:
+        raise
+
+    except Exception as error:
+        raise ProxboxException(
+            message="Error establishing NetBox API session", python_exception=str(error)
+        )
 
 
-NetBoxSessionDep = Annotated[Api, Depends(get_netbox_session)]
+NetBoxSessionDep = Annotated[Api, Depends(get_netbox_async_session)]
 NetBoxAsyncSessionDep = Annotated[Api, Depends(get_netbox_async_session)]
 
 

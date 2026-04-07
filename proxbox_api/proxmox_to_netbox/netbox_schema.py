@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -31,9 +32,9 @@ def _candidate_schema_urls(base_url: str) -> list[str]:
 
 def _extract_netbox_endpoint_from_db() -> NetBoxEndpoint | None:
     try:
-        database_session = next(get_session())
-        endpoint = database_session.exec(select(NetBoxEndpoint)).first()
-        return endpoint
+        with closing(get_session()) as session_iter:
+            database_session = next(session_iter)
+            return database_session.exec(select(NetBoxEndpoint)).first()
     except Exception as error:
         logger.warning("Unable to load NetBox endpoint from database: %s", error)
         return None

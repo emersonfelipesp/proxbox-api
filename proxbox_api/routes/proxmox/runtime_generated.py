@@ -14,7 +14,7 @@ from typing import Literal
 
 from fastapi import Body, Depends, FastAPI, Path, Query
 
-from proxbox_api.database import get_session
+from proxbox_api.database import get_async_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_codegen.pydantic_generator import (
@@ -266,7 +266,7 @@ def _build_generated_endpoint(  # noqa: C901
             "_database_session",
             inspect.Parameter.KEYWORD_ONLY,
             annotation=object,
-            default=Depends(get_session),
+            default=Depends(get_async_session),
         ),
         inspect.Parameter(
             "source",

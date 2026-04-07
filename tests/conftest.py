@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import get_session
+from proxbox_api.database import get_async_session, get_session
 from proxbox_api.main import app
 from proxbox_api.netbox_rest import _reset_netbox_globals
 from proxbox_api.routes.proxmox.runtime_generated import (
     clear_generated_proxmox_route_cache,
     clear_generated_proxmox_routes,
 )
-from proxbox_api.session.netbox import get_netbox_session
+from proxbox_api.session.netbox import get_netbox_async_session, get_netbox_session
 
 
 class FakeNetBoxSession:
@@ -64,15 +67,27 @@ class FakeNetBoxSession:
                 raise StopAsyncIteration
             return self._items.pop(0)
 
-    def status(self) -> Any:
+    async def status(self) -> Any:
         if self._status_error:
             raise self._status_error
         return self._status_result
 
-    def openapi(self) -> Any:
+    async def openapi(self) -> Any:
         if self._openapi_error:
             raise self._openapi_error
         return self._openapi_result
+
+
+def _async_db_override(db_engine):
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_async_session():
+        async with session_factory() as session:
+            yield session
+
+    return async_engine, override_get_async_session
 
 
 @pytest.fixture(autouse=True)
@@ -108,9 +123,13 @@ def test_api_key(db_engine, db_session):
         with Session(db_engine) as session:
             yield session
 
+    async_engine, override_get_async_session = _async_db_override(db_engine)
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[get_async_session] = override_get_async_session
     yield raw_key
     app.dependency_overrides.pop(get_session, None)
+    app.dependency_overrides.pop(get_async_session, None)
+    asyncio.run(async_engine.dispose())
 
 
 @pytest.fixture
@@ -171,9 +190,16 @@ def client_with_fake_netbox(db_engine):
         with Session(db_engine) as session:
             yield session
 
+    async_engine, override_get_async_session = _async_db_override(db_engine)
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[get_async_session] = override_get_async_session
     app.dependency_overrides[get_netbox_session] = lambda: fake_session
+    app.dependency_overrides[get_netbox_async_session] = lambda: fake_session
     yield fake_session
+    app.dependency_overrides.pop(get_async_session, None)
+    app.dependency_overrides.pop(get_netbox_session, None)
+    app.dependency_overrides.pop(get_netbox_async_session, None)
+    asyncio.run(async_engine.dispose())
 
 
 # Mock fixtures for proxmox and netbox sessions
