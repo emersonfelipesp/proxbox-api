@@ -145,4 +145,9 @@
 ## E2E Transport Stabilization (Round 5)
 
 - [x] Fix E2E NetBox SDK session config to pass token via `token_secret` (compatible with current netbox-sdk `Config`).
-- [ ] Re-run CI and verify E2E tests progress beyond NetBox tag setup.
+- [x] Re-run CI and verify E2E tests progress beyond NetBox tag setup.
+
+## E2E Transport Stabilization (Round 6)
+
+- [x] Fix E2E tag fixture to handle `RestRecord` returned by `ensure_tag_async` (serialize/object-attribute fallback).
+- [ ] Re-run CI and verify E2E suite exits setup and executes test bodies.

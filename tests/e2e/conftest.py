@@ -107,8 +107,22 @@ async def e2e_tag(netbox_e2e_session: "Api") -> dict[str, Any]:
         color=E2E_TAG["color"],
         description=E2E_TAG["description"],
     )
-    print(f"[E2E Setup] E2E tag ready: {tag['name']} (id={tag['id']})")
-    return tag
+
+    if isinstance(tag, dict):
+        tag_data = tag
+    elif hasattr(tag, "serialize"):
+        tag_data = tag.serialize()
+    else:
+        tag_data = {
+            "id": getattr(tag, "id", None),
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+            "url": getattr(tag, "url", None),
+        }
+
+    print(f"[E2E Setup] E2E tag ready: {tag_data.get('name')} (id={tag_data.get('id')})")
+    return tag_data
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
