@@ -1953,33 +1953,13 @@ async def create_virtual_machines(  # noqa: C901
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
     try:
-        vm_items: list[dict[str, object]] = []
-        # Process each cluster
+        total_vms = 0
+        # Count VMs for logging
         for cluster in filtered_cluster_resources:
             cluster_name = list(cluster.keys())[0]
             resources = cluster[cluster_name]
-            vm_resources = [r for r in resources if r.get("type") in ("qemu", "lxc")]
-            vm_count = len(vm_resources)
-
-            for resource in vm_resources:
-                vm_items.append(
-                    {
-                        "name": str(resource.get("name") or resource.get("vmid") or "unknown"),
-                        "type": str(resource.get("type") or "unknown"),
-                        "cluster": str(cluster_name),
-                        "node": str(resource.get("node") or ""),
-                    }
-                )
-
+            vm_count = len([r for r in resources if r.get("type") in ("qemu", "lxc")])
             total_vms += vm_count
-
-        if bridge:
-            await bridge.emit_discovery(
-                phase="virtual-machines",
-                items=vm_items,
-                message=f"Discovered {total_vms} virtual machine(s) to synchronize",
-                metadata={"sync_vm_network": sync_vm_network},
-            )
 
         # Return the created virtual machines.
         result_list = await asyncio.gather(
