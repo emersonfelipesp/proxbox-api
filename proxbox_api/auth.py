@@ -7,7 +7,7 @@ Subsequent key management requires authentication via /auth/keys endpoints.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -171,5 +171,6 @@ def get_async_session_factory(app) -> Callable[[], AsyncSession]:
     from proxbox_api.database import get_async_session
 
     if hasattr(app, "dependency_overrides") and get_async_session in app.dependency_overrides:
-        return app.dependency_overrides[get_async_session]
-    return get_async_session
+        original = app.dependency_overrides[get_async_session]
+        return asynccontextmanager(original)
+    return asynccontextmanager(get_async_session)
