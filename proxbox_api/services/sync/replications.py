@@ -121,6 +121,7 @@ async def sync_all_replications(  # noqa: C901
 
         results["created"] = reconcile_result.created
         results["updated"] = reconcile_result.updated
+        results["errors"] += reconcile_result.failed
         logger.info(
             "Replication sync completed: created=%s, updated=%s",
             reconcile_result.created,

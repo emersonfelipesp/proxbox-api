@@ -26,16 +26,50 @@ from proxbox_api.utils.retry import (
 
 
 def _resolve_netbox_max_concurrent() -> int:
-    """Resolve max concurrent NetBox requests from environment."""
-    raw = os.environ.get("PROXBOX_NETBOX_MAX_CONCURRENT", "").strip()
-    if not raw:
-        # Default to 1 to avoid exhausting NetBox DB connection pools.
-        # Increase only if NetBox has sufficient PostgreSQL pool capacity.
-        return 1
+    """Resolve max concurrent NetBox requests from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
     try:
-        return max(1, int(raw))
-    except ValueError:
-        return 5
+        return int(get_settings().get("netbox_max_concurrent", 1))
+    except Exception:
+        raw = os.environ.get("PROXBOX_NETBOX_MAX_CONCURRENT", "").strip()
+        if not raw:
+            # Default to 1 to avoid exhausting NetBox DB connection pools.
+            # Increase only if NetBox has sufficient PostgreSQL pool capacity.
+            return 1
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 1
+
+
+def _resolve_netbox_max_retries() -> int:
+    """Resolve max retry attempts from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
+    try:
+        return max(0, int(get_settings().get("netbox_max_retries", 5)))
+    except Exception:
+        raw = os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "").strip()
+        if not raw:
+            return 5
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 5
+
+
+def _resolve_netbox_retry_delay() -> float:
+    """Resolve retry delay in seconds from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
+    try:
+        return float(get_settings().get("netbox_retry_delay", 2.0))
+    except Exception:
+        raw = os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "").strip()
+        if not raw:
+            return 2.0
+        try:
+            return float(raw)
+        except ValueError:
+            return 2.0
 
 
 _netbox_request_semaphore: asyncio.Semaphore | None = None
@@ -162,15 +196,19 @@ def _debug_cache_enabled() -> bool:
 
 
 def _resolve_get_cache_ttl_seconds() -> float:
-    """Resolve NetBox GET cache TTL from environment."""
-    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_TTL", "").strip()
-    if not raw:
-        return 60.0
+    """Resolve NetBox GET cache TTL from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
     try:
-        ttl = float(raw)
-    except ValueError:
-        return 60.0
-    return max(0.0, ttl)
+        return float(get_settings().get("netbox_get_cache_ttl", 60.0))
+    except Exception:
+        raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_TTL", "").strip()
+        if not raw:
+            return 60.0
+        try:
+            ttl = float(raw)
+        except ValueError:
+            return 60.0
+        return max(0.0, ttl)
 
 
 def _resolve_get_cache_max_entries() -> int:
@@ -722,8 +760,8 @@ async def rest_list_async(
         return [RestRecord(api, normalized_path, item) for item in normalized_results]
 
     # Retry loop with semaphore and exponential backoff for transient errors
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+    max_retries = _resolve_netbox_max_retries()
+    base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -786,8 +824,8 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
         return RestRecord(api, normalized_path, body)
 
     # Retry loop with semaphore and exponential backoff for transient errors
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+    max_retries = _resolve_netbox_max_retries()
+    base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -978,8 +1016,8 @@ async def rest_patch_async(
         return body
 
     # Retry loop with semaphore and exponential backoff for transient errors
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+    max_retries = _resolve_netbox_max_retries()
+    base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
         async with semaphore:
