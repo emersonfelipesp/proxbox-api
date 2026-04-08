@@ -345,6 +345,14 @@ class SerializableRecord:
         return {"id": self.id}
 
 
+@pytest.fixture(autouse=False)
+def clear_cached_netbox_api():
+    """Clear LRU cache before test to prevent monkeypatch conflicts."""
+    from proxbox_api.session.netbox import _cached_netbox_api
+    _cached_netbox_api.cache_clear()
+    yield
+
+
 def test_to_dict_supports_dict_and_serializable_objects():
     assert to_dict({"id": 1}) == {"id": 1}
     assert to_dict(SerializableRecord(id=2)) == {"id": 2}
@@ -1272,6 +1280,7 @@ def test_get_netbox_session_requires_endpoint(db_engine):
         ]
 
 
+@pytest.mark.usefixtures("clear_cached_netbox_api")
 def test_get_netbox_async_session_returns_async_facade(monkeypatch, db_engine):
     with Session(db_engine) as session:
         session.add(

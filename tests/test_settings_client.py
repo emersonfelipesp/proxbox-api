@@ -10,52 +10,74 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["backend_log_file_path"] == "/var/log/proxbox.log"
 
 
-def test_fetch_settings_from_netbox_reads_backend_log_file_path():
-    class _Response:
-        status_code = 200
+def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
+    import json
+    from unittest.mock import MagicMock
 
-        @staticmethod
-        def json():
-            return {
-                "backend_log_file_path": "/srv/log/proxbox-api.log",
-                "ssrf_protection_enabled": True,
-                "allow_private_ips": True,
-                "additional_allowed_ip_ranges": "",
-                "explicitly_blocked_ip_ranges": "",
-            }
+    class _Config:
+        base_url = "https://netbox.local"
+        token_secret = "test-token"
+        token_version = "v1"
+        token_key = None
+
+    class _Client:
+        config = _Config()
 
     class _Session:
-        class http_session:  # noqa: N801
-            @staticmethod
-            def get(path, timeout=10):
-                assert path == "/api/plugins/proxbox/settings/"
-                return _Response()
+        client = _Client()
+
+    response_data = {
+        "backend_log_file_path": "/srv/log/proxbox-api.log",
+        "ssrf_protection_enabled": True,
+        "allow_private_ips": True,
+        "additional_allowed_ip_ranges": "",
+        "explicitly_blocked_ip_ranges": "",
+    }
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.status = 200
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: mock_response)
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
     assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
 
 
-def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path():
-    class _Response:
-        status_code = 200
+def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path(monkeypatch):
+    import json
+    from unittest.mock import MagicMock
 
-        @staticmethod
-        def json():
-            return {
-                "backend_log_file_path": "relative/path.log",
-                "ssrf_protection_enabled": True,
-                "allow_private_ips": True,
-                "additional_allowed_ip_ranges": "",
-                "explicitly_blocked_ip_ranges": "",
-            }
+    class _Config:
+        base_url = "https://netbox.local"
+        token_secret = "test-token"
+        token_version = "v1"
+        token_key = None
+
+    class _Client:
+        config = _Config()
 
     class _Session:
-        class http_session:  # noqa: N801
-            @staticmethod
-            def get(path, timeout=10):
-                assert path == "/api/plugins/proxbox/settings/"
-                return _Response()
+        client = _Client()
+
+    response_data = {
+        "backend_log_file_path": "relative/path.log",
+        "ssrf_protection_enabled": True,
+        "allow_private_ips": True,
+        "additional_allowed_ip_ranges": "",
+        "explicitly_blocked_ip_ranges": "",
+    }
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.status = 200
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: mock_response)
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None

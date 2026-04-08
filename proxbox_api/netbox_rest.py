@@ -196,19 +196,22 @@ def _debug_cache_enabled() -> bool:
 
 
 def _resolve_get_cache_ttl_seconds() -> float:
-    """Resolve NetBox GET cache TTL from settings, with env var fallback."""
+    """Resolve NetBox GET cache TTL from settings, with env var priority."""
+    # Check environment variable FIRST (allows tests to override)
+    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_TTL", "").strip()
+    if raw:
+        try:
+            ttl = float(raw)
+            return max(0.0, ttl)
+        except ValueError:
+            pass  # Fall through to settings
+
+    # Then try settings cache as fallback
     from proxbox_api.settings_client import get_settings
     try:
         return float(get_settings().get("netbox_get_cache_ttl", 60.0))
     except Exception:
-        raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_TTL", "").strip()
-        if not raw:
-            return 60.0
-        try:
-            ttl = float(raw)
-        except ValueError:
-            return 60.0
-        return max(0.0, ttl)
+        return 60.0
 
 
 def _resolve_get_cache_max_entries() -> int:
