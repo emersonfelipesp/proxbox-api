@@ -1148,6 +1148,15 @@ async def rest_bulk_delete_async(
                 payload = response.json()
                 if isinstance(payload, dict):
                     detail = str(payload.get("detail") or payload.get("message") or detail)
+                elif isinstance(payload, list):
+                    parts = []
+                    for i, item in enumerate(payload):
+                        if isinstance(item, dict) and item:
+                            parts.append(f"item[{i}]: {item}")
+                        elif item:
+                            parts.append(str(item))
+                    if parts:
+                        detail = "; ".join(parts)
             except json.JSONDecodeError:
                 pass
             raise ProxboxException(message="NetBox REST bulk delete failed", detail=detail)
