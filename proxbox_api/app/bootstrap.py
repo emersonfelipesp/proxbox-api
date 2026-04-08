@@ -11,6 +11,7 @@ from sqlmodel import select
 from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import NetBoxBase
+from proxbox_api.netbox_rest import configure_netbox_concurrency, rest_list
 from proxbox_api.session.netbox import get_netbox_session
 
 if TYPE_CHECKING:
@@ -22,6 +23,28 @@ database_session: Session | None = None
 netbox_endpoints: list[object] = []
 init_ok: bool = False
 last_init_error: str | None = None
+
+
+def _apply_plugin_settings_concurrency(nb: object) -> None:
+    """Fetch ProxboxPluginSettings from NetBox and configure the semaphore concurrency.
+
+    Falls back silently to the default (1) if the settings endpoint is unavailable
+    (e.g. migration 0023 not yet applied or network error).
+    """
+    try:
+        rows = rest_list(nb, "/api/plugins/proxbox/settings/", query={"limit": 1})
+        if rows:
+            stored = rows[0].get("netbox_max_concurrent")
+            if isinstance(stored, int) and stored >= 1:
+                configure_netbox_concurrency(stored)
+                logger.info(
+                    "NetBox semaphore configured to %d (from ProxboxPluginSettings)", stored
+                )
+                return
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "Could not fetch plugin settings for concurrency config; using default (1)"
+        )
 
 
 def init_database_and_netbox() -> None:
@@ -55,6 +78,7 @@ def init_database_and_netbox() -> None:
             netbox_session = get_netbox_session(database_session=database_session)
             NetBoxBase.nb = netbox_session
             init_ok = True
+            _apply_plugin_settings_concurrency(netbox_session)
     except Exception as error:  # noqa: BLE001
         last_init_error = str(error)
         logger.exception("Database or NetBox client bootstrap failed")
