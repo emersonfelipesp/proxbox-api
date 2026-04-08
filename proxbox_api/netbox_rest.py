@@ -470,6 +470,15 @@ def _extract_payload(response: ApiResponse) -> object:
             payload = None
         if isinstance(payload, dict):
             detail = str(payload.get("detail") or payload.get("message") or detail)
+        elif isinstance(payload, list):
+            parts = []
+            for i, item in enumerate(payload):
+                if isinstance(item, dict) and item:
+                    parts.append(f"item[{i}]: {item}")
+                elif item:
+                    parts.append(str(item))
+            if parts:
+                detail = "; ".join(parts)
         raise ProxboxException(
             message="NetBox REST request failed",
             detail=detail,
@@ -1174,6 +1183,7 @@ class BulkReconcileResult:
     created: int
     updated: int
     unchanged: int
+    failed: int = 0
 
 
 @dataclass(slots=True)
@@ -1283,7 +1293,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
     selector=None,
 ) -> BulkReconcileResult:
     if not payloads:
-        return BulkReconcileResult(records=[], created=0, updated=0, unchanged=0)
+        return BulkReconcileResult(records=[], created=0, updated=0, unchanged=0, failed=0)
 
     supports_model_validation = hasattr(schema, "model_validate") and hasattr(schema, "model_dump")
     resolved_batch_size = _normalize_bulk_batch_size(batch_size)
@@ -1411,6 +1421,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
 
     updated = 0
+    failed = 0
     for offset in range(0, len(to_patch), resolved_batch_size):
         batch = to_patch[offset : offset + resolved_batch_size]
         try:
@@ -1438,9 +1449,20 @@ async def rest_bulk_reconcile_async(  # noqa: C901
                     continue
                 for field, value in patch_payload.items():
                     setattr(record, field, value)
-                await record.save()
-                records.append(record)
-                updated += 1
+                try:
+                    await record.save()
+                    records.append(record)
+                    updated += 1
+                except Exception as save_exc:
+                    logger.error(
+                        "Per-item patch failed for %s id=%s: %s",
+                        path,
+                        record.id,
+                        getattr(save_exc, "detail", str(save_exc)),
+                        exc_info=True,
+                    )
+                    records.append(record)
+                    failed += 1
         if offset + resolved_batch_size < len(to_patch) and resolved_batch_delay_ms > 0:
             await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
 
@@ -1449,6 +1471,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
         created=created,
         updated=updated,
         unchanged=unchanged,
+        failed=failed,
     )
 
 
