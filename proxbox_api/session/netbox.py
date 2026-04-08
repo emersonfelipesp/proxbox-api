@@ -11,6 +11,7 @@ from fastapi import Depends
 from netbox_sdk.client import NetBoxApiClient
 from netbox_sdk.config import Config
 from netbox_sdk.facade import Api
+from netbox_sdk.schema import build_schema_index
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -72,7 +73,7 @@ def _cached_netbox_api(
         timeout=timeout,
         ssl_verify=ssl_verify,
     )
-    return Api(client=NetBoxApiClient(cfg))
+    return Api(client=NetBoxApiClient(cfg), schema=build_schema_index(version="4.5"))
 
 
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
