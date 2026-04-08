@@ -115,6 +115,39 @@ def _redact_pii(text: str) -> str:
     return text
 
 
+def _format_percent_style_message(message: str, args: object) -> str | None:
+    """Apply percent-style interpolation with tolerant args coercion."""
+    if args in (None, (), [], {}):
+        return message
+
+    candidates: list[object] = []
+    if isinstance(args, list):
+        candidates.append(tuple(args))
+    candidates.append(args)
+    if not isinstance(args, (tuple, dict, list)):
+        candidates.append((args,))
+
+    for candidate in candidates:
+        try:
+            return message % candidate
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _resolve_log_record_message(record: logging.LogRecord) -> str:
+    """Resolve a record into display text without leaking format placeholders."""
+    try:
+        message = record.getMessage()
+    except Exception:  # noqa: BLE001
+        raw_message = record.msg if isinstance(record.msg, str) else str(record.msg)
+        rendered = _format_percent_style_message(raw_message, getattr(record, "args", None))
+        message = rendered if rendered is not None else raw_message
+    if not isinstance(message, str):
+        return str(message)
+    return message
+
+
 def _entry_sort_key(entry: BufferedLogEntry) -> int:
     """Return a numeric sort key for a buffered log entry."""
     try:
@@ -192,7 +225,7 @@ class LogBufferHandler(logging.Handler):
                 timestamp=timestamp,
                 level=level,
                 module=record.module,
-                message=_redact_pii(record.getMessage()),
+                message=_redact_pii(_resolve_log_record_message(record)),
                 operation_id=operation_id,
                 operation=operation,
                 phase=phase,
