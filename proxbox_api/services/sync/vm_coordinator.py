@@ -121,7 +121,8 @@ class VMSyncCoordinator:
                 if isinstance(vm_result, Exception):
                     self._result.failed += 1
                     self._result.errors.append(str(vm_result))
-                else:
+                elif isinstance(vm_result, dict):
+                    # VM was successfully synced
                     self._result.created += 1
 
     async def _sync_single_vm(

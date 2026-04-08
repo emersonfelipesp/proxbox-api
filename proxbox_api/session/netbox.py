@@ -186,8 +186,12 @@ async def get_netbox_async_session(
                 )
             return netbox_api_from_endpoint(netbox_endpoint)
 
-        endpoint_rows = await _maybe_await(database_session.exec(select(NetBoxEndpoint)))
-        count = len(endpoint_rows.all()) if endpoint_rows else 0
+        # Use a count query to determine how many endpoints exist
+        from sqlalchemy import func
+        count_result = await _maybe_await(
+            database_session.exec(select(func.count(NetBoxEndpoint.id)))
+        )
+        count = count_result.scalar() if count_result else 0
 
         if count == 0:
             raise ProxboxException(
@@ -195,14 +199,11 @@ async def get_netbox_async_session(
                 detail="Please add a NetBox endpoint in the database",
             )
 
-        if count == 1:
-            result = await _maybe_await(database_session.exec(select(NetBoxEndpoint)))
-            netbox_endpoint = result.first()
-        else:
-            result = await _maybe_await(
-                database_session.exec(select(NetBoxEndpoint).order_by(NetBoxEndpoint.id))
-            )
-            netbox_endpoint = result.first()
+        # Fetch the endpoint with a single query
+        result = await _maybe_await(
+            database_session.exec(select(NetBoxEndpoint).order_by(NetBoxEndpoint.id))
+        )
+        netbox_endpoint = result.first()
 
         if not netbox_endpoint:
             raise ProxboxException(
