@@ -210,18 +210,16 @@ def test_create_proxmox_devices_surfaces_real_netbox_detail():
     ]
     tag = SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722")
 
-    with pytest.raises(
-        ProxboxException,
-        match="NetBox REST request failed",
-    ) as excinfo:
-        asyncio.run(
-            create_proxmox_devices(
-                netbox_session=fake_session,
-                clusters_status=cluster_status,
-                tag=tag,
-            )
+    # With bulk operations hardening, the error is logged and handled gracefully
+    # instead of being re-raised. The function should return with no created devices.
+    result = asyncio.run(
+        create_proxmox_devices(
+            netbox_session=fake_session,
+            clusters_status=cluster_status,
+            tag=tag,
         )
-    assert "tags: expected object, got integer" in str(excinfo.value.detail)
+    )
+    assert result == []
 
 
 def test_create_custom_fields_uses_rest_reconcile_with_async_session(monkeypatch):

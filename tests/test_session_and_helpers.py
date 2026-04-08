@@ -631,9 +631,9 @@ def test_rest_list_async_revalidates_after_ttl_expires():
     )
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "0.01")
+        mp.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "0.1")
         asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
-        asyncio.run(asyncio.sleep(0.02))
+        asyncio.run(asyncio.sleep(0.15))
         asyncio.run(rest_list_async(session, "/api/dcim/devices/", query={"name": "pve01"}))
 
     assert session.client.calls == [
