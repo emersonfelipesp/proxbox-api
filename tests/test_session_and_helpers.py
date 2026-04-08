@@ -1248,8 +1248,9 @@ def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
             self.config = config
 
     class DummyApi:
-        def __init__(self, client):
+        def __init__(self, client, schema=None):
             self.client = client
+            self.schema = schema
 
     monkeypatch.setattr(netbox_session_module, "NetBoxApiClient", DummyNetBoxApiClient)
     monkeypatch.setattr(netbox_session_module, "Api", DummyApi)
