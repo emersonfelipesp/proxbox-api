@@ -31,6 +31,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
+_DEFAULT_BACKUP_BATCH_SIZE = max(1, int(os.getenv("PROXBOX_BACKUP_BATCH_SIZE", "5")))
 
 
 def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
@@ -177,7 +178,7 @@ async def create_netbox_backups(
         return None
 
 
-async def process_backups_batch(backup_tasks: list, batch_size: int = 10) -> tuple[list, int]:
+async def process_backups_batch(backup_tasks: list, batch_size: int = _DEFAULT_BACKUP_BATCH_SIZE) -> tuple[list, int]:
     """
     Process a list of backup tasks in batches to avoid overwhelming the API.
 
