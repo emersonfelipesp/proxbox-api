@@ -94,10 +94,10 @@ _ERROR_MESSAGE_RE = re.compile(
 _PII_PATTERNS = [
     (
         re.compile(
-            r'(?:token|password|secret|key|auth)[=:]\s*["\']?([a-zA-Z0-9_\-]{8,})["\']?',
+            r'(?:token|password|secret|key|auth)[=:]\s*["\']?[a-zA-Z0-9_\-]{8,}["\']?',
             re.IGNORECASE,
         ),
-        r"\1[REDACTED]",
+        "[REDACTED]",
     ),
     (re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]+"), "Bearer [REDACTED]"),
     (re.compile(r"Basic\s+[a-zA-Z0-9+\/=]+"), "Basic [REDACTED]"),

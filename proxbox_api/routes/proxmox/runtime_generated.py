@@ -27,6 +27,7 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     load_proxmox_generated_openapi,
     proxmox_generated_route_cache_path,
 )
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import resolve_proxmox_target_session
 
 _GENERATED_ROUTE_TAG_PREFIX = "proxmox / live-generated"
@@ -418,9 +419,9 @@ def _build_generated_endpoint(  # noqa: C901
             payload.update(query_values)
 
             if method.upper() == "GET":
-                result = await handler(**query_values)
+                result = await resolve_async(handler(**query_values))
             else:
-                result = await handler(**payload)
+                result = await resolve_async(handler(**payload))
         except ProxboxException:
             raise
         except Exception as error:

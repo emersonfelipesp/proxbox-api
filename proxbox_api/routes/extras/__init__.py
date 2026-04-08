@@ -11,7 +11,7 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxCustomFieldSyncState
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep
-from proxbox_api.utils.retry import _is_netbox_overwhelmed_error
+from proxbox_api.utils.retry import is_netbox_overwhelmed_error
 
 router = APIRouter()
 _CUSTOM_FIELDS_CACHE: tuple[dict[str, object], ...] | None = None
@@ -604,7 +604,7 @@ async def create_custom_fields(  # noqa: C901
                         "error": str(e.message),
                     }
                 )
-                overloaded = overloaded or _is_netbox_overwhelmed_error(e)
+                overloaded = overloaded or is_netbox_overwhelmed_error(e)
                 logger.warning(
                     "Failed to create/update custom field '%s': %s - %s",
                     custom_field.get("name", "unknown"),
@@ -621,7 +621,7 @@ async def create_custom_fields(  # noqa: C901
                         "error": str(e),
                     }
                 )
-                overloaded = overloaded or _is_netbox_overwhelmed_error(e)
+                overloaded = overloaded or is_netbox_overwhelmed_error(e)
                 logger.warning(
                     "Failed to create/update custom field '%s': %s",
                     custom_field.get("name", "unknown"),

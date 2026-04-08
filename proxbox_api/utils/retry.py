@@ -61,7 +61,7 @@ def _is_transient_netbox_error(error: Exception) -> bool:
     return any(indicator in error_str for indicator in transient_indicators)
 
 
-def _is_netbox_overwhelmed_error(error: Exception) -> bool:
+def is_netbox_overwhelmed_error(error: Exception) -> bool:
     """Check whether NetBox appears overloaded or PostgreSQL-saturated."""
     details: list[str] = [str(error)]
     for attr_name in ("detail", "python_exception"):
@@ -165,7 +165,7 @@ async def retry_async(
                 ) from last_exception
 
             is_conn_refused = _is_connection_refused_error(e)
-            is_overwhelmed = _is_netbox_overwhelmed_error(e)
+            is_overwhelmed = is_netbox_overwhelmed_error(e)
             delay = _compute_delay(attempt, base_delay, is_conn_refused, is_overwhelmed)
             errors.append(f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}")
             logger.warning(

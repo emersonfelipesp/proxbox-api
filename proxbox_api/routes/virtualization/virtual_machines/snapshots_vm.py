@@ -268,12 +268,6 @@ async def create_all_virtual_machine_snapshots_stream(  # noqa: C901
 
         sync_task = asyncio.create_task(_run_sync())
         try:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
             yield sse_event(
                 "step",
                 {

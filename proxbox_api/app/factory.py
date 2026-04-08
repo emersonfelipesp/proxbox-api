@@ -73,6 +73,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _clean_old_requests(self, ip: str, now: float) -> None:
         cutoff = now - self.window_size
         self._requests[ip] = [t for t in self._requests[ip] if t > cutoff]
+        # Remove IP entry if no requests remain (prevent unbounded dict growth)
+        if not self._requests[ip]:
+            del self._requests[ip]
 
     def _get_client_ip(self, request: Request) -> str:
         forwarded = request.headers.get("X-Forwarded-For")
