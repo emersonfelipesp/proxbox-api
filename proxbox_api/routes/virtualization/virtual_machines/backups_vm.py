@@ -848,38 +848,27 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                             ids_to_delete.append(int(backup_id))
 
                 if ids_to_delete:
-                    batch_size = _DEFAULT_BULK_BATCH_SIZE
-                    for i in range(0, len(ids_to_delete), batch_size):
-                        batch_ids = ids_to_delete[i : i + batch_size]
+                    # Delete backups one at a time. rest_bulk_delete_async detects single-item
+                    # deletes and automatically uses detail-path DELETE (/{id}/) instead of
+                    # query-param-based bulk delete, which accommodates plugin endpoints that
+                    # don't support ?id= filters (like the proxbox backups endpoint).
+                    for bid in ids_to_delete:
                         try:
                             deleted = await rest_bulk_delete_async(
                                 nb,
                                 "/api/plugins/proxbox/backups/",
-                                batch_ids,
+                                [bid],
                             )
                             deleted_count += deleted
                         except Exception:
                             logger.warning(
-                                "Bulk delete failed (%s items), falling back to individual deletes",
-                                len(batch_ids),
+                                "Failed to delete backup id=%s",
+                                bid,
                                 exc_info=True,
                             )
-                            for bid in batch_ids:
-                                try:
-                                    await rest_bulk_delete_async(
-                                        nb,
-                                        "/api/plugins/proxbox/backups/",
-                                        [bid],
-                                    )
-                                    deleted_count += 1
-                                except Exception:
-                                    logger.warning(
-                                        "Failed to delete backup id=%s",
-                                        bid,
-                                        exc_info=True,
-                                    )
+                            # Continue to next backup instead of aborting the batch
 
-                        if i + batch_size < len(ids_to_delete) and _DEFAULT_BULK_BATCH_DELAY_MS > 0:
+                        if _DEFAULT_BULK_BATCH_DELAY_MS > 0:
                             await asyncio.sleep(_DEFAULT_BULK_BATCH_DELAY_MS / 1000.0)
 
                 if skipped_no_volid:

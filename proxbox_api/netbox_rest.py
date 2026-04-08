@@ -1126,18 +1126,102 @@ async def rest_bulk_patch_async(
     return await _do_request()
 
 
+async def _delete_single_record_async(
+    nb: object,
+    api: object,
+    list_path: str,
+    record_id: int,
+) -> int:
+    """Delete a single record via detail-path DELETE (/{id}/) instead of query params.
+
+    Used by rest_bulk_delete_async for single-item deletes. This accommodates
+    plugin endpoints that don't support query-param-based bulk operations.
+    """
+    semaphore = _get_netbox_semaphore()
+    detail_path = f"{list_path}{record_id}/"
+
+    async def _do_request() -> int:
+        try:
+            response = await api.client.request(
+                "DELETE",
+                detail_path,
+                expect_json=False,
+            )
+        except Exception as e:
+            _handle_netbox_error(e, f"delete record {detail_path}")
+            raise
+
+        if response.status not in {200, 204}:
+            detail = response.text
+            try:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    detail = str(payload.get("detail") or payload.get("message") or detail)
+                elif isinstance(payload, list):
+                    parts = []
+                    for i, item in enumerate(payload):
+                        if isinstance(item, dict) and item:
+                            parts.append(f"item[{i}]: {item}")
+                        elif item:
+                            parts.append(str(item))
+                    if parts:
+                        detail = "; ".join(parts)
+            except json.JSONDecodeError:
+                pass
+            raise ProxboxException(
+                message="NetBox REST delete failed",
+                detail=detail,
+            )
+        _invalidate_get_cache_for_path(api, list_path)
+        _invalidate_get_cache_for_path(api, detail_path)
+        return 1
+
+    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
+    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                return await _do_request()
+            except Exception as e:
+                if attempt == max_retries or not _is_transient_netbox_error(e):
+                    raise
+                delay = _compute_retry_delay(base_delay, attempt, e)
+                logger.warning(
+                    "NetBox delete failed (attempt %s/%s), retrying in %ss: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    str(e)[:200],
+                )
+        await asyncio.sleep(delay)
+
+    return await _do_request()
+
+
 async def rest_bulk_delete_async(
     nb: object,
     path: str,
     ids: list[int],
 ) -> int:
-    """Bulk-delete NetBox records by ID via DELETE with query params ?id=1&id=2&..."""
+    """Bulk-delete NetBox records by ID via DELETE with query params ?id=1&id=2&...
+
+    Note: For single-item deletes, uses detail-path DELETE (/{id}/) instead of list-endpoint
+    query params. This accommodates plugin endpoints that don't support query-param-based
+    bulk operations (e.g., NetBox plugins often only support detail-path DELETE).
+    """
     if not ids:
         return 0
     api = _unwrap_api(nb)
     semaphore = _get_netbox_semaphore()
     normalized_path = _normalize_path(path)
     unique_ids = list(dict.fromkeys(ids))  # deduplicate, preserve order
+
+    # For single-item deletes, use detail-path DELETE instead of query params.
+    # Many plugin endpoints don't support query-param-based bulk operations.
+    if len(unique_ids) == 1:
+        return await _delete_single_record_async(nb, api, normalized_path, unique_ids[0])
+
     query: dict[str, object] = {"id": [str(i) for i in unique_ids]}
 
     async def _do_request() -> int:
