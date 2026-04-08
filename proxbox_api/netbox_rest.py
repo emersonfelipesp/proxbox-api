@@ -1031,11 +1031,19 @@ async def rest_bulk_create_async(
         else:
             raise ProxboxException(message="NetBox bulk create response was not JSON")
         records = []
+        non_dict_count = 0
         for item in items:
             if not isinstance(item, dict):
+                non_dict_count += 1
                 continue
             _invalidate_get_cache_for_record(api, normalized_path, item)
             records.append(RestRecord(api, normalized_path, item))
+        if non_dict_count > 0:
+            logger.warning(
+                "Bulk create response contained %s non-dict item(s) for %s; response may be incomplete or malformed",
+                non_dict_count,
+                path,
+            )
         return records
 
     max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
@@ -1129,7 +1137,8 @@ async def rest_bulk_delete_async(
     api = _unwrap_api(nb)
     semaphore = _get_netbox_semaphore()
     normalized_path = _normalize_path(path)
-    query: dict[str, object] = {"id": ",".join(str(i) for i in ids)}
+    unique_ids = list(dict.fromkeys(ids))  # deduplicate, preserve order
+    query: dict[str, object] = {"id": [str(i) for i in unique_ids]}
 
     async def _do_request() -> int:
         try:
@@ -1318,7 +1327,14 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             desired_payload = {key: value for key, value in payload.items() if value is not None}
         lookup = _build_lookup_dict_from_fields(desired_payload, lookup_fields)
         lookup_key = _lookup_tuple(lookup)
-        if lookup_key is None or lookup_key in seen_desired:
+        if lookup_key is None:
+            continue
+        if lookup_key in seen_desired:
+            logger.warning(
+                "Skipping duplicate payload for %s with lookup %s; only first occurrence will be synced",
+                path,
+                lookup,
+            )
             continue
         seen_desired.add(lookup_key)
         desired_entries.append((desired_payload, lookup))
@@ -1415,17 +1431,26 @@ async def rest_bulk_reconcile_async(  # noqa: C901
                 exc_info=True,
             )
             for payload, lookup in batch:
-                record = await rest_reconcile_async(
-                    nb,
-                    path,
-                    lookup=lookup,
-                    payload=payload,
-                    schema=schema,
-                    current_normalizer=current_normalizer,
-                    patchable_fields=patchable_fields,
-                )
-                records.append(record)
-                created += 1
+                try:
+                    record = await rest_reconcile_async(
+                        nb,
+                        path,
+                        lookup=lookup,
+                        payload=payload,
+                        schema=schema,
+                        current_normalizer=current_normalizer,
+                        patchable_fields=patchable_fields,
+                    )
+                    records.append(record)
+                    created += 1
+                except Exception as reconcile_exc:
+                    logger.error(
+                        "Per-item reconcile failed for %s with lookup %s: %s",
+                        path,
+                        lookup,
+                        getattr(reconcile_exc, "detail", str(reconcile_exc)),
+                        exc_info=True,
+                    )
         if offset + resolved_batch_size < len(to_create) and resolved_batch_delay_ms > 0:
             await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
 
@@ -1433,6 +1458,13 @@ async def rest_bulk_reconcile_async(  # noqa: C901
     failed = 0
     for offset in range(0, len(to_patch), resolved_batch_size):
         batch = to_patch[offset : offset + resolved_batch_size]
+        none_id_count = sum(1 for record, _, _ in batch if record.id is None)
+        if none_id_count > 0:
+            logger.warning(
+                "Skipping %s record(s) with id=None from bulk patch for %s; they cannot be updated without an ID",
+                none_id_count,
+                path,
+            )
         try:
             patched_records = await rest_bulk_patch_async(
                 nb,
