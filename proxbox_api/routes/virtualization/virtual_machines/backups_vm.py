@@ -511,8 +511,8 @@ async def _bulk_reconcile_backups(  # noqa: C901
 
 async def process_backups_batch(
     backup_tasks: list,
-    batch_size: int = 10,
-    delay_ms: int = 200,
+    batch_size: int = _DEFAULT_BACKUP_BATCH_SIZE,
+    delay_ms: int = _DEFAULT_BACKUP_BATCH_DELAY_MS,
 ) -> tuple[list, int]:
     """
     Process a list of backup tasks in batches to avoid overwhelming the API.
