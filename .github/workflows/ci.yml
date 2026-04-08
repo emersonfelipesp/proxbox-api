@@ -133,6 +133,7 @@ jobs:
       NETBOX_IMAGE: netboxcommunity/netbox:v4.5
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-openapi:latest
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
+      UV_HTTP_TIMEOUT: "120"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
