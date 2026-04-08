@@ -31,7 +31,7 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.mock_backend
 @pytest.mark.mock_http
 class TestDevicesSync:

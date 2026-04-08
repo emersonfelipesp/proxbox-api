@@ -33,7 +33,7 @@ from proxbox_api.services.sync.device_ensure import _slugify
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.mock_backend
 @pytest.mark.mock_http
 class TestVMSync:
