@@ -479,6 +479,17 @@ def _get_netbox_semaphore() -> asyncio.Semaphore:
     return _netbox_request_semaphore
 
 
+def configure_netbox_concurrency(value: int) -> None:
+    """Override the global NetBox semaphore concurrency limit.
+
+    Call this before serving requests (e.g. from bootstrap) to apply a
+    value read from ProxboxPluginSettings instead of relying solely on
+    the PROXBOX_NETBOX_MAX_CONCURRENT environment variable.
+    """
+    global _netbox_request_semaphore
+    _netbox_request_semaphore = asyncio.Semaphore(max(1, value))
+
+
 def _unwrap_api(nb: object) -> object:
     return nb
 
