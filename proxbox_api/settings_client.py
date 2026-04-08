@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import time
+import urllib.error
+import urllib.request
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -43,6 +46,17 @@ def get_default_settings() -> ProxboxSettingsDict:
         "allow_private_ips": True,  # Permissive for on-premises
         "allowed_ip_ranges": [],
         "blocked_ip_ranges": [],
+        "use_guest_agent_interface_name": True,
+        "proxbox_fetch_max_concurrency": 8,
+        "ignore_ipv6_link_local_addresses": True,
+        "netbox_max_concurrent": 1,
+        "netbox_max_retries": 5,
+        "netbox_retry_delay": 2.0,
+        "netbox_get_cache_ttl": 60.0,
+        "bulk_batch_size": 50,
+        "bulk_batch_delay_ms": 500,
+        "vm_sync_max_concurrency": 4,
+        "custom_fields_request_delay": 0.0,
     }
 
 
@@ -66,18 +80,37 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
     Returns None if fetch fails.
     """
     try:
-        response = netbox_session.http_session.get(
-            "/api/plugins/proxbox/settings/",
-            timeout=10,
-        )
-        if response.status_code != 200:
-            logger.warning(
-                "Failed to fetch ProxboxPluginSettings: HTTP %s",
-                response.status_code,
-            )
+        config = netbox_session.client.config
+        base_url = (config.base_url or "").rstrip("/")
+        token_secret = config.token_secret or ""
+        token_version = config.token_version or "v1"
+
+        if not base_url:
+            logger.warning("NetBox base_url not configured")
             return None
 
-        data = response.json()
+        # Build auth header (v1: "Token <secret>", v2: "nbt <key>:<secret>")
+        if token_version == "v2" and config.token_key:
+            auth = f"nbt {config.token_key}:{token_secret}"
+        else:
+            auth = f"Token {token_secret}"
+
+        url = f"{base_url}/api/plugins/proxbox/settings/"
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": auth, "Accept": "application/json"},
+        )
+
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status != 200:
+                logger.warning(
+                    "Failed to fetch ProxboxPluginSettings: HTTP %s",
+                    resp.status,
+                )
+                return None
+
+            data = json.loads(resp.read().decode())
+
         if isinstance(data, list) and len(data) > 0:
             settings = data[0]
         elif isinstance(data, dict):
@@ -94,8 +127,22 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "allow_private_ips": settings.get("allow_private_ips", True),
             "allowed_ip_ranges": parse_cidr_list(settings.get("additional_allowed_ip_ranges", "")),
             "blocked_ip_ranges": parse_cidr_list(settings.get("explicitly_blocked_ip_ranges", "")),
+            "use_guest_agent_interface_name": settings.get("use_guest_agent_interface_name", True),
+            "proxbox_fetch_max_concurrency": int(settings.get("proxbox_fetch_max_concurrency", 8)),
+            "ignore_ipv6_link_local_addresses": settings.get("ignore_ipv6_link_local_addresses", True),
+            "netbox_max_concurrent": int(settings.get("netbox_max_concurrent", 1)),
+            "netbox_max_retries": int(settings.get("netbox_max_retries", 5)),
+            "netbox_retry_delay": float(settings.get("netbox_retry_delay", 2.0)),
+            "netbox_get_cache_ttl": float(settings.get("netbox_get_cache_ttl", 60.0)),
+            "bulk_batch_size": int(settings.get("bulk_batch_size", 50)),
+            "bulk_batch_delay_ms": int(settings.get("bulk_batch_delay_ms", 500)),
+            "vm_sync_max_concurrency": int(settings.get("vm_sync_max_concurrency", 4)),
+            "custom_fields_request_delay": float(settings.get("custom_fields_request_delay", 0.0)),
         }
 
+    except urllib.error.URLError as exc:
+        logger.warning("Error fetching ProxboxPluginSettings: %s", exc)
+        return None
     except Exception as exc:
         logger.warning("Error fetching ProxboxPluginSettings: %s", exc)
         return None

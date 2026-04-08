@@ -509,7 +509,9 @@ async def sync_virtual_machine_task_history(  # noqa: C901
             patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
         )
 
-        reconciled = reconcile_result.created + reconcile_result.updated
+        reconciled = (
+            reconcile_result.created + reconcile_result.updated + reconcile_result.unchanged
+        )
         logger.debug(
             "Task history bulk reconcile for VM %s: created=%s, updated=%s, unchanged=%s",
             virtual_machine_id,

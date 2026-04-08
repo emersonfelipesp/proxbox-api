@@ -38,8 +38,24 @@ router = APIRouter()
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
 _DEFAULT_BACKUP_BATCH_SIZE = max(1, int(os.getenv("PROXBOX_BACKUP_BATCH_SIZE", "5")))
 _DEFAULT_BACKUP_BATCH_DELAY_MS = max(0, int(os.getenv("PROXBOX_BACKUP_BATCH_DELAY_MS", "200")))
-_DEFAULT_BULK_BATCH_SIZE = max(1, int(os.getenv("PROXBOX_BULK_BATCH_SIZE", "50")))
-_DEFAULT_BULK_BATCH_DELAY_MS = max(0, int(os.getenv("PROXBOX_BULK_BATCH_DELAY_MS", "500")))
+
+
+def _resolve_bulk_batch_size() -> int:
+    """Resolve bulk batch size from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
+    try:
+        return int(get_settings().get("bulk_batch_size", 50))
+    except Exception:
+        return max(1, int(os.getenv("PROXBOX_BULK_BATCH_SIZE", "50")))
+
+
+def _resolve_bulk_batch_delay_ms() -> int:
+    """Resolve bulk batch delay in milliseconds from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
+    try:
+        return int(get_settings().get("bulk_batch_delay_ms", 500))
+    except Exception:
+        return max(0, int(os.getenv("PROXBOX_BULK_BATCH_DELAY_MS", "500")))
 
 _BACKUP_SUBTYPE_ALIASES: dict[str, str] = {
     "ct": "lxc",
@@ -338,9 +354,9 @@ async def _bulk_reconcile_backups(  # noqa: C901
 
     Returns (results, create_count, patch_count).
     """
-    batch_size = bulk_batch_size or _DEFAULT_BULK_BATCH_SIZE
+    batch_size = bulk_batch_size or _resolve_bulk_batch_size()
     delay_ms = (
-        bulk_batch_delay_ms if bulk_batch_delay_ms is not None else _DEFAULT_BULK_BATCH_DELAY_MS
+        bulk_batch_delay_ms if bulk_batch_delay_ms is not None else _resolve_bulk_batch_delay_ms()
     )
     normalizer = _build_backup_normalizer()
 
@@ -811,8 +827,8 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
         logger.info(
             "Starting bulk backup reconcile: %s payloads, batch_size=%s, delay_ms=%s",
             len(all_payloads),
-            _DEFAULT_BULK_BATCH_SIZE,
-            _DEFAULT_BULK_BATCH_DELAY_MS,
+            _resolve_bulk_batch_size(),
+            _resolve_bulk_batch_delay_ms(),
         )
 
         results, created_count, patched_count = await _bulk_reconcile_backups(
@@ -868,8 +884,9 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                             )
                             # Continue to next backup instead of aborting the batch
 
-                        if _DEFAULT_BULK_BATCH_DELAY_MS > 0:
-                            await asyncio.sleep(_DEFAULT_BULK_BATCH_DELAY_MS / 1000.0)
+                        batch_delay_ms = _resolve_bulk_batch_delay_ms()
+                        if batch_delay_ms > 0:
+                            await asyncio.sleep(batch_delay_ms / 1000.0)
 
                 if skipped_no_volid:
                     logger.info(

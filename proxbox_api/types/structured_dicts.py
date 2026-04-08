@@ -14,6 +14,17 @@ class ProxboxSettingsDict(TypedDict):
     allow_private_ips: bool
     allowed_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
     blocked_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
+    use_guest_agent_interface_name: bool
+    proxbox_fetch_max_concurrency: int
+    ignore_ipv6_link_local_addresses: bool
+    netbox_max_concurrent: int
+    netbox_max_retries: int
+    netbox_retry_delay: float
+    netbox_get_cache_ttl: float
+    bulk_batch_size: int
+    bulk_batch_delay_ms: int
+    vm_sync_max_concurrency: int
+    custom_fields_request_delay: float
 
 
 class SyncResultDict(TypedDict):

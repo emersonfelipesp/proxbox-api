@@ -107,6 +107,7 @@ async def sync_all_backup_routines(
 
         results["created"] = reconcile_result.created
         results["updated"] = reconcile_result.updated
+        results["errors"] += reconcile_result.failed
         logger.info(
             "Backup routines sync completed: created=%s, updated=%s",
             reconcile_result.created,
