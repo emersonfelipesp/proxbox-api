@@ -20,8 +20,8 @@ from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.schemas.netbox.extras import TagSchema
 from proxbox_api.utils.retry import (
     _is_connection_refused_error,
-    _is_netbox_overwhelmed_error,
     _is_transient_netbox_error,
+    is_netbox_overwhelmed_error as _is_netbox_overwhelmed_error,
 )
 
 
