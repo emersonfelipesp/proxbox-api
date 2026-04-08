@@ -369,6 +369,11 @@ async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeyp
         "proxbox_api.services.sync.individual.backup_sync.rest_reconcile_async",
         _fake_rest_reconcile_async,
     )
+    # Also patch in helpers module where ensure_vm_record is defined
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
 
     result = await sync_backup_individual(
         nb=object(),
