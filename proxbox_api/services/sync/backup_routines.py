@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import rest_bulk_reconcile_async
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
@@ -14,7 +14,7 @@ async def sync_all_backup_routines(
     netbox_session,
     pxs: ProxmoxSessionsDep,
 ) -> dict:
-    """Sync all backup routines (vzdump schedules) from Proxmox to NetBox.
+    """Sync all backup routines (vzdump schedules) from Proxmox to NetBox using bulk operations.
 
     Args:
         netbox_session: NetBox async session.
@@ -26,15 +26,15 @@ async def sync_all_backup_routines(
     nb = netbox_session
     results = {"created": 0, "updated": 0, "errors": 0}
 
-    async def sync_backup_routines_for_session(px):
-        """Sync backup routines for a single Proxmox session."""
-        session_results = {"created": 0, "updated": 0, "errors": 0}
+    async def fetch_backup_routines_for_session(px):
+        """Fetch backup routines for a single Proxmox session. Returns list of job payloads."""
         try:
             backup_jobs = await resolve_async(px.session.cluster.backup.get())
         except Exception as e:
             logger.warning("Error fetching backup routines for %s: %s", px.name, e)
-            return session_results
+            return []
 
+        payloads = []
         for job in backup_jobs:
             try:
                 job_id = job.get("id", "")
@@ -64,56 +64,57 @@ async def sync_all_backup_routines(
                     "raw_config": job,
                     "status": "active",
                 }
-
-                existing = await rest_list_async(
-                    nb,
-                    "/api/plugins/proxbox/backup-routines/",
-                    query={"job_id": job_id},
-                )
-
-                if existing:
-                    await rest_reconcile_async(
-                        nb,
-                        "/api/plugins/proxbox/backup-routines/",
-                        lookup={"job_id": job_id},
-                        payload=job_payload,
-                        schema=dict,
-                        current_normalizer=lambda record: {
-                            "job_id": record.get("job_id"),
-                            "enabled": record.get("enabled"),
-                            "schedule": record.get("schedule"),
-                            "node": record.get("node"),
-                            "storage": record.get("storage"),
-                            "selection": record.get("selection"),
-                            "status": record.get("status"),
-                        },
-                    )
-                    session_results["updated"] += 1
-                else:
-                    await rest_reconcile_async(
-                        nb,
-                        "/api/plugins/proxbox/backup-routines/",
-                        lookup={"job_id": job_id},
-                        payload=job_payload,
-                        schema=dict,
-                        current_normalizer=lambda record: {},
-                    )
-                    session_results["created"] += 1
+                payloads.append(job_payload)
 
             except Exception as e:
-                logger.warning("Error syncing backup routine %s: %s", job.get("id"), e)
-                session_results["errors"] += 1
+                logger.warning("Error building payload for backup routine %s: %s", job.get("id"), e)
+                results["errors"] += 1
 
-        return session_results
+        return payloads
 
-    tasks = [sync_backup_routines_for_session(px) for px in pxs]
-    all_results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Fetch backup routines from all Proxmox sessions in parallel
+    fetch_tasks = [fetch_backup_routines_for_session(px) for px in pxs]
+    all_payloads_by_session = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
-    for r in all_results:
-        if isinstance(r, dict):
-            results["created"] += r.get("created", 0)
-            results["updated"] += r.get("updated", 0)
-            results["errors"] += r.get("errors", 0)
+    # Flatten all payloads from all sessions
+    all_payloads = []
+    for payload_list in all_payloads_by_session:
+        if isinstance(payload_list, list):
+            all_payloads.extend(payload_list)
 
-    logger.info("Backup routines sync completed: %s", results)
+    if not all_payloads:
+        logger.info("No backup routines to sync")
+        return results
+
+    try:
+        # Perform bulk reconciliation with a single API call
+        reconcile_result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/plugins/proxbox/backup-routines/",
+            payloads=all_payloads,
+            lookup_fields=["job_id"],
+            schema=dict,
+            current_normalizer=lambda record: {
+                "job_id": record.get("job_id"),
+                "enabled": record.get("enabled"),
+                "schedule": record.get("schedule"),
+                "node": record.get("node"),
+                "storage": record.get("storage"),
+                "selection": record.get("selection"),
+                "status": record.get("status"),
+            },
+        )
+
+        results["created"] = reconcile_result.created
+        results["updated"] = reconcile_result.updated
+        logger.info(
+            "Backup routines sync completed: created=%s, updated=%s",
+            reconcile_result.created,
+            reconcile_result.updated,
+        )
+
+    except Exception as e:
+        logger.error("Error during bulk backup routines reconciliation: %s", e)
+        results["errors"] = len(all_payloads)
+
     return results

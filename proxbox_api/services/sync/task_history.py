@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timezone
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
 from proxbox_api.services.proxmox_helpers import (
     dump_models,
@@ -479,43 +479,91 @@ async def sync_virtual_machine_task_history(  # noqa: C901
     if not task_payloads:
         return 0
 
-    reconciled = 0
-    for payload in task_payloads:
-        try:
-            await rest_reconcile_async(
-                nb,
-                "/api/plugins/proxbox/task-history/",
-                lookup={"upid": payload.get("upid")},
-                payload=payload,
-                schema=NetBoxTaskHistorySyncState,
-                current_normalizer=lambda record: {
-                    "virtual_machine": record.get("virtual_machine"),
-                    "vm_type": record.get("vm_type"),
-                    "upid": record.get("upid"),
-                    "node": record.get("node"),
-                    "pid": record.get("pid"),
-                    "pstart": record.get("pstart"),
-                    "task_id": record.get("task_id"),
-                    "task_type": record.get("task_type"),
-                    "username": record.get("username"),
-                    "start_time": record.get("start_time"),
-                    "end_time": record.get("end_time"),
-                    "description": record.get("description"),
-                    "status": record.get("status"),
-                    "task_state": record.get("task_state"),
-                    "exitstatus": record.get("exitstatus"),
-                    "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
-                },
-                patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
-            )
-            reconciled += 1
-        except Exception as error:
-            logger.warning(
-                "Error reconciling task history upid=%s for VM %s: %s",
-                payload.get("upid"),
-                virtual_machine_id,
-                error,
-            )
+    # Perform bulk reconciliation with a single API call
+    try:
+        reconcile_result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/plugins/proxbox/task-history/",
+            payloads=task_payloads,
+            lookup_fields=["upid"],
+            schema=NetBoxTaskHistorySyncState,
+            current_normalizer=lambda record: {
+                "virtual_machine": record.get("virtual_machine"),
+                "vm_type": record.get("vm_type"),
+                "upid": record.get("upid"),
+                "node": record.get("node"),
+                "pid": record.get("pid"),
+                "pstart": record.get("pstart"),
+                "task_id": record.get("task_id"),
+                "task_type": record.get("task_type"),
+                "username": record.get("username"),
+                "start_time": record.get("start_time"),
+                "end_time": record.get("end_time"),
+                "description": record.get("description"),
+                "status": record.get("status"),
+                "task_state": record.get("task_state"),
+                "exitstatus": record.get("exitstatus"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+            patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
+        )
 
-    return reconciled
+        reconciled = reconcile_result.created + reconcile_result.updated
+        logger.debug(
+            "Task history bulk reconcile for VM %s: created=%s, updated=%s, unchanged=%s",
+            virtual_machine_id,
+            reconcile_result.created,
+            reconcile_result.updated,
+            reconcile_result.unchanged,
+        )
+        return reconciled
+
+    except Exception as error:
+        logger.error(
+            "Error during bulk task history reconciliation for VM %s: %s",
+            virtual_machine_id,
+            error,
+        )
+        # Fall back to per-task writes on bulk failure
+        reconciled = 0
+        from proxbox_api.netbox_rest import rest_reconcile_async
+        for payload in task_payloads:
+            try:
+                await rest_reconcile_async(
+                    nb,
+                    "/api/plugins/proxbox/task-history/",
+                    lookup={"upid": payload.get("upid")},
+                    payload=payload,
+                    schema=NetBoxTaskHistorySyncState,
+                    current_normalizer=lambda record: {
+                        "virtual_machine": record.get("virtual_machine"),
+                        "vm_type": record.get("vm_type"),
+                        "upid": record.get("upid"),
+                        "node": record.get("node"),
+                        "pid": record.get("pid"),
+                        "pstart": record.get("pstart"),
+                        "task_id": record.get("task_id"),
+                        "task_type": record.get("task_type"),
+                        "username": record.get("username"),
+                        "start_time": record.get("start_time"),
+                        "end_time": record.get("end_time"),
+                        "description": record.get("description"),
+                        "status": record.get("status"),
+                        "task_state": record.get("task_state"),
+                        "exitstatus": record.get("exitstatus"),
+                        "tags": record.get("tags"),
+                        "custom_fields": record.get("custom_fields"),
+                    },
+                    patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
+                )
+                reconciled += 1
+            except Exception as item_error:
+                logger.warning(
+                    "Error reconciling task history upid=%s for VM %s: %s",
+                    payload.get("upid"),
+                    virtual_machine_id,
+                    item_error,
+                )
+
+        return reconciled
