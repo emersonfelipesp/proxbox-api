@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ipaddress
 import time
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
+from proxbox_api.constants import DEFAULT_LOG_PATH
 from proxbox_api.logger import logger
 from proxbox_api.types import ProxboxSettingsDict
 
@@ -36,11 +38,26 @@ def parse_cidr_list(text: str | None) -> list[ipaddress.IPv4Network | ipaddress.
 def get_default_settings() -> ProxboxSettingsDict:
     """Return default settings when NetBox is unavailable."""
     return {
+        "backend_log_file_path": DEFAULT_LOG_PATH,
         "ssrf_protection_enabled": True,
         "allow_private_ips": True,  # Permissive for on-premises
         "allowed_ip_ranges": [],
         "blocked_ip_ranges": [],
     }
+
+
+def normalize_backend_log_file_path(value: object) -> str:
+    """Return a safe absolute backend log file path."""
+    if not isinstance(value, str):
+        return DEFAULT_LOG_PATH
+    cleaned = value.strip()
+    if not cleaned:
+        return DEFAULT_LOG_PATH
+    if not PurePosixPath(cleaned).is_absolute():
+        return DEFAULT_LOG_PATH
+    if cleaned.endswith("/"):
+        return DEFAULT_LOG_PATH
+    return cleaned
 
 
 def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | None:
@@ -70,6 +87,9 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             return None
 
         return {
+            "backend_log_file_path": normalize_backend_log_file_path(
+                settings.get("backend_log_file_path")
+            ),
             "ssrf_protection_enabled": settings.get("ssrf_protection_enabled", True),
             "allow_private_ips": settings.get("allow_private_ips", True),
             "allowed_ip_ranges": parse_cidr_list(settings.get("additional_allowed_ip_ranges", "")),

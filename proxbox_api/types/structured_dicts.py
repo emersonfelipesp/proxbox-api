@@ -9,6 +9,7 @@ from typing import Any, NotRequired, TypedDict
 class ProxboxSettingsDict(TypedDict):
     """Settings structure for Proxbox configuration from NetBox plugin."""
 
+    backend_log_file_path: str
     ssrf_protection_enabled: bool
     allow_private_ips: bool
     allowed_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
