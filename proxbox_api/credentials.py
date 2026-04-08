@@ -33,17 +33,29 @@ _ENCRYPTION_WARNING_LOGGED: bool = False
 
 
 def _get_encryption_key() -> bytes | None:
-    """Get the encryption key from environment variable.
+    """Get the encryption key from environment variable or ProxboxPluginSettings.
 
     The key is derived using SHA-256 to ensure it's exactly 32 bytes
-    (Fernet requirement). If PROXBOX_ENCRYPTION_KEY is not set, returns None
-    which signals that encryption should be skipped (dev mode).
+    (Fernet requirement). Priority: env var > ProxboxPluginSettings > None.
+    Returns None which signals that encryption should be skipped (dev mode).
     """
     global _ENCRYPTION_KEY
     if _ENCRYPTION_KEY is not None:
         return _ENCRYPTION_KEY
 
+    # Check environment variable first (highest priority)
     raw_key = os.environ.get("PROXBOX_ENCRYPTION_KEY", "").strip()
+
+    # If no env var, try to get from ProxboxPluginSettings
+    if not raw_key:
+        try:
+            from proxbox_api.settings_client import get_settings
+            settings = get_settings()
+            raw_key = settings.get("encryption_key", "").strip()
+        except Exception:
+            # If fetching settings fails, continue with empty key
+            pass
+
     if not raw_key:
         _ENCRYPTION_KEY = None
         return None

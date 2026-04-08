@@ -46,6 +46,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "allow_private_ips": True,  # Permissive for on-premises
         "allowed_ip_ranges": [],
         "blocked_ip_ranges": [],
+        "encryption_key": "",  # Empty string means no key in settings, use env var
         "use_guest_agent_interface_name": True,
         "proxbox_fetch_max_concurrency": 8,
         "ignore_ipv6_link_local_addresses": True,
@@ -127,6 +128,7 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "allow_private_ips": settings.get("allow_private_ips", True),
             "allowed_ip_ranges": parse_cidr_list(settings.get("additional_allowed_ip_ranges", "")),
             "blocked_ip_ranges": parse_cidr_list(settings.get("explicitly_blocked_ip_ranges", "")),
+            "encryption_key": str(settings.get("encryption_key", "")).strip(),
             "use_guest_agent_interface_name": settings.get("use_guest_agent_interface_name", True),
             "proxbox_fetch_max_concurrency": int(settings.get("proxbox_fetch_max_concurrency", 8)),
             "ignore_ipv6_link_local_addresses": settings.get("ignore_ipv6_link_local_addresses", True),

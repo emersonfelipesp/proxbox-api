@@ -14,6 +14,7 @@ class ProxboxSettingsDict(TypedDict):
     allow_private_ips: bool
     allowed_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
     blocked_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
+    encryption_key: str
     use_guest_agent_interface_name: bool
     proxbox_fetch_max_concurrency: int
     ignore_ipv6_link_local_addresses: bool
