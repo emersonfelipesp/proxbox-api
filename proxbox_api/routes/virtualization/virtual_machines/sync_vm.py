@@ -2059,8 +2059,6 @@ async def create_only_vm_interfaces(  # noqa: C901
     Returns:
         List of synced interface records.
     """
-    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
-
     nb = netbox_session
     tag_refs = [
         {
@@ -2073,7 +2071,8 @@ async def create_only_vm_interfaces(  # noqa: C901
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
-    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
+    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> tuple[list[dict], dict]:  # noqa: C901
+        """Collect interface payloads for a single VM. Returns (payloads, interface_info_dict)."""
         cluster_name_str = str(cluster_name)
         resource_node = str(resource.get("node", ""))
         vm_type = resource.get("type", "unknown")
@@ -2090,11 +2089,11 @@ async def create_only_vm_interfaces(  # noqa: C901
                         break
 
         if not vm_record:
-            return []
+            return [], {}
 
         vmid = resource.get("vmid")
         if vmid is None:
-            return []
+            return [], {}
 
         netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
         if not netbox_vm:
@@ -2103,7 +2102,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                 vm_name,
                 vmid,
             )
-            return []
+            return [], {}
 
         proxmox_session = next(
             (
@@ -2150,8 +2149,8 @@ async def create_only_vm_interfaces(  # noqa: C901
         }
 
         vm_networks = _parse_vm_networks(vm_config)
-
-        interfaces_synced: list[dict] = []
+        interface_payloads: list[dict] = []
+        interface_info: dict = {}
 
         for network in vm_networks:
             for iface_name, config_dict in network.items():
@@ -2186,43 +2185,41 @@ async def create_only_vm_interfaces(  # noqa: C901
                     )
 
                 try:
-                    result = await sync_vm_interface_and_ip(
-                        nb=nb,
-                        virtual_machine={
-                            "id": netbox_vm.get("id"),
-                            "name": netbox_vm.get("name") or vm_name,
-                        },
-                        interface_name=resolved_name,
-                        interface_config=config_dict,
-                        guest_iface=guest_iface,
-                        tag_refs=tag_refs,
-                        use_guest_agent_interface_name=use_guest_agent_interface_name,
-                        create_ip=False,
-                        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
-                        now=now,
-                    )
-                    interfaces_synced.append(result)
+                    # Collect interface payload info for later bulk processing
+                    payload = {
+                        "name": resolved_name,
+                        "enabled": True,
+                        "bridge": None,
+                        "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
+                        "untagged_vlan": None,
+                        "mode": None,
+                        "tags": tag_refs,
+                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                        "virtual_machine": netbox_vm.get("id"),
+                    }
 
-                    if use_websocket and websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "vm_interface",
-                                "data": {
-                                    "completed": True,
-                                    "rowid": resolved_name,
-                                    "name": resolved_name,
-                                    "vm": vm_name,
-                                    "netbox_id": result.get("id"),
-                                    "mac_address": result.get("mac_address"),
-                                    "ip_address": result.get("ip_address"),
-                                },
-                            }
-                        )
+                    # Store bridge reference info for later resolution
+                    vlan_tag = config_dict.get("tag")
+                    bridge_name = config_dict.get("bridge")
+
+                    # Store metadata for processing
+                    key = f"{netbox_vm.get('id')}:{resolved_name}"
+                    interface_info[key] = {
+                        "payload": payload,
+                        "vlan_tag": vlan_tag,
+                        "bridge_name": bridge_name,
+                        "vm_id": netbox_vm.get("id"),
+                        "resolved_name": resolved_name,
+                        "config_dict": config_dict,
+                        "guest_iface": guest_iface,
+                        "vm_name": vm_name,
+                    }
+                    interface_payloads.append(payload)
                 except Exception as exc:
                     error_detail = getattr(exc, "detail", str(exc))
                     error_msg = f"{type(exc).__name__}: {error_detail}"
                     logger.warning(
-                        "Failed to sync interface %s for VM %s: %s",
+                        "Failed to collect interface payload %s for VM %s: %s",
                         resolved_name,
                         vm_name,
                         error_msg,
@@ -2241,12 +2238,12 @@ async def create_only_vm_interfaces(  # noqa: C901
                             }
                         )
 
-        return interfaces_synced
+        return interface_payloads, interface_info
 
     max_concurrency = resolve_vm_sync_concurrency()
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+    async def _run_task(cluster_name: str, resource: dict) -> tuple[list[dict], dict]:
         async with semaphore:
             return await _sync_vm_interfaces(cluster_name, resource)
 
@@ -2258,20 +2255,118 @@ async def create_only_vm_interfaces(  # noqa: C901
                     tasks.append(_run_task(cluster_name, resource))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Collect all interface payloads and metadata from all VMs
+    all_interface_payloads: list[dict] = []
+    all_interface_info: dict = {}
+    all_vlan_tags: dict[int, list[dict]] = {}  # tag → [payload_list]
+
     try:
         for cluster in cluster_resources:
             cluster_results = await _create_cluster_tasks(cluster)
             for cluster_result in cluster_results:
                 if isinstance(cluster_result, Exception):
                     continue
-                for result in cluster_result:
-                    if isinstance(result, Exception):
-                        continue
-                    results.append(result)
+                payloads, iface_info = cluster_result
+                if isinstance(payloads, list):
+                    all_interface_payloads.extend(payloads)
+                    all_interface_info.update(iface_info)
+
+                    # Collect VLAN tags for bulk creation
+                    for key, info in iface_info.items():
+                        vlan_tag = info.get("vlan_tag")
+                        if vlan_tag:
+                            try:
+                                vid = int(vlan_tag)
+                                if vid not in all_vlan_tags:
+                                    all_vlan_tags[vid] = []
+                            except (ValueError, TypeError):
+                                pass
     except Exception as exc:
         error_detail = getattr(exc, "detail", str(exc))
         error_msg = f"{type(exc).__name__}: {error_detail}"
-        logger.warning("Error during VM interfaces sync: %s", error_msg)
+        logger.warning("Error during VM interfaces collection: %s", error_msg)
+
+    # Bulk reconcile VLANs first
+    vlan_vid_to_id = {}
+    if all_vlan_tags:
+        try:
+            from proxbox_api.services.sync.network import (
+                build_vlan_payload,
+                bulk_reconcile_vlans,
+            )
+
+            vlan_payloads = [
+                build_vlan_payload(vid, tag_refs, now)
+                for vid in all_vlan_tags.keys()
+            ]
+            vlan_vid_to_id = await bulk_reconcile_vlans(nb, vlan_payloads)
+            logger.info("Bulk VLAN reconciliation completed: %d VLANs processed", len(vlan_payloads))
+        except Exception as e:
+            logger.error("Error during VLAN bulk reconciliation: %s", e)
+
+    # Update interface payloads with resolved VLAN IDs
+    for key, info in all_interface_info.items():
+        vlan_tag = info.get("vlan_tag")
+        if vlan_tag:
+            try:
+                vid = int(vlan_tag)
+                if vid in vlan_vid_to_id:
+                    info["payload"]["untagged_vlan"] = vlan_vid_to_id[vid]
+                    info["payload"]["mode"] = "access"
+            except (ValueError, TypeError):
+                pass
+
+    # Bulk reconcile interfaces
+    if all_interface_payloads:
+        try:
+            from proxbox_api.services.sync.network import bulk_reconcile_vm_interfaces
+
+            created_interfaces, interface_name_vm_to_id = await bulk_reconcile_vm_interfaces(
+                nb, all_interface_payloads
+            )
+            logger.info(
+                "Bulk interface reconciliation completed: %d interfaces processed",
+                len(all_interface_payloads),
+            )
+
+            # Emit WebSocket progress for each created interface
+            if use_websocket and websocket:
+                for interface in created_interfaces:
+                    # Find the original info for this interface
+                    iface_name = interface.get("name")
+                    vm_id = interface.get("virtual_machine")
+                    iface_id = interface.get("id")
+
+                    key = f"{vm_id}:{iface_name}"
+                    if key in all_interface_info:
+                        info = all_interface_info[key]
+                        await websocket.send_json(
+                            {
+                                "object": "vm_interface",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": iface_name,
+                                    "name": iface_name,
+                                    "vm": info.get("vm_name"),
+                                    "netbox_id": iface_id,
+                                    "mac_address": interface.get("mac_address"),
+                                },
+                            }
+                        )
+
+            # Build results list for compatibility
+            results = [
+                {
+                    "id": i.get("id"),
+                    "mac_address": i.get("mac_address"),
+                    "interface": i,
+                }
+                for i in created_interfaces
+            ]
+        except Exception as e:
+            logger.error("Error during interface bulk reconciliation: %s", e)
+    else:
+        results = []
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_interface", "end": True})
@@ -2312,7 +2407,6 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     Returns:
         List of synced IP address records.
     """
-    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
     from proxbox_api.services.sync.vm_network import set_primary_ip
 
     nb = netbox_session
@@ -2327,7 +2421,8 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
-    async def _sync_vm_ips(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
+    async def _sync_vm_ips(cluster_name: str, resource: dict) -> tuple[list[dict], list[dict], dict]:  # noqa: C901
+        """Collect IP payloads for a single VM. Returns (ip_payloads, first_ip_per_vm, ip_info)."""
         cluster_name_str = str(cluster_name)
         resource_node = str(resource.get("node", ""))
         vm_type = resource.get("type", "unknown")
@@ -2335,7 +2430,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
 
         vmid = resource.get("vmid")
         if vmid is None:
-            return []
+            return [], [], {}
 
         netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
         if not netbox_vm:
@@ -2344,7 +2439,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 vm_name,
                 vmid,
             )
-            return []
+            return [], [], {}
 
         proxmox_session = next(
             (
@@ -2393,9 +2488,19 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         }
 
         vm_networks = _parse_vm_networks(vm_config)
+        ip_payloads: list[dict] = []
+        first_ips: list[dict] = []  # Track first IP per VM
+        ip_info: dict = {}
 
-        ips_synced: list[dict] = []
-        first_ip_id: int | None = None
+        # Pre-fetch interfaces for this VM to get their IDs
+        from proxbox_api.netbox_rest import rest_list_async
+
+        vm_interfaces = await rest_list_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            query={"virtual_machine_id": netbox_vm.get("id"), "limit": 500},
+        )
+        interface_name_to_id = {iface.get("name"): iface.get("id") for iface in (vm_interfaces or [])}
 
         for network in vm_networks:
             for iface_name, config_dict in network.items():
@@ -2415,6 +2520,15 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     if guest_name:
                         resolved_name = guest_name
 
+                interface_id = interface_name_to_id.get(resolved_name)
+                if not interface_id:
+                    logger.debug(
+                        "Skipping IP sync for interface %s on VM %s: interface not found in NetBox",
+                        resolved_name,
+                        vm_name,
+                    )
+                    continue
+
                 if use_websocket and websocket:
                     await websocket.send_json(
                         {
@@ -2430,51 +2544,57 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     )
 
                 try:
-                    result = await sync_vm_interface_and_ip(
-                        nb=nb,
-                        virtual_machine={
-                            "id": netbox_vm.get("id"),
-                            "name": netbox_vm.get("name") or vm_name,
-                        },
-                        interface_name=resolved_name,
-                        interface_config=config_dict,
-                        guest_iface=guest_iface,
-                        tag_refs=tag_refs,
-                        use_guest_agent_interface_name=use_guest_agent_interface_name,
-                        create_interface=False,
-                        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
-                        now=now,
-                    )
-                    if result.get("ip_id"):
-                        if first_ip_id is None:
-                            first_ip_id = result.get("ip_id")
-                        ips_synced.append(
-                            {
-                                "ip_id": result.get("ip_id"),
-                                "address": result.get("ip_address"),
-                                "interface_name": resolved_name,
-                                "interface_id": result.get("id"),
-                                "vm": vm_name,
-                            }
-                        )
+                    # Resolve IP address from guest agent or config
+                    interface_ip: str | None = None
+                    if guest_iface:
+                        from proxbox_api.services.sync.network import _best_guest_agent_ip
 
-                    if use_websocket and websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "vm_ip",
-                                "data": {
-                                    "completed": True,
-                                    "rowid": resolved_name,
-                                    "name": resolved_name,
-                                    "vm": vm_name,
-                                    "ip_id": result.get("ip_id"),
-                                    "address": result.get("ip_address"),
-                                },
-                            }
+                        interface_ip = _best_guest_agent_ip(guest_iface, ignore_ipv6_link_local_addresses)
+                    if not interface_ip:
+                        interface_ip = config_dict.get("ip")
+
+                    if interface_ip and interface_ip != "dhcp":
+                        from proxbox_api.services.sync.network import build_vm_interface_ip_payload
+
+                        payload = build_vm_interface_ip_payload(
+                            interface_ip,
+                            interface_id,
+                            tag_refs,
+                            now,
                         )
+                        ip_payloads.append(payload)
+
+                        # Track first IP for primary assignment
+                        if not first_ips:
+                            first_ips.append({
+                                "vm_id": netbox_vm.get("id"),
+                                "netbox_vm": netbox_vm,
+                                "address": interface_ip,
+                            })
+
+                        ip_info[interface_ip] = {
+                            "address": interface_ip,
+                            "interface_name": resolved_name,
+                            "interface_id": interface_id,
+                            "vm_name": vm_name,
+                        }
+                    else:
+                        if use_websocket and websocket:
+                            await websocket.send_json(
+                                {
+                                    "object": "vm_ip",
+                                    "data": {
+                                        "completed": True,
+                                        "rowid": resolved_name,
+                                        "name": resolved_name,
+                                        "vm": vm_name,
+                                        "address": "No IP",
+                                    },
+                                }
+                            )
                 except Exception as exc:
                     logger.warning(
-                        "Failed to sync IP for VM %s interface %s: %s",
+                        "Failed to collect IP payload for VM %s interface %s: %s",
                         vm_name,
                         resolved_name,
                         exc,
@@ -2493,19 +2613,12 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                             }
                         )
 
-        if first_ip_id is not None:
-            await set_primary_ip(
-                nb=nb,
-                virtual_machine=netbox_vm,
-                primary_ip_id=first_ip_id,
-            )
-
-        return ips_synced
+        return ip_payloads, first_ips, ip_info
 
     max_concurrency = resolve_vm_sync_concurrency()
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+    async def _run_task(cluster_name: str, resource: dict) -> tuple[list[dict], list[dict], dict]:
         async with semaphore:
             return await _sync_vm_ips(cluster_name, resource)
 
@@ -2517,20 +2630,95 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     tasks.append(_run_task(cluster_name, resource))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Collect all IP payloads and metadata from all VMs
+    all_ip_payloads: list[dict] = []
+    all_ip_info: dict = {}
+    vms_with_first_ips: list[dict] = []
+
     try:
         for cluster in cluster_resources:
             cluster_results = await _create_cluster_tasks(cluster)
             for cluster_result in cluster_results:
                 if isinstance(cluster_result, Exception):
                     continue
-                for result in cluster_result:
-                    if isinstance(result, Exception):
-                        continue
-                    results.append(result)
+                ip_payloads, first_ips, ip_info = cluster_result
+                if isinstance(ip_payloads, list):
+                    all_ip_payloads.extend(ip_payloads)
+                    all_ip_info.update(ip_info)
+                    vms_with_first_ips.extend(first_ips)
     except Exception as exc:
         error_detail = getattr(exc, "detail", str(exc))
         error_msg = f"{type(exc).__name__}: {error_detail}"
-        logger.warning("Error during VM IP address sync: %s", error_msg)
+        logger.warning("Error during VM IP address collection: %s", error_msg)
+
+    # Bulk reconcile IP addresses
+    if all_ip_payloads:
+        try:
+            from proxbox_api.services.sync.network import bulk_reconcile_vm_interface_ips
+
+            created_ips = await bulk_reconcile_vm_interface_ips(nb, all_ip_payloads)
+            logger.info(
+                "Bulk IP address reconciliation completed: %d IPs processed",
+                len(all_ip_payloads),
+            )
+
+            # Emit WebSocket progress for each created IP
+            if use_websocket and websocket:
+                for ip_record in created_ips:
+                    address = ip_record.get("address")
+                    if address in all_ip_info:
+                        info = all_ip_info[address]
+                        await websocket.send_json(
+                            {
+                                "object": "vm_ip",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": info.get("interface_name"),
+                                    "name": info.get("interface_name"),
+                                    "vm": info.get("vm_name"),
+                                    "ip_id": ip_record.get("id"),
+                                    "address": address,
+                                },
+                            }
+                        )
+
+            # Build results list for compatibility
+            results = [
+                {
+                    "ip_id": ip.get("id"),
+                    "address": ip.get("address"),
+                }
+                for ip in created_ips
+            ]
+        except Exception as e:
+            logger.error("Error during bulk IP reconciliation: %s", e)
+    else:
+        results = []
+
+    # Set primary IPs per VM (low volume, keep as per-VM operations)
+    if vms_with_first_ips:
+        try:
+            for vm_info in vms_with_first_ips:
+                netbox_vm = vm_info.get("netbox_vm")
+                if netbox_vm:
+                    # Fetch the IP record to get its ID for primary assignment
+                    from proxbox_api.netbox_rest import rest_first_async
+
+                    ip_record = await rest_first_async(
+                        nb,
+                        "/api/ipam/ip-addresses/",
+                        query={"address": vm_info.get("address"), "limit": 1},
+                    )
+                    if ip_record:
+                        ip_id = ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+                        if ip_id:
+                            await set_primary_ip(
+                                nb=nb,
+                                virtual_machine=netbox_vm,
+                                primary_ip_id=ip_id,
+                            )
+        except Exception as e:
+            logger.warning("Error setting primary IPs: %s", e)
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_ip", "end": True})
