@@ -182,6 +182,7 @@ async def sync_vm_interfaces(  # noqa: C901
                     "tags": record.get("tags"),
                     "custom_fields": record.get("custom_fields"),
                 },
+                nullable_fields={"bridge"},
             )
             if not isinstance(vm_interface, dict):
                 vm_interface = vm_interface.dict()

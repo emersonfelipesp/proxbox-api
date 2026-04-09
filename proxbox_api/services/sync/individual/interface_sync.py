@@ -326,6 +326,7 @@ async def sync_interface_individual(  # noqa: C901
                 "tags": record.get("tags"),
                 "custom_fields": record.get("custom_fields"),
             },
+            nullable_fields={"bridge"},
         )
 
         netbox_object = (

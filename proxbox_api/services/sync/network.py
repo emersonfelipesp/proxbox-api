@@ -410,6 +410,7 @@ async def _reconcile_vm_interface_record(
             "tags": record.get("tags"),
             "custom_fields": record.get("custom_fields"),
         },
+        nullable_fields={"bridge"},
     )
     if not isinstance(vm_interface, dict):
         vm_interface = getattr(vm_interface, "dict", lambda: {})()
