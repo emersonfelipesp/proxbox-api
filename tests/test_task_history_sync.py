@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from proxbox_api.services.sync.task_history import sync_virtual_machine_task_history
@@ -11,7 +10,7 @@ from proxbox_api.services.sync.task_history import sync_virtual_machine_task_his
 
 def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeypatch):
     bulk_calls: list[dict[str, object]] = []
-    expected_pstart = datetime.fromtimestamp(2222, timezone.utc).isoformat()
+    expected_pstart = 2222
 
     async def _fake_rest_bulk_reconcile(
         _nb,

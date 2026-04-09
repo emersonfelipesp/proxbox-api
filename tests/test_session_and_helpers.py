@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -993,7 +992,7 @@ def test_rest_reconcile_async_accepts_dict_schema_payloads():
 
 
 def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
-    expected_pstart = datetime.fromtimestamp(3001, timezone.utc).isoformat()
+    expected_pstart = 3001
     session = AsyncNetBoxRestFacade(
         {
             ("GET", "/api/plugins/proxbox/task-history/"): (

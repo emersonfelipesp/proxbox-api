@@ -132,7 +132,7 @@ async def sync_task_history_individual(  # noqa: C901
         "upid": str(target_task.get("upid", "")),
         "node": node,
         "pid": target_task.get("pid"),
-        "pstart": _normalize_task_datetime(target_task.get("pstart")),
+        "pstart": target_task.get("pstart"),
         "task_id": task_id,
         "task_type": task_type,
         "username": str(target_task.get("user", "unknown")),
