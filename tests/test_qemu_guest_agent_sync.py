@@ -168,9 +168,8 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
     )
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
+    async def _fake_guest_ifaces_with_ip(*args, **kwargs):
+        return [
             {
                 "name": "ens18",
                 "mac_address": "AA:BB:CC:DD:EE:FF",
@@ -178,7 +177,11 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
                     {"ip_address": "10.0.0.50", "prefix": 24, "ip_address_type": "ipv4"}
                 ],
             }
-        ],
+        ]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_ifaces_with_ip,
     )
 
     result = asyncio.run(
@@ -210,15 +213,12 @@ def test_vm_sync_uses_guest_agent_interface_name_by_default(monkeypatch):
         ip_payloads=ip_payloads,
         interface_payloads=interface_payloads,
     )
+    async def _fake_guest_ifaces_no_ip(*args, **kwargs):
+        return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
-            {
-                "name": "ens18",
-                "mac_address": "AA:BB:CC:DD:EE:FF",
-                "ip_addresses": [],
-            }
-        ],
+        _fake_guest_ifaces_no_ip,
     )
 
     result = asyncio.run(
@@ -246,7 +246,7 @@ def test_vm_sync_falls_back_to_config_when_guest_agent_unavailable(monkeypatch):
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
     helper_calls = {"count": 0}
 
-    def _fake_guest_helper(*args, **kwargs):
+    async def _fake_guest_helper(*args, **kwargs):
         helper_calls["count"] += 1
         return []
 
@@ -285,15 +285,12 @@ def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
         ip_payloads=ip_payloads,
         interface_payloads=interface_payloads,
     )
+    async def _fake_guest_ifaces_no_ip_2(*args, **kwargs):
+        return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
-            {
-                "name": "ens18",
-                "mac_address": "AA:BB:CC:DD:EE:FF",
-                "ip_addresses": [],
-            }
-        ],
+        _fake_guest_ifaces_no_ip_2,
     )
 
     result = asyncio.run(
@@ -360,9 +357,12 @@ def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
     )
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    async def _should_not_be_called(*args, **kwargs):
+        raise AssertionError("should not be called")
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+        _should_not_be_called,
     )
 
     result = asyncio.run(
@@ -429,10 +429,8 @@ def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
         }
     )
     ip_payloads: list[dict] = []
-    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
+    async def _fake_guest_fe80(*args, **kwargs):
+        return [
             {
                 "name": "ens18",
                 "mac_address": "AA:BB:CC:DD:EE:FF",
@@ -440,7 +438,12 @@ def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
                     {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
                 ],
             }
-        ],
+        ]
+
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_fe80,
     )
 
     result = asyncio.run(
@@ -466,10 +469,9 @@ def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
         }
     )
     ip_payloads: list[dict] = []
-    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
+
+    async def _fake_guest_fe80(*args, **kwargs):
+        return [
             {
                 "name": "ens18",
                 "mac_address": "AA:BB:CC:DD:EE:FF",
@@ -477,7 +479,12 @@ def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
                     {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
                 ],
             }
-        ],
+        ]
+
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_fe80,
     )
 
     result = asyncio.run(
