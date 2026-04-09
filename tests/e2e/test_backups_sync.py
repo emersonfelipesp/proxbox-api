@@ -10,9 +10,10 @@ from typing import Any
 
 import pytest
 
-from proxbox_api.e2e.fixtures.proxmox_mock import (
+from proxbox_api.e2e.fixtures.proxmox_openapi_mock import (
     create_cluster_with_backups,
 )
+from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
     nested_tag_payload,
     rest_reconcile_async,
@@ -34,14 +35,15 @@ from proxbox_api.services.sync.device_ensure import _slugify
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.mock_backend
+@pytest.mark.mock_http
 class TestBackupsSync:
     """E2E tests for backup synchronization."""
 
     async def test_sync_vm_backups_with_e2e_tag(
         self,
-        require_proxbox_netbox_plugin,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -52,7 +54,7 @@ class TestBackupsSync:
         2. Backup has 'proxbox e2e testing' tag
         3. Backup is linked to correct VM
         """
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster, backups = create_cluster_with_backups(prefix=unique_prefix)
 
@@ -144,41 +146,46 @@ class TestBackupsSync:
 
         created_backups = []
         for backup in vm_backups:
-            storage = storage_lookup[backup.storage]
-            netbox_backup = await rest_reconcile_async(
-                nb,
-                "/api/plugins/proxbox/backups/",
-                lookup={"volume_id": backup.volid},
-                payload={
-                    "storage": storage.id,
-                    "virtual_machine": virtual_machine.id,
-                    "subtype": backup.subtype,
-                    "creation_time": None,
-                    "size": backup.size,
-                    "verification_state": None,
-                    "verification_upid": None,
-                    "volume_id": backup.volid,
-                    "notes": backup.notes,
-                    "vmid": backup.vmid,
-                    "format": backup.format,
-                    "tags": tag_refs,
-                },
-                schema=NetBoxBackupSyncState,
-                current_normalizer=lambda record: {
-                    "storage": _relation_id(record.get("storage")),
-                    "virtual_machine": record.get("virtual_machine"),
-                    "subtype": record.get("subtype"),
-                    "creation_time": record.get("creation_time"),
-                    "size": record.get("size"),
-                    "verification_state": record.get("verification_state"),
-                    "verification_upid": record.get("verification_upid"),
-                    "volume_id": record.get("volume_id"),
-                    "notes": record.get("notes"),
-                    "vmid": record.get("vmid"),
-                    "format": record.get("format"),
-                    "tags": record.get("tags"),
-                },
-            )
+            _storage = storage_lookup[backup.storage]
+            try:
+                netbox_backup = await rest_reconcile_async(
+                    nb,
+                    "/api/plugins/proxbox/backups/",
+                    lookup={"volume_id": backup.volid},
+                    payload={
+                        "storage": backup.storage,
+                        "virtual_machine": virtual_machine.id,
+                        "subtype": vm.type,
+                        "creation_time": None,
+                        "size": backup.size,
+                        "verification_state": None,
+                        "verification_upid": None,
+                        "volume_id": backup.volid,
+                        "notes": backup.notes,
+                        "vmid": backup.vmid,
+                        "format": backup.format,
+                        "tags": tag_refs,
+                    },
+                    schema=NetBoxBackupSyncState,
+                    current_normalizer=lambda record: {
+                        "storage": record.get("storage"),
+                        "virtual_machine": record.get("virtual_machine"),
+                        "subtype": record.get("subtype"),
+                        "creation_time": record.get("creation_time"),
+                        "size": record.get("size"),
+                        "verification_state": record.get("verification_state"),
+                        "verification_upid": record.get("verification_upid"),
+                        "volume_id": record.get("volume_id"),
+                        "notes": record.get("notes"),
+                        "vmid": record.get("vmid"),
+                        "format": record.get("format"),
+                        "tags": record.get("tags"),
+                    },
+                )
+            except ProxboxException as error:
+                raise AssertionError(
+                    f"backup create failed for {backup.volid}: {error.detail}"
+                ) from error
             created_backups.append(netbox_backup)
 
         assert len(created_backups) == len(vm_backups)
@@ -191,8 +198,7 @@ class TestBackupsSync:
 
     async def test_sync_multiple_vm_backups(
         self,
-        require_proxbox_netbox_plugin,
-        netbox_demo_session,
+        netbox_e2e_session,
         e2e_tag,
         unique_prefix,
     ):
@@ -202,7 +208,7 @@ class TestBackupsSync:
         """
         import asyncio
 
-        nb = netbox_demo_session
+        nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
         cluster, all_backups = create_cluster_with_backups(prefix=unique_prefix)
 
@@ -294,41 +300,46 @@ class TestBackupsSync:
             created_backups = []
 
             for backup in vm_backups:
-                storage = storage_lookup[backup.storage]
-                netbox_backup = await rest_reconcile_async(
-                    nb,
-                    "/api/plugins/proxbox/backups/",
-                    lookup={"volume_id": backup.volid},
-                    payload={
-                        "storage": storage.id,
-                        "virtual_machine": virtual_machine.id,
-                        "subtype": backup.subtype,
-                        "creation_time": None,
-                        "size": backup.size,
-                        "verification_state": None,
-                        "verification_upid": None,
-                        "volume_id": backup.volid,
-                        "notes": backup.notes,
-                        "vmid": backup.vmid,
-                        "format": backup.format,
-                        "tags": tag_refs,
-                    },
-                    schema=NetBoxBackupSyncState,
-                    current_normalizer=lambda record: {
-                        "storage": _relation_id(record.get("storage")),
-                        "virtual_machine": record.get("virtual_machine"),
-                        "subtype": record.get("subtype"),
-                        "creation_time": record.get("creation_time"),
-                        "size": record.get("size"),
-                        "verification_state": record.get("verification_state"),
-                        "verification_upid": record.get("verification_upid"),
-                        "volume_id": record.get("volume_id"),
-                        "notes": record.get("notes"),
-                        "vmid": record.get("vmid"),
-                        "format": record.get("format"),
-                        "tags": record.get("tags"),
-                    },
-                )
+                _storage = storage_lookup[backup.storage]
+                try:
+                    netbox_backup = await rest_reconcile_async(
+                        nb,
+                        "/api/plugins/proxbox/backups/",
+                        lookup={"volume_id": backup.volid},
+                        payload={
+                            "storage": backup.storage,
+                            "virtual_machine": virtual_machine.id,
+                            "subtype": vm.type,
+                            "creation_time": None,
+                            "size": backup.size,
+                            "verification_state": None,
+                            "verification_upid": None,
+                            "volume_id": backup.volid,
+                            "notes": backup.notes,
+                            "vmid": backup.vmid,
+                            "format": backup.format,
+                            "tags": tag_refs,
+                        },
+                        schema=NetBoxBackupSyncState,
+                        current_normalizer=lambda record: {
+                            "storage": record.get("storage"),
+                            "virtual_machine": record.get("virtual_machine"),
+                            "subtype": record.get("subtype"),
+                            "creation_time": record.get("creation_time"),
+                            "size": record.get("size"),
+                            "verification_state": record.get("verification_state"),
+                            "verification_upid": record.get("verification_upid"),
+                            "volume_id": record.get("volume_id"),
+                            "notes": record.get("notes"),
+                            "vmid": record.get("vmid"),
+                            "format": record.get("format"),
+                            "tags": record.get("tags"),
+                        },
+                    )
+                except ProxboxException as error:
+                    raise AssertionError(
+                        f"backup create failed for {backup.volid}: {error.detail}"
+                    ) from error
                 created_backups.append(netbox_backup)
 
             return created_backups

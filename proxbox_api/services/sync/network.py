@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_first_async, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    rest_bulk_reconcile_async,
+    rest_first_async,
+    rest_reconcile_async,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxInterfaceSyncState,
     NetBoxIpAddressSyncState,
@@ -189,6 +193,95 @@ def _resolve_vm_interface_identity(
             if guest_mac and not mac_address:
                 mac_address = _normalized_mac(guest_mac)
     return resolved_name, mac_address
+
+
+def build_vlan_payload(
+    vlan_tag: int,
+    tag_refs: list[dict],
+    now: datetime,
+) -> dict:
+    """Build a VLAN payload dict for bulk operations (no NetBox writes).
+
+    Args:
+        vlan_tag: VLAN ID (vid)
+        tag_refs: List of tag references
+        now: Current datetime for custom fields
+
+    Returns:
+        Payload dict for bulk reconciliation
+    """
+    return {
+        "vid": vlan_tag,
+        "name": f"VLAN {vlan_tag}",
+        "status": "active",
+        "tags": tag_refs,
+        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+    }
+
+
+def build_vm_interface_payload(
+    resolved_name: str,
+    mac_address: str | None,
+    bridge_id: int | None,
+    vlan_id: int | None,
+    tag_refs: list[dict],
+    vm_id: int,
+    now: datetime,
+) -> dict:
+    """Build a VM interface payload dict for bulk operations (no NetBox writes).
+
+    Args:
+        resolved_name: Interface name
+        mac_address: MAC address
+        bridge_id: Bridge interface ID (if applicable)
+        vlan_id: VLAN ID (if applicable)
+        tag_refs: List of tag references
+        vm_id: Virtual machine ID
+        now: Current datetime for custom fields
+
+    Returns:
+        Payload dict for bulk reconciliation
+    """
+    payload: dict = {
+        "name": resolved_name,
+        "enabled": True,
+        "bridge": bridge_id,
+        "mac_address": mac_address,
+        "untagged_vlan": vlan_id,
+        "mode": "access" if vlan_id is not None else None,
+        "tags": tag_refs,
+        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+    }
+    if vm_id is not None:
+        payload["virtual_machine"] = vm_id
+    return payload
+
+
+def build_vm_interface_ip_payload(
+    address: str,
+    interface_id: int,
+    tag_refs: list[dict],
+    now: datetime,
+) -> dict:
+    """Build a VM interface IP payload dict for bulk operations (no NetBox writes).
+
+    Args:
+        address: IP address with CIDR (e.g., "192.168.1.10/24")
+        interface_id: Interface ID
+        tag_refs: List of tag references
+        now: Current datetime for custom fields
+
+    Returns:
+        Payload dict for bulk reconciliation
+    """
+    return {
+        "address": address,
+        "assigned_object_type": "virtualization.vminterface",
+        "assigned_object_id": interface_id,
+        "status": "active",
+        "tags": tag_refs,
+        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+    }
 
 
 async def _resolve_vm_interface_vlan(
@@ -391,6 +484,129 @@ async def _resolve_vm_interface_ip(
             ip_exc,
         )
         return None, interface_ip
+
+
+async def bulk_reconcile_vlans(
+    nb,
+    vlan_payloads: list[dict],
+) -> dict[int, int]:
+    """Perform bulk reconciliation of VLAN payloads. Returns mapping of vid → NetBox ID.
+
+    Args:
+        nb: NetBox session
+        vlan_payloads: List of VLAN payload dicts
+
+    Returns:
+        Dict mapping VLAN vid to NetBox ID
+    """
+    if not vlan_payloads:
+        return {}
+
+    vlan_vid_to_id = {}
+    try:
+        result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/ipam/vlans/",
+            payloads=vlan_payloads,
+            lookup_fields=["vid"],
+            schema=NetBoxVlanSyncState,
+            current_normalizer=lambda record: {
+                "vid": record.get("vid"),
+                "name": record.get("name"),
+                "status": record.get("status"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        # Build mapping of vid → ID from returned records
+        for record in result.records:
+            vid = record.get("vid")
+            if vid:
+                vlan_vid_to_id[vid] = record.get("id")
+    except Exception as e:
+        logger.error("Error during bulk VLAN reconciliation: %s", e)
+    return vlan_vid_to_id
+
+
+async def bulk_reconcile_vm_interfaces(
+    nb,
+    interface_payloads: list[dict],
+) -> tuple[list, dict[tuple, int]]:
+    """Perform bulk reconciliation of VM interface payloads.
+
+    Returns:
+        (created_interfaces_list, name_vm_to_id_mapping)
+    """
+    if not interface_payloads:
+        return [], {}
+
+    interface_name_vm_to_id = {}
+    result = None
+    try:
+        result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            payloads=interface_payloads,
+            lookup_fields=["name", "virtual_machine_id"],
+            schema=NetBoxVirtualMachineInterfaceSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "virtual_machine": record.get("virtual_machine"),
+                "enabled": record.get("enabled"),
+                "bridge": record.get("bridge"),
+                "mac_address": record.get("mac_address"),
+                "type": record.get("type"),
+                "description": record.get("description"),
+                "untagged_vlan": record.get("untagged_vlan"),
+                "mode": record.get("mode"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        # Build mapping (name, vm_id) → interface_id
+        for record in result.records:
+            name = record.get("name")
+            vm_id = record.get("virtual_machine")
+            iface_id = record.get("id")
+            if name and vm_id and iface_id:
+                interface_name_vm_to_id[(name, vm_id)] = iface_id
+    except Exception as e:
+        logger.error("Error during bulk VM interface reconciliation: %s", e)
+    return result.records if result and hasattr(result, "records") else [], interface_name_vm_to_id
+
+
+async def bulk_reconcile_vm_interface_ips(
+    nb,
+    ip_payloads: list[dict],
+) -> list:
+    """Perform bulk reconciliation of VM interface IP payloads.
+
+    Returns:
+        List of created/updated IP records
+    """
+    if not ip_payloads:
+        return []
+
+    result = None
+    try:
+        result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/ipam/ip-addresses/",
+            payloads=ip_payloads,
+            lookup_fields=["address"],
+            schema=NetBoxIpAddressSyncState,
+            current_normalizer=lambda record: {
+                "address": record.get("address"),
+                "assigned_object_type": record.get("assigned_object_type"),
+                "assigned_object_id": record.get("assigned_object_id"),
+                "status": record.get("status"),
+                "tags": record.get("tags"),
+            },
+        )
+        return result.records if result and hasattr(result, "records") else []
+    except Exception as e:
+        logger.error("Error during bulk VM interface IP reconciliation: %s", e)
+        return []
 
 
 async def sync_vm_interface_and_ip(

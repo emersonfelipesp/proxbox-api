@@ -48,6 +48,45 @@ Resolution:
 - Confirm frontend origin is included in app CORS origin list.
 - Confirm requests target expected API host and port.
 
+## NetBox Cache Issues
+
+### Stale data after sync
+
+Symptom:
+
+- NetBox UI shows old values after sync completes.
+
+Resolution:
+
+```bash
+curl http://localhost:8000/clear-cache
+```
+
+### High cache miss rate
+
+Symptom:
+
+- `/cache` endpoint shows >80% miss rate.
+
+Resolution:
+
+1. Increase `PROXBOX_NETBOX_GET_CACHE_TTL`:
+   ```bash
+   export PROXBOX_NETBOX_GET_CACHE_TTL=300  # 5 minutes
+   ```
+2. Check query patterns: identical queries are required for cache hits (same path, same query params).
+3. Monitor with: `curl http://localhost:8000/cache/metrics`
+
+### Cache performance debugging
+
+Enable debug logging:
+
+```bash
+export PROXBOX_DEBUG_CACHE=1
+```
+
+Then check application logs for cache HIT/MISS/INVALIDATE messages.
+
 ## Proxmox connection failures
 
 Symptom:

@@ -10,15 +10,18 @@ proxbox_api = ["static/*"]
 
 [project]
 name = "proxbox_api"
-version = "0.0.6.post5"
+version = "0.0.7"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi[standard]>=0.135.2",
-    "proxmoxer>=2.3.0",
-    "netbox-sdk>=0.0.6",
-    "sqlmodel>=0.0.37",
+    "fastapi[standard]>=0.135.2,<1.0.0",
+    "proxmox-openapi>=0.0.1,<1.0.0",
+    "netbox-sdk==0.0.7.post3",
+    "sqlmodel>=0.0.37,<1.0.0",
+    "aiosqlite>=0.20.0,<1.0.0",
+    "cryptography>=43.0.0,<50.0.0",
+    "bcrypt>=4.0.0,<5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +38,6 @@ e2e = [
     "pytest>=9.0.2",
     "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.6.1",
-    "playwright>=1.58.0",
 ]
 playwright = [
     "playwright>=1.58.0",
@@ -45,10 +47,14 @@ docs = [
     "mkdocs-material>=9.7.6",
     "mkdocs-static-i18n>=1.3.1",
 ]
+granian = [
+    "granian>=2.7.0",
+]
 
 [dependency-groups]
 dev = [
     "ruff>=0.15.8",
+    "ty>=0.0.29",
 ]
 
 [project.scripts]
@@ -59,8 +65,11 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+addopts = "--dist loadgroup"
 markers = [
     "image_http: smoke tests against PROXBOX_IMAGE_E2E_BASE_URL (published Docker images)",
+    "mock_backend: tests using in-process MockBackend (fast, no HTTP)",
+    "mock_http: tests using HTTP mock container (realistic, validates HTTP layer)",
 ]
 
 [tool.coverage.run]
@@ -94,8 +103,10 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 
 [tool.ruff.lint.per-file-ignores]
 "proxbox_api/**/*.py" = ["ANN201", "D103"]
-# Pytest tests: public test_* names trigger ANN201/D103; keep checks focused on package code.
-"tests/**/*.py" = ["ANN201", "D103"]
+# Pytest tests: public test_* names trigger ANN201/D103; complex test helpers trigger C901.
+"tests/**/*.py" = ["ANN201", "D103", "C901"]
+# Root-level ad-hoc test/debug scripts (not part of the package or test suite).
+"test_*.py" = ["ANN201", "D103", "C901"]
 "scripts/**/*.py" = ["D103"]
 "proxbox_api/app/**/*.py" = []
 "proxbox_api/netbox_async_bridge.py" = []
@@ -108,24 +119,10 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 # C901: inherently complex retry/ reconcile functions
 "proxbox_api/netbox_rest.py" = ["C901"]
 "proxbox_api/routes/virtualization/virtual_machines/sync_vm.py" = ["C901"]
+"proxbox_api/services/sync/vm_coordinator.py" = ["C901"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
 [tool.ruff.format]
 quote-style = "double"
-
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
-disallow_untyped_calls = false
-disallow_incomplete_defs = false
-check_untyped_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-strict_optional = true
-strict_equality = true

@@ -1,8 +1,8 @@
 # Installing proxbox-api (Plugin backend made using FastAPI)
 
-## Tooling: uv + Ruff
+## Tooling: uv + Ruff + ty
 
-This repo uses [uv](https://docs.astral.sh/uv/) to install Python and dependencies, and [Ruff](https://docs.astral.sh/ruff/) for linting and formatting.
+This repo uses [uv](https://docs.astral.sh/uv/) to install Python and dependencies, [Ruff](https://docs.astral.sh/ruff/) for linting and formatting, and [ty](https://github.com/astral-sh/ty) for type checking.
 
 ```bash
 # Runtime only
@@ -18,6 +18,7 @@ uv sync --extra docs --group dev
 ```bash
 uv run ruff check .
 uv run ruff format .
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py
 uv run pytest tests
 uv run mkdocs serve   # after syncing with --extra docs
 ```
@@ -40,55 +41,86 @@ uv run mkdocs serve
 
 ## Using docker (recommended)
 
-The image is built from this repository with **uv** and **`uv.lock`** (multi-stage Dockerfile): dependencies install in a builder stage, then only `.venv` and `proxbox_api/` are copied into the runtime image.
+All images are **Alpine-based** (smaller footprint), built from this repository with **uv** and **`uv.lock`** in a multi-stage Dockerfile. Three variants are published to Docker Hub:
 
-**Reverse proxy:** both the default and mkcert images run **[nginx](https://nginx.org/)** in front of the app. **nginx** listens on **`PORT`** (default **8000**); **uvicorn** listens only on **`127.0.0.1:8001`** inside the container. **[supervisord](http://supervisord.org/)** keeps both processes running. Map your host port to **`PORT`** (for example `-p 8800:8000`). The bundled nginx config turns **`proxy_buffering`** off (and disables **gzip** for that location) so **chunked and streaming responses** (including SSE) are forwarded without being fully buffered first.
+| Variant | Tags | Description |
+|---------|------|-------------|
+| **Raw** (default) | `latest`, `<version>` | Pure uvicorn, HTTP only. Smallest image. |
+| **Nginx** | `latest-nginx`, `<version>-nginx` | nginx terminates HTTPS via mkcert; proxies to uvicorn. |
+| **Granian** | `latest-granian`, `<version>-granian` | [Granian](https://github.com/emmett-framework/granian) (Rust ASGI server) with native TLS via mkcert. No nginx. |
 
-### Build from source (this repo)
+> **Upgrade note:** before v0.0.7, `latest` was the nginx+HTTP image. It is now the raw uvicorn image. Pull `latest-nginx` for the previous behavior.
+
+### Raw image (default)
+
+Plain uvicorn on HTTP — the simplest option for local dev or when you put your own proxy in front.
 
 ```bash
-docker build -t proxbox-api:local .
-docker run -d -p 8000:8000 --name proxbox-api proxbox-api:local
-```
-
-### Pull the docker image
-
-```
 docker pull emersonfelipesp/proxbox-api:latest
-```
-
-### Run the container
-```
 docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest
 ```
 
-### HTTPS image (mkcert)
-
-There is a second image variant where **nginx terminates HTTPS** using certificates from [mkcert](https://github.com/FiloSottile/mkcert) and still proxies to **uvicorn** on `127.0.0.1:8001`. It is published next to the default image:
-
-- `emersonfelipesp/proxbox-api:<version>-mkcert` (for example `0.0.4-mkcert`)
-- `emersonfelipesp/proxbox-api:latest-mkcert`
-
-**Defaults:** the certificate always includes **`localhost`** and **`127.0.0.1`**. You can add more names or IPs with **`MKCERT_EXTRA_NAMES`** (commas and/or spaces), for example `proxbox.lan,10.0.0.5`.
-
-**Optional:** set **`CAROOT`** to a mounted directory so the same local CA is reused across container restarts (then install that root CA on your workstation if you want the browser to trust the cert).
+Build from source:
 
 ```bash
-docker pull emersonfelipesp/proxbox-api:latest-mkcert
+docker build -t proxbox-api:raw .
+docker run -d -p 8000:8000 proxbox-api:raw
+```
 
+### Nginx image (nginx + mkcert HTTPS + uvicorn)
+
+**nginx** terminates HTTPS on `PORT` (default **8000**) using certificates from [mkcert](https://github.com/FiloSottile/mkcert) and proxies to **uvicorn** on `127.0.0.1:8001`. **supervisord** manages both processes. The nginx config disables proxy buffering so chunked / SSE responses flow through unmodified.
+
+```bash
+docker pull emersonfelipesp/proxbox-api:latest-nginx
+docker run -d -p 8443:8000 --name proxbox-api-nginx \
+  emersonfelipesp/proxbox-api:latest-nginx
+```
+
+Build from source:
+
+```bash
+docker build --target nginx -t proxbox-api:nginx .
+docker run -d -p 8443:8000 proxbox-api:nginx
+```
+
+### Granian image (granian + mkcert HTTPS)
+
+[Granian](https://github.com/emmett-framework/granian) is a Rust-based ASGI server with native HTTP/2, WebSocket, and TLS support. This variant eliminates nginx and supervisord — a single granian process handles everything.
+
+```bash
+docker pull emersonfelipesp/proxbox-api:latest-granian
+docker run -d -p 8443:8000 --name proxbox-api-granian \
+  emersonfelipesp/proxbox-api:latest-granian
+```
+
+Build from source:
+
+```bash
+docker build --target granian -t proxbox-api:granian .
+docker run -d -p 8443:8000 proxbox-api:granian
+```
+
+### mkcert environment variables (nginx and granian images)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | Port the server listens on |
+| `MKCERT_CERT_DIR` | `/certs` | Directory where certs are stored |
+| `MKCERT_EXTRA_NAMES` | — | Extra SANs (commas or spaces), e.g. `proxbox.lan,10.0.0.5` |
+| `CAROOT` | — | Mount a volume here to persist the local CA across container restarts |
+
+```bash
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
-  emersonfelipesp/proxbox-api:latest-mkcert
+  emersonfelipesp/proxbox-api:latest-nginx
 ```
 
-Build the mkcert target from this repository:
+To run a shell instead of starting the server, pass a command (the entrypoint delegates to it):
 
 ```bash
-docker build --target mkcert -t proxbox-api:local-mkcert .
-docker run -d -p 8443:8000 proxbox-api:local-mkcert
+docker run --rm emersonfelipesp/proxbox-api:latest-nginx sh
 ```
-
-To run a shell or tests instead of starting nginx+uvicorn, pass a command (the entrypoint delegates to it), for example: `docker run --rm … emersonfelipesp/proxbox-api:latest-mkcert sh -c "mkcert -help"`.
 
 ## Using git repository
 
@@ -101,7 +133,7 @@ git clone https://github.com/netdevopsbr/netbox-proxbox.git
 ### Change to 'proxbox_api' project root folder
 
 ```
-cd proxbox_api 
+cd proxbox_api
 ```
 
 ### Install dependencies
@@ -124,6 +156,56 @@ uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
 Just pass your desired IP like `--host <YOUR-IP>` and it will also work.
 
 - `--port 8000` is the default port, but you can change it if needed. Just to remember to update it on NetBox also, at FastAPI Endpoint model.
+
+### Cache Configuration (optional)
+
+Control NetBox API request caching to optimize sync performance:
+
+```bash
+# 5-minute TTL (default is 60 seconds)
+export PROXBOX_NETBOX_GET_CACHE_TTL=300
+
+# Disable caching entirely
+export PROXBOX_NETBOX_GET_CACHE_TTL=0
+
+# Increase max entries (default 4096)
+export PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES=8192
+
+# Set max cache size in bytes (default 52428800 = 50MB)
+export PROXBOX_NETBOX_GET_CACHE_MAX_BYTES=104857600  # 100MB
+
+# Enable debug logging
+export PROXBOX_DEBUG_CACHE=1
+
+uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+Cache metrics are available at `GET /cache` and `GET /cache/metrics/prometheus`.
+
+### Backup Sync Throttling (optional)
+
+Control backup synchronization batch size and delay to prevent overwhelming NetBox's PostgreSQL connection pool:
+
+```bash
+# Batch size for backup sync (default 5, was 10 before fix)
+export PROXBOX_BACKUP_BATCH_SIZE=5
+
+# Delay between batches in milliseconds (default 200ms)
+export PROXBOX_BACKUP_BATCH_DELAY_MS=200
+
+uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+**Why adjust these?**
+- **Smaller batch size (3-5)**: Use when NetBox has limited PostgreSQL connections or many concurrent users
+- **Larger batch size (10-20)**: Safe if NetBox has a large PostgreSQL pool (50+ connections) and dedicated hardware
+- **Longer delay (500-1000ms)**: Helps when "database unavailable" errors appear during full sync
+- **Shorter delay (0-100ms)**: Faster sync when NetBox is lightly loaded
+
+**Symptoms of incorrect tuning:**
+- HTTP 500 "database unavailable" during backup/VM sync → decrease batch size, increase delay
+- HTTP 502 "Response ended prematurely" → decrease batch size, increase delay
+- Slow sync performance on powerful hardware → increase batch size, decrease delay
 
 ### Alternative: pip editable install
 

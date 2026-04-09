@@ -18,6 +18,19 @@ from proxbox_api.types.protocols import (
     SyncResult,
     TagLike,
 )
+from proxbox_api.types.structured_dicts import (
+    CacheEntryDict,
+    DevicePayloadDict,
+    InterfacePayloadDict,
+    IPAddressPayloadDict,
+    ProxboxSettingsDict,
+    ProxmoxDeviceDict,
+    ProxmoxVMDict,
+    StoragePayloadDict,
+    SyncPhaseResultDict,
+    SyncResultDict,
+    VMPayloadDict,
+)
 
 __all__ = [
     # Protocols
@@ -36,4 +49,16 @@ __all__ = [
     "VLANId",
     "SyncStatus",
     "VMStatus",
+    # TypedDicts
+    "ProxboxSettingsDict",
+    "SyncResultDict",
+    "DevicePayloadDict",
+    "VMPayloadDict",
+    "InterfacePayloadDict",
+    "IPAddressPayloadDict",
+    "CacheEntryDict",
+    "StoragePayloadDict",
+    "ProxmoxDeviceDict",
+    "ProxmoxVMDict",
+    "SyncPhaseResultDict",
 ]

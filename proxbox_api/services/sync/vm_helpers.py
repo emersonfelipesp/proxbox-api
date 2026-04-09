@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
+from typing import Any
 
 from proxbox_api.logger import logger
 
 
-def to_mapping(value: object) -> dict[str, object]:
+def to_mapping(value: Any) -> dict[str, Any]:
     """Coerce any value to a dictionary mapping."""
     if isinstance(value, dict):
         return value
@@ -30,7 +31,7 @@ def to_mapping(value: object) -> dict[str, object]:
     return {}
 
 
-def relation_name(value: object) -> str | None:
+def relation_name(value: Any) -> str | None:
     """Extract relation name from a value."""
     if isinstance(value, dict):
         for key in ("name", "display", "label", "value"):
@@ -42,7 +43,7 @@ def relation_name(value: object) -> str | None:
     return None
 
 
-def relation_id(value: object) -> int | None:
+def relation_id(value: Any) -> int | None:
     """Extract relation ID from a value."""
     if isinstance(value, int):
         return value
@@ -63,7 +64,7 @@ def normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def parse_comma_separated_ints(value: object) -> list[int]:
+def parse_comma_separated_ints(value: Any) -> list[int]:
     """Parse a comma-separated list of ints from any value.
 
     Non-string values are treated as absent instead of raising on `.split()`.
@@ -77,7 +78,7 @@ def parse_comma_separated_ints(value: object) -> list[int]:
     return result
 
 
-def parse_key_value_string(value: object) -> dict[str, str]:
+def parse_key_value_string(value: Any) -> dict[str, str]:
     """Parse comma-separated `key=value` text into a mapping."""
     if not isinstance(value, str):
         return {}
@@ -94,7 +95,7 @@ def parse_key_value_string(value: object) -> dict[str, str]:
 
 
 def guest_agent_ip_with_prefix(
-    addr: dict[str, object], ignore_ipv6_link_local: bool = True
+    addr: dict[str, Any], ignore_ipv6_link_local: bool = True
 ) -> str | None:
     """Extract and format guest agent IP with prefix."""
     ip_text = str(addr.get("ip_address") or "").strip()
@@ -137,7 +138,28 @@ def best_guest_agent_ip(
     return None
 
 
-def filter_cluster_resources_for_vm(  # noqa: C901
+def _matches_vm_criteria(
+    resource: dict[str, object],
+    vm_name: str,
+    proxmox_vm_id: int | None,
+    cluster_id: int | None,
+) -> bool:
+    """Check if a resource matches VM filtering criteria."""
+    if resource.get("type") not in ("qemu", "lxc"):
+        return False
+    if str(resource.get("name", "")).strip() != vm_name:
+        if proxmox_vm_id is None:
+            return False
+        if str(resource.get("vmid", "")).strip() != str(proxmox_vm_id):
+            return False
+    if cluster_id is not None:
+        resource_cluster_id = relation_id(resource.get("cluster"))
+        if resource_cluster_id is not None and resource_cluster_id != cluster_id:
+            return False
+    return True
+
+
+def filter_cluster_resources_for_vm(
     cluster_resources: list[dict[str, object]],
     *,
     vm_name: str,
@@ -157,23 +179,12 @@ def filter_cluster_resources_for_vm(  # noqa: C901
             cluster_key_str = str(cluster_key)
             if cluster_hint and cluster_key_str.strip().lower() != cluster_hint:
                 continue
-            selected = []
-            for resource in resources:
-                if not isinstance(resource, dict):
-                    continue
-                if resource.get("type") not in ("qemu", "lxc"):
-                    continue
-                same_name = str(resource.get("name", "")).strip() == vm_name
-                same_vmid = proxmox_vm_id is not None and str(
-                    resource.get("vmid", "")
-                ).strip() == str(proxmox_vm_id)
-                if not (same_name or same_vmid):
-                    continue
-                if cluster_id is not None:
-                    resource_cluster_id = relation_id(resource.get("cluster"))
-                    if resource_cluster_id is not None and resource_cluster_id != cluster_id:
-                        continue
-                selected.append(resource)
+            selected = [
+                r
+                for r in resources
+                if isinstance(r, dict)
+                and _matches_vm_criteria(r, vm_name, proxmox_vm_id, cluster_id)
+            ]
             if selected:
                 filtered.append({cluster_key_str: selected})
     return filtered

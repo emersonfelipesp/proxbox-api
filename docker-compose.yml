@@ -1,0 +1,50 @@
+name: proxbox-api-dev
+
+services:
+  proxmox-mock-published:
+    image: emersonfelipesp/proxmox-openapi:latest
+    container_name: proxmox-mock-published
+    ports:
+      - "8006:8000"
+    environment:
+      - PROXMOX_API_MODE=mock
+      - PROXMOX_MOCK_SCHEMA_VERSION=latest
+      - HOST=0.0.0.0
+      - PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - proxmox-mock-published-net
+    restart: "no"
+
+  proxmox-mock-local:
+    build:
+      context: ./proxmox-openapi
+      dockerfile: Dockerfile
+    container_name: proxmox-mock-local
+    ports:
+      - "8007:8000"
+    environment:
+      - PROXMOX_API_MODE=mock
+      - PROXMOX_MOCK_SCHEMA_VERSION=latest
+      - HOST=0.0.0.0
+      - PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - proxmox-mock-local-net
+    restart: "no"
+
+networks:
+  proxmox-mock-published-net:
+    driver: bridge
+  proxmox-mock-local-net:
+    driver: bridge

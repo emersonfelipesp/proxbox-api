@@ -34,7 +34,8 @@ def _mb_from_bytes(value: object) -> int:
         return 0
     if as_int <= 0:
         return 0
-    return as_int // 1_000_000
+    # NetBox VM disk must match virtual disk aggregate, which is parsed in MiB.
+    return as_int // (1024 * 1024)
 
 
 def _relation_id(value: object) -> object:
@@ -379,6 +380,7 @@ class NetBoxBackupSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     proxmox_storage: int | None = None
+    storage: str | None = None
     virtual_machine: int
     subtype: str | None = None
     creation_time: str | None = None

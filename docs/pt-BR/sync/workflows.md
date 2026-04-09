@@ -39,6 +39,50 @@ Comportamento principal:
 - Escreve journal entries para auditoria.
 - No modo full-update, a criacao de VM nao faz writes de rede, porque as etapas dedicadas de interface e IP cuidam disso.
 
+### Modelo Assincrono com Ordem de Dependencias
+
+O sync de VM e assincrono de ponta a ponta, mas nem todas as etapas podem rodar em paralelo. O fluxo aplica uma cadeia estrita de dependencias antes de abrir fan-out por VM.
+
+Preflight sequencial de dependencias:
+
+1. Garante objetos pai globais no NetBox:
+	- Manufacturer
+	- Device type (depende de manufacturer)
+	- Role de node Proxmox
+2. Para cada cluster, garante objetos pai do escopo do cluster:
+	- Cluster type
+	- Cluster
+	- Site
+3. Para cada node do cluster, garante o device:
+	- Device (depende de cluster + device type + role + site)
+4. Garante objetos de role de VM por tipo (`qemu` e `lxc`).
+
+Depois desse preflight, as operacoes por VM rodam concorrentemente com limite por semaforo.
+
+Ordem obrigatoria por VM:
+
+1. Buscar dados da VM no Proxmox (resource/config).
+2. Reconciliar VM no NetBox (create/patch).
+3. Reconciliar interfaces e IPs da VM (quando habilitado).
+4. Reconciliar discos da VM.
+5. Reconciliar task history da VM.
+
+Assim, o async e usado para throughput quando os objetos sao independentes, mas dependencias pai-filho sempre sao aguardadas em sequencia.
+
+### Regras de Paralelismo
+
+Permitido em paralelo:
+
+- VMs diferentes no mesmo cluster ou em clusters diferentes, depois do preflight.
+- Operacoes de interface de uma VM quando o objeto VM ja existe.
+- Operacoes de disco de uma VM quando o objeto VM ja existe.
+
+Nao permitido em paralelo:
+
+- Criar objetos filho antes dos objetos pai necessarios existirem.
+- Reconciliar estado da VM no NetBox antes de buscar os dados da VM no Proxmox.
+- Criar device antes de manufacturer/device type/site/cluster estarem prontos.
+
 ## Fluxo de Backup
 
 Endpoints:

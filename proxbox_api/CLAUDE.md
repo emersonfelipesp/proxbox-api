@@ -6,23 +6,23 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 
 ## Package Map
 
-- `app/`: application factory, bootstrap, CORS, exception handlers, cache routes, root metadata, full-update orchestration, and WebSocket handlers.
-- `routes/`: FastAPI route packages for admin, NetBox, Proxmox, DCIM, virtualization, Proxbox plugin access, and sync helpers.
-- `services/`: synchronization workflows and reusable helper logic, including the typed Proxmox helper layer.
-- `session/`: NetBox and Proxmox session factories, providers, and dependency aliases.
-- `schemas/`: Pydantic request and response models for external and internal contracts.
-- `enum/`: Proxmox and NetBox choice values used by schemas and routes.
-- `proxmox_codegen/`: crawler and generator pipeline that produces Proxmox contract artifacts.
-- `proxmox_to_netbox/`: schema-driven transformation from Proxmox payloads to NetBox payloads.
-- `generated/`: checked-in generated OpenAPI, model artifacts, and runtime route cache data.
-- `e2e/`: browser-backed test helpers and fixtures.
-- `utils/`: streaming, retry, logging, error handling, and WebSocket helper utilities.
-- `custom_objects/`: reserved area for custom NetBox object wrappers.
-- `diode/`: experimental Diode sandbox integration.
-- `templates/`: Jinja2 templates used by the admin route.
-- `types/`: shared aliases and protocol definitions.
-- `static/`: static assets bundled with the package.
-- `test_*.py`: package-level smoke tests that run with the repository test suite.
+- `app/` — application factory, bootstrap, CORS, exception handlers, cache routes, root metadata, full-update orchestration, and WebSocket handlers. See `app/CLAUDE.md`.
+- `routes/` — FastAPI route packages for admin, NetBox, Proxmox, DCIM, virtualization, Proxbox plugin access, and sync helpers. See `routes/CLAUDE.md`.
+- `services/` — synchronization workflows and reusable helper logic, including the typed Proxmox helper layer. See `services/CLAUDE.md`.
+- `session/` — NetBox and Proxmox session factories, providers, and dependency aliases. See `session/CLAUDE.md`.
+- `schemas/` — Pydantic request and response models for external and internal contracts. See `schemas/CLAUDE.md`.
+- `enum/` — Proxmox and NetBox choice values used by schemas and routes. See `enum/CLAUDE.md`.
+- `proxmox_codegen/` — crawler and generator pipeline that produces Proxmox contract artifacts. See `proxmox_codegen/CLAUDE.md`.
+- `proxmox_to_netbox/` — schema-driven transformation from Proxmox payloads to NetBox payloads. See `proxmox_to_netbox/CLAUDE.md`.
+- `generated/` — checked-in generated OpenAPI, model artifacts, and runtime route cache data. See `generated/CLAUDE.md`.
+- `types/` — shared type aliases and protocol definitions. See `types/CLAUDE.md`.
+- `utils/` — streaming, retry, logging, error handling, and WebSocket helper utilities. See `utils/CLAUDE.md`.
+- `e2e/` — browser-backed test helpers and fixtures. See `e2e/CLAUDE.md`.
+- `custom_objects/` — reserved area for custom NetBox object wrappers. See `custom_objects/CLAUDE.md`.
+- `diode/` — experimental Diode sandbox integration. See `diode/CLAUDE.md`.
+- `templates/` — Jinja2 templates used by the admin route.
+- `static/` — static assets bundled with the package.
+- `test_*.py` — package-level smoke tests that run with the repository test suite.
 
 ## Runtime Boundaries
 

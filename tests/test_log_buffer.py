@@ -1,3 +1,5 @@
+"""Tests for in-memory log buffering and filtering utilities."""
+
 from __future__ import annotations
 
 import logging
@@ -14,6 +16,7 @@ def _make_record(
     level: int,
     message: str,
     *,
+    args: object = (),
     operation_id: str | None = None,
     operation: str | None = None,
     phase: str | None = None,
@@ -27,7 +30,7 @@ def _make_record(
         pathname="/tmp/sync.py",
         lineno=12,
         msg=message,
-        args=(),
+        args=args,
         exc_info=exc_info,
     )
     if operation_id is not None:
@@ -75,6 +78,40 @@ def test_emit_captures_structured_fields_from_log_record():
     assert entry.resource_type == "device"
     assert entry.resource_id == 42
     assert entry.expandable and "ValueError: boom" in entry.expandable["traceback"]
+
+
+def test_emit_renders_percent_templates_with_tuple_args():
+    handler = LogBufferHandler()
+
+    handler.emit(
+        _make_record(
+            logging.INFO,
+            "Stage completed: %s (HTTP %s)",
+            args=("devices", 200),
+        )
+    )
+
+    assert handler.count == 1
+    entry = handler.buffer[-1]
+    assert entry.message == "Stage completed: devices (HTTP 200)"
+    assert "%s" not in entry.message
+
+
+def test_emit_renders_percent_templates_with_list_args():
+    handler = LogBufferHandler()
+
+    handler.emit(
+        _make_record(
+            logging.INFO,
+            "Starting stage: %s (%s)",
+            args=["devices", "dcim/devices/create/stream"],
+        )
+    )
+
+    assert handler.count == 1
+    entry = handler.buffer[-1]
+    assert entry.message == "Starting stage: devices (dcim/devices/create/stream)"
+    assert "%s" not in entry.message
 
 
 def test_get_logs_filters_by_exact_level_and_operation_id():

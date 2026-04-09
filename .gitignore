@@ -146,3 +146,10 @@ dmypy.json
 
 # other stuff
 .vscode
+
+# proxmox-openapi is a local dev copy; installed from PyPI, not tracked as a submodule
+/proxmox-openapi/
+
+# Docker compose
+docker-compose.override.yml
+.env.test

@@ -1,3 +1,5 @@
+"""Contract tests for generated Proxmox passthrough routes."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,9 +11,11 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import ProxmoxEndpoint, get_session
+from proxbox_api.database import ApiKey, ProxmoxEndpoint, get_async_session, get_session
 from proxbox_api.main import app
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
@@ -28,6 +32,14 @@ from proxbox_api.routes.proxmox.runtime_generated import (
     register_generated_proxmox_routes,
 )
 from proxbox_api.routes.proxmox.viewer_codegen import refresh_generated_proxmox_routes
+
+_TEST_API_KEY = "test-api-key-for-unit-tests-0000000000000000"
+
+# All tests in this module mutate the shared ``app`` singleton (registering /
+# clearing generated routes, overriding dependency providers, patching the auth
+# middleware).  Running them concurrently across pytest-xdist workers causes
+# intermittent failures.  Pin them to a single worker.
+pytestmark = pytest.mark.xdist_group("generated_proxmox_routes")
 
 TEST_GENERATED_OPENAPI = {
     "openapi": "3.1.0",
@@ -427,21 +439,21 @@ class SchemaDrivenFakeResource:
         self.session = session
         self.path = path
 
-    def _invoke(self, http_method: str, **kwargs: Any) -> Any:
+    async def _invoke(self, http_method: str, **kwargs: Any) -> Any:
         self.session.calls.append((http_method, self.path, kwargs))
         return self.session.responses[(http_method, self.path)]
 
-    def get(self, **kwargs: Any) -> Any:
-        return self._invoke("GET", **kwargs)
+    async def get(self, **kwargs: Any) -> Any:
+        return await self._invoke("GET", **kwargs)
 
-    def post(self, **kwargs: Any) -> Any:
-        return self._invoke("POST", **kwargs)
+    async def post(self, **kwargs: Any) -> Any:
+        return await self._invoke("POST", **kwargs)
 
-    def put(self, **kwargs: Any) -> Any:
-        return self._invoke("PUT", **kwargs)
+    async def put(self, **kwargs: Any) -> Any:
+        return await self._invoke("PUT", **kwargs)
 
-    def delete(self, **kwargs: Any) -> Any:
-        return self._invoke("DELETE", **kwargs)
+    async def delete(self, **kwargs: Any) -> Any:
+        return await self._invoke("DELETE", **kwargs)
 
 
 class SchemaDrivenFakeSession:
@@ -456,6 +468,10 @@ class SchemaDrivenFakeSession:
 class SchemaDrivenFakeTarget:
     def __init__(self, responses: dict[tuple[str, str], Any]):
         self.session = SchemaDrivenFakeSession(responses)
+        self.closed = 0
+
+    async def aclose(self) -> None:
+        self.closed += 1
 
 
 def _single_operation_document(
@@ -560,7 +576,7 @@ class ProxyFakeResource:
         self.api = api
         self.path = path
 
-    def get(self, **kwargs):
+    async def get(self, **kwargs):
         if self.path == "cluster/status":
             return [
                 {"type": "cluster", "name": "lab-cluster"},
@@ -571,7 +587,7 @@ class ProxyFakeResource:
         self.api.calls.append(("GET", self.path, kwargs))
         return {"path": self.path, "method": "GET", "params": kwargs}
 
-    def post(self, **kwargs):
+    async def post(self, **kwargs):
         self.api.calls.append(("POST", self.path, kwargs))
         return {"path": self.path, "method": "POST", "payload": kwargs}
 
@@ -596,6 +612,18 @@ def _override_db_session(db_engine):
             yield session
 
     return override_get_session
+
+
+def _override_async_db_session(db_engine):
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_async_session():
+        async with session_factory() as session:
+            yield session
+
+    return async_engine, override_get_async_session
 
 
 def test_generated_routes_appear_in_openapi():
@@ -652,12 +680,18 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
         )
         session.commit()
 
+    with Session(db_engine) as session:
+        ApiKey.store_key(session, _TEST_API_KEY, label="test-key")
+
+    async_engine, override_get_async_session = _override_async_db_session(db_engine)
     app.dependency_overrides[get_session] = _override_db_session(db_engine)
+    app.dependency_overrides[get_async_session] = override_get_async_session
     register_generated_proxmox_routes(
         app,
         openapi_documents={"latest": TEST_GENERATED_OPENAPI},
     )
 
+    _headers = {"X-Proxbox-API-Key": _TEST_API_KEY}
     with TestClient(app) as client:
         response = client.post(
             "/proxmox/api2/latest/access/acl",
@@ -666,6 +700,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
                 "roles": "PVEAdmin",
                 "groups-autocreate": True,
             },
+            headers=_headers,
         )
         alias_response = client.post(
             "/proxmox/api2/access/acl",
@@ -674,7 +709,10 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
                 "roles": "PVEAdmin",
                 "groups-autocreate": True,
             },
+            headers=_headers,
         )
+
+    asyncio.run(async_engine.dispose())
 
     assert response.status_code == 200
     assert alias_response.status_code == 200
@@ -726,18 +764,27 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
         )
         session.commit()
 
+    with Session(db_engine) as session:
+        ApiKey.store_key(session, _TEST_API_KEY, label="test-key")
+
+    async_engine, override_get_async_session = _override_async_db_session(db_engine)
     app.dependency_overrides[get_session] = _override_db_session(db_engine)
+    app.dependency_overrides[get_async_session] = override_get_async_session
     register_generated_proxmox_routes(
         app,
         openapi_documents={"latest": TEST_GENERATED_OPENAPI},
     )
 
+    _headers = {"X-Proxbox-API-Key": _TEST_API_KEY}
     with TestClient(app) as client:
-        missing_selector = client.get("/proxmox/api2/latest/cluster/resources")
+        missing_selector = client.get("/proxmox/api2/latest/cluster/resources", headers=_headers)
         selected = client.get(
             "/proxmox/api2/latest/cluster/resources",
             params={"target_domain": "pve02.local", "type": "vm"},
+            headers=_headers,
         )
+
+    asyncio.run(async_engine.dispose())
 
     assert missing_selector.status_code == 400
     assert "Multiple Proxmox endpoints configured" in missing_selector.json()["message"]
@@ -803,6 +850,10 @@ def test_every_generated_proxy_route_has_mock_based_schema_validated_coverage(
         "proxbox_api.app.factory.register_generated_proxmox_routes",
         lambda _app: None,
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.factory.check_auth_header_with_session",
+        lambda _session, _api_key, _client_ip: (True, None),
+    )
 
     register_generated_proxmox_routes(
         app,
@@ -819,6 +870,7 @@ def test_every_generated_proxy_route_has_mock_based_schema_validated_coverage(
         response = client.request(case["method"], case["route_path"], **request_kwargs)
 
     assert response.status_code == 200, response.text
+    assert fake_target.closed == 1
     actual_method, actual_upstream_path, actual_payload = fake_target.session.calls[-1]
     assert actual_method == case["method"]
     assert actual_upstream_path == case["upstream_path"]
@@ -827,6 +879,49 @@ def test_every_generated_proxy_route_has_mock_based_schema_validated_coverage(
         assert response.json() is None
     else:
         assert response.json() == expected_response
+
+
+def test_generated_proxy_route_closes_target_on_response_validation_failure(monkeypatch, tmp_path):
+    fake_target = SchemaDrivenFakeTarget(
+        responses={
+            ("GET", "cluster/resources"): {
+                "unexpected": "payload",
+            }
+        }
+    )
+
+    async def fake_resolve_proxmox_target_session(
+        database_session,
+        source="database",
+        name=None,
+        domain=None,
+        ip_address=None,
+    ):
+        return fake_target
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.proxmox.runtime_generated.resolve_proxmox_target_session",
+        fake_resolve_proxmox_target_session,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.proxmox.runtime_generated.proxmox_generated_route_cache_path",
+        lambda: tmp_path / "runtime_generated_routes_cache.json",
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.factory.check_auth_header_with_session",
+        lambda _session, _api_key, _client_ip: (True, None),
+    )
+
+    register_generated_proxmox_routes(
+        app,
+        openapi_documents={"latest": TEST_GENERATED_OPENAPI},
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/proxmox/api2/latest/cluster/resources")
+
+    assert response.status_code == 400
+    assert fake_target.closed == 1
 
 
 def test_refresh_generated_routes_endpoint_rebuilds_runtime_state(monkeypatch):

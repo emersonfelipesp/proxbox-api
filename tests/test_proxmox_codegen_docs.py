@@ -1,3 +1,5 @@
+"""Tests for Proxmox codegen documentation normalization."""
+
 from __future__ import annotations
 
 from proxbox_api.proxmox_codegen.crawler import _normalize_doc_sections

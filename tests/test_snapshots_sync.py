@@ -50,9 +50,30 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
             }
         ]
 
-    async def _fake_reconcile(_nb, _path, lookup, payload, **kwargs):
-        reconciled.append((lookup, payload))
-        return {"id": 99, **payload}
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        # Capture lookup info from the payloads for test verification
+        if _path == "/api/plugins/proxbox/snapshots/":
+            for payload in payloads:
+                reconciled.append(
+                    (
+                        {
+                            "vmid": payload.get("vmid"),
+                            "name": payload.get("name"),
+                            "node": payload.get("node"),
+                        },
+                        payload,
+                    )
+                )
+        # Return bulk reconcile result with created snapshots
+        from proxbox_api.netbox_rest import BulkReconcileResult
+
+        return BulkReconcileResult(
+            records=[{"id": 99, **payload} for payload in payloads],
+            created=len(payloads),
+            updated=0,
+            unchanged=0,
+            failed=0,
+        )
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.snapshots.rest_list_async",
@@ -63,12 +84,8 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
         _fake_get_vm_snapshots,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.snapshots.rest_reconcile_async",
-        _fake_reconcile,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.snapshots.rest_create_async",
-        lambda *args, **kwargs: asyncio.sleep(0, result={"id": 1}),
+        "proxbox_api.services.sync.snapshots.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
     )
 
     result = asyncio.run(

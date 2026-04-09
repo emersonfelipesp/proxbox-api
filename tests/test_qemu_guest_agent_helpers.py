@@ -1,3 +1,5 @@
+"""Tests for QEMU guest-agent helper functions."""
+
 from __future__ import annotations
 
 from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces

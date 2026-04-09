@@ -6,6 +6,8 @@ from copy import deepcopy
 
 from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, slugify_identifier
 
+_PYDANTIC_RESERVED_FIELD_NAMES = {"schema"}
+
 
 def _resolved_schema(schema: dict[str, object] | None) -> dict[str, object] | None:
     if not isinstance(schema, dict):
@@ -54,6 +56,8 @@ def _generate_object_model(model_name: str, schema: dict[str, object]) -> str:
         if not isinstance(prop_schema, dict):
             prop_schema = {}
         field_name = slugify_identifier(prop_name)
+        if field_name in _PYDANTIC_RESERVED_FIELD_NAMES:
+            field_name = f"{field_name}_"
         field_type = _python_type(prop_schema)
         is_required = prop_name in required
         default_expr = "..." if is_required else "None"
@@ -149,11 +153,14 @@ def generate_pydantic_models_from_openapi(openapi: dict[str, object]) -> str:  #
         "",
         "from __future__ import annotations",
         "",
+        "import warnings",
+        "",
         "from pydantic import BaseModel, ConfigDict, Field, RootModel",
         "",
+        "warnings.filterwarnings('ignore', message='Field name \"schema\".*shadows an attribute.*')",
         "",
         "class ProxmoxBaseModel(BaseModel):",
-        "    model_config = ConfigDict(populate_by_name=True, extra='allow')",
+        "    model_config = ConfigDict(populate_by_name=True, extra='allow', protected_namespaces=())",
         "",
     ]
 
