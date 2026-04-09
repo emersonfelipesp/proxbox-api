@@ -8,6 +8,10 @@ from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
 from proxbox_api.services.proxmox_helpers import get_vm_tasks_individual
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
+from proxbox_api.services.sync.task_history import (
+    _extract_fk_id,
+    _format_task_description,
+)
 
 
 def _normalize_task_datetime(value: object) -> str | None:
@@ -120,31 +124,35 @@ async def sync_task_history_individual(  # noqa: C901
     task_start_time = _normalize_task_datetime(target_task.get("starttime"))
     task_end_time = _normalize_task_datetime(target_task.get("endtime"))
     task_type = str(target_task.get("type") or "unknown")
-    task_description = _task_action_label(task_type)
+    task_id = str(target_task.get("id") or target_task.get("upid", "")[:12])
+    task_description = _format_task_description(vm_type, task_id, task_type)
 
     nb_task_payload: dict[str, object] = {
         "vm_type": vm_type,
         "upid": str(target_task.get("upid", "")),
         "node": node,
         "pid": target_task.get("pid"),
-        "pstart": target_task.get("pstart"),
-        "task_id": str(target_task.get("id") or target_task.get("upid", "")[:12]),
+        "pstart": _normalize_task_datetime(target_task.get("pstart")),
+        "task_id": task_id,
         "task_type": task_type,
         "username": str(target_task.get("user", "unknown")),
         "start_time": task_start_time or now.isoformat(),
         "end_time": task_end_time,
         "description": task_description,
         "status": str(target_task.get("exitstatus") or target_task.get("status") or "unknown"),
+        "task_state": str(target_task.get("status") or ""),
         "exitstatus": target_task.get("exitstatus"),
         "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+        "custom_fields": {},
     }
+
+    target_upid = str(target_task.get("upid", ""))
 
     if dry_run:
         existing = await rest_list_async(
             nb,
-            "/api/extras/journal-entries/",
-            query={"name": f"proxmox-{vmid}-{target_task.get('upid', '')}"},
+            "/api/plugins/proxbox/task-history/",
+            query={"upid": target_upid},
         )
         netbox_object = None
         if existing:
@@ -212,20 +220,19 @@ async def sync_task_history_individual(  # noqa: C901
 
         nb_task_payload["virtual_machine"] = vm_id
 
-        journal_entry_name = f"proxmox-{vmid}-{target_task.get('upid', '')}"
-        existing_journal_entries = await rest_list_async(
+        existing_records = await rest_list_async(
             nb,
-            "/api/extras/journal-entries/",
-            query={"name": journal_entry_name},
+            "/api/plugins/proxbox/task-history/",
+            query={"upid": target_upid},
         )
-        journal_record = await rest_reconcile_async(
+        task_record = await rest_reconcile_async(
             nb,
-            "/api/extras/journal-entries/",
-            lookup={"name": journal_entry_name},
+            "/api/plugins/proxbox/task-history/",
+            lookup={"upid": target_upid},
             payload=nb_task_payload,
             schema=NetBoxTaskHistorySyncState,
             current_normalizer=lambda record: {
-                "virtual_machine": record.get("virtual_machine"),
+                "virtual_machine": _extract_fk_id(record.get("virtual_machine")),
                 "vm_type": record.get("vm_type"),
                 "upid": record.get("upid"),
                 "node": record.get("node"),
@@ -238,14 +245,15 @@ async def sync_task_history_individual(  # noqa: C901
                 "end_time": record.get("end_time"),
                 "description": record.get("description"),
                 "status": record.get("status"),
+                "task_state": record.get("task_state"),
                 "exitstatus": record.get("exitstatus"),
                 "tags": record.get("tags"),
                 "custom_fields": record.get("custom_fields"),
             },
         )
 
-        netbox_object = journal_record.serialize() if hasattr(journal_record, "serialize") else None
-        action = "updated" if existing_journal_entries else "created"
+        netbox_object = task_record.serialize() if hasattr(task_record, "serialize") else None
+        action = "updated" if existing_records else "created"
 
         return {
             "object_type": "task_history",

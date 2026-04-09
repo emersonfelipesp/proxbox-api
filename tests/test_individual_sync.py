@@ -586,7 +586,7 @@ async def test_sync_task_history_individual_accepts_cluster_name_and_reports_upd
     async def _fake_rest_list_async(_nb, path, query=None):
         if path == "/api/virtualization/virtual-machines/":
             return [SimpleNamespace(id=44)]
-        if path == "/api/extras/journal-entries/" and query == {"name": "proxmox-101-UPID:1"}:
+        if path == "/api/plugins/proxbox/task-history/" and (query or {}).get("upid") == "UPID:1":
             return [SimpleNamespace(id=77)]
         return []
 
