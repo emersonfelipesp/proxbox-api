@@ -5,10 +5,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
 from proxmox_openapi.sdk.exceptions import ResourceException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
+from proxbox_api.enum.proxmox import AddressingMethod
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.schemas._coerce import normalize_bool
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session_for_request
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
@@ -58,29 +60,34 @@ class InterfaceTypeChoices(str, Enum):
 
 
 class ProxmoxNodeInterfaceSchema(BaseModel):
-    active: int | None = None
+    active: bool | None = None
     address: str | None = None
     netmask: str | None = None
     gateway: str | None = None
-    autostart: int | None = None
+    autostart: bool | None = None
     bond_miimon: int | None = None
     bond_mode: str | None = None
     slaves: str | None = None
     bridge_fd: str | None = None
     bridge_ports: str | None = None
     bridge_stp: str | None = None
-    brdige_vlan_aware: int | None = None
+    brdige_vlan_aware: bool | None = None
     cidr: str | None = None
     comments: str | None = None
-    exists: int | None = None
+    exists: bool | None = None
     families: list[str] | None = None
     iface: str | None = None
-    method: str | None = None
-    method6: str | None = None
+    method: AddressingMethod | str | None = None
+    method6: AddressingMethod | str | None = None
     priority: int | None = None
     type: str | None = None
     vlan_id: str | None = None
     vlan_raw_device: str | None = None
+
+    @field_validator("active", "autostart", "brdige_vlan_aware", "exists", mode="before")
+    @classmethod
+    def _coerce_bool(cls, value: object) -> bool | None:
+        return normalize_bool(value)
 
 
 ProxmoxNodeInterfaceSchemaList = list[ProxmoxNodeInterfaceSchema]

@@ -7,6 +7,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, RootModel
 
+from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.netbox_sdk_helpers import ensure_record, to_dict
 
 
@@ -248,13 +249,10 @@ class IPAddress(_BaseCompat):
 class VirtualMachine(_BaseCompat):
     endpoint_getter = "virtualization.virtual_machines"
 
-    status_field = {
-        "running": "active",
-        "stopped": "offline",
-        "paused": "offline",
-        "active": "active",
-        "online": "active",
-    }
+    @staticmethod
+    def map_status(proxmox_status: str) -> str:
+        """Map a Proxmox VM status string to the corresponding NetBox status value."""
+        return ProxmoxToNetBoxVMStatus.from_proxmox(proxmox_status)
 
     def _lookup(self, payload: dict[str, object]) -> dict[str, object]:
         custom_fields = payload.get("custom_fields", {})

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     rest_bulk_reconcile_async,
@@ -25,13 +26,6 @@ async def sync_node_interface_and_ip(
     interface_config: dict,
     tag_refs: list[dict],
 ) -> dict:
-    interface_type_mapping = {
-        "lo": "loopback",
-        "bridge": "bridge",
-        "bond": "lag",
-        "vlan": "virtual",
-    }
-
     node_cidr = interface_config.get("cidr") or interface_config.get("address")
     vlan_nb_id: int | None = None
 
@@ -83,7 +77,7 @@ async def sync_node_interface_and_ip(
             "device": device.get("id", 0),
             "name": interface_name,
             "status": "active",
-            "type": interface_type_mapping.get(iface_type, "other"),
+            "type": NetBoxInterfaceType.from_proxmox(iface_type),
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id is not None else None,
             "tags": tag_refs,

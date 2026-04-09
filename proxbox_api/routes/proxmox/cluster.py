@@ -34,14 +34,14 @@ class BaseClusterStatusSchema(BaseModel):
 class ClusterNodeStatusSchema(BaseClusterStatusSchema):
     ip: str
     level: str | None = None
-    local: int
+    local: bool
     nodeid: int
-    online: int
+    online: bool
 
 
 class ClusterStatusSchema(BaseClusterStatusSchema):
     nodes: int
-    quorate: int
+    quorate: bool
     version: int
     mode: str
     node_list: list[ClusterNodeStatusSchema] | None = None
@@ -65,7 +65,7 @@ def _cluster_item_defaults(
         "name": name,
         "type": item_data.get("type") or "cluster",
         "nodes": int(item_data.get("nodes") or node_count),
-        "quorate": int(quorate) if quorate is not None else int(node_count > 0),
+        "quorate": bool(quorate) if quorate is not None else bool(node_count > 0),
         "version": int(item_data.get("version") or 0),
         "mode": mode,
     }
@@ -80,9 +80,9 @@ def _node_item_defaults(item_data: dict[str, object]) -> dict[str, object]:
         "type": item_data.get("type") or "node",
         "ip": item_data.get("ip") or "",
         "level": item_data.get("level"),
-        "local": int(item_data.get("local") or 0),
+        "local": bool(item_data.get("local") or False),
         "nodeid": int(item_data.get("nodeid") or 0),
-        "online": int(item_data.get("online") or 0),
+        "online": bool(item_data.get("online") or False),
     }
 
 

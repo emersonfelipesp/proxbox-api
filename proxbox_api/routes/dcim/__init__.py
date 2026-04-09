@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import ProxboxTagDep
+from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload, rest_patch_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
@@ -130,13 +131,6 @@ async def create_devices_stream(
 async def create_interface_and_ip(
     netbox_session: NetBoxAsyncSessionDep, tag: ProxboxTagDep, node_interface, node
 ):
-    interface_type_mapping = {
-        "lo": "loopback",
-        "bridge": "bridge",
-        "bond": "lag",
-        "vlan": "virtual",
-    }
-
     node_cidr = getattr(node_interface, "cidr", None)
     node_data = node if isinstance(node, dict) else {}
 
@@ -190,7 +184,7 @@ async def create_interface_and_ip(
             "device": node_data.get("id", 0),
             "name": str(node_interface.iface),
             "status": "active",
-            "type": interface_type_mapping.get(node_interface.type, "other"),
+            "type": NetBoxInterfaceType.from_proxmox(node_interface.type or ""),
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id is not None else None,
             "tags": nested_tag_payload(tag),

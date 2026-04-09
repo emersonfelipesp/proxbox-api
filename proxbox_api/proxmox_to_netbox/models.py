@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
 
 
@@ -829,17 +830,7 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: object) -> str:
-        mapping = {
-            "running": "active",
-            "online": "active",
-            "active": "active",
-            "stopped": "offline",
-            "paused": "offline",
-            "offline": "offline",
-            "planned": "planned",
-        }
-        text = str(value or "active").strip().lower()
-        return mapping.get(text, "active")
+        return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
 
     @field_validator("cluster", "device", "role", mode="before")
     @classmethod

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
+from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
@@ -29,18 +30,8 @@ def _mb_from_bytes(value: object) -> int:
 
 
 def _status_value(value: object) -> str:
-    """Normalize status value."""
-    mapping = {
-        "running": "active",
-        "online": "active",
-        "active": "active",
-        "stopped": "offline",
-        "paused": "offline",
-        "offline": "offline",
-        "planned": "planned",
-    }
-    text = str(value or "active").strip().lower()
-    return mapping.get(text, "active")
+    """Normalize Proxmox VM status to NetBox VM status."""
+    return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
 
 
 def _as_bool(value: object) -> bool:

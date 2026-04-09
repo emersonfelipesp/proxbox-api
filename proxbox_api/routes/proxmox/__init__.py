@@ -4,13 +4,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query
 from proxmox_openapi.sdk.exceptions import ResourceException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from proxbox_api.enum.proxmox import *
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.schemas._coerce import normalize_bool
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.schemas.virtualization import VMConfig
 from proxbox_api.services.proxmox_helpers import (
@@ -254,16 +255,21 @@ class ProxmoxStorage(BaseModel):
     digest: str | None = None
     nodes: str | None = None
     prune_backups: str | None = Field(None, alias="prune-backups")
-    shared: int | None = None
+    shared: bool | None = None
     export: str | None = None
     server: str | None = None
-    disable: int | None = None
+    disable: bool | None = None
     pool: str | None = None
-    sparse: int | None = None
+    sparse: bool | None = None
     username: str | None = None
     datastore: str | None = None
     fingerprint: str | None = None
     mountpoint: str | None = None
+
+    @field_validator("shared", "disable", "sparse", mode="before")
+    @classmethod
+    def _coerce_bool(cls, value: object) -> bool | None:
+        return normalize_bool(value)
 
 
 ProxmoxStorageList = list[ProxmoxStorage]
