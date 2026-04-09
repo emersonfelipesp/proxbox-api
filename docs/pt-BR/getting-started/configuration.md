@@ -114,9 +114,12 @@ Regras de autenticacao para create/update:
 | `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Delay inicial, em segundos, para retries do NetBox. |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximo de requisicoes simultaneas ao NetBox. Mantenha baixo (1-2) para evitar agotar o pool de conexoes PostgreSQL do NetBox. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximo de tarefas concorrentes de escrita no sync de VMs. |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` | Maximo de operacoes concorrentes de escrita no NetBox. |
-| `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` | Maximo de operacoes concorrentes de leitura no Proxmox. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (sync de VM) / `4` (task-history, snapshots) | Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync. |
+| `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (maioria dos fluxos) / `4` (task-history) | Maximo de operacoes concorrentes de leitura no Proxmox. O padrao varia por servico de sync. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Override legado de concorrencia usado por alguns entrypoints de sync. |
+| `PROXBOX_RATE_LIMIT` | `60` | Maximo de requisicoes por minuto por endereco IP. |
+| `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Tamanho do lote de sync de backups. Reduza para diminuir a pressao de escrita no NetBox. |
+| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup. |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (vazio) | Lista de origens CORS extras, separadas por virgula. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | nao definido | Quando `1`, `true` ou `yes`, respostas HTTP 500 incluem detalhes internos da excecao. |
 | `PROXBOX_STRICT_STARTUP` | nao definido | Quando `1`, `true` ou `yes`, falha no mount de rotas Proxmox geradas interrompe o startup. |

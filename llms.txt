@@ -37,22 +37,49 @@ This file is for AI/code assistants. It summarizes the project structure, runtim
 - `PROXBOX_NETBOX_TIMEOUT` (default `120`): NetBox client timeout (seconds)
 - `PROXBOX_VM_SYNC_MAX_CONCURRENCY` (default `4`): VM sync create concurrency
 - `PROXBOX_FETCH_MAX_CONCURRENCY` (default `8`): fetch concurrency for storage/backup/snapshot flows
+- `PROXBOX_NETBOX_WRITE_CONCURRENCY` (default `8` in VM sync path, `4` in task-history/snapshot paths): max concurrent NetBox write operations
+- `PROXBOX_PROXMOX_FETCH_CONCURRENCY` (default `8` in most paths, `4` in task-history path): max concurrent Proxmox read operations
+- `PROXBOX_RATE_LIMIT` (default `60`): max API requests per minute per IP address
+- `PROXBOX_BACKUP_BATCH_SIZE` (default `5`): backup sync batch size to avoid overwhelming NetBox
+- `PROXBOX_BACKUP_BATCH_DELAY_MS` (default `200`): delay in milliseconds between backup batches
 - `PROXBOX_CORS_EXTRA_ORIGINS` (default empty): extra CORS origins, comma-separated
 - `PROXBOX_EXPOSE_INTERNAL_ERRORS` (default unset): expose exception details in HTTP 500 responses
 - `PROXBOX_STRICT_STARTUP` (default unset): fail startup if generated Proxmox routes cannot mount
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP` (default unset): skip default NetBox client bootstrap on startup
+- `PROXBOX_NETBOX_GET_CACHE_TTL` (default `60.0`): NetBox GET response cache TTL in seconds (0 to disable)
+- `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` (default `4096`): max cached GET responses by entry count
+- `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` (default `52428800`): max cache size in bytes (50 MB)
+- `PROXBOX_DEBUG_CACHE` (default `0`): enable debug-level cache logging
 
 ## 5) API surfaces to know
 
 ### Utility/root
 
 - `GET /`
+- `GET /version`
+- `GET /health`
 - `GET /cache`
+- `GET /cache/metrics`
+- `GET /cache/metrics/prometheus`
 - `GET /clear-cache`
-- `GET /sync-processes`
-- `POST /sync-processes`
 - `GET /full-update`
 - `GET /full-update/stream` (SSE)
+
+### Authentication (`/auth`)
+
+- `GET /auth/bootstrap-status` - Check if initial bootstrap key registration is needed (auth-exempt)
+- `POST /auth/register-key` - Register the first API key (auth-exempt, one-time bootstrap)
+- `POST /auth/keys` - Create a new API key (requires authentication)
+- `GET /auth/keys` - List all API keys (key values redacted)
+- `DELETE /auth/keys/{key_id}` - Delete an API key
+- `POST /auth/keys/{key_id}/activate` - Re-activate a deactivated key
+- `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key
+
+### Admin
+
+- `GET /admin/` - HTML admin dashboard (excluded from OpenAPI)
+- `GET /admin/logs` - In-memory log buffer with optional filters for `level`, `limit`, `offset`, `since`, `operation_id`
+- `GET /admin/logs/stream` - SSE real-time log stream with filters for `level`, `errors_only`, `operation_id`, `newer_than_id`
 
 ### NetBox (`/netbox`)
 
@@ -92,6 +119,14 @@ This file is for AI/code assistants. It summarizes the project structure, runtim
   - `/storage/create`
   - `/storage/create/stream` (SSE)
 
+### Sync Individual (`/sync/individual`)
+
+Per-object fine-grained sync routes (12 sub-routers): backup, backup-routine, cluster, device, vm, interface, ip, disk, storage, snapshot, task-history, replication. Each supports dry-run and targeted sync by ID.
+
+### Extras (`/extras`)
+
+- `GET /extras/extras/custom-fields/create` - Create or reconcile ~30 Proxmox-related custom fields in NetBox
+
 ### WebSockets
 
 - `ws://<host>:<port>/` (counter stream)
@@ -107,10 +142,16 @@ Current full-update pipeline in `proxbox_api/app/full_update.py`:
 
 1. devices
 2. storage
-3. virtual machines
-4. virtual disks
-5. backups
-6. snapshots
+3. virtual-machines
+4. task-history
+5. virtual-disks
+6. backups
+7. snapshots
+8. node-interfaces
+9. vm-interfaces
+10. vm-ip-addresses
+11. replications
+12. backup-routines
 
 SSE endpoints use `WebSocketSSEBridge` to convert websocket-style progress payloads into SSE `step/error/complete` frames.
 
@@ -164,9 +205,10 @@ uv run mkdocs build --strict
 
 - Python target: `>=3.11`
 - API framework: FastAPI
-- Proxmox client: `proxmoxer`
+- Proxmox client: `proxmox-openapi`
 - NetBox client facade: `netbox-sdk`
 - ORM: SQLModel
 - Local DB default file: `database.db`
+- Runtime deps (notable): `fastapi[standard]`, `proxmox-openapi`, `netbox-sdk`, `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`
 
 End of llms context file.

@@ -11,10 +11,23 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 - `GET /cache` - Inspect the in-memory cache snapshot.
 - `GET /clear-cache` - Clear the in-memory cache.
 
+## Authentication (`/auth`)
+
+All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. See [Authentication](../getting-started/authentication.md) for the full bootstrap flow and key management guide.
+
+- `GET /auth/bootstrap-status` - Check whether first-time key registration is still needed. Auth-exempt.
+- `POST /auth/register-key` - Register the first API key. Auth-exempt; fails once a key already exists.
+- `POST /auth/keys` - Create a new API key. Returns the raw key value once; store it securely.
+- `GET /auth/keys` - List all API keys. Key values are redacted (only metadata is returned).
+- `DELETE /auth/keys/{key_id}` - Delete an API key by ID.
+- `POST /auth/keys/{key_id}/activate` - Re-activate a previously deactivated key.
+- `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key without deleting it.
+
 ## Admin
 
 - `GET /admin/` - HTML admin dashboard for the configured NetBox endpoint records. This route is excluded from OpenAPI.
 - `GET /admin/logs` - In-memory backend log buffer with optional filters for `level`, `limit`, `offset`, `since`, and `operation_id`.
+- `GET /admin/logs/stream` - SSE real-time log stream. Supports query parameters `level`, `errors_only`, `operation_id`, and `newer_than_id`.
 
 ## NetBox Routes (`/netbox`)
 

@@ -20,6 +20,8 @@ Current execution order:
 8. Sync node interfaces and IP addresses.
 9. Sync VM interfaces.
 10. Sync VM IP addresses and primary IP assignment.
+11. Sync replication jobs across Proxmox clusters.
+12. Sync backup routines (scheduled backup job configurations).
 
 The streaming variant at `GET /full-update/stream` emits the same stage transitions over Server-Sent Events.
 

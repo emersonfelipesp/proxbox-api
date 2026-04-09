@@ -11,10 +11,23 @@ Para schemas completos de request e response, use o OpenAPI em tempo de execucao
 - `GET /cache` - Inspeciona o cache em memoria.
 - `GET /clear-cache` - Limpa o cache em memoria.
 
+## Autenticacao (`/auth`)
+
+Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Proxbox-API-Key`. Consulte [Autenticacao](../getting-started/authentication.md) para o fluxo completo de bootstrap e gerenciamento de chaves.
+
+- `GET /auth/bootstrap-status` - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao.
+- `POST /auth/register-key` - Registra a primeira chave de API. Isento de autenticacao; falha se ja existir uma chave.
+- `POST /auth/keys` - Cria uma nova chave de API. Retorna o valor da chave uma unica vez; armazene com seguranca.
+- `GET /auth/keys` - Lista todas as chaves de API. Os valores sao ocultados (apenas metadados sao retornados).
+- `DELETE /auth/keys/{key_id}` - Remove uma chave de API pelo ID.
+- `POST /auth/keys/{key_id}/activate` - Reativa uma chave previamente desativada.
+- `POST /auth/keys/{key_id}/deactivate` - Desativa uma chave ativa sem remove-la.
+
 ## Admin
 
 - `GET /admin/` - Dashboard HTML do admin para os registros configurados do NetBox. Esta rota fica fora do OpenAPI.
 - `GET /admin/logs` - Buffer de logs em memoria com filtros opcionais para `level`, `limit`, `offset`, `since` e `operation_id`.
+- `GET /admin/logs/stream` - Stream SSE de logs em tempo real. Suporta os parametros `level`, `errors_only`, `operation_id` e `newer_than_id`.
 
 ## Rotas NetBox (`/netbox`)
 

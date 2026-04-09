@@ -20,6 +20,8 @@ Ordem atual de execucao:
 8. Sincroniza interfaces de node e enderecos IP.
 9. Sincroniza interfaces das VMs.
 10. Sincroniza IPs das VMs e a primary IP.
+11. Sincroniza jobs de replicacao entre clusters Proxmox.
+12. Sincroniza backup routines (configuracoes de backups agendados).
 
 A variacao em `GET /full-update/stream` emite os mesmos estagios via Server-Sent Events.
 

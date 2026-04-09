@@ -85,6 +85,7 @@ Open the nearest scoped guide for the code you are changing.
 ### Core layers
 
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
+- Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and bootstrap flow for first-time key registration.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
 - Schema and enum layer (`proxbox_api/schemas/*`, `proxbox_api/enum/*`): validate payloads, normalize data, and define contract-safe choice values.
@@ -117,7 +118,7 @@ Open the nearest scoped guide for the code you are changing.
 
 ## Dependencies
 
-- Runtime: `fastapi[standard]`, `proxmox-openapi`, `netbox-sdk`, `sqlmodel`
+- Runtime: `fastapi[standard]`, `proxmox-openapi`, `netbox-sdk`, `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`
 - Tests: `pytest`, `httpx`, `playwright`, `pytest-cov`, `pytest-asyncio`, `pytest-xdist`
 - Docs: `mkdocs`, `mkdocs-material`, `mkdocs-static-i18n`
 
@@ -133,6 +134,11 @@ Open the nearest scoped guide for the code you are changing.
 - `PROXBOX_EXPOSE_INTERNAL_ERRORS`: returns raw exception details in 500 responses when enabled.
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
+- `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 60).
+- `PROXBOX_NETBOX_WRITE_CONCURRENCY`: max concurrent NetBox write operations (default: 8 in VM sync path, 4 in task-history/snapshot paths).
+- `PROXBOX_PROXMOX_FETCH_CONCURRENCY`: max concurrent Proxmox read operations (default: 8 in most paths, 4 in task-history path).
+- `PROXBOX_BACKUP_BATCH_SIZE`: backup sync batch size (default: 5).
+- `PROXBOX_BACKUP_BATCH_DELAY_MS`: delay in milliseconds between backup batches (default: 200).
 
 ### Cache Configuration
 

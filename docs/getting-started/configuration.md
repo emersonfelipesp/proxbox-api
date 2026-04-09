@@ -125,9 +125,12 @@ See [Authentication](./authentication.md) for complete documentation on:
 | `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Initial retry delay in seconds for NetBox retries. |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximum concurrent NetBox API requests. Keep low (1-2) to avoid exhausting NetBox's PostgreSQL connection pool. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent VM sync write tasks. |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` | Maximum number of concurrent NetBox write operations. |
-| `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` | Maximum number of concurrent Proxmox read operations. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync) / `4` (task-history, snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. |
+| `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
+| `PROXBOX_RATE_LIMIT` | `60` | Maximum API requests per minute per IP address. |
+| `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Backup sync batch size. Reduce to lower NetBox write pressure during backup sync. |
+| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay in milliseconds between backup batches. |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (empty) | Comma-separated extra CORS origins added to the runtime allowlist. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | unset | When set to `1`, `true`, or `yes`, HTTP 500 responses include internal exception details. |
 | `PROXBOX_STRICT_STARTUP` | unset | When set to `1`, `true`, or `yes`, startup fails if generated Proxmox routes cannot be mounted. |
