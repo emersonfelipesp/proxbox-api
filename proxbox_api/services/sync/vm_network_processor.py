@@ -74,7 +74,7 @@ async def process_vm_network_interface(  # noqa: C901
         if guest_name:
             resolved_interface_name = guest_name
 
-    # Process bridge interface — create dcim bridge on node + per-VM bridge VMInterface
+    # Process bridge interface — create dcim bridge on node device
     result = {
         "interface_name": resolved_interface_name,
         "mac_address": interface_config.get("virtio", interface_config.get("hwaddr")),
@@ -82,15 +82,17 @@ async def process_vm_network_interface(  # noqa: C901
         "bridge_id": None,
     }
 
-    # Create/sync bridge: dcim.Interface on node device + VMInterface on this VM
+    # Create/sync bridge: dcim.Interface on node device (ID stored as proxbox_bridge custom field)
     bridge_name = interface_config.get("bridge")
     if bridge_name:
         try:
             from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
             device_id = (
-                device.get("id") if isinstance(device, dict)
-                else getattr(device, "id", None)
-            ) if device else None
+                (device.get("id") if isinstance(device, dict) else getattr(device, "id", None))
+                if device
+                else None
+            )
             result["bridge_id"] = await ensure_bridge_interfaces(
                 nb, device_id, int(vm_id), bridge_name, tag_refs, now
             )

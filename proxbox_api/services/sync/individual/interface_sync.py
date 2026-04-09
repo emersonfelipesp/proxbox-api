@@ -258,6 +258,7 @@ async def sync_interface_individual(  # noqa: C901
         if bridge_name and vm_id:
             from proxbox_api.netbox_rest import rest_first_async
             from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
             try:
                 device_record = await rest_first_async(
                     nb,
@@ -265,10 +266,14 @@ async def sync_interface_individual(  # noqa: C901
                     query={"name": node, "limit": 1},
                 )
                 device_id = (
-                    device_record.get("id")
-                    if isinstance(device_record, dict)
-                    else getattr(device_record, "id", None)
-                ) if device_record else None
+                    (
+                        device_record.get("id")
+                        if isinstance(device_record, dict)
+                        else getattr(device_record, "id", None)
+                    )
+                    if device_record
+                    else None
+                )
                 bridge_id = await ensure_bridge_interfaces(
                     nb, device_id, int(vm_id), bridge_name, tag_refs, now
                 )
@@ -283,12 +288,14 @@ async def sync_interface_individual(  # noqa: C901
         interface_payload: dict[str, object] = {
             "name": resolved_name,
             "enabled": True,
-            "bridge": bridge_id,
             "mac_address": mac_address,
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id else None,
             "tags": tag_refs,
-            "custom_fields": {"proxmox_last_updated": now.isoformat()},
+            "custom_fields": {
+                "proxmox_last_updated": now.isoformat(),
+                **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+            },
         }
 
         if vm_id:
@@ -309,7 +316,6 @@ async def sync_interface_individual(  # noqa: C901
                 "name": record.get("name"),
                 "virtual_machine": record.get("virtual_machine"),
                 "enabled": record.get("enabled"),
-                "bridge": record.get("bridge"),
                 "mac_address": record.get("mac_address"),
                 "type": record.get("type"),
                 "description": record.get("description"),

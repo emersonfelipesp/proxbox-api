@@ -7,7 +7,12 @@ from datetime import datetime
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_patch_async, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    rest_first_async,
+    rest_list_async,
+    rest_patch_async,
+    rest_reconcile_async,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxIpAddressSyncState,
     NetBoxVirtualDiskSyncState,
@@ -93,10 +98,12 @@ async def sync_vm_interfaces(  # noqa: C901
             bridge_id: int | None = None
             if bridge_name and vm_id:
                 from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
                 device_id = (
-                    device.get("id") if isinstance(device, dict)
-                    else getattr(device, "id", None)
-                ) if device else None
+                    (device.get("id") if isinstance(device, dict) else getattr(device, "id", None))
+                    if device
+                    else None
+                )
                 bridge_id = await ensure_bridge_interfaces(
                     nb, device_id, int(vm_id), bridge_name, tag_refs, now
                 )
@@ -151,19 +158,20 @@ async def sync_vm_interfaces(  # noqa: C901
                     "virtual_machine": vm_id,
                     "name": resolved_interface_name,
                     "enabled": True,
-                    "bridge": bridge_id,
                     "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
                     "untagged_vlan": vlan_nb_id,
                     "mode": "access" if vlan_nb_id is not None else None,
                     "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                    "custom_fields": {
+                        "proxmox_last_updated": now.isoformat(),
+                        **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+                    },
                 },
                 schema=NetBoxVirtualMachineInterfaceSyncState,
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "virtual_machine": record.get("virtual_machine"),
                     "enabled": record.get("enabled"),
-                    "bridge": record.get("bridge"),
                     "mac_address": record.get("mac_address"),
                     "type": record.get("type"),
                     "description": record.get("description"),
@@ -292,6 +300,88 @@ async def sync_vm_disks(
     return disk_count
 
 
+async def ensure_ip_assigned_to_vm(
+    nb: NetBoxSessionDep,
+    ip_id: int,
+    vm_id: int,
+) -> bool:
+    """Verify the IP address is assigned to an interface on the given VM.
+
+    If the IP exists but is assigned to the wrong object (or unassigned), this
+    function PATCHes the IP to assign it to the VM's first interface so that
+    NetBox will accept it as the VM's primary IP.
+
+    Returns True if the IP is (or was fixed to be) assigned to the VM, False otherwise.
+    """
+    try:
+        ip_record = await rest_first_async(
+            nb, "/api/ipam/ip-addresses/", query={"id": ip_id}
+        )
+        if not ip_record:
+            logger.warning("ensure_ip_assigned_to_vm: IP id=%s not found in NetBox", ip_id)
+            return False
+
+        raw_assigned_id = ip_record.get("assigned_object_id")
+        assigned_object_id = (
+            raw_assigned_id.get("id") if isinstance(raw_assigned_id, dict) else raw_assigned_id
+        )
+        assigned_object_type = ip_record.get("assigned_object_type")
+
+        ifaces = await rest_list_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            query={"virtual_machine_id": vm_id, "limit": 50},
+        )
+        if not ifaces:
+            logger.warning(
+                "ensure_ip_assigned_to_vm: VM id=%s has no interfaces; cannot assign IP id=%s",
+                vm_id,
+                ip_id,
+            )
+            return False
+
+        vm_interface_ids = {
+            iface.get("id") if isinstance(iface, dict) else getattr(iface, "id", None)
+            for iface in ifaces
+        }
+
+        if (
+            assigned_object_type == "virtualization.vminterface"
+            and assigned_object_id in vm_interface_ids
+        ):
+            return True
+
+        # IP is not assigned to this VM — reassign to the first available interface
+        first_iface = ifaces[0]
+        first_iface_id = (
+            first_iface.get("id") if isinstance(first_iface, dict) else getattr(first_iface, "id", None)
+        )
+        await rest_patch_async(
+            nb,
+            "/api/ipam/ip-addresses/",
+            ip_id,
+            {
+                "assigned_object_type": "virtualization.vminterface",
+                "assigned_object_id": first_iface_id,
+            },
+        )
+        logger.info(
+            "ensure_ip_assigned_to_vm: reassigned IP id=%s to interface id=%s on VM id=%s",
+            ip_id,
+            first_iface_id,
+            vm_id,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "ensure_ip_assigned_to_vm: failed for IP id=%s VM id=%s: %s",
+            ip_id,
+            vm_id,
+            exc,
+        )
+        return False
+
+
 async def set_primary_ip(
     nb: NetBoxSessionDep,
     virtual_machine: dict[str, object],
@@ -313,6 +403,16 @@ async def set_primary_ip(
 
     # Skip if primary IP already set
     if virtual_machine.get("primary_ip4") is not None:
+        return False
+
+    # Verify (and fix if needed) that the IP is assigned to this VM before setting primary
+    assigned = await ensure_ip_assigned_to_vm(nb, primary_ip_id, vm_id)
+    if not assigned:
+        logger.warning(
+            "IP id=%s is not assigned to VM id=%s; skipping primary_ip4 assignment",
+            primary_ip_id,
+            vm_id,
+        )
         return False
 
     try:

@@ -227,7 +227,7 @@ def build_vm_interface_payload(
     Args:
         resolved_name: Interface name
         mac_address: MAC address
-        bridge_id: Bridge interface ID (if applicable)
+        bridge_id: Node dcim.Interface ID for the bridge (stored as proxbox_bridge custom field)
         vlan_id: VLAN ID (if applicable)
         tag_refs: List of tag references
         vm_id: Virtual machine ID
@@ -239,12 +239,14 @@ def build_vm_interface_payload(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "bridge": bridge_id,
         "mac_address": mac_address,
         "untagged_vlan": vlan_id,
         "mode": "access" if vlan_id is not None else None,
         "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+        "custom_fields": {
+            "proxmox_last_updated": now.isoformat(),
+            **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+        },
     }
     if vm_id is not None:
         payload["virtual_machine"] = vm_id
@@ -346,9 +348,10 @@ async def _reconcile_vm_interface_record(
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id is not None:
         device_id = (
-            device.get("id") if isinstance(device, dict)
-            else getattr(device, "id", None)
-        ) if device else None
+            (device.get("id") if isinstance(device, dict) else getattr(device, "id", None))
+            if device
+            else None
+        )
         bridge_id = await ensure_bridge_interfaces(
             nb, device_id, int(vm_id), bridge_name, tag_refs, now
         )
@@ -371,12 +374,14 @@ async def _reconcile_vm_interface_record(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "bridge": bridge_id,
         "mac_address": mac_address,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
         "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+        "custom_fields": {
+            "proxmox_last_updated": now.isoformat(),
+            **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+        },
     }
     if vm_id is not None:
         payload["virtual_machine"] = vm_id
@@ -395,7 +400,6 @@ async def _reconcile_vm_interface_record(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "bridge": record.get("bridge"),
             "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
@@ -544,7 +548,6 @@ async def bulk_reconcile_vm_interfaces(
                 "name": record.get("name"),
                 "virtual_machine": record.get("virtual_machine"),
                 "enabled": record.get("enabled"),
-                "bridge": record.get("bridge"),
                 "mac_address": record.get("mac_address"),
                 "type": record.get("type"),
                 "description": record.get("description"),

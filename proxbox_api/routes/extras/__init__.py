@@ -562,6 +562,20 @@ async def create_custom_fields(  # noqa: C901
                 "group_name": "Proxmox",
             },
             {
+                "object_types": ["virtualization.vminterface"],
+                "type": "object",
+                "name": "proxbox_bridge",
+                "label": "Proxbox Bridge",
+                "related_object_type": "dcim.interface",
+                "description": "Node-level bridge interface (vmbr) used by this VM interface",
+                "ui_visible": "always",
+                "ui_editable": "hidden",
+                "weight": 100,
+                "filter_logic": "loose",
+                "search_weight": 1000,
+                "group_name": "Proxmox",
+            },
+            {
                 "object_types": [
                     "dcim.devicerole",
                     "dcim.manufacturer",
@@ -608,6 +622,7 @@ async def create_custom_fields(  # noqa: C901
                         "search_weight": record.get("search_weight"),
                         "group_name": record.get("group_name"),
                         "object_types": record.get("object_types"),
+                        "related_object_type": record.get("related_object_type"),
                     },
                 )
                 fields.append(record.serialize())

@@ -4,7 +4,10 @@ import asyncio
 from datetime import datetime, timezone
 
 from proxbox_api.exception import ProxboxException
-from proxbox_api.services.sync.bridge_interfaces import ensure_node_bridge_interface
+from proxbox_api.services.sync.bridge_interfaces import (
+    ensure_bridge_interfaces,
+    ensure_node_bridge_interface,
+)
 
 
 class _FakeRestRecord:
@@ -159,3 +162,51 @@ def test_ensure_node_bridge_interface_refetches_strict_after_create_error(monkey
 
     assert calls == {"first": 2, "create": 1}
     assert result["id"] == 91
+
+
+def test_ensure_bridge_interfaces_returns_node_dcim_interface_id(monkeypatch):
+    """ensure_bridge_interfaces must return the node dcim.Interface ID, not a per-VM ID."""
+
+    async def _fake_first(_nb, path, *, query=None):
+        return None
+
+    async def _fake_create(_nb, path, payload):
+        return {"id": 77, **payload}
+
+    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_create_async", _fake_create)
+
+    result_id = asyncio.run(
+        ensure_bridge_interfaces(
+            nb=object(),
+            device_id=19,
+            vm_id=42,
+            bridge_name="vmbr0",
+            tag_refs=[],
+            now=datetime(2026, 4, 9, 20, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    assert result_id == 77
+
+
+def test_ensure_bridge_interfaces_returns_none_when_device_id_missing(monkeypatch):
+    """Without a device_id there is no node interface to create; return None."""
+
+    async def _unexpected(*_args, **_kwargs):
+        raise AssertionError("should not call NetBox when device_id is None")
+
+    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_first_async", _unexpected)
+    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_create_async", _unexpected)
+
+    result_id = asyncio.run(
+        ensure_bridge_interfaces(
+            nb=object(),
+            device_id=None,
+            vm_id=42,
+            bridge_name="vmbr0",
+            tag_refs=[],
+        )
+    )
+
+    assert result_id is None

@@ -686,12 +686,8 @@ async def _create_vm_interface_parallel(
     bridge_id: int | None = None
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id:
-        device_id = (
-            device.get("id") if isinstance(device, dict) else getattr(device, "id", None)
-        )
-        bridge_id = await ensure_bridge_interfaces(
-            nb, device_id, vm_id, bridge_name, tag_refs, now
-        )
+        device_id = device.get("id") if isinstance(device, dict) else getattr(device, "id", None)
+        bridge_id = await ensure_bridge_interfaces(nb, device_id, vm_id, bridge_name, tag_refs, now)
 
     vlan_nb_id: int | None = None
     vlan_tag_raw = interface_config.get("tag")
@@ -741,12 +737,14 @@ async def _create_vm_interface_parallel(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "bridge": bridge_id,
         "mac_address": mac_address,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
         "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+        "custom_fields": {
+            "proxmox_last_updated": now.isoformat(),
+            **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+        },
     }
     if vm_id:
         payload["virtual_machine"] = vm_id
@@ -765,7 +763,6 @@ async def _create_vm_interface_parallel(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "bridge": record.get("bridge"),
             "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
@@ -1810,30 +1807,51 @@ async def create_virtual_machines(  # noqa: C901
         vm_id = virtual_machine.get("id")
         if virtual_machine.get("primary_ip4") is None:
             if first_ip_id is not None:
-                try:
-                    await rest_patch_async(
-                        nb,
-                        "/api/virtualization/virtual-machines/",
-                        vm_id,
-                        {"primary_ip4": first_ip_id},
-                    )
-                except Exception as exc:
+                from proxbox_api.services.sync.vm_network import ensure_ip_assigned_to_vm
+
+                ip_assigned = await ensure_ip_assigned_to_vm(nb, first_ip_id, vm_id)
+                if not ip_assigned:
                     logger.warning(
-                        "Failed to set primary_ip4 for VM %s (id=%s): %s",
+                        "IP id=%s is not assigned to VM %s (id=%s); skipping primary_ip4 assignment",
+                        first_ip_id,
                         virtual_machine.get("name"),
                         vm_id,
-                        exc,
                     )
                     if websocket:
                         await websocket.send_json(
                             {
                                 "object": "virtual_machine",
                                 "data": {
-                                    "error": f"Could not set primary IP: {exc}",
+                                    "error": "Could not set primary IP: IP address is not assigned to any interface on this VM",
                                     "rowid": virtual_machine.get("name"),
                                 },
                             }
                         )
+                else:
+                    try:
+                        await rest_patch_async(
+                            nb,
+                            "/api/virtualization/virtual-machines/",
+                            vm_id,
+                            {"primary_ip4": first_ip_id},
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to set primary_ip4 for VM %s (id=%s): %s",
+                            virtual_machine.get("name"),
+                            vm_id,
+                            exc,
+                        )
+                        if websocket:
+                            await websocket.send_json(
+                                {
+                                    "object": "virtual_machine",
+                                    "data": {
+                                        "error": f"Could not set primary IP: {exc}",
+                                        "rowid": virtual_machine.get("name"),
+                                    },
+                                }
+                            )
             else:
                 logger.info(
                     "No IP available for VM %s (vmid=%s), skipping primary_ip4 assignment.",
@@ -2342,10 +2360,10 @@ async def create_only_vm_interfaces(  # noqa: C901
     else:
         results = []
 
-    # Create node-level dcim bridge interfaces and per-VM bridge VMInterfaces for
-    # any NIC that references a Proxmox bridge (e.g. vmbr0, vmbr1).  The bulk
-    # path skips bridge resolution during payload collection, so we handle it here
-    # after all VM interfaces exist.  Then update each NIC's bridge FK.
+    # Create node-level dcim bridge interfaces for any NIC that references a
+    # Proxmox bridge (e.g. vmbr0, vmbr1).  The bulk path skips bridge resolution
+    # during payload collection, so we handle it here after all VM interfaces exist.
+    # Then update each NIC's proxbox_bridge custom field with the dcim.Interface ID.
     if all_interface_info:
         from proxbox_api.netbox_rest import rest_first_async
         from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
@@ -2380,7 +2398,9 @@ async def create_only_vm_interfaces(  # noqa: C901
             if not vm_id_val:
                 continue
             try:
-                device_id_val = await _resolve_device_id(resource_node_val) if resource_node_val else None
+                device_id_val = (
+                    await _resolve_device_id(resource_node_val) if resource_node_val else None
+                )
                 vm_bridge_id = await ensure_bridge_interfaces(
                     nb, device_id_val, int(vm_id_val), bridge_name, tag_refs, now
                 )
@@ -2407,11 +2427,11 @@ async def create_only_vm_interfaces(  # noqa: C901
                                 if iface_id:
                                     await nb.patch(
                                         f"/api/virtualization/interfaces/{iface_id}/",
-                                        json={"bridge": vm_bridge_id},
+                                        json={"custom_fields": {"proxbox_bridge": vm_bridge_id}},
                                     )
                         except Exception as patch_exc:
                             logger.warning(
-                                "Failed to set bridge FK on interface %s (VM %s): %s",
+                                "Failed to set proxbox_bridge on interface %s (VM %s): %s",
                                 resolved_name,
                                 vm_id_val,
                                 patch_exc,
@@ -2928,6 +2948,30 @@ async def create_virtual_machines_stream(
                     "result": {"count": len(result)},
                 },
             )
+        except asyncio.CancelledError:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-machines",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual machines sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
+                },
+            )
         except Exception as error:
             if not sync_task.done():
                 sync_task.cancel()
@@ -3039,6 +3083,24 @@ async def create_virtual_machine_by_netbox_id_stream(
                     "ok": True,
                     "message": "Virtual machine sync completed.",
                     "result": {"count": len(result)},
+                },
+            )
+        except asyncio.CancelledError:
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-machine",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual machine sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
                 },
             )
         except HTTPException as error:
