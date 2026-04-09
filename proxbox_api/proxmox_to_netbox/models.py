@@ -614,6 +614,7 @@ class NetBoxReplicationSyncState(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    endpoint: int | None = None
     virtual_machine: int
     proxmox_node: int | None = None
     replication_id: str
@@ -627,10 +628,12 @@ class NetBoxReplicationSyncState(BaseModel):
     source: str | None = None
     jobnum: int
     remove_job: str | None = None
+    status: str = "active"
+    raw_config: dict[str, object] = Field(default_factory=dict)
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("virtual_machine", "proxmox_node", mode="before")
+    @field_validator("endpoint", "virtual_machine", "proxmox_node", mode="before")
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)

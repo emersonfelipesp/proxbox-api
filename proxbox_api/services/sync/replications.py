@@ -5,26 +5,91 @@ from __future__ import annotations
 import asyncio
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_bulk_reconcile_async, rest_list_async
+from proxbox_api.netbox_rest import (
+    rest_bulk_patch_async,
+    rest_bulk_reconcile_async,
+    rest_list_async,
+    rest_list_paginated_async,
+)
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.services.sync.backup_routines import (
+    _extract_choice_value,
+    _extract_fk_id,
+    _get_netbox_endpoint_id,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
+
+
+async def _mark_stale_replications(
+    nb: object,
+    synced_replication_ids: set[str],
+    endpoint_id: int | None,
+) -> int:
+    """Mark replication records no longer found in Proxmox as stale.
+
+    Args:
+        nb: NetBox async session.
+        synced_replication_ids: Set of replication_id values successfully synced.
+        endpoint_id: NetBox ProxmoxEndpoint ID to scope the query.
+
+    Returns:
+        Count of records marked stale.
+    """
+    query: dict[str, object] = {"status": "active"}
+    if endpoint_id:
+        query["endpoint"] = endpoint_id
+
+    try:
+        active_records = await rest_list_paginated_async(
+            nb,
+            "/api/plugins/proxbox/replications/",
+            query=query,
+        )
+    except Exception as e:
+        logger.warning("Error fetching active replication records for stale check: %s", e)
+        return 0
+
+    stale_ids = [
+        r.get("id")
+        for r in (active_records or [])
+        if r.get("replication_id") not in synced_replication_ids and r.get("id")
+    ]
+
+    if not stale_ids:
+        return 0
+
+    try:
+        await rest_bulk_patch_async(
+            nb,
+            "/api/plugins/proxbox/replications/",
+            updates=[{"id": rid, "status": "stale"} for rid in stale_ids],
+        )
+        logger.info("Marked %d replication records as stale", len(stale_ids))
+    except Exception as e:
+        logger.warning("Error marking stale replication records: %s", e)
+        return 0
+
+    return len(stale_ids)
 
 
 async def sync_all_replications(  # noqa: C901
     netbox_session,
     pxs: ProxmoxSessionsDep,
+    tag_refs: list[dict] | None = None,
 ) -> dict:
     """Sync all replication jobs from Proxmox to NetBox using bulk operations.
 
     Args:
         netbox_session: NetBox async session.
         pxs: Proxmox sessions dependency.
+        tag_refs: Optional list of tag reference dicts to attach to synced records.
 
     Returns:
-        Dict with sync results (created, updated, errors counts).
+        Dict with sync results (created, updated, stale, errors counts).
     """
     nb = netbox_session
-    results = {"created": 0, "updated": 0, "errors": 0}
+    results = {"created": 0, "updated": 0, "stale": 0, "errors": 0}
+    _tag_refs = tag_refs or []
 
     # Pre-fetch all VMs once, indexed by proxmox_vm_id
     try:
@@ -52,12 +117,14 @@ async def sync_all_replications(  # noqa: C901
         nodes_by_name = {}
 
     async def fetch_replications_for_session(px):
-        """Fetch replications for a single Proxmox session. Returns list of replication payloads."""
+        """Fetch replications for a single Proxmox session. Returns (endpoint_id, payloads)."""
+        endpoint_id = await _get_netbox_endpoint_id(nb, px)
+
         try:
             replications = await resolve_async(px.session.cluster.replication.get())
         except Exception as e:
             logger.warning("Error fetching replications for %s: %s", px.name, e)
-            return []
+            return endpoint_id, []
 
         payloads = []
         for rep in replications:
@@ -78,6 +145,7 @@ async def sync_all_replications(  # noqa: C901
                 target_node_name = rep.get("target") or ""
                 replication_payload = {
                     "replication_id": rep.get("id", ""),
+                    "endpoint": endpoint_id,
                     "guest": rep.get("guest"),
                     "target": target_node_name,
                     "job_type": rep.get("type"),
@@ -90,6 +158,9 @@ async def sync_all_replications(  # noqa: C901
                     "remove_job": rep.get("remove_job"),
                     "virtual_machine": netbox_vm_id,
                     "proxmox_node": nodes_by_name.get(target_node_name),
+                    "raw_config": rep,
+                    "status": "active",
+                    "tags": _tag_refs,
                 }
                 payloads.append(replication_payload)
 
@@ -97,17 +168,22 @@ async def sync_all_replications(  # noqa: C901
                 logger.warning("Error building payload for replication %s: %s", rep.get("id"), e)
                 results["errors"] += 1
 
-        return payloads
+        return endpoint_id, payloads
 
     # Fetch replications from all Proxmox sessions in parallel
     fetch_tasks = [fetch_replications_for_session(px) for px in pxs]
-    all_payloads_by_session = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
-    # Flatten all payloads from all sessions
-    all_payloads = []
-    for payload_list in all_payloads_by_session:
-        if isinstance(payload_list, list):
-            all_payloads.extend(payload_list)
+    # Flatten all payloads from all sessions, collect per-endpoint IDs
+    all_payloads: list[dict] = []
+    endpoint_ids: set[int] = set()
+    for result in all_results:
+        if isinstance(result, tuple):
+            ep_id, payload_list = result
+            if isinstance(payload_list, list):
+                all_payloads.extend(payload_list)
+            if ep_id:
+                endpoint_ids.add(ep_id)
 
     if not all_payloads:
         logger.info("No replications to sync")
@@ -119,21 +195,25 @@ async def sync_all_replications(  # noqa: C901
             nb,
             "/api/plugins/proxbox/replications/",
             payloads=all_payloads,
-            lookup_fields=["replication_id"],
+            lookup_fields=["replication_id", "endpoint"],
             schema=dict,
             current_normalizer=lambda record: {
                 "replication_id": record.get("replication_id"),
+                "endpoint": _extract_fk_id(record.get("endpoint")),
                 "guest": record.get("guest"),
                 "target": record.get("target"),
-                "job_type": record.get("job_type"),
+                "job_type": _extract_choice_value(record.get("job_type")),
                 "schedule": record.get("schedule"),
                 "rate": record.get("rate"),
                 "comment": record.get("comment"),
                 "disable": record.get("disable"),
                 "source": record.get("source"),
                 "jobnum": record.get("jobnum"),
-                "remove_job": record.get("remove_job"),
-                "virtual_machine": record.get("virtual_machine"),
+                "remove_job": _extract_choice_value(record.get("remove_job")),
+                "virtual_machine": _extract_fk_id(record.get("virtual_machine")),
+                "proxmox_node": _extract_fk_id(record.get("proxmox_node")),
+                "raw_config": record.get("raw_config"),
+                "status": _extract_choice_value(record.get("status")),
             },
         )
 
@@ -149,5 +229,12 @@ async def sync_all_replications(  # noqa: C901
     except Exception as e:
         logger.error("Error during bulk replication reconciliation: %s", e)
         results["errors"] = len(all_payloads)
+        return results
+
+    # Mark stale: replications that exist in NetBox but were not returned by Proxmox
+    synced_ids = {p["replication_id"] for p in all_payloads}
+    for ep_id in endpoint_ids:
+        stale_count = await _mark_stale_replications(nb, synced_ids, ep_id)
+        results["stale"] += stale_count
 
     return results
