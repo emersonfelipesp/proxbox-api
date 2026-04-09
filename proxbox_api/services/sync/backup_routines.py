@@ -204,33 +204,39 @@ async def _fetch_session_payloads(px, nb, results: dict) -> list[dict]:  # noqa:
                 continue
 
             retention = _parse_retention(job)
-            payloads.append({
-                "job_id": job_id,
-                "endpoint": netbox_endpoint_id,
-                "enabled": bool(job.get("enabled", True)),
-                "schedule": job.get("schedule") or "",
-                # node/storage are nullable FKs — send null rather than raw
-                # Proxmox name strings, which DRF would reject as invalid PKs.
-                "node": None,
-                "storage": None,
-                "fleecing_storage": None,
-                # Proxmox uses vmid for VM ID list; selection is the selection type string
-                "selection": _parse_vmid_selection(job.get("vmid")),
-                "keep_last": retention["keep_last"],
-                "keep_daily": retention["keep_daily"],
-                "keep_weekly": retention["keep_weekly"],
-                "keep_monthly": retention["keep_monthly"],
-                "keep_yearly": retention["keep_yearly"],
-                "keep_all": retention["keep_all"],
-                "bwlimit": job.get("bwlimit"),
-                "zstd": job.get("zstd"),
-                "io_workers": job.get("io_workers"),
-                "fleecing": job.get("fleecing"),
-                "repeat_missed": job.get("repeat-missed") if "repeat-missed" in job else job.get("repeat_missed"),
-                "pbs_change_detection_mode": job.get("pbs-change-detection-mode") if "pbs-change-detection-mode" in job else job.get("pbs_change_detection_mode"),
-                "raw_config": job,
-                "status": "active",
-            })
+            payloads.append(
+                {
+                    "job_id": job_id,
+                    "endpoint": netbox_endpoint_id,
+                    "enabled": bool(job.get("enabled", True)),
+                    "schedule": job.get("schedule") or "",
+                    # node/storage are nullable FKs — send null rather than raw
+                    # Proxmox name strings, which DRF would reject as invalid PKs.
+                    "node": None,
+                    "storage": None,
+                    "fleecing_storage": None,
+                    # Proxmox uses vmid for VM ID list; selection is the selection type string
+                    "selection": _parse_vmid_selection(job.get("vmid")),
+                    "keep_last": retention["keep_last"],
+                    "keep_daily": retention["keep_daily"],
+                    "keep_weekly": retention["keep_weekly"],
+                    "keep_monthly": retention["keep_monthly"],
+                    "keep_yearly": retention["keep_yearly"],
+                    "keep_all": retention["keep_all"],
+                    "bwlimit": job.get("bwlimit"),
+                    "zstd": job.get("zstd"),
+                    "io_workers": job.get("io_workers"),
+                    "fleecing": job.get("fleecing"),
+                    "repeat_missed": job.get("repeat-missed")
+                    if "repeat-missed" in job
+                    else job.get("repeat_missed"),
+                    "pbs_change_detection_mode": job.get("pbs-change-detection-mode")
+                    if "pbs-change-detection-mode" in job
+                    else job.get("pbs_change_detection_mode"),
+                    "raw_config": job,
+                    "status": "active",
+                }
+            )
         except Exception as e:
             logger.warning("Error building payload for backup routine %s: %s", job.get("id"), e)
             results["errors"] += 1
@@ -302,8 +308,7 @@ async def sync_all_backup_routines(
         await bridge.emit_discovery(
             phase="backup-routines",
             items=[
-                {"name": str(p.get("job_id", "")), "type": "backup-routine"}
-                for p in all_payloads
+                {"name": str(p.get("job_id", "")), "type": "backup-routine"} for p in all_payloads
             ],
             message=f"Discovered {len(all_payloads)} backup routine(s) to synchronize",
         )

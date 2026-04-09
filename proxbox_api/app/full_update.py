@@ -907,6 +907,24 @@ async def full_update_sync_stream(  # noqa: C901
                     },
                 },
             )
+        except asyncio.CancelledError:
+            yield sse_event(
+                "error",
+                {
+                    "step": "full-update",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Full update sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
+                },
+            )
         except ProxboxException as error:
             yield sse_event(
                 "error_detail",

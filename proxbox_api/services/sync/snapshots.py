@@ -516,10 +516,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     if use_websocket and websocket and hasattr(websocket, "emit_discovery"):
         await websocket.emit_discovery(
             phase="vm-snapshots",
-            items=[
-                {"name": str(vm.get("name", "")), "type": "virtual-machine"}
-                for vm in vms
-            ],
+            items=[{"name": str(vm.get("name", "")), "type": "virtual-machine"} for vm in vms],
             message=f"Discovered {total_vms} VM(s) to scan for snapshots",
         )
 

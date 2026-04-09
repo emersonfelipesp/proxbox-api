@@ -341,10 +341,7 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
         if hasattr(websocket, "emit_discovery"):
             await websocket.emit_discovery(
                 phase="task-history",
-                items=[
-                    {"name": vm.get("name", ""), "type": "vm"}
-                    for vm in vms_with_proxmox_id
-                ],
+                items=[{"name": vm.get("name", ""), "type": "vm"} for vm in vms_with_proxmox_id],
                 message=f"Starting task history sync for {total_vms} VMs",
             )
         elif use_websocket:

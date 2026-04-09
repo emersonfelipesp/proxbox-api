@@ -925,6 +925,13 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
         _fake_task_history,
     )
+    async def _fake_ensure_ip_assigned(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_network.ensure_ip_assigned_to_vm",
+        _fake_ensure_ip_assigned,
+    )
 
     result = asyncio.run(
         create_virtual_machines(

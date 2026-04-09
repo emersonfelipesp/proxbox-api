@@ -122,8 +122,12 @@ async def sync_backup_routine_individual(
             "zstd": target_job.get("zstd"),
             "io_workers": target_job.get("io_workers"),
             "fleecing": target_job.get("fleecing"),
-            "repeat_missed": target_job.get("repeat-missed") if "repeat-missed" in target_job else target_job.get("repeat_missed"),
-            "pbs_change_detection_mode": target_job.get("pbs-change-detection-mode") if "pbs-change-detection-mode" in target_job else target_job.get("pbs_change_detection_mode"),
+            "repeat_missed": target_job.get("repeat-missed")
+            if "repeat-missed" in target_job
+            else target_job.get("repeat_missed"),
+            "pbs_change_detection_mode": target_job.get("pbs-change-detection-mode")
+            if "pbs-change-detection-mode" in target_job
+            else target_job.get("pbs_change_detection_mode"),
             "raw_config": target_job,
             "status": "active",
             "tags": tag_refs,
