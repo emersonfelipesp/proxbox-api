@@ -181,7 +181,7 @@ def get_settings(
 
     settings = fetch_settings_from_netbox(netbox_session)
     if settings is None:
-        return get_default_settings()
+        settings = get_default_settings()
 
     _SETTINGS_CACHE = settings
     _SETTINGS_CACHE_TIME = now

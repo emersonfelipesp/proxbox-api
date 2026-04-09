@@ -10,6 +10,7 @@ import bcrypt
 from fastapi import Depends
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -21,7 +22,7 @@ sqlite_url = f"sqlite:///{sqlite_file_name}"
 async_sqlite_url = f"sqlite+aiosqlite:///{sqlite_file_name}"
 
 connect_args = {"check_same_thread": False}
-engine = create_engine(sqlite_url, connect_args=connect_args)
+engine = create_engine(sqlite_url, connect_args=connect_args, poolclass=NullPool)
 
 async_engine = create_async_engine(async_sqlite_url, connect_args=connect_args)
 async_session_factory = async_sessionmaker(
