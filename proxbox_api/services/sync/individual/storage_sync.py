@@ -77,17 +77,17 @@ async def sync_storage_individual(
         path = storage_config.get("path", None)
         nodes = storage_config.get("nodes", None)
         shared = storage_config.get("shared", 0)
-        enabled = storage_config.get("enabled", 1)
+        disable = storage_config.get("disable", 0)
 
         if isinstance(shared, str):
             shared = shared.lower() in ("1", "true", "yes")
         else:
             shared = bool(shared)
 
-        if isinstance(enabled, str):
-            enabled = enabled.lower() not in ("0", "false", "no")
+        if isinstance(disable, str):
+            enabled = disable.lower() not in ("1", "true", "yes")
         else:
-            enabled = bool(enabled)
+            enabled = not bool(disable)
 
         storage_payload: dict[str, object] = {
             "cluster": cluster_id,
@@ -98,17 +98,36 @@ async def sync_storage_individual(
             "nodes": nodes,
             "shared": shared,
             "enabled": enabled,
+            "server": storage_config.get("server"),
+            "port": storage_config.get("port"),
+            "username": storage_config.get("username"),
+            "export": storage_config.get("export"),
+            "share": storage_config.get("share"),
+            "pool": storage_config.get("pool"),
+            "monhost": storage_config.get("monhost"),
+            "namespace": storage_config.get("namespace"),
+            "datastore": storage_config.get("datastore"),
+            "subdir": storage_config.get("subdir"),
+            "mountpoint": storage_config.get("mountpoint"),
+            "is_mountpoint": storage_config.get("is_mountpoint"),
+            "preallocation": storage_config.get("preallocation"),
+            "format": storage_config.get("format"),
+            "prune_backups": storage_config.get("prune-backups"),
+            "max_protected_backups": storage_config.get("max-protected-backups"),
+            "raw_config": storage_config,
             "tags": tag_refs,
         }
 
         storage_record = await rest_reconcile_async(
             nb,
             "/api/plugins/proxbox/storage/",
-            lookup={"name": storage_name},
+            lookup={"cluster": cluster_id, "name": storage_name},
             payload=storage_payload,
             schema=NetBoxStorageSyncState,
             current_normalizer=lambda record: {
-                "cluster": record.get("cluster"),
+                "cluster": record.get("cluster", {}).get("id")
+                if isinstance(record.get("cluster"), dict)
+                else record.get("cluster"),
                 "name": record.get("name"),
                 "storage_type": record.get("storage_type"),
                 "content": record.get("content"),
@@ -116,6 +135,23 @@ async def sync_storage_individual(
                 "nodes": record.get("nodes"),
                 "shared": record.get("shared"),
                 "enabled": record.get("enabled"),
+                "server": record.get("server"),
+                "port": record.get("port"),
+                "username": record.get("username"),
+                "export": record.get("export"),
+                "share": record.get("share"),
+                "pool": record.get("pool"),
+                "monhost": record.get("monhost"),
+                "namespace": record.get("namespace"),
+                "datastore": record.get("datastore"),
+                "subdir": record.get("subdir"),
+                "mountpoint": record.get("mountpoint"),
+                "is_mountpoint": record.get("is_mountpoint"),
+                "preallocation": record.get("preallocation"),
+                "format": record.get("format"),
+                "prune_backups": record.get("prune_backups"),
+                "max_protected_backups": record.get("max_protected_backups"),
+                "raw_config": record.get("raw_config"),
                 "tags": record.get("tags"),
             },
         )

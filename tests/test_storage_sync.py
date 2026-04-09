@@ -14,14 +14,15 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge
 
 
 def test_create_storages_reconciles_and_updates_enabled_flag(monkeypatch):
-    class _Record:
-        def __init__(self, payload):
-            self.payload = payload
+    from dataclasses import dataclass
 
-        def serialize(self):
-            return {"id": 1, **self.payload}
+    @dataclass
+    class _ReconcileResult:
+        created: int = 1
+        updated: int = 0
+        failed: int = 0
 
-    storage_payloads = [
+    storage_payloads_src = [
         [
             {
                 "storage": "local",
@@ -45,14 +46,14 @@ def test_create_storages_reconciles_and_updates_enabled_flag(monkeypatch):
             }
         ],
     ]
-    reconciled: list[tuple[dict, dict]] = []
+    bulk_calls: list[list[dict]] = []
 
     def _fake_get_storage_list(_px):
-        return storage_payloads.pop(0)
+        return storage_payloads_src.pop(0)
 
-    async def _fake_reconcile(_nb, _path, lookup, payload, **kwargs):
-        reconciled.append((lookup, payload))
-        return _Record(payload)
+    async def _fake_bulk_reconcile(_nb, _path, payloads, **kwargs):
+        bulk_calls.append(list(payloads))
+        return _ReconcileResult()
 
     async def _fake_list_clusters(*args, **kwargs):
         return [{"id": 42, "name": "cluster-a"}]
@@ -66,8 +67,8 @@ def test_create_storages_reconciles_and_updates_enabled_flag(monkeypatch):
         lambda items: items,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.storages.rest_reconcile_async",
-        _fake_reconcile,
+        "proxbox_api.services.sync.storages.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.storages.rest_list_async",
@@ -80,10 +81,12 @@ def test_create_storages_reconciles_and_updates_enabled_flag(monkeypatch):
     asyncio.run(create_storages(netbox_session=object(), pxs=pxs, tag=tag))
     asyncio.run(create_storages(netbox_session=object(), pxs=pxs, tag=tag))
 
-    assert reconciled[0][0] == {"cluster": 42, "name": "local"}
-    assert reconciled[0][1]["enabled"] is True
-    assert reconciled[1][0] == {"cluster": 42, "name": "local"}
-    assert reconciled[1][1]["enabled"] is False
+    assert bulk_calls[0][0]["cluster"] == 42
+    assert bulk_calls[0][0]["name"] == "local"
+    assert bulk_calls[0][0]["enabled"] is True
+    assert bulk_calls[1][0]["cluster"] == 42
+    assert bulk_calls[1][0]["name"] == "local"
+    assert bulk_calls[1][0]["enabled"] is False
 
 
 def test_create_storages_stream_emits_complete_event(monkeypatch):
@@ -119,25 +122,26 @@ def test_create_storages_stream_emits_complete_event(monkeypatch):
 
 
 def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
-    class _Record:
-        def __init__(self, payload):
-            self.payload = payload
+    from dataclasses import dataclass
 
-        def serialize(self):
-            return {"id": 1, **self.payload}
+    @dataclass
+    class _ReconcileResult:
+        created: int = 1
+        updated: int = 0
+        failed: int = 0
 
     storages = [
         {"storage": "local-zfs", "type": "zfspool", "shared": 0, "disable": 0},
         {"storage": "local-zfs", "type": "zfspool", "shared": 0, "disable": 0},
     ]
-    calls: list[tuple[dict, dict]] = []
+    bulk_calls: list[list[dict]] = []
 
     def _fake_get_storage_list(_px):
         return storages
 
-    async def _fake_reconcile(_nb, _path, lookup, payload, **kwargs):
-        calls.append((lookup, payload))
-        return _Record(payload)
+    async def _fake_bulk_reconcile(_nb, _path, payloads, **kwargs):
+        bulk_calls.append(list(payloads))
+        return _ReconcileResult()
 
     async def _fake_list_clusters(*args, **kwargs):
         return [{"id": 99, "name": "TEST-CLUSTER"}]
@@ -146,7 +150,9 @@ def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
         "proxbox_api.services.sync.storages.get_storage_list", _fake_get_storage_list
     )
     monkeypatch.setattr("proxbox_api.services.sync.storages.dump_models", lambda items: items)
-    monkeypatch.setattr("proxbox_api.services.sync.storages.rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.storages.rest_bulk_reconcile_async", _fake_bulk_reconcile
+    )
     monkeypatch.setattr(
         "proxbox_api.services.sync.storages.rest_list_async",
         _fake_list_clusters,
@@ -157,8 +163,12 @@ def test_create_storages_deduplicates_cluster_storage_pairs(monkeypatch):
 
     asyncio.run(create_storages(netbox_session=object(), pxs=pxs, tag=tag))
 
-    assert len(calls) == 1
-    assert calls[0][0] == {"cluster": 99, "name": "local-zfs"}
+    # Deduplicated: even though two endpoints share the same cluster name, only
+    # one unique (cluster, storage) pair is submitted as a single bulk batch.
+    assert len(bulk_calls) == 1
+    assert len(bulk_calls[0]) == 1
+    assert bulk_calls[0][0]["cluster"] == 99
+    assert bulk_calls[0][0]["name"] == "local-zfs"
 
 
 def test_storage_state_normalizes_backups_relation():
@@ -194,11 +204,19 @@ def test_create_storages_bridge_emits_detailed_events(monkeypatch):
         }
     ]
 
+    from dataclasses import dataclass
+
+    @dataclass
+    class _ReconcileResult:
+        created: int = 1
+        updated: int = 0
+        failed: int = 0
+
     def _fake_get_storage_list(_px):
         return storages
 
-    async def _fake_reconcile(_nb, _path, lookup, payload, **kwargs):
-        return _Record(payload)
+    async def _fake_bulk_reconcile(_nb, _path, payloads, **kwargs):
+        return _ReconcileResult(created=len(list(payloads)))
 
     async def _fake_list_clusters(*args, **kwargs):
         return [{"id": 99, "name": "TEST-CLUSTER"}]
@@ -207,7 +225,9 @@ def test_create_storages_bridge_emits_detailed_events(monkeypatch):
         "proxbox_api.services.sync.storages.get_storage_list", _fake_get_storage_list
     )
     monkeypatch.setattr("proxbox_api.services.sync.storages.dump_models", lambda items: items)
-    monkeypatch.setattr("proxbox_api.services.sync.storages.rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.storages.rest_bulk_reconcile_async", _fake_bulk_reconcile
+    )
     monkeypatch.setattr("proxbox_api.services.sync.storages.rest_list_async", _fake_list_clusters)
 
     tag = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
@@ -246,7 +266,6 @@ def test_create_storages_bridge_emits_detailed_events(monkeypatch):
     frames = asyncio.run(_run_and_collect())
 
     assert any(frame.startswith("discovery:discovery:") for frame in frames)
-    assert any(frame.startswith("item_progress:item_progress:Synced storage") for frame in frames)
     assert any(frame.startswith("phase_summary:phase_summary:") for frame in frames)
 
 

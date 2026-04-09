@@ -386,6 +386,8 @@ class NetBoxBackupSyncState(BaseModel):
     subtype: str | None = None
     creation_time: str | None = None
     size: int | None = None
+    used: int | None = None
+    encrypted: str | None = None
     verification_state: str | None = None
     verification_upid: str | None = None
     volume_id: str
@@ -454,7 +456,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
     upid: str
     node: str
     pid: int | None = None
-    pstart: str | None = None
+    pstart: int | None = None
     task_id: str | None = None
     task_type: str
     username: str
@@ -470,12 +472,21 @@ class NetBoxTaskHistorySyncState(BaseModel):
     @field_validator(
         "virtual_machine",
         "pid",
-        "pstart",
         mode="before",
     )
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("pstart", mode="before")
+    @classmethod
+    def normalize_pstart(cls, value: object) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @field_validator(
         "vm_type",
@@ -496,7 +507,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
         text = str(value).strip()
         return text or None
 
-    @field_validator("pstart", "start_time", "end_time", mode="before")
+    @field_validator("start_time", "end_time", mode="before")
     @classmethod
     def normalize_datetimes(cls, value: object) -> object:
         normalized = _task_datetime(value)
@@ -570,6 +581,30 @@ class NetBoxStorageSyncState(BaseModel):
     nodes: str | None = None
     shared: bool = False
     enabled: bool = True
+    # Remote-host fields
+    server: str | None = None
+    port: int | None = None
+    username: str | None = None
+    # NFS / CIFS
+    export: str | None = None
+    share: str | None = None
+    # Ceph / RBD
+    pool: str | None = None
+    monhost: str | None = None
+    namespace: str | None = None
+    # PBS
+    datastore: str | None = None
+    subdir: str | None = None
+    # Filesystem
+    mountpoint: str | None = None
+    is_mountpoint: str | None = None
+    preallocation: str | None = None
+    format: str | None = None
+    # Retention / backup
+    prune_backups: str | None = Field(None, alias="prune-backups")
+    max_protected_backups: int | None = Field(None, alias="max-protected-backups")
+    # Full raw config
+    raw_config: dict[str, object] = Field(default_factory=dict)
     backups: list[int] = Field(default_factory=list)
     tags: list[NetBoxTagRef] = Field(default_factory=list)
 
