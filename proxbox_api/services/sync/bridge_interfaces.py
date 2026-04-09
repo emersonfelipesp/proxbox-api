@@ -10,12 +10,61 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_rest import rest_create_async, rest_first_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxInterfaceSyncState,
     NetBoxVirtualMachineInterfaceSyncState,
 )
+
+
+def _normalize_node_interface_record(record: dict[str, object]) -> dict[str, object]:
+    return {
+        "device": record.get("device"),
+        "name": record.get("name"),
+        "type": record.get("type"),
+        "status": record.get("status"),
+        "tags": record.get("tags"),
+        "custom_fields": record.get("custom_fields"),
+    }
+
+
+def _record_dict(record: object) -> dict[str, object]:
+    if isinstance(record, dict):
+        return record
+    serializer = getattr(record, "serialize", None)
+    if callable(serializer):
+        serialized = serializer()
+        if isinstance(serialized, dict):
+            return serialized
+    as_dict = getattr(record, "dict", None)
+    if callable(as_dict):
+        dumped = as_dict()
+        if isinstance(dumped, dict):
+            return dumped
+    return {}
+
+
+async def _reconcile_existing_node_bridge(record: object, payload: dict[str, object]) -> dict:
+    desired_model = NetBoxInterfaceSyncState.model_validate(payload)
+    desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
+
+    current_payload = NetBoxInterfaceSyncState.model_validate(
+        _normalize_node_interface_record(_record_dict(record))
+    ).model_dump(exclude_none=True, by_alias=True)
+
+    # NetBox forbids moving interface components between devices; keep reconcile local.
+    patch_payload = {
+        key: value
+        for key, value in desired_payload.items()
+        if key != "device" and current_payload.get(key) != value
+    }
+    if patch_payload and hasattr(record, "save"):
+        for field, value in patch_payload.items():
+            setattr(record, field, value)
+        await record.save()
+    return _record_dict(record)
 
 
 async def ensure_node_bridge_interface(
@@ -40,30 +89,45 @@ async def ensure_node_bridge_interface(
     if now is None:
         now = datetime.now(timezone.utc)
     try:
-        record = await rest_reconcile_async(
-            nb,
-            "/api/dcim/interfaces/",
-            lookup={"device_id": device_id, "name": bridge_name},
-            payload={
-                "device": device_id,
-                "name": bridge_name,
-                "type": "bridge",
-                "status": "active",
-                "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-            },
-            schema=NetBoxInterfaceSyncState,
-            current_normalizer=lambda rec: {
-                "device": rec.get("device"),
-                "name": rec.get("name"),
-                "type": rec.get("type"),
-                "status": rec.get("status"),
-                "tags": rec.get("tags"),
-                "custom_fields": rec.get("custom_fields"),
-            },
-        )
+        payload = {
+            "device": device_id,
+            "name": bridge_name,
+            "type": "bridge",
+            "status": "active",
+            "tags": tag_refs,
+            "custom_fields": {"proxmox_last_updated": now.isoformat()},
+        }
+        strict_query = {"device_id": device_id, "name": bridge_name, "limit": 2}
+        existing = await rest_first_async(nb, "/api/dcim/interfaces/", query=strict_query)
+
+        if existing is None:
+            try:
+                record = await rest_create_async(nb, "/api/dcim/interfaces/", payload)
+            except ProxboxException:
+                # Another worker may have created it; re-fetch with strict device scoping.
+                existing = await rest_first_async(nb, "/api/dcim/interfaces/", query=strict_query)
+                if existing is None:
+                    raise
+                record = await _reconcile_existing_node_bridge(existing, payload)
+            else:
+                record = _record_dict(record)
+        else:
+            record = await _reconcile_existing_node_bridge(existing, payload)
+
         if not isinstance(record, dict):
-            record = getattr(record, "dict", lambda: {})()
+            record = _record_dict(record)
+        if not record:
+            # Fallback: keep previous behavior and try generic reconcile if record payload was malformed.
+            record = await rest_reconcile_async(
+                nb,
+                "/api/dcim/interfaces/",
+                lookup={"device_id": device_id, "name": bridge_name},
+                payload=payload,
+                schema=NetBoxInterfaceSyncState,
+                current_normalizer=_normalize_node_interface_record,
+                patchable_fields={"name", "type", "status", "tags", "custom_fields"},
+            )
+            record = _record_dict(record)
         return record or {}
     except Exception as exc:
         logger.warning(
