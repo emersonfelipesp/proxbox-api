@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
@@ -106,7 +107,7 @@ async def _resolve_vlan_id(
         return None
 
 
-async def sync_interface_individual(
+async def sync_interface_individual(  # noqa: C901
     nb: object,
     px: object,
     tag: object,
@@ -251,7 +252,33 @@ async def sync_interface_individual(
             interface_name=interface_name,
         )
 
+        # Resolve node device and create bridge interfaces (dcim on node + VMInterface on VM)
         bridge_id: int | None = None
+        bridge_name = target_config.get("bridge")
+        if bridge_name and vm_id:
+            from proxbox_api.netbox_rest import rest_first_async
+            from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+            try:
+                device_record = await rest_first_async(
+                    nb,
+                    "/api/dcim/devices/",
+                    query={"name": node, "limit": 1},
+                )
+                device_id = (
+                    device_record.get("id")
+                    if isinstance(device_record, dict)
+                    else getattr(device_record, "id", None)
+                ) if device_record else None
+                bridge_id = await ensure_bridge_interfaces(
+                    nb, device_id, int(vm_id), bridge_name, tag_refs, now
+                )
+            except Exception as bridge_exc:
+                logger.warning(
+                    "Failed to create bridge %s for interface %s: %s",
+                    bridge_name,
+                    interface_name,
+                    bridge_exc,
+                )
 
         interface_payload: dict[str, object] = {
             "name": resolved_name,

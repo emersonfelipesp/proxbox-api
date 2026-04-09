@@ -671,54 +671,27 @@ async def _create_vm_interface_parallel(
     use_guest_agent_interface_name: bool,
     ignore_ipv6_link_local_addresses: bool,
     now: datetime,
+    device: dict | None = None,
 ) -> dict:
     """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
 
     Returns a dict with 'interface' (the created interface), 'ip' (the created IP or None),
     and 'first_ip_id' (first IP id found, for setting VM primary_ip).
     """
+    from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
     vm_id = virtual_machine.get("id")
     result: dict = {"interface": None, "ip": None, "first_ip_id": None}
 
-    bridge: dict = {}
+    bridge_id: int | None = None
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id:
-        existing_bridge = await rest_first_async(
-            nb,
-            "/api/virtualization/interfaces/",
-            query={"name": bridge_name, "virtual_machine_id": vm_id},
+        device_id = (
+            device.get("id") if isinstance(device, dict) else getattr(device, "id", None)
         )
-        if existing_bridge:
-            bridge = (
-                existing_bridge.serialize()
-                if hasattr(existing_bridge, "serialize")
-                else dict(existing_bridge)
-            )
-        else:
-            bridge = await rest_reconcile_async(
-                nb,
-                "/api/virtualization/interfaces/",
-                lookup={"name": bridge_name, "virtual_machine_id": vm_id},
-                payload={
-                    "name": bridge_name,
-                    "virtual_machine": vm_id,
-                    "type": "bridge",
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
-                schema=NetBoxVirtualMachineInterfaceSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "virtual_machine": record.get("virtual_machine"),
-                    "type": record.get("type"),
-                    "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
-                },
-            )
-            if not isinstance(bridge, dict):
-                bridge = getattr(bridge, "dict", lambda: {})()
-        if bridge and not isinstance(bridge, dict):
-            bridge = getattr(bridge, "dict", lambda: {})()
+        bridge_id = await ensure_bridge_interfaces(
+            nb, device_id, vm_id, bridge_name, tag_refs, now
+        )
 
     vlan_nb_id: int | None = None
     vlan_tag_raw = interface_config.get("tag")
@@ -768,7 +741,7 @@ async def _create_vm_interface_parallel(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "bridge": bridge.get("id") if bridge else None,
+        "bridge": bridge_id,
         "mac_address": mac_address,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
@@ -1801,6 +1774,7 @@ async def create_virtual_machines(  # noqa: C901
                                 use_guest_agent_interface_name=use_guest_agent_interface_name,
                                 ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                                 now=now,
+                                device=device,
                             )
                         )
 
@@ -2209,6 +2183,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                         "vlan_tag": vlan_tag,
                         "bridge_name": bridge_name,
                         "vm_id": netbox_vm.get("id"),
+                        "resource_node": resource_node,
                         "resolved_name": resolved_name,
                         "config_dict": config_dict,
                         "guest_iface": guest_iface,
@@ -2366,6 +2341,88 @@ async def create_only_vm_interfaces(  # noqa: C901
             logger.error("Error during interface bulk reconciliation: %s", e)
     else:
         results = []
+
+    # Create node-level dcim bridge interfaces and per-VM bridge VMInterfaces for
+    # any NIC that references a Proxmox bridge (e.g. vmbr0, vmbr1).  The bulk
+    # path skips bridge resolution during payload collection, so we handle it here
+    # after all VM interfaces exist.  Then update each NIC's bridge FK.
+    if all_interface_info:
+        from proxbox_api.netbox_rest import rest_first_async
+        from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
+        node_device_id_cache: dict[str, int | None] = {}
+
+        async def _resolve_device_id(node_name: str) -> int | None:
+            if node_name in node_device_id_cache:
+                return node_device_id_cache[node_name]
+            try:
+                device_record = await rest_first_async(
+                    nb,
+                    "/api/dcim/devices/",
+                    query={"name": node_name, "limit": 1},
+                )
+                did = (
+                    device_record.get("id")
+                    if isinstance(device_record, dict)
+                    else getattr(device_record, "id", None)
+                )
+            except Exception:
+                did = None
+            node_device_id_cache[node_name] = did
+            return did
+
+        for key, info in all_interface_info.items():
+            bridge_name = info.get("bridge_name")
+            if not bridge_name:
+                continue
+            vm_id_val = info.get("vm_id")
+            resource_node_val = info.get("resource_node", "")
+            if not vm_id_val:
+                continue
+            try:
+                device_id_val = await _resolve_device_id(resource_node_val) if resource_node_val else None
+                vm_bridge_id = await ensure_bridge_interfaces(
+                    nb, device_id_val, int(vm_id_val), bridge_name, tag_refs, now
+                )
+                # Update the NIC interface in NetBox to set the bridge FK.
+                if vm_bridge_id:
+                    resolved_name = info.get("resolved_name", "")
+                    if resolved_name:
+                        try:
+                            existing_iface = await rest_first_async(
+                                nb,
+                                "/api/virtualization/interfaces/",
+                                query={
+                                    "virtual_machine_id": int(vm_id_val),
+                                    "name": resolved_name,
+                                    "limit": 1,
+                                },
+                            )
+                            if existing_iface:
+                                iface_id = (
+                                    existing_iface.get("id")
+                                    if isinstance(existing_iface, dict)
+                                    else getattr(existing_iface, "id", None)
+                                )
+                                if iface_id:
+                                    await nb.patch(
+                                        f"/api/virtualization/interfaces/{iface_id}/",
+                                        json={"bridge": vm_bridge_id},
+                                    )
+                        except Exception as patch_exc:
+                            logger.warning(
+                                "Failed to set bridge FK on interface %s (VM %s): %s",
+                                resolved_name,
+                                vm_id_val,
+                                patch_exc,
+                            )
+            except Exception as bridge_exc:
+                logger.warning(
+                    "Failed to create bridge interfaces for %s on VM %s: %s",
+                    bridge_name,
+                    vm_id_val,
+                    bridge_exc,
+                )
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_interface", "end": True})

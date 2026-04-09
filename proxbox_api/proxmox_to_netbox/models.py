@@ -264,12 +264,13 @@ class NetBoxInterfaceSyncState(BaseModel):
     name: str
     status: str = "active"
     type: str
+    bridge: int | None = None
     untagged_vlan: int | None = None
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("device", "untagged_vlan", mode="before")
+    @field_validator("device", "bridge", "untagged_vlan", mode="before")
     @classmethod
     def normalize_device(cls, value: object) -> object:
         return _relation_id(value)

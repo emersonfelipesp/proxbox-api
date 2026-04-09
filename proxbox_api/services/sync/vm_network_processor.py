@@ -7,10 +7,7 @@ from datetime import datetime
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
-from proxbox_api.proxmox_to_netbox.models import (
-    NetBoxVirtualMachineInterfaceSyncState,
-    NetBoxVlanSyncState,
-)
+from proxbox_api.proxmox_to_netbox.models import NetBoxVlanSyncState
 from proxbox_api.services.sync.vm_helpers import normalized_mac
 
 
@@ -25,6 +22,7 @@ async def process_vm_network_interface(  # noqa: C901
     tag_refs: list[dict[str, object]],
     resource_node: str,
     now: datetime | None = None,
+    device: dict | None = None,
 ) -> dict[str, object] | None:
     """Process a single VM network interface with flattened logic (no deep nesting).
 
@@ -76,7 +74,7 @@ async def process_vm_network_interface(  # noqa: C901
         if guest_name:
             resolved_interface_name = guest_name
 
-    # Process bridge interface
+    # Process bridge interface — create dcim bridge on node + per-VM bridge VMInterface
     result = {
         "interface_name": resolved_interface_name,
         "mac_address": interface_config.get("virtio", interface_config.get("hwaddr")),
@@ -84,41 +82,18 @@ async def process_vm_network_interface(  # noqa: C901
         "bridge_id": None,
     }
 
-    # Create/sync bridge if configured
+    # Create/sync bridge: dcim.Interface on node device + VMInterface on this VM
     bridge_name = interface_config.get("bridge")
     if bridge_name:
         try:
-            bridge = await rest_reconcile_async(
-                nb,
-                "/api/virtualization/interfaces/",
-                lookup={"virtual_machine_id": vm_id, "name": bridge_name},
-                payload={
-                    "name": bridge_name,
-                    "virtual_machine": vm_id,
-                    "type": "bridge",
-                    "description": f"Bridge interface of Device {resource_node}.",
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
-                schema=NetBoxVirtualMachineInterfaceSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "virtual_machine": record.get("virtual_machine"),
-                    "type": record.get("type"),
-                    "description": record.get("description"),
-                    "bridge": record.get("bridge"),
-                    "enabled": record.get("enabled"),
-                    "mac_address": record.get("mac_address"),
-                    "untagged_vlan": record.get("untagged_vlan"),
-                    "mode": record.get("mode"),
-                    "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
-                },
+            from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+            device_id = (
+                device.get("id") if isinstance(device, dict)
+                else getattr(device, "id", None)
+            ) if device else None
+            result["bridge_id"] = await ensure_bridge_interfaces(
+                nb, device_id, int(vm_id), bridge_name, tag_refs, now
             )
-            if bridge:
-                result["bridge_id"] = (
-                    bridge.get("id") if isinstance(bridge, dict) else getattr(bridge, "id", None)
-                )
         except Exception as e:
             logger.warning(f"Failed to create bridge {bridge_name}: {e}")
 

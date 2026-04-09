@@ -342,25 +342,22 @@ async def _reconcile_vm_interface_record(
     tag_refs: list[dict],
     use_guest_agent_interface_name: bool,
     now: datetime,
+    device: dict | None = None,
 ) -> tuple[dict[str, object], int | None, str | None]:
     """Create or update the VM interface record."""
+    from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
     vm_id = virtual_machine.get("id")
-    bridge: dict = {}
+    bridge_id: int | None = None
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id is not None:
-        bridge = await rest_first_async(
-            nb,
-            "/api/virtualization/interfaces/",
-            query={
-                "name": bridge_name,
-                "virtual_machine_id": vm_id,
-                "limit": 1,
-            },
+        device_id = (
+            device.get("id") if isinstance(device, dict)
+            else getattr(device, "id", None)
+        ) if device else None
+        bridge_id = await ensure_bridge_interfaces(
+            nb, device_id, int(vm_id), bridge_name, tag_refs, now
         )
-        if bridge and isinstance(bridge, dict):
-            bridge = {"id": bridge.get("id")}
-        else:
-            bridge = {}
 
     vlan_nb_id = await _resolve_vm_interface_vlan(
         nb,
@@ -380,7 +377,7 @@ async def _reconcile_vm_interface_record(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "bridge": bridge.get("id") if bridge else None,
+        "bridge": bridge_id,
         "mac_address": mac_address,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
@@ -621,6 +618,7 @@ async def sync_vm_interface_and_ip(
     create_ip: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
     now: datetime | None = None,
+    device: dict | None = None,
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -636,6 +634,7 @@ async def sync_vm_interface_and_ip(
             tag_refs,
             use_guest_agent_interface_name,
             now,
+            device=device,
         )
     else:
         vm_interface = await rest_first_async(

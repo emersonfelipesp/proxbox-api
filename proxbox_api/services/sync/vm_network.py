@@ -27,6 +27,7 @@ async def sync_vm_interfaces(  # noqa: C901
     tag_refs: list[dict[str, object]],
     use_guest_agent_interface_name: bool = True,
     now: datetime | None = None,
+    device: dict | None = None,
 ) -> tuple[list[dict[str, object]], int | None]:
     """Synchronize VM interfaces and IP addresses.
 
@@ -39,6 +40,7 @@ async def sync_vm_interfaces(  # noqa: C901
         tag_refs: Tag references for NetBox objects
         use_guest_agent_interface_name: Whether to use guest agent names
         now: Current datetime for timestamps
+        device: NetBox node device dict (used to create node-level bridge interfaces)
 
     Returns:
         Tuple of (created_interfaces, first_ip_id)
@@ -86,35 +88,18 @@ async def sync_vm_interfaces(  # noqa: C901
                 use_guest_agent_interface_name,
             )
 
-            # Create bridge interface if needed
+            # Create node-level dcim bridge and per-VM bridge VMInterface if needed
             bridge_name = config_dict.get("bridge")
-            bridge = {}
-            if bridge_name:
-                bridge = await rest_reconcile_async(
-                    nb,
-                    "/api/virtualization/interfaces/",
-                    lookup={
-                        "virtual_machine_id": vm_id,
-                        "name": bridge_name,
-                    },
-                    payload={
-                        "name": bridge_name,
-                        "virtual_machine": vm_id,
-                        "type": "bridge",
-                        "tags": tag_refs,
-                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                    },
-                    schema=NetBoxVirtualMachineInterfaceSyncState,
-                    current_normalizer=lambda record: {
-                        "name": record.get("name"),
-                        "virtual_machine": record.get("virtual_machine"),
-                        "type": record.get("type"),
-                        "tags": record.get("tags"),
-                        "custom_fields": record.get("custom_fields"),
-                    },
+            bridge_id: int | None = None
+            if bridge_name and vm_id:
+                from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+                device_id = (
+                    device.get("id") if isinstance(device, dict)
+                    else getattr(device, "id", None)
+                ) if device else None
+                bridge_id = await ensure_bridge_interfaces(
+                    nb, device_id, int(vm_id), bridge_name, tag_refs, now
                 )
-                if not isinstance(bridge, dict):
-                    bridge = bridge.dict()
 
             # Resolve VLAN tag from Proxmox config
             vlan_nb_id: int | None = None
@@ -166,7 +151,7 @@ async def sync_vm_interfaces(  # noqa: C901
                     "virtual_machine": vm_id,
                     "name": resolved_interface_name,
                     "enabled": True,
-                    "bridge": bridge.get("id") if bridge else None,
+                    "bridge": bridge_id,
                     "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
                     "untagged_vlan": vlan_nb_id,
                     "mode": "access" if vlan_nb_id is not None else None,
