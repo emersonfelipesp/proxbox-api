@@ -2181,7 +2181,6 @@ async def create_only_vm_interfaces(  # noqa: C901
                     payload = {
                         "name": resolved_name,
                         "enabled": True,
-                        "bridge": None,
                         "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
                         "untagged_vlan": None,
                         "mode": None,
