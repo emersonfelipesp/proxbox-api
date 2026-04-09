@@ -146,7 +146,7 @@ class TestBackupsSync:
 
         created_backups = []
         for backup in vm_backups:
-            storage = storage_lookup[backup.storage]
+            _storage = storage_lookup[backup.storage]
             try:
                 netbox_backup = await rest_reconcile_async(
                     nb,
@@ -300,7 +300,7 @@ class TestBackupsSync:
             created_backups = []
 
             for backup in vm_backups:
-                storage = storage_lookup[backup.storage]
+                _storage = storage_lookup[backup.storage]
                 try:
                     netbox_backup = await rest_reconcile_async(
                         nb,

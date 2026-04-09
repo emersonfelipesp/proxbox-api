@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import ProxmoxEndpoint, get_async_session, get_session
+from proxbox_api.database import ApiKey, ProxmoxEndpoint, get_async_session, get_session
 from proxbox_api.main import app
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
@@ -32,6 +32,14 @@ from proxbox_api.routes.proxmox.runtime_generated import (
     register_generated_proxmox_routes,
 )
 from proxbox_api.routes.proxmox.viewer_codegen import refresh_generated_proxmox_routes
+
+_TEST_API_KEY = "test-api-key-for-unit-tests-0000000000000000"
+
+# All tests in this module mutate the shared ``app`` singleton (registering /
+# clearing generated routes, overriding dependency providers, patching the auth
+# middleware).  Running them concurrently across pytest-xdist workers causes
+# intermittent failures.  Pin them to a single worker.
+pytestmark = pytest.mark.xdist_group("generated_proxmox_routes")
 
 TEST_GENERATED_OPENAPI = {
     "openapi": "3.1.0",
@@ -672,6 +680,9 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
         )
         session.commit()
 
+    with Session(db_engine) as session:
+        ApiKey.store_key(session, _TEST_API_KEY, label="test-key")
+
     async_engine, override_get_async_session = _override_async_db_session(db_engine)
     app.dependency_overrides[get_session] = _override_db_session(db_engine)
     app.dependency_overrides[get_async_session] = override_get_async_session
@@ -680,6 +691,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
         openapi_documents={"latest": TEST_GENERATED_OPENAPI},
     )
 
+    _headers = {"X-Proxbox-API-Key": _TEST_API_KEY}
     with TestClient(app) as client:
         response = client.post(
             "/proxmox/api2/latest/access/acl",
@@ -688,6 +700,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
                 "roles": "PVEAdmin",
                 "groups-autocreate": True,
             },
+            headers=_headers,
         )
         alias_response = client.post(
             "/proxmox/api2/access/acl",
@@ -696,6 +709,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
                 "roles": "PVEAdmin",
                 "groups-autocreate": True,
             },
+            headers=_headers,
         )
 
     asyncio.run(async_engine.dispose())
@@ -750,6 +764,9 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
         )
         session.commit()
 
+    with Session(db_engine) as session:
+        ApiKey.store_key(session, _TEST_API_KEY, label="test-key")
+
     async_engine, override_get_async_session = _override_async_db_session(db_engine)
     app.dependency_overrides[get_session] = _override_db_session(db_engine)
     app.dependency_overrides[get_async_session] = override_get_async_session
@@ -758,11 +775,13 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
         openapi_documents={"latest": TEST_GENERATED_OPENAPI},
     )
 
+    _headers = {"X-Proxbox-API-Key": _TEST_API_KEY}
     with TestClient(app) as client:
-        missing_selector = client.get("/proxmox/api2/latest/cluster/resources")
+        missing_selector = client.get("/proxmox/api2/latest/cluster/resources", headers=_headers)
         selected = client.get(
             "/proxmox/api2/latest/cluster/resources",
             params={"target_domain": "pve02.local", "type": "vm"},
+            headers=_headers,
         )
 
     asyncio.run(async_engine.dispose())
@@ -831,6 +850,10 @@ def test_every_generated_proxy_route_has_mock_based_schema_validated_coverage(
         "proxbox_api.app.factory.register_generated_proxmox_routes",
         lambda _app: None,
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.factory.check_auth_header_with_session",
+        lambda _session, _api_key, _client_ip: (True, None),
+    )
 
     register_generated_proxmox_routes(
         app,
@@ -884,6 +907,10 @@ def test_generated_proxy_route_closes_target_on_response_validation_failure(monk
         "proxbox_api.routes.proxmox.runtime_generated.proxmox_generated_route_cache_path",
         lambda: tmp_path / "runtime_generated_routes_cache.json",
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.factory.check_auth_header_with_session",
+        lambda _session, _api_key, _client_ip: (True, None),
+    )
 
     register_generated_proxmox_routes(
         app,
@@ -893,7 +920,7 @@ def test_generated_proxy_route_closes_target_on_response_validation_failure(monk
     with TestClient(app) as client:
         response = client.get("/proxmox/api2/latest/cluster/resources")
 
-    assert response.status_code == 500
+    assert response.status_code == 400
     assert fake_target.closed == 1
 
 

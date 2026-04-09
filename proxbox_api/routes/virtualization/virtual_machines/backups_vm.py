@@ -43,6 +43,7 @@ _DEFAULT_BACKUP_BATCH_DELAY_MS = max(0, int(os.getenv("PROXBOX_BACKUP_BATCH_DELA
 def _resolve_bulk_batch_size() -> int:
     """Resolve bulk batch size from settings, with env var fallback."""
     from proxbox_api.settings_client import get_settings
+
     try:
         return int(get_settings().get("bulk_batch_size", 50))
     except Exception:
@@ -52,10 +53,12 @@ def _resolve_bulk_batch_size() -> int:
 def _resolve_bulk_batch_delay_ms() -> int:
     """Resolve bulk batch delay in milliseconds from settings, with env var fallback."""
     from proxbox_api.settings_client import get_settings
+
     try:
         return int(get_settings().get("bulk_batch_delay_ms", 500))
     except Exception:
         return max(0, int(os.getenv("PROXBOX_BULK_BATCH_DELAY_MS", "500")))
+
 
 _BACKUP_SUBTYPE_ALIASES: dict[str, str] = {
     "ct": "lxc",

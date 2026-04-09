@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+# Disable rate limiting before importing the app so the middleware is created
+# with a very high threshold.  This prevents 429 responses when hundreds of
+# parametrized tests hit the shared app singleton in rapid succession.
+os.environ.setdefault("PROXBOX_RATE_LIMIT", "999999")
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine

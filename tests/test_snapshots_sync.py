@@ -54,12 +54,19 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
         # Capture lookup info from the payloads for test verification
         if _path == "/api/plugins/proxbox/snapshots/":
             for payload in payloads:
-                reconciled.append((
-                    {"vmid": payload.get("vmid"), "name": payload.get("name"), "node": payload.get("node")},
-                    payload
-                ))
+                reconciled.append(
+                    (
+                        {
+                            "vmid": payload.get("vmid"),
+                            "name": payload.get("name"),
+                            "node": payload.get("node"),
+                        },
+                        payload,
+                    )
+                )
         # Return bulk reconcile result with created snapshots
         from proxbox_api.netbox_rest import BulkReconcileResult
+
         return BulkReconcileResult(
             records=[{"id": 99, **payload} for payload in payloads],
             created=len(payloads),

@@ -349,6 +349,7 @@ class SerializableRecord:
 def clear_cached_netbox_api():
     """Clear LRU cache before test to prevent monkeypatch conflicts."""
     from proxbox_api.session.netbox import _cached_netbox_api
+
     _cached_netbox_api.cache_clear()
     yield
 

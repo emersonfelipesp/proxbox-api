@@ -50,6 +50,7 @@ def _get_encryption_key() -> bytes | None:
     if not raw_key:
         try:
             from proxbox_api.settings_client import get_settings
+
             settings = get_settings()
             raw_key = settings.get("encryption_key", "").strip()
         except Exception:

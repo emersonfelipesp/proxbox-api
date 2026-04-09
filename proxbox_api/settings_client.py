@@ -131,7 +131,9 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "encryption_key": str(settings.get("encryption_key", "")).strip(),
             "use_guest_agent_interface_name": settings.get("use_guest_agent_interface_name", True),
             "proxbox_fetch_max_concurrency": int(settings.get("proxbox_fetch_max_concurrency", 8)),
-            "ignore_ipv6_link_local_addresses": settings.get("ignore_ipv6_link_local_addresses", True),
+            "ignore_ipv6_link_local_addresses": settings.get(
+                "ignore_ipv6_link_local_addresses", True
+            ),
             "netbox_max_concurrent": int(settings.get("netbox_max_concurrent", 1)),
             "netbox_max_retries": int(settings.get("netbox_max_retries", 5)),
             "netbox_retry_delay": float(settings.get("netbox_retry_delay", 2.0)),

@@ -65,6 +65,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+addopts = "--dist loadgroup"
 markers = [
     "image_http: smoke tests against PROXBOX_IMAGE_E2E_BASE_URL (published Docker images)",
     "mock_backend: tests using in-process MockBackend (fast, no HTTP)",
@@ -103,8 +104,9 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 [tool.ruff.lint.per-file-ignores]
 "proxbox_api/**/*.py" = ["ANN201", "D103"]
 # Pytest tests: public test_* names trigger ANN201/D103; keep checks focused on package code.
-"tests/**/*.py" = ["ANN201", "D103"]
+"tests/**/*.py" = ["ANN201", "D103", "C901"]
 "scripts/**/*.py" = ["D103"]
+"test_*.py" = ["ANN201", "D103", "C901"]
 "proxbox_api/app/**/*.py" = []
 "proxbox_api/netbox_async_bridge.py" = []
 "proxbox_api/services/sync/device_ensure.py" = []
@@ -116,6 +118,7 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 # C901: inherently complex retry/ reconcile functions
 "proxbox_api/netbox_rest.py" = ["C901"]
 "proxbox_api/routes/virtualization/virtual_machines/sync_vm.py" = ["C901"]
+"proxbox_api/services/sync/vm_coordinator.py" = ["C901"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

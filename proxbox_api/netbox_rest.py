@@ -21,6 +21,8 @@ from proxbox_api.schemas.netbox.extras import TagSchema
 from proxbox_api.utils.retry import (
     _is_connection_refused_error,
     _is_transient_netbox_error,
+)
+from proxbox_api.utils.retry import (
     is_netbox_overwhelmed_error as _is_netbox_overwhelmed_error,
 )
 
@@ -28,6 +30,7 @@ from proxbox_api.utils.retry import (
 def _resolve_netbox_max_concurrent() -> int:
     """Resolve max concurrent NetBox requests from settings, with env var fallback."""
     from proxbox_api.settings_client import get_settings
+
     try:
         return int(get_settings().get("netbox_max_concurrent", 1))
     except Exception:
@@ -45,6 +48,7 @@ def _resolve_netbox_max_concurrent() -> int:
 def _resolve_netbox_max_retries() -> int:
     """Resolve max retry attempts from settings, with env var fallback."""
     from proxbox_api.settings_client import get_settings
+
     try:
         return max(0, int(get_settings().get("netbox_max_retries", 5)))
     except Exception:
@@ -60,6 +64,7 @@ def _resolve_netbox_max_retries() -> int:
 def _resolve_netbox_retry_delay() -> float:
     """Resolve retry delay in seconds from settings, with env var fallback."""
     from proxbox_api.settings_client import get_settings
+
     try:
         return float(get_settings().get("netbox_retry_delay", 2.0))
     except Exception:
@@ -208,6 +213,7 @@ def _resolve_get_cache_ttl_seconds() -> float:
 
     # Then try settings cache as fallback
     from proxbox_api.settings_client import get_settings
+
     try:
         return float(get_settings().get("netbox_get_cache_ttl", 60.0))
     except Exception:

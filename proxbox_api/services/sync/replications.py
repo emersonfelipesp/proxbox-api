@@ -56,7 +56,10 @@ async def sync_all_replications(  # noqa: C901
                 # Look up NetBox VM using pre-fetched cache
                 netbox_vm_id = vms_by_proxmox_id.get(str(guest_vmid))
                 if not netbox_vm_id:
-                    logger.debug("VM with proxmox_vm_id=%s not found in NetBox, skipping replication", guest_vmid)
+                    logger.debug(
+                        "VM with proxmox_vm_id=%s not found in NetBox, skipping replication",
+                        guest_vmid,
+                    )
                     continue
 
                 replication_payload = {
