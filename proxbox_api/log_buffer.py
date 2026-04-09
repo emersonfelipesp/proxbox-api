@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import threading
@@ -191,6 +192,8 @@ class LogBufferHandler(logging.Handler):
         self.buffer: deque[BufferedLogEntry] = deque(maxlen=capacity)
         self._lock = threading.Lock()
         self._id_counter = 0
+        self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
+        self._subscribers_lock = threading.Lock()
 
     def _next_id(self) -> str:
         """Generate a unique sequential ID for log entries."""
@@ -237,8 +240,36 @@ class LogBufferHandler(logging.Handler):
             with self._lock:
                 self.buffer.append(entry)
 
+            self._notify_subscribers()
+
         except Exception:
             self.handleError(record)
+
+    def _notify_subscribers(self) -> None:
+        """Wake all SSE stream subscribers (called after each new entry)."""
+        with self._subscribers_lock:
+            subscribers = list(self._subscribers)
+        for loop, event in subscribers:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                pass
+
+    def subscribe(self, loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> None:
+        """Register an asyncio.Event to be set when new log entries arrive."""
+        with self._subscribers_lock:
+            self._subscribers.append((loop, event))
+
+    def unsubscribe(self, event: asyncio.Event) -> None:
+        """Remove a previously registered event."""
+        with self._subscribers_lock:
+            self._subscribers = [(lp, ev) for lp, ev in self._subscribers if ev is not event]
+
+    @property
+    def latest_id(self) -> int:
+        """Return the current ID counter (highest assigned ID)."""
+        with self._lock:
+            return self._id_counter
 
     def get_logs(
         self,
