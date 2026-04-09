@@ -15,6 +15,17 @@ uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_
 rtk pytest tests
 ```
 
+If you edit `proxmox-openapi/`, also run:
+
+```bash
+cd proxmox-openapi
+uv run ruff check .
+uv run ruff format --check .
+uv run python -m compileall proxmox_openapi tests
+uv run python -c "import proxmox_openapi.mock_main"
+uv run pytest tests
+```
+
 If you edit `nextjs-ui/`, also run:
 
 ```bash
@@ -31,23 +42,24 @@ Fix failures locally before finishing the task.
 
 ## Scoped Guides
 
-- `nextjs-ui/AGENTS.md`
-- `nextjs-ui/CLAUDE.md`
+### Top-level packages
 - `proxbox_api/CLAUDE.md`
-- `proxbox_api/custom_objects/CLAUDE.md`
-- `proxbox_api/diode/CLAUDE.md`
-- `proxbox_api/e2e/CLAUDE.md`
-- `proxbox_api/enum/CLAUDE.md`
-- `proxbox_api/enum/netbox/CLAUDE.md`
-- `proxbox_api/enum/netbox/dcim/CLAUDE.md`
-- `proxbox_api/enum/netbox/virtualization/CLAUDE.md`
-- `proxbox_api/generated/CLAUDE.md`
-- `proxbox_api/generated/netbox/CLAUDE.md`
-- `proxbox_api/generated/proxmox/CLAUDE.md`
-- `proxbox_api/proxmox_codegen/CLAUDE.md`
-- `proxbox_api/proxmox_to_netbox/CLAUDE.md`
-- `proxbox_api/proxmox_to_netbox/mappers/CLAUDE.md`
-- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md`
+- `proxmox-openapi/CLAUDE.md`
+- `nextjs-ui/CLAUDE.md`
+- `nextjs-ui/AGENTS.md`
+
+### Infrastructure
+- `.github/CLAUDE.md`
+- `docker/CLAUDE.md`
+- `docs/CLAUDE.md`
+- `tests/CLAUDE.md`
+- `scripts/CLAUDE.md`
+- `tasks/CLAUDE.md`
+- `automation/CLAUDE.md`
+- `proxmox-mock/CLAUDE.md`
+
+### proxbox_api subpackages
+- `proxbox_api/app/CLAUDE.md`
 - `proxbox_api/routes/CLAUDE.md`
 - `proxbox_api/routes/admin/CLAUDE.md`
 - `proxbox_api/routes/dcim/CLAUDE.md`
@@ -56,16 +68,32 @@ Fix failures locally before finishing the task.
 - `proxbox_api/routes/proxbox/CLAUDE.md`
 - `proxbox_api/routes/proxbox/clusters/CLAUDE.md`
 - `proxbox_api/routes/proxmox/CLAUDE.md`
+- `proxbox_api/routes/sync/CLAUDE.md`
 - `proxbox_api/routes/virtualization/CLAUDE.md`
 - `proxbox_api/routes/virtualization/virtual_machines/CLAUDE.md`
+- `proxbox_api/services/CLAUDE.md`
+- `proxbox_api/services/sync/CLAUDE.md`
+- `proxbox_api/services/sync/individual/CLAUDE.md`
+- `proxbox_api/session/CLAUDE.md`
 - `proxbox_api/schemas/CLAUDE.md`
 - `proxbox_api/schemas/netbox/CLAUDE.md`
 - `proxbox_api/schemas/netbox/dcim/CLAUDE.md`
 - `proxbox_api/schemas/netbox/extras/CLAUDE.md`
 - `proxbox_api/schemas/netbox/virtualization/CLAUDE.md`
 - `proxbox_api/schemas/virtualization/CLAUDE.md`
-- `proxbox_api/services/CLAUDE.md`
-- `proxbox_api/services/sync/CLAUDE.md`
-- `proxbox_api/services/sync/individual/CLAUDE.md`
-- `proxbox_api/session/CLAUDE.md`
+- `proxbox_api/enum/CLAUDE.md`
+- `proxbox_api/enum/netbox/CLAUDE.md`
+- `proxbox_api/enum/netbox/dcim/CLAUDE.md`
+- `proxbox_api/enum/netbox/virtualization/CLAUDE.md`
+- `proxbox_api/proxmox_codegen/CLAUDE.md`
+- `proxbox_api/proxmox_to_netbox/CLAUDE.md`
+- `proxbox_api/proxmox_to_netbox/mappers/CLAUDE.md`
+- `proxbox_api/proxmox_to_netbox/schemas/CLAUDE.md`
+- `proxbox_api/generated/CLAUDE.md`
+- `proxbox_api/generated/netbox/CLAUDE.md`
+- `proxbox_api/generated/proxmox/CLAUDE.md`
+- `proxbox_api/types/CLAUDE.md`
 - `proxbox_api/utils/CLAUDE.md`
+- `proxbox_api/custom_objects/CLAUDE.md`
+- `proxbox_api/diode/CLAUDE.md`
+- `proxbox_api/e2e/CLAUDE.md`

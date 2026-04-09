@@ -1,6 +1,7 @@
 """Extras route handlers for NetBox custom field management."""
 
 import asyncio
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -10,10 +11,27 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxCustomFieldSyncState
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep
+from proxbox_api.utils.retry import is_netbox_overwhelmed_error
 
 router = APIRouter()
 _CUSTOM_FIELDS_CACHE: tuple[dict[str, object], ...] | None = None
 _CUSTOM_FIELDS_LOCK = asyncio.Lock()
+
+
+def _resolve_custom_field_delay() -> float:
+    """Resolve optional delay between custom-field operations from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
+
+    try:
+        return float(get_settings().get("custom_fields_request_delay", 0.0))
+    except Exception:
+        raw = os.environ.get("PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY", "").strip()
+        if not raw:
+            return 0.0
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            return 0.0
 
 
 @router.get(
@@ -22,7 +40,7 @@ _CUSTOM_FIELDS_LOCK = asyncio.Lock()
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
-async def create_custom_fields(
+async def create_custom_fields(  # noqa: C901
     netbox_session: NetBoxAsyncSessionDep,
 ) -> list[dict]:
     """Create custom fields in NetBox for Proxmox synchronization."""
@@ -504,7 +522,7 @@ async def create_custom_fields(
                 "group_name": "Proxmox",
             },
             {
-                "object_types": ["virtualization.vmmigration"],
+                "object_types": ["virtualization.virtualmachine"],
                 "type": "integer",
                 "name": "proxmox_migration_duration",
                 "label": "Migration Duration",
@@ -517,7 +535,7 @@ async def create_custom_fields(
                 "group_name": "Proxmox",
             },
             {
-                "object_types": ["virtualization.vmmigration"],
+                "object_types": ["virtualization.virtualmachine"],
                 "type": "text",
                 "name": "proxmox_migration_type",
                 "label": "Migration Type",
@@ -552,6 +570,9 @@ async def create_custom_fields(
         ]
         fields = []
         had_failures = False
+        overloaded = False
+        failed_fields: list[dict[str, str]] = []
+        request_delay = _resolve_custom_field_delay()
 
         for custom_field in custom_fields:
             try:
@@ -578,22 +599,62 @@ async def create_custom_fields(
                 fields.append(record.serialize())
             except ProxboxException as e:
                 had_failures = True
+                failed_fields.append(
+                    {
+                        "name": str(custom_field.get("name", "unknown")),
+                        "error": str(e.message),
+                    }
+                )
+                overloaded = overloaded or is_netbox_overwhelmed_error(e)
                 logger.warning(
                     "Failed to create/update custom field '%s': %s - %s",
                     custom_field.get("name", "unknown"),
                     e.message,
                     e.detail,
                 )
+                if overloaded:
+                    break
             except Exception as e:
                 had_failures = True
+                failed_fields.append(
+                    {
+                        "name": str(custom_field.get("name", "unknown")),
+                        "error": str(e),
+                    }
+                )
+                overloaded = overloaded or is_netbox_overwhelmed_error(e)
                 logger.warning(
                     "Failed to create/update custom field '%s': %s",
                     custom_field.get("name", "unknown"),
                     str(e),
                 )
+                if overloaded:
+                    break
 
-        if not had_failures:
-            _CUSTOM_FIELDS_CACHE = tuple(dict(field) for field in fields)
+            if request_delay > 0:
+                await asyncio.sleep(request_delay)
+
+        if had_failures:
+            if overloaded:
+                raise ProxboxException(
+                    message="NetBox is overwhelmed. Please retry this action in a few moments.",
+                    detail={
+                        "reason": "netbox_overwhelmed",
+                        "created_count": len(fields),
+                        "failed_fields": failed_fields,
+                    },
+                )
+
+            raise ProxboxException(
+                message="Failed to create all NetBox custom fields.",
+                detail={
+                    "reason": "custom_field_sync_failed",
+                    "created_count": len(fields),
+                    "failed_fields": failed_fields,
+                },
+            )
+
+        _CUSTOM_FIELDS_CACHE = tuple(dict(field) for field in fields)
         return fields
 
 

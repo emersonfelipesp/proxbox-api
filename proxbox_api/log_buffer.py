@@ -91,6 +91,62 @@ _ERROR_MESSAGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PII_PATTERNS = [
+    (
+        re.compile(
+            r'(?:token|password|secret|key|auth)[=:]\s*["\']?[a-zA-Z0-9_\-]{8,}["\']?',
+            re.IGNORECASE,
+        ),
+        "[REDACTED]",
+    ),
+    (re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]+"), "Bearer [REDACTED]"),
+    (re.compile(r"Basic\s+[a-zA-Z0-9+\/=]+"), "Basic [REDACTED]"),
+    (
+        re.compile(r"X-Proxbox-API-Key:\s*[a-zA-Z0-9]+", re.IGNORECASE),
+        "X-Proxbox-API-Key: [REDACTED]",
+    ),
+]
+
+
+def _redact_pii(text: str) -> str:
+    """Redact personally identifiable information and secrets from text."""
+    for pattern, replacement in _PII_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _format_percent_style_message(message: str, args: object) -> str | None:
+    """Apply percent-style interpolation with tolerant args coercion."""
+    if args in (None, (), [], {}):
+        return message
+
+    candidates: list[object] = []
+    if isinstance(args, list):
+        candidates.append(tuple(args))
+    candidates.append(args)
+    if not isinstance(args, (tuple, dict, list)):
+        candidates.append((args,))
+
+    for candidate in candidates:
+        try:
+            return message % candidate
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _resolve_log_record_message(record: logging.LogRecord) -> str:
+    """Resolve a record into display text without leaking format placeholders."""
+    try:
+        message = record.getMessage()
+    except Exception:  # noqa: BLE001
+        raw_message = record.msg if isinstance(record.msg, str) else str(record.msg)
+        rendered = _format_percent_style_message(raw_message, getattr(record, "args", None))
+        message = rendered if rendered is not None else raw_message
+    if not isinstance(message, str):
+        return str(message)
+    return message
+
 
 def _entry_sort_key(entry: BufferedLogEntry) -> int:
     """Return a numeric sort key for a buffered log entry."""
@@ -159,8 +215,9 @@ class LogBufferHandler(logging.Handler):
 
             expandable = None
             if record.exc_info:
+                raw_traceback = "".join(traceback.format_exception(*record.exc_info))
                 expandable = {
-                    "traceback": "".join(traceback.format_exception(*record.exc_info)),
+                    "traceback": _redact_pii(raw_traceback),
                 }
 
             entry = BufferedLogEntry(
@@ -168,7 +225,7 @@ class LogBufferHandler(logging.Handler):
                 timestamp=timestamp,
                 level=level,
                 module=record.module,
-                message=record.getMessage(),
+                message=_redact_pii(_resolve_log_record_message(record)),
                 operation_id=operation_id,
                 operation=operation,
                 phase=phase,

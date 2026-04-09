@@ -42,8 +42,8 @@ def test_map_proxmox_vm_to_netbox_vm_body():
     assert body["device"] == 22
     assert body["role"] == 33
     assert body["vcpus"] == 4
-    assert body["memory"] > 0
-    assert body["disk"] > 0
+    assert body["memory"] == 8192
+    assert body["disk"] == 102400
     assert body["custom_fields"]["proxmox_vm_id"] == 101
     assert body["custom_fields"]["proxmox_start_at_boot"] is True
 

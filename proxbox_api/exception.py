@@ -27,6 +27,14 @@ class ProxboxException(Exception):
         if self.python_exception:
             log_message += f"\n > Python Exception: {self.python_exception}"
 
+        logger.debug(log_message)
+
+    def __str__(self) -> str:
+        """Include detail in string representation so it appears in tracebacks and logs."""
+        if self.detail:
+            return f"{self.message} | {self.detail}"
+        return self.message
+
 
 class SyncError(ProxboxException):
     """Base exception for synchronization operations."""

@@ -5,15 +5,16 @@ from __future__ import annotations
 import asyncio
 import os
 import random
-from typing import Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 
 T = TypeVar("T")
 
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_BASE_DELAY = 1.0
+DEFAULT_MAX_RETRIES = 5
+DEFAULT_BASE_DELAY = 2.0
 
 
 def _resolve_max_retries() -> int:
@@ -60,33 +61,64 @@ def _is_transient_netbox_error(error: Exception) -> bool:
     return any(indicator in error_str for indicator in transient_indicators)
 
 
+def is_netbox_overwhelmed_error(error: Exception) -> bool:
+    """Check whether NetBox appears overloaded or PostgreSQL-saturated."""
+    details: list[str] = [str(error)]
+    for attr_name in ("detail", "python_exception"):
+        attr_val = getattr(error, attr_name, None)
+        if attr_val is not None:
+            details.append(str(attr_val))
+    error_str = " ".join(details).lower()
+    overload_indicators = [
+        "too many connections",
+        "remaining connection slots",
+        "connection slots are reserved",
+        "database unavailable",
+        "service unavailable",
+        "service temporarily unavailable",
+        "http 503",
+        "status 503",
+        "operationalerror",
+        "psycopg2.errors",
+    ]
+    return any(indicator in error_str for indicator in overload_indicators)
+
+
 def _is_connection_refused_error(error: Exception) -> bool:
     """Check if this is a connection refused error (NetBox completely unreachable)."""
     error_str = str(error).lower()
     return "connection refused" in error_str or "connect call failed" in error_str
 
 
-def _compute_delay(attempt: int, base_delay: float, is_connection_refused: bool = False) -> float:
+def _compute_delay(
+    attempt: int,
+    base_delay: float,
+    is_connection_refused: bool = False,
+    is_overwhelmed: bool = False,
+) -> float:
     """Compute delay with exponential backoff and jitter.
 
     For connection refused errors (NetBox offline), use longer delays since
     retrying immediately won't help - NetBox needs time to come back.
+    For overwhelmed errors (DB pool saturated), use aggressive backoff.
     """
     exponential_delay = base_delay * (2**attempt)
     if is_connection_refused:
-        exponential_delay = max(exponential_delay, 5.0)
+        exponential_delay = max(exponential_delay, 10.0)
+    if is_overwhelmed:
+        exponential_delay = max(exponential_delay, 30.0)
     jitter = random.uniform(0, exponential_delay * 0.5)
     return exponential_delay + jitter
 
 
 async def retry_async(
-    coro: Callable[..., object],
-    *args: object,
+    coro: Callable[..., Awaitable[T]],
+    *args: Any,
     max_retries: int | None = None,
     base_delay: float | None = None,
     operation_name: str = "operation",
-    **kwargs: object,
-) -> object:
+    **kwargs: Any,
+) -> T:
     """
     Retry an async operation with exponential backoff for transient failures.
 
@@ -116,27 +148,15 @@ async def retry_async(
         except Exception as e:
             last_exception = e
             is_transient = _is_transient_netbox_error(e)
+            can_retry = attempt < max_retries and is_transient
+            is_final = not can_retry
 
-            if attempt < max_retries and is_transient:
-                is_conn_refused = _is_connection_refused_error(e)
-                delay = _compute_delay(attempt, base_delay, is_conn_refused)
-                errors.append(f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}")
-                logger.warning(
-                    "%s failed (attempt %d/%d): %s. Retrying in %.1fs...",
-                    operation_name,
-                    attempt + 1,
-                    max_retries + 1,
-                    e,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-            else:
+            if is_final:
                 error_msg = f"{operation_name} failed after {attempt + 1} attempt(s)"
-                if attempt < max_retries and not is_transient:
+                if not is_transient:
                     error_msg += f" (non-transient error: {e})"
                 errors.append(f"Attempt {attempt + 1} failed: {e}")
                 logger.error("%s: %s", operation_name, "; ".join(errors))
-
                 detail = f"Failed after {attempt + 1} attempts. Errors: " + "; ".join(errors)
                 raise ProxboxException(
                     message=error_msg,
@@ -144,33 +164,21 @@ async def retry_async(
                     python_exception=str(last_exception),
                 ) from last_exception
 
+            is_conn_refused = _is_connection_refused_error(e)
+            is_overwhelmed = is_netbox_overwhelmed_error(e)
+            delay = _compute_delay(attempt, base_delay, is_conn_refused, is_overwhelmed)
+            errors.append(f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}")
+            logger.warning(
+                "%s failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                operation_name,
+                attempt + 1,
+                max_retries + 1,
+                e,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
     raise ProxboxException(
         message=f"{operation_name} failed",
         detail="Unexpected: no error was raised but no result returned",
     )
-
-
-def retry_sync(
-    coro: Callable[..., object],
-    *args: object,
-    max_retries: int | None = None,
-    base_delay: float | None = None,
-    operation_name: str = "operation",
-    **kwargs: object,
-) -> object:
-    """
-    Synchronous wrapper for retry_async using run_coroutine_blocking.
-    """
-    from proxbox_api.netbox_async_bridge import run_coroutine_blocking
-
-    async def wrapped():
-        return await retry_async(
-            coro,
-            *args,
-            max_retries=max_retries,
-            base_delay=base_delay,
-            operation_name=operation_name,
-            **kwargs,
-        )
-
-    return run_coroutine_blocking(wrapped())

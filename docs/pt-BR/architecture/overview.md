@@ -29,7 +29,7 @@
   - `/sync/individual`
 - Configuracao de endpoints persistida em SQLite.
 - Acesso ao NetBox via clientes `netbox-sdk` sync e async.
-- Acesso ao Proxmox via sessoes `proxmoxer` e wrappers tipados.
+- Acesso ao Proxmox via sessoes do SDK sync `proxmox-openapi` e wrappers tipados.
 - Rotas Proxmox geradas em runtime sao montadas durante o startup da aplicacao.
 
 ## Modelos de dados principais

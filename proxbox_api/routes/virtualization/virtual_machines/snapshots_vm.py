@@ -212,7 +212,7 @@ async def _get_proxmox_vmids_from_netbox_vm_ids(
 
 
 @router.get("/snapshots/all/create/stream", response_model=None)
-async def create_all_virtual_machine_snapshots_stream(
+async def create_all_virtual_machine_snapshots_stream(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -297,6 +297,12 @@ async def create_all_virtual_machine_snapshots_stream(
                 },
             )
         except Exception as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {

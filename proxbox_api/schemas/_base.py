@@ -26,6 +26,19 @@ class ProxboxBaseModel(BaseModel):
         return iter(self.model_dump(mode="python", by_alias=True, exclude_none=True).items())
 
 
+class ProxboxStrictModel(BaseModel):
+    """Base model that forbids arbitrary extras for security.
+
+    Use this for request schemas where mass-assignment is a concern.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+
+
 class ProxboxLenientModel(ProxboxBaseModel):
     """Base model that allows arbitrary extras and keeps unknown keys."""
 

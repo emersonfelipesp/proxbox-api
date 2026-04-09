@@ -130,12 +130,16 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
+      - name: Ty (type check)
+        run: uv run ty check proxbox_api/types proxbox_api/utils/retry.py
+
       - name: Compile package
         run: uv run python -m compileall proxbox_api scripts tests
 
       - name: Import smoke checks
         run: |
           uv run python -c "import proxbox_api.main"
+          uv run python -c "import proxmox_openapi.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Run mocked schema-driven tests

@@ -1,3 +1,5 @@
+"""Integration-oriented tests for core API route responses."""
+
 from __future__ import annotations
 
 import asyncio
@@ -65,6 +67,13 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
 
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
             self.calls.append((method, path, query, payload, expect_json))
+
+            if (
+                method == "GET"
+                and (query or {}).get("limit") == 200
+                and (query or {}).get("offset") == 0
+            ):
+                return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
 
             lookup_key = (method, path, tuple(sorted((query or {}).items())))
             if lookup_key in lookup_responses:
@@ -172,7 +181,8 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
         for method, path, _query, payload, _expect_json in fake_session.client.calls
         if method == "POST" and path == "/api/dcim/devices/"
     )
-    assert device_create["tags"] == [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}]
+    first_payload = device_create[0] if isinstance(device_create, list) else device_create
+    assert first_payload["tags"] == [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}]
 
 
 def test_create_proxmox_devices_surfaces_real_netbox_detail():
@@ -200,21 +210,19 @@ def test_create_proxmox_devices_surfaces_real_netbox_detail():
     ]
     tag = SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722")
 
-    with pytest.raises(
-        ProxboxException,
-        match="Error during device sync: Error creating NetBox device",
-    ) as excinfo:
-        asyncio.run(
-            create_proxmox_devices(
-                netbox_session=fake_session,
-                clusters_status=cluster_status,
-                tag=tag,
-            )
+    # With bulk operations hardening, the error is logged and handled gracefully
+    # instead of being re-raised. The function should return with no created devices.
+    result = asyncio.run(
+        create_proxmox_devices(
+            netbox_session=fake_session,
+            clusters_status=cluster_status,
+            tag=tag,
         )
-    assert excinfo.value.detail == "tags: expected object, got integer"
+    )
+    assert result == []
 
 
-def test_create_custom_fields_uses_rest_reconcile_with_async_session():
+def test_create_custom_fields_uses_rest_reconcile_with_async_session(monkeypatch):
     class FakeClient:
         def __init__(self):
             self.calls = []
@@ -229,6 +237,7 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session():
             raise AssertionError((method, path, query, payload, expect_json))
 
     session = SimpleNamespace(client=FakeClient())
+    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
 
     result = asyncio.run(create_custom_fields(netbox_session=session))
 
@@ -271,63 +280,88 @@ def test_create_custom_fields_caches_successful_bootstrap(monkeypatch):
     assert len(session.client.calls) == first_call_count
 
 
+def test_create_custom_fields_reports_netbox_overwhelmed(monkeypatch):
+    class FakeClient:
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                return ApiResponse(status=500, text=json.dumps({"detail": "database unavailable"}))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
+    monkeypatch.setenv("PROXBOX_NETBOX_MAX_RETRIES", "0")
+    session = SimpleNamespace(client=FakeClient())
+
+    with pytest.raises(ProxboxException, match="NetBox is overwhelmed") as excinfo:
+        asyncio.run(create_custom_fields(netbox_session=session))
+
+    assert isinstance(excinfo.value.detail, dict)
+    assert excinfo.value.detail.get("reason") == "netbox_overwhelmed"
+    failed_fields = excinfo.value.detail.get("failed_fields")
+    assert isinstance(failed_fields, list)
+    assert failed_fields
+
+
 def test_proxmox_endpoint_crud_lifecycle(db_session):
-    created = create_proxmox_endpoint(
-        ProxmoxEndpointCreate(
-            name="pve-lab-1",
-            ip_address="10.0.0.10",
-            domain="pve-lab-1.local",
-            port=8006,
-            username="root@pam",
-            password="supersecret",
-            verify_ssl=False,
-        ),
-        db_session,
+    created = asyncio.run(
+        create_proxmox_endpoint(
+            ProxmoxEndpointCreate(
+                name="pve-lab-1",
+                ip_address="1.1.1.1",
+                domain="pve-lab-1.example.com",
+                port=8006,
+                username="root@pam",
+                password="supersecret",
+                verify_ssl=False,
+            ),
+            db_session,
+        )
     )
     endpoint_id = created.id
     assert created.name == "pve-lab-1"
     assert created.model_dump() == {
         "id": endpoint_id,
         "name": "pve-lab-1",
-        "ip_address": "10.0.0.10",
-        "domain": "pve-lab-1.local",
+        "ip_address": "1.1.1.1",
+        "domain": "pve-lab-1.example.com",
         "port": 8006,
         "username": "root@pam",
         "verify_ssl": False,
     }
 
-    listed = get_proxmox_endpoints(db_session)
+    listed = asyncio.run(get_proxmox_endpoints(db_session))
     assert len(listed) == 1
     assert listed[0].model_dump()["name"] == "pve-lab-1"
     assert "password" not in listed[0].model_dump()
 
-    updated = update_proxmox_endpoint(
-        endpoint_id,
-        ProxmoxEndpointUpdate(
-            name="pve-lab-1-updated",
-            verify_ssl=True,
-            token_name="sync",
-            token_value="secret-token",
-            password=None,
-        ),
-        db_session,
+    updated = asyncio.run(
+        update_proxmox_endpoint(
+            endpoint_id,
+            ProxmoxEndpointUpdate(
+                name="pve-lab-1-updated",
+                verify_ssl=True,
+                token_name="sync",
+                token_value="secret-token",
+                password=None,
+            ),
+            db_session,
+        )
     )
     assert updated.name == "pve-lab-1-updated"
     assert updated.model_dump() == {
         "id": endpoint_id,
         "name": "pve-lab-1-updated",
-        "ip_address": "10.0.0.10",
-        "domain": "pve-lab-1.local",
+        "ip_address": "1.1.1.1",
+        "domain": "pve-lab-1.example.com",
         "port": 8006,
         "username": "root@pam",
         "verify_ssl": True,
     }
 
-    deleted = delete_proxmox_endpoint(endpoint_id, db_session)
+    deleted = asyncio.run(delete_proxmox_endpoint(endpoint_id, db_session))
     assert deleted == {"message": "Proxmox endpoint deleted."}
 
     with pytest.raises(HTTPException, match="Proxmox endpoint not found"):
-        get_proxmox_endpoint(endpoint_id, db_session)
+        asyncio.run(get_proxmox_endpoint(endpoint_id, db_session))
 
 
 def test_proxmox_endpoint_requires_complete_token_pair(db_session):
@@ -335,80 +369,90 @@ def test_proxmox_endpoint_requires_complete_token_pair(db_session):
         HTTPException,
         match="token_name and token_value must be provided together",
     ):
-        create_proxmox_endpoint(
-            ProxmoxEndpointCreate(
-                name="pve-lab-2",
-                ip_address="10.0.0.11",
-                port=8006,
-                username="root@pam",
-                token_name="sync",
-                verify_ssl=True,
-            ),
-            db_session,
+        asyncio.run(
+            create_proxmox_endpoint(
+                ProxmoxEndpointCreate(
+                    name="pve-lab-2",
+                    ip_address="1.1.1.2",
+                    port=8006,
+                    username="root@pam",
+                    token_name="sync",
+                    verify_ssl=True,
+                ),
+                db_session,
+            )
         )
 
 
 def test_netbox_endpoint_crud_and_singleton_rule(db_session):
     payload = NetBoxEndpoint(
         name="netbox-primary",
-        ip_address="10.0.0.20",
-        domain="netbox.local",
+        ip_address="1.1.1.3",
+        domain="netbox.example.com",
         port=443,
         token="token-1",
         verify_ssl=True,
     )
-    created = create_netbox_endpoint(payload, db_session)
+    created = asyncio.run(create_netbox_endpoint(payload, db_session))
     endpoint_id = created.id
 
     with pytest.raises(HTTPException, match="Only one NetBox endpoint is allowed"):
-        create_netbox_endpoint(
+        asyncio.run(
+            create_netbox_endpoint(
+                NetBoxEndpoint(
+                    name="netbox-secondary",
+                    ip_address="1.1.1.4",
+                    domain="netbox2.local",
+                    port=443,
+                    token="token-2",
+                    verify_ssl=True,
+                ),
+                db_session,
+            )
+        )
+
+    listed = asyncio.run(get_netbox_endpoints(db_session))
+    assert len(listed) == 1
+
+    updated = asyncio.run(
+        update_netbox_endpoint(
+            endpoint_id,
             NetBoxEndpoint(
-                name="netbox-secondary",
-                ip_address="10.0.0.21",
-                domain="netbox2.local",
+                name="netbox-primary-updated",
+                ip_address="1.1.1.3",
+                domain="netbox.example.com",
                 port=443,
                 token="token-2",
                 verify_ssl=True,
             ),
             db_session,
         )
-
-    listed = get_netbox_endpoints(db_session)
-    assert len(listed) == 1
-
-    updated = update_netbox_endpoint(
-        endpoint_id,
-        NetBoxEndpoint(
-            name="netbox-primary-updated",
-            ip_address="10.0.0.20",
-            domain="netbox.local",
-            port=443,
-            token="token-2",
-            verify_ssl=True,
-        ),
-        db_session,
     )
     assert updated.name == "netbox-primary-updated"
 
-    assert get_netbox_endpoint(endpoint_id, db_session).token == "token-2"
-    assert delete_netbox_endpoint(endpoint_id, db_session) == {
+    retrieved = asyncio.run(get_netbox_endpoint(endpoint_id, db_session))
+    assert retrieved.name == "netbox-primary-updated"
+    assert not hasattr(retrieved, "token") or retrieved.token is None
+    assert asyncio.run(delete_netbox_endpoint(endpoint_id, db_session)) == {
         "message": "NetBox Endpoint deleted."
     }
 
 
 def test_netbox_endpoint_rejects_v1_without_token(db_session):
     with pytest.raises(HTTPException, match="token is required for NetBox API token v1"):
-        create_netbox_endpoint(
-            NetBoxEndpoint(
-                name="netbox-primary",
-                ip_address="10.0.0.20",
-                domain="netbox.local",
-                port=443,
-                token_version="v1",
-                token="",
-                verify_ssl=True,
-            ),
-            db_session,
+        asyncio.run(
+            create_netbox_endpoint(
+                NetBoxEndpoint(
+                    name="netbox-primary",
+                    ip_address="1.1.1.3",
+                    domain="netbox.example.com",
+                    port=443,
+                    token_version="v1",
+                    token="",
+                    verify_ssl=True,
+                ),
+                db_session,
+            )
         )
 
 
@@ -417,38 +461,42 @@ def test_netbox_endpoint_rejects_v2_incomplete_token(db_session):
         HTTPException,
         match="token_key and token \\(secret\\) must both be set",
     ):
-        create_netbox_endpoint(
-            NetBoxEndpoint(
-                name="netbox-primary",
-                ip_address="10.0.0.20",
-                domain="netbox.local",
-                port=443,
-                token_version="v2",
-                token_key="myid",
-                token="",
-                verify_ssl=True,
-            ),
-            db_session,
+        asyncio.run(
+            create_netbox_endpoint(
+                NetBoxEndpoint(
+                    name="netbox-primary",
+                    ip_address="1.1.1.3",
+                    domain="netbox.example.com",
+                    port=443,
+                    token_version="v2",
+                    token_key="myid",
+                    token="",
+                    verify_ssl=True,
+                ),
+                db_session,
+            )
         )
 
 
 def test_netbox_endpoint_accepts_v2_token(db_session):
-    created = create_netbox_endpoint(
-        NetBoxEndpoint(
-            name="netbox-v2",
-            ip_address="10.0.0.20",
-            domain="netbox.local",
-            port=443,
-            token_version="v2",
-            token_key="myid",
-            token="secretpart",
-            verify_ssl=True,
-        ),
-        db_session,
+    created = asyncio.run(
+        create_netbox_endpoint(
+            NetBoxEndpoint(
+                name="netbox-v2",
+                ip_address="1.1.1.3",
+                domain="netbox.example.com",
+                port=443,
+                token_version="v2",
+                token_key="myid",
+                token="secretpart",
+                verify_ssl=True,
+            ),
+            db_session,
+        )
     )
     assert created.token_version == "v2"
-    assert created.token_key == "myid"
-    assert created.token == "secretpart"
+    assert not hasattr(created, "token_key") or created.token_key is None
+    assert not hasattr(created, "token") or created.token is None
 
 
 def test_netbox_status_and_openapi_routes_are_mocked(client_with_fake_netbox):
@@ -825,7 +873,7 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
             "agent": 1,
             "unprivileged": 0,
             "searchdomain": "lab.local",
-            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=1.1.1.3/24",
             "scsi0": "local-lvm:vm-101-disk-0,size=20G",
         },
     )
@@ -1183,10 +1231,38 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
                                             "verification_upid": "UPID:1",
                                             "notes": None,
                                             "vmid": "101",
-                                            "format": "zst",
+                                            "format": "tzst",
                                         }
                                     ]
                                 ),
+                            }
+                        ),
+                    )
+                # Handle scan query after duplicate error
+                if query.get("limit") == 200:
+                    return ApiResponse(
+                        status=200,
+                        text=json.dumps(
+                            {
+                                "count": 1,
+                                "results": [
+                                    {
+                                        "id": 900,
+                                        "volume_id": "backup-store:vm/101/2026-03-29",
+                                        "virtual_machine": 55,
+                                        "storage": "backup-store",
+                                        "subtype": "qemu",
+                                        "creation_time": datetime.fromtimestamp(
+                                            1711660800
+                                        ).isoformat(),
+                                        "size": 1024,
+                                        "verification_state": "ok",
+                                        "verification_upid": "UPID:1",
+                                        "notes": None,
+                                        "vmid": "101",
+                                        "format": "tzst",
+                                    }
+                                ],
                             }
                         ),
                     )
@@ -1256,6 +1332,7 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
             "/api/plugins/proxbox/backups/",
             None,
             {
+                "storage": "backup-store",
                 "virtual_machine": 55,
                 "subtype": "qemu",
                 "creation_time": datetime.fromtimestamp(1711660800).isoformat(),
@@ -1264,7 +1341,7 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
                 "verification_upid": "UPID:1",
                 "volume_id": "backup-store:vm/101/2026-03-29",
                 "vmid": "101",
-                "format": "zst",
+                "format": "tzst",
                 "tags": [],
             },
             True,

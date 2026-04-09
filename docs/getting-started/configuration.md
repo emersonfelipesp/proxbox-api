@@ -105,13 +105,25 @@ Authentication rules for create and update:
 - Proxmox sessions default to local database endpoint records.
 - Legacy source mode (`source=netbox`) is still supported in Proxmox session dependency behavior.
 
+## Authentication
+
+All API requests (except bootstrap endpoints) require authentication via the `X-Proxbox-API-Key` header. Keys are stored in the SQLite database with bcrypt hashing.
+
+See [Authentication](./authentication.md) for complete documentation on:
+
+- Bootstrap flow for first-time setup
+- Key registration and management
+- Auth-exempt endpoints
+- Brute-force protection
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PROXBOX_NETBOX_TIMEOUT` | `120` | NetBox API client timeout in seconds. Applied to `netbox-sdk` config and underlying requests. |
-| `PROXBOX_NETBOX_MAX_RETRIES` | `3` | Retry attempts for transient NetBox connection failures. |
-| `PROXBOX_NETBOX_RETRY_DELAY` | `1.0` | Initial retry delay in seconds for NetBox retries. |
+| `PROXBOX_NETBOX_MAX_RETRIES` | `5` | Retry attempts for transient NetBox connection failures. |
+| `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Initial retry delay in seconds for NetBox retries. |
+| `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximum concurrent NetBox API requests. Keep low (1-2) to avoid exhausting NetBox's PostgreSQL connection pool. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent VM sync write tasks. |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` | Maximum number of concurrent NetBox write operations. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` | Maximum number of concurrent Proxmox read operations. |
@@ -120,6 +132,16 @@ Authentication rules for create and update:
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | unset | When set to `1`, `true`, or `yes`, HTTP 500 responses include internal exception details. |
 | `PROXBOX_STRICT_STARTUP` | unset | When set to `1`, `true`, or `yes`, startup fails if generated Proxmox routes cannot be mounted. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | unset | When set to `1`, `true`, or `yes`, skips creating the default NetBox client during app startup. |
+
+### Handling NetBox Overwhelmed Errors
+
+When NetBox's PostgreSQL connection pool is saturated, proxbox-api returns `netbox_overwhelmed` errors. To mitigate:
+
+1. **Reduce concurrency**: Set `PROXBOX_NETBOX_MAX_CONCURRENT=1` to serialize requests
+2. **Increase retries**: More attempts with longer delays give NetBox time to recover
+3. **Extend cache TTL**: Use `PROXBOX_NETBOX_GET_CACHE_TTL=300` to reduce redundant fetches
+
+The retry logic applies aggressive backoff (up to 30 seconds) when overwhelmed errors are detected.
 
 ## CORS Behavior
 

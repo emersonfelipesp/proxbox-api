@@ -8,43 +8,45 @@ from typing import TYPE_CHECKING
 from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
+from proxbox_api.constants import DEFAULT_LOG_PATH
 from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
-from proxbox_api.logger import logger
+from proxbox_api.logger import configure_file_logging_path, logger
 from proxbox_api.netbox_compat import NetBoxBase
-from proxbox_api.netbox_rest import configure_netbox_concurrency, rest_list
 from proxbox_api.session.netbox import get_netbox_session
+from proxbox_api.settings_client import get_settings
 
 if TYPE_CHECKING:
+    from netbox_sdk.facade import Api
     from sqlmodel import Session
 
 # Populated by init_database_and_netbox(); used by WebSocket handlers and helpers.
-netbox_session: object | None = None
+netbox_session: Api | None = None
 database_session: Session | None = None
-netbox_endpoints: list[object] = []
+netbox_endpoints: list[NetBoxEndpoint] = []
 init_ok: bool = False
 last_init_error: str | None = None
 
 
-def _apply_plugin_settings_concurrency(nb: object) -> None:
-    """Fetch ProxboxPluginSettings from NetBox and configure the semaphore concurrency.
-
-    Falls back silently to the default (1) if the settings endpoint is unavailable
-    (e.g. migration 0023 not yet applied or network error).
-    """
+def _configure_backend_file_logging() -> None:
+    """Apply file log path from Proxbox plugin settings when available."""
     try:
-        rows = rest_list(nb, "/api/plugins/proxbox/settings/", query={"limit": 1})
-        if rows:
-            stored = rows[0].get("netbox_max_concurrent")
-            if isinstance(stored, int) and stored >= 1:
-                configure_netbox_concurrency(stored)
-                logger.info(
-                    "NetBox semaphore configured to %d (from ProxboxPluginSettings)", stored
-                )
-                return
+        settings = get_settings(netbox_session=netbox_session, use_cache=False)
+        configured_path = settings.get("backend_log_file_path", DEFAULT_LOG_PATH)
     except Exception:  # noqa: BLE001
-        logger.debug(
-            "Could not fetch plugin settings for concurrency config; using default (1)"
+        logger.exception(
+            "Failed to resolve backend_log_file_path from Proxbox plugin settings; using default"
         )
+        configured_path = DEFAULT_LOG_PATH
+
+    applied_path = configure_file_logging_path(configured_path)
+    if applied_path:
+        logger.info("Backend file logs configured", extra={"backend_log_file_path": applied_path})
+        return
+
+    logger.warning(
+        "Backend file logs disabled because no log archive path could be created",
+        extra={"backend_log_file_path": configured_path},
+    )
 
 
 def init_database_and_netbox() -> None:
@@ -78,7 +80,6 @@ def init_database_and_netbox() -> None:
             netbox_session = get_netbox_session(database_session=database_session)
             NetBoxBase.nb = netbox_session
             init_ok = True
-            _apply_plugin_settings_concurrency(netbox_session)
     except Exception as error:  # noqa: BLE001
         last_init_error = str(error)
         logger.exception("Database or NetBox client bootstrap failed")
@@ -96,3 +97,5 @@ def init_database_and_netbox() -> None:
                 logger.exception("Failed to load NetBox endpoint rows after schema retry")
                 netbox_endpoints = []
                 last_init_error = last_init_error or str(error)
+
+    _configure_backend_file_logging()

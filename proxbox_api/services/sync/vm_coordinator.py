@@ -52,7 +52,7 @@ class VMSyncContext:
     tag: ProxboxTagDep
     storage_index: dict[tuple[str, str], dict] = field(default_factory=dict)
     use_websocket: bool = False
-    use_guest_agent_interface_name: bool = True
+    use_guest_agent_interface_name: bool | None = None  # None means read from settings
     use_css: bool = False
 
 
@@ -83,9 +83,18 @@ class VMSyncCoordinator:
         except Exception as error:
             logger.warning("Error loading storage records for VM sync: %s", error)
 
+    def _resolve_vm_sync_concurrency(self) -> int:
+        """Resolve VM sync concurrency from settings, with fallback."""
+        from proxbox_api.settings_client import get_settings
+
+        try:
+            return int(get_settings().get("vm_sync_max_concurrency", 4))
+        except Exception:
+            return 4
+
     async def _process_clusters(self, cluster_resources: list[dict]) -> None:
         """Process all clusters and their VMs."""
-        max_concurrency = 4
+        max_concurrency = self._resolve_vm_sync_concurrency()
         semaphore = asyncio.Semaphore(max_concurrency)
 
         async def run_vm_task(cluster_name: str, resource: dict) -> dict | Exception:
@@ -113,7 +122,8 @@ class VMSyncCoordinator:
                 if isinstance(vm_result, Exception):
                     self._result.failed += 1
                     self._result.errors.append(str(vm_result))
-                else:
+                elif isinstance(vm_result, dict):
+                    # VM was successfully synced
                     self._result.created += 1
 
     async def _sync_single_vm(
@@ -205,6 +215,51 @@ async def create_virtual_machines_v2(
     context: VMSyncContext,
     cluster_resources: list[dict],
 ) -> VMSyncResult:
-    """Create virtual machines using the new coordinator pattern."""
-    coordinator = VMSyncCoordinator(context)
-    return await coordinator.run(cluster_resources)
+    """Create virtual machines using the production VM sync flow.
+
+    The coordinator class is still available for incremental migration, but this
+    entrypoint delegates to the production route-level implementation to preserve
+    dependency ordering guarantees end-to-end.
+    """
+
+    from proxbox_api.routes.virtualization.virtual_machines.sync_vm import create_virtual_machines
+    from proxbox_api.settings_client import get_settings
+
+    # Read settings with defaults
+    try:
+        settings = get_settings()
+        use_guest_agent = context.use_guest_agent_interface_name
+        if use_guest_agent is None:
+            use_guest_agent = settings.get("use_guest_agent_interface_name", True)
+        ignore_ipv6 = settings.get("ignore_ipv6_link_local_addresses", True)
+    except Exception:
+        use_guest_agent = (
+            context.use_guest_agent_interface_name
+            if context.use_guest_agent_interface_name is not None
+            else True
+        )
+        ignore_ipv6 = True
+
+    try:
+        results = await create_virtual_machines(
+            netbox_session=context.netbox_session,
+            pxs=context.pxs,
+            cluster_status=context.cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=context.custom_fields,
+            tag=context.tag,
+            websocket=None,
+            use_css=context.use_css,
+            use_websocket=False,
+            sync_vm_network=True,
+            use_guest_agent_interface_name=use_guest_agent,
+            netbox_vm_ids=None,
+            ignore_ipv6_link_local_addresses=ignore_ipv6,
+        )
+    except Exception as error:
+        return VMSyncResult(created=0, updated=0, failed=1, errors=[str(error)])
+
+    if not isinstance(results, list):
+        return VMSyncResult(created=0, updated=0, failed=1, errors=["Unexpected VM sync result"])
+
+    return VMSyncResult(created=len(results), updated=0, failed=0, errors=[])

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 
 
@@ -32,7 +33,7 @@ async def sync_backup_routine_individual(
     now = datetime.now(timezone.utc)
 
     try:
-        backup_jobs = px.session.cluster.backup.get()
+        backup_jobs = await resolve_async(px.session.cluster.backup.get())
     except Exception:
         backup_jobs = []
 

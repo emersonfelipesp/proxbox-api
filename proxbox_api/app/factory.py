@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from proxbox_api.app import bootstrap
 from proxbox_api.app.cache_routes import register_cache_routes
@@ -17,11 +21,13 @@ from proxbox_api.app.exceptions import register_exception_handlers
 from proxbox_api.app.full_update import register_full_update_routes
 from proxbox_api.app.root_meta import root_meta_router
 from proxbox_api.app.websockets import register_websocket_routes
+from proxbox_api.auth import check_auth_header_with_session, get_session_factory
 from proxbox_api.exception import ProxboxException
 from proxbox_api.log_buffer import configure_buffer_logger
 from proxbox_api.logger import logger
 from proxbox_api.openapi_custom import custom_openapi_builder
 from proxbox_api.routes.admin import router as admin_router
+from proxbox_api.routes.auth import router as auth_router
 from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.routes.extras import router as extras_router
 from proxbox_api.routes.netbox import router as netbox_router
@@ -36,6 +42,114 @@ from proxbox_api.routes.virtualization.virtual_machines import router as virtual
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+
+AUTH_EXEMPT_PATHS = frozenset(
+    {
+        "/",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/health",
+        "/meta",
+        "/auth/register-key",
+        "/auth/bootstrap-status",
+    }
+)
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Simple in-memory rate limiting per IP address.
+
+    Limits requests to a configurable rate per minute.
+    """
+
+    def __init__(self, app, requests_per_minute: int = 60):
+        super().__init__(app)
+        self.requests_per_minute = requests_per_minute
+        self.window_size = 60.0
+        self._requests: dict[str, list[float]] = defaultdict(list)
+
+    def _clean_old_requests(self, ip: str, now: float) -> None:
+        cutoff = now - self.window_size
+        self._requests[ip] = [t for t in self._requests[ip] if t > cutoff]
+        # Remove IP entry if no requests remain (prevent unbounded dict growth)
+        if not self._requests[ip]:
+            del self._requests[ip]
+
+    def _get_client_ip(self, request: Request) -> str:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else "unknown"
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/static/") or path in AUTH_EXEMPT_PATHS:
+            return await call_next(request)
+
+        now = time.time()
+        ip = self._get_client_ip(request)
+        self._clean_old_requests(ip, now)
+
+        if len(self._requests[ip]) >= self.requests_per_minute:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Please try again later."},
+                headers={"Retry-After": "60"},
+            )
+
+        self._requests[ip].append(now)
+        return await call_next(request)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        return response
+
+
+class APIKeyAuthMiddleware(BaseHTTPMiddleware):
+    """Middleware to enforce API key authentication on protected routes."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        if path in AUTH_EXEMPT_PATHS or path.startswith("/static/"):
+            return await call_next(request)
+
+        api_key = request.headers.get("X-Proxbox-API-Key")
+        client_ip = self._get_client_ip(request)
+
+        session_factory = get_session_factory(request.app)
+        with session_factory() as session:
+            authorized, error_message = check_auth_header_with_session(session, api_key, client_ip)
+
+        if not authorized:
+            status_code = 429 if "Too many failed" in (error_message or "") else 401
+            return JSONResponse(
+                status_code=status_code,
+                content={"detail": error_message},
+                headers={"Retry-After": "300"} if status_code == 429 else {},
+            )
+
+        return await call_next(request)
+
+    def _get_client_ip(self, request: Request) -> str:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else "unknown"
+
 
 # Legacy module-level placeholders (some tooling may read these names).
 configuration = None
@@ -92,16 +206,33 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Accept",
+            "Accept-Language",
+            "Content-Type",
+            "X-Proxbox-API-Key",
+            "X-Requested-With",
+        ],
     )
+
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(APIKeyAuthMiddleware)
+
+    rate_limit_str = os.environ.get("PROXBOX_RATE_LIMIT", "60")
+    try:
+        rate_limit = max(1, int(rate_limit_str))
+    except ValueError:
+        rate_limit = 60
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit)
 
     register_exception_handlers(app)
 
     configure_buffer_logger("proxbox")
 
     app.include_router(root_meta_router)
+    app.include_router(auth_router)
     register_cache_routes(app)
     register_full_update_routes(app)
     register_websocket_routes(app)

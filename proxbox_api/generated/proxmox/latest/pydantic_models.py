@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import warnings
+
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+warnings.filterwarnings('ignore', message='Field name "schema".*shadows an attribute.*')
 
 class ProxmoxBaseModel(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra='allow')
+    model_config = ConfigDict(populate_by_name=True, extra='allow', protected_namespaces=())
 
 class GetAccessResponseItem(ProxmoxBaseModel):
     subdir: str | None = Field(None)
@@ -540,7 +543,7 @@ class PutClusterAcmeAccountNameResponse(RootModel[str]):
 class GetClusterAcmeChallengeSchemaResponseItem(ProxmoxBaseModel):
     id: str | None = Field(None)
     name: str | None = Field(None, description='Human readable name, falls back to id')
-    schema: dict[str, object] | None = Field(None)
+    schema_: dict[str, object] | None = Field(None, alias="schema")
     type: str | None = Field(None)
 
 class GetClusterAcmeChallengeSchemaResponse(RootModel[list[GetClusterAcmeChallengeSchemaResponseItem]]):

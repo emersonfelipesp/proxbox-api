@@ -1,3 +1,5 @@
+"""Tests for individual sync flows and status reporting."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -46,7 +48,7 @@ def test_parse_disk_config_entry_preserves_leading_volume():
 
 
 @pytest.mark.asyncio
-async def test_individual_backup_route_supports_post(monkeypatch):
+async def test_individual_backup_route_supports_post(monkeypatch, test_api_key):
     captured: dict[str, object] = {}
 
     async def _fake_sync_backup(*args, **kwargs):
@@ -63,7 +65,11 @@ async def test_individual_backup_route_supports_post(monkeypatch):
         _fake_sync_backup,
     )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.post(
             "/sync/individual/backup",
             params={
@@ -85,14 +91,18 @@ async def test_individual_backup_route_supports_post(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_individual_ip_route_requires_cluster_name():
+async def test_individual_ip_route_requires_cluster_name(test_api_key):
     app.dependency_overrides[get_netbox_session] = lambda: object()
     app.dependency_overrides[proxmox_sessions] = lambda: [SimpleNamespace(name="lab")]
     app.dependency_overrides[proxbox_tag] = lambda: SimpleNamespace(
         id=7, name="Proxbox", slug="proxbox", color="ff5722"
     )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.get(
             "/sync/individual/ip",
             params={
@@ -352,8 +362,17 @@ async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeyp
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
         "proxbox_api.services.sync.individual.backup_sync.rest_reconcile_async",
         _fake_rest_reconcile_async,
+    )
+    # Also patch in helpers module where ensure_vm_record is defined
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
     )
 
     result = await sync_backup_individual(
@@ -371,7 +390,7 @@ async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_individual_interface_route_supports_post(monkeypatch):
+async def test_individual_interface_route_supports_post(monkeypatch, test_api_key):
     async def _fake_sync_interface(*args, **kwargs):
         return {"object_type": "interface", "name": "net0", "dry_run": kwargs["dry_run"]}
 
@@ -385,7 +404,11 @@ async def test_individual_interface_route_supports_post(monkeypatch):
         _fake_sync_interface,
     )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.post(
             "/sync/individual/interface",
             params={
@@ -403,7 +426,7 @@ async def test_individual_interface_route_supports_post(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_individual_disk_route_forwards_auto_create_flags(monkeypatch):
+async def test_individual_disk_route_forwards_auto_create_flags(monkeypatch, test_api_key):
     captured: dict[str, object] = {}
 
     async def _fake_sync_disk(*args, **kwargs):
@@ -420,7 +443,11 @@ async def test_individual_disk_route_forwards_auto_create_flags(monkeypatch):
         _fake_sync_disk,
     )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.post(
             "/sync/individual/disk",
             params={
@@ -441,7 +468,7 @@ async def test_individual_disk_route_forwards_auto_create_flags(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_individual_snapshot_route_forwards_auto_create_flags(monkeypatch):
+async def test_individual_snapshot_route_forwards_auto_create_flags(monkeypatch, test_api_key):
     captured: dict[str, object] = {}
 
     async def _fake_sync_snapshot(*args, **kwargs):
@@ -458,7 +485,11 @@ async def test_individual_snapshot_route_forwards_auto_create_flags(monkeypatch)
         _fake_sync_snapshot,
     )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.post(
             "/sync/individual/snapshot",
             params={
@@ -479,7 +510,7 @@ async def test_individual_snapshot_route_forwards_auto_create_flags(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_individual_task_history_route_uses_explicit_cluster(monkeypatch):
+async def test_individual_task_history_route_uses_explicit_cluster(monkeypatch, test_api_key):
     captured: dict[str, object] = {}
 
     async def _fake_sync_task_history_individual(*args, **kwargs):
@@ -499,7 +530,11 @@ async def test_individual_task_history_route_uses_explicit_cluster(monkeypatch):
         _fake_sync_task_history_individual,
     )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.get(
             "/sync/individual/task-history",
             params={
@@ -517,7 +552,7 @@ async def test_individual_task_history_route_uses_explicit_cluster(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_individual_task_history_route_requires_cluster_for_multi_session():
+async def test_individual_task_history_route_requires_cluster_for_multi_session(test_api_key):
     app.dependency_overrides[get_netbox_session] = lambda: object()
     app.dependency_overrides[proxmox_sessions] = lambda: [
         SimpleNamespace(name="alpha"),
@@ -527,7 +562,11 @@ async def test_individual_task_history_route_requires_cluster_for_multi_session(
         id=7, name="Proxbox", slug="proxbox", color="ff5722"
     )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
         response = await client.get(
             "/sync/individual/task-history",
             params={

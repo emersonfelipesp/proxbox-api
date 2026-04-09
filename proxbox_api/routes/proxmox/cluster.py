@@ -3,9 +3,12 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from proxbox_api.enum.proxmox import *
+from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
@@ -13,7 +16,10 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_status as get_typed_cluster_status,
 )
+from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
+from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
+from proxbox_api.utils.streaming import sse_event
 
 router = APIRouter()
 
@@ -156,7 +162,10 @@ async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
 
     return ClusterStatusSchemaList(
         [
-            await parse_cluster_status(proxmox_object=px, data=get_typed_cluster_status(px))
+            await parse_cluster_status(
+                proxmox_object=px,
+                data=await get_typed_cluster_status(px),
+            )
             for px in pxs
         ]
     )
@@ -195,11 +204,12 @@ async def cluster_resources(
     json_response = []
 
     for px in pxs:
+        resources = await get_typed_cluster_resources(px, resource_type=resource_type)
         json_response.append(
             {
                 px.name: [
                     resource.model_dump(mode="python", by_alias=True, exclude_none=True)
-                    for resource in get_typed_cluster_resources(px, resource_type=resource_type)
+                    for resource in resources
                 ]
             }
         )
@@ -226,7 +236,7 @@ async def cluster_backup(pxs: ProxmoxSessionsDep):
 
     for px in pxs:
         try:
-            backup_jobs = px.session.cluster.backup.get()
+            backup_jobs = await resolve_async(px.session.cluster.backup.get())
             for job in backup_jobs:
                 job["cluster_name"] = px.name
                 results.append(job)
@@ -235,3 +245,70 @@ async def cluster_backup(pxs: ProxmoxSessionsDep):
             results.append({"cluster_name": px.name, "error": str(error)})
 
     return results
+
+
+@router.get("/backup/stream", response_model=None)
+async def cluster_backup_stream(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+):
+    """Stream backup-routines sync progress and terminal status via SSE."""
+
+    async def event_stream():
+        try:
+            yield sse_event(
+                "step",
+                {
+                    "step": "backup-routines",
+                    "status": "started",
+                    "message": "Starting backup routines synchronization.",
+                },
+            )
+            result = await sync_all_backup_routines(
+                netbox_session=netbox_session,
+                pxs=pxs,
+            )
+            yield sse_event(
+                "step",
+                {
+                    "step": "backup-routines",
+                    "status": "completed",
+                    "message": "Backup routines synchronization finished.",
+                    "result": result,
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Backup routines sync completed.",
+                    "result": result,
+                },
+            )
+        except Exception as error:  # noqa: BLE001
+            yield sse_event(
+                "error",
+                {
+                    "step": "backup-routines",
+                    "status": "failed",
+                    "error": str(error),
+                    "detail": str(error),
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Backup routines sync failed.",
+                    "errors": [{"detail": str(error)}],
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

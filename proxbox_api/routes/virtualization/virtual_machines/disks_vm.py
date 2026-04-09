@@ -143,6 +143,12 @@ async def create_virtual_disks_stream(
                 },
             )
         except Exception as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {

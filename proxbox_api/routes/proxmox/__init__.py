@@ -3,12 +3,13 @@
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query
-from proxmoxer.core import ResourceException
+from proxmox_openapi.sdk.exceptions import ResourceException
 from pydantic import BaseModel, Field
 
 from proxbox_api.enum.proxmox import *
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.schemas.virtualization import VMConfig
@@ -22,7 +23,7 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.proxmox_helpers import (
     get_vm_config as get_typed_vm_config,
 )
-from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.session.proxmox import ProxmoxSessionsDep, close_proxmox_sessions
 
 router = APIRouter()
 
@@ -86,18 +87,47 @@ async def proxmox_version(pxs: ProxmoxSessionsDep):
     """
     json_response = []
 
-    for px in pxs:
-        if px.CONNECTED:
+    try:
+        for px in pxs:
+            if not getattr(px, "CONNECTED", False):
+                continue
+
             session = getattr(px, "session", None)
-            json_response.append({getattr(px, "name", None): session.version.get()})
+            if session is None:
+                raise ProxboxException(
+                    message="Invalid Proxmox session state",
+                    detail="Connected session is missing SDK client instance.",
+                )
 
-    if not json_response:
-        raise HTTPException(
-            status_code=404,
-            detail="No Proxmox active connections found, not able to retrieve version information",
-        )
+            try:
+                version = await resolve_async(session.version.get())
+                json_response.append({getattr(px, "name", None): version})
+            except ResourceException as error:
+                target = getattr(px, "domain", None) or getattr(px, "ip_address", None)
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Failed to query Proxmox version "
+                        f"for endpoint '{getattr(px, 'name', 'unknown')}' ({target}). "
+                        f"Upstream responded with HTTP {error.status_code} {error.status_message}."
+                    ),
+                ) from error
+            except Exception as error:
+                raise ProxboxException(
+                    message="Error retrieving Proxmox version",
+                    detail="Unexpected error while querying upstream Proxmox API.",
+                    python_exception=str(error),
+                ) from error
 
-    return json_response
+        if not json_response:
+            raise HTTPException(
+                status_code=404,
+                detail="No Proxmox active connections found, not able to retrieve version information",
+            )
+
+        return json_response
+    finally:
+        await close_proxmox_sessions(pxs)
 
 
 @router.get("/")
@@ -124,7 +154,7 @@ async def proxmox(pxs: ProxmoxSessionsDep):
 
     json_response = []
 
-    def minimize_result(endpoint_name):
+    async def minimize_result(endpoint_name):
         """
         Minimize the result obtained from a Proxmox endpoint.
         This function retrieves data from a specified Proxmox endpoint and extracts
@@ -142,7 +172,7 @@ async def proxmox(pxs: ProxmoxSessionsDep):
         """
 
         endpoint_list = []
-        result = px.session(endpoint_name).get()
+        result = await resolve_async(px.session(endpoint_name).get())
 
         match endpoint_name:
             case "access":
@@ -155,31 +185,38 @@ async def proxmox(pxs: ProxmoxSessionsDep):
 
         return endpoint_list
 
-    for px in pxs:
-        json_response.append(
-            {
-                f"{px.name}": {
-                    "access": minimize_result("access"),
-                    "cluster": minimize_result("cluster"),
-                    "nodes": px.session.nodes.get(),
-                    "pools": px.session.pools.get(),
-                    "storage": px.session.storage.get(),
-                    "version": px.session.version.get(),
+    try:
+        for px in pxs:
+            nodes = await resolve_async(px.session.nodes.get())
+            pools = await resolve_async(px.session.pools.get())
+            storage = await resolve_async(px.session.storage.get())
+            version = await resolve_async(px.session.version.get())
+            json_response.append(
+                {
+                    f"{px.name}": {
+                        "access": await minimize_result("access"),
+                        "cluster": await minimize_result("cluster"),
+                        "nodes": nodes,
+                        "pools": pools,
+                        "storage": storage,
+                        "version": version,
+                    }
                 }
-            }
-        )
+            )
 
-    return {
-        "message": "Proxmox API",
-        "proxmox_api_viewer": "https://pve.proxmox.com/pve-docs/api-viewer/",
-        "github": {
-            "netbox": "https://github.com/netbox-community/netbox",
-            "netbox-sdk": "https://github.com/netbox-community/netbox-sdk",
-            "proxmoxer": "https://github.com/proxmoxer/proxmoxer",
-            "proxbox": "https://github.com/netdevopsbr/netbox-proxbox",
-        },
-        "clusters": json_response,
-    }
+        return {
+            "message": "Proxmox API",
+            "proxmox_api_viewer": "https://pve.proxmox.com/pve-docs/api-viewer/",
+            "github": {
+                "netbox": "https://github.com/netbox-community/netbox",
+                "netbox-sdk": "https://github.com/netbox-community/netbox-sdk",
+                "proxmox-openapi": "https://github.com/emersonfelipesp/proxmox-openapi",
+                "proxbox": "https://github.com/netdevopsbr/netbox-proxbox",
+            },
+            "clusters": json_response,
+        }
+    finally:
+        await close_proxmox_sessions(pxs)
 
 
 class BackupVerification(BaseModel):
@@ -245,7 +282,7 @@ async def get_proxmox_storage(
     """
     result = []
     for proxmox in pxs:
-        result.append({proxmox.name: dump_models(get_storage_list(proxmox))})
+        result.append({proxmox.name: dump_models(await get_storage_list(proxmox))})
 
     return result
 
@@ -299,7 +336,7 @@ async def get_proxmox_node_storage_content(
         for cluster_node in cluster.node_list:
             if cluster_node.name == node:
                 return dump_models(
-                    get_typed_node_storage_content(
+                    await get_typed_node_storage_content(
                         proxmox,
                         node=node,
                         storage=storage,
@@ -329,10 +366,13 @@ async def top_level_endpoint(
 
     json_response = []
 
-    for px in pxs:
-        json_response.append({px.name: px.session(top_level).get()})
+    try:
+        for px in pxs:
+            json_response.append({px.name: await resolve_async(px.session(top_level).get())})
 
-    return json_response
+        return json_response
+    finally:
+        await close_proxmox_sessions(pxs)
 
 
 @router.get(
@@ -367,9 +407,13 @@ async def get_vm_config(  # noqa: C901
                 for cluster_node in cluster.node_list:
                     if str(node) == str(cluster_node.name):
                         if type == "qemu":
-                            config = get_typed_vm_config(px, node=node, vm_type=type, vmid=vmid)
+                            config = await get_typed_vm_config(
+                                px, node=node, vm_type=type, vmid=vmid
+                            )
                         elif type == "lxc":
-                            config = get_typed_vm_config(px, node=node, vm_type=type, vmid=vmid)
+                            config = await get_typed_vm_config(
+                                px, node=node, vm_type=type, vmid=vmid
+                            )
 
                         if config:
                             return config.model_dump(

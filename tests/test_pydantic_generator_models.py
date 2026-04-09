@@ -1,3 +1,5 @@
+"""Tests for generated Pydantic models from OpenAPI schemas."""
+
 from __future__ import annotations
 
 from types import ModuleType
