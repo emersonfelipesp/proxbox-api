@@ -1564,6 +1564,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             unchanged += 1
 
     created = 0
+    failed = 0
     for offset in range(0, len(to_create), resolved_batch_size):
         batch = to_create[offset : offset + resolved_batch_size]
         try:
@@ -1607,7 +1608,6 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
 
     updated = 0
-    failed = 0
     for offset in range(0, len(to_patch), resolved_batch_size):
         batch = to_patch[offset : offset + resolved_batch_size]
         none_id_count = sum(1 for record, _, _ in batch if record.id is None)

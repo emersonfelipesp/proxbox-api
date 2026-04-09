@@ -32,6 +32,20 @@ _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURR
 _DEFAULT_VM_SYNC_CONCURRENCY = max(1, int(os.getenv("PROXBOX_NETBOX_WRITE_CONCURRENCY", "4")))
 
 
+def _extract_fk_id(value: object) -> object:
+    """Return the integer ID from a nested FK dict, or the value itself."""
+    if isinstance(value, dict):
+        return value.get("id")
+    return value
+
+
+def _extract_choice_value(value: object) -> object:
+    """Return the raw choice string from a nested choice dict, or the value itself."""
+    if isinstance(value, dict):
+        return value.get("value")
+    return value
+
+
 async def _load_storage_index(netbox_session: object) -> dict[tuple[str, str], dict[str, object]]:
     nb = netbox_session
     try:
@@ -460,10 +474,18 @@ async def create_virtual_machine_snapshots(  # noqa: C901
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
+    logger.info("Fetched %d VMs from NetBox before proxmox_vm_id filtering", len(vms))
+
     vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
 
+    logger.info("After proxmox_vm_id filtering: %d VMs remain for snapshot sync", len(vms))
+
     if not vms:
-        logger.warning("No VMs found with cf_proxmox_vm_id set")
+        logger.warning(
+            "No VMs found with proxmox_vm_id custom field set; "
+            "ensure the VM sync stage runs before snapshot sync and that the "
+            "'proxmox_vm_id' custom field is defined and populated in NetBox"
+        )
         if use_websocket and websocket:
             await websocket.send_json(
                 {
@@ -545,7 +567,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                     "vmid": record.get("vmid"),
                     "name": record.get("name"),
                     "node": record.get("node"),
-                    "virtual_machine": record.get("virtual_machine"),
+                    "virtual_machine": _extract_fk_id(record.get("virtual_machine")),
                 },
             )
             created = reconcile_result.created
