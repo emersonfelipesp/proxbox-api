@@ -46,7 +46,7 @@ def test_backup_routines_includes_bulk_failed_count_in_errors(monkeypatch):
 
     result = asyncio.run(sync_all_backup_routines(netbox_session=object(), pxs=pxs))
 
-    assert result == {"created": 3, "updated": 4, "errors": 2}
+    assert result == {"created": 3, "updated": 4, "stale": 0, "errors": 2}
 
 
 def test_replications_includes_bulk_failed_count_in_errors(monkeypatch):

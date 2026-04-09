@@ -6,7 +6,12 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_bulk_reconcile_async, rest_list_async
+from proxbox_api.netbox_rest import (
+    rest_bulk_patch_async,
+    rest_bulk_reconcile_async,
+    rest_list_async,
+    rest_list_paginated_async,
+)
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
@@ -26,6 +31,51 @@ def _extract_choice_value(value: object) -> object:
     if isinstance(value, dict):
         return value.get("value")
     return value
+
+
+def _parse_vmid_selection(vmid_raw: object) -> list[int]:
+    """Parse Proxmox vmid field into a list of integer VMIDs."""
+    if not vmid_raw:
+        return []
+    if isinstance(vmid_raw, str):
+        return [int(part.strip()) for part in vmid_raw.split(",") if part.strip().isdigit()]
+    if isinstance(vmid_raw, list):
+        return [int(x) for x in vmid_raw if str(x).isdigit()]
+    return []
+
+
+def _parse_retention(job: dict) -> dict:
+    """Parse Proxmox prune-backups string into individual retention fields."""
+    raw = job.get("prune-backups") or job.get("prune_backups") or ""
+    result: dict[str, int | bool | None] = {
+        "keep_last": None,
+        "keep_daily": None,
+        "keep_weekly": None,
+        "keep_monthly": None,
+        "keep_yearly": None,
+        "keep_all": None,
+    }
+    if not raw:
+        return result
+    for part in raw.split(","):
+        part = part.strip()
+        if "=" in part:
+            key, value = part.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "keep-last":
+                result["keep_last"] = int(value) if value.isdigit() else None
+            elif key == "keep-daily":
+                result["keep_daily"] = int(value) if value.isdigit() else None
+            elif key == "keep-weekly":
+                result["keep_weekly"] = int(value) if value.isdigit() else None
+            elif key == "keep-monthly":
+                result["keep_monthly"] = int(value) if value.isdigit() else None
+            elif key == "keep-yearly":
+                result["keep_yearly"] = int(value) if value.isdigit() else None
+        elif part.lower() == "keep-all":
+            result["keep_all"] = True
+    return result
 
 
 def _record_id(record) -> int | None:
@@ -153,29 +203,31 @@ async def _fetch_session_payloads(px, nb, results: dict) -> list[dict]:  # noqa:
             if not job_id:
                 continue
 
+            retention = _parse_retention(job)
             payloads.append({
                 "job_id": job_id,
                 "endpoint": netbox_endpoint_id,
-                "enabled": job.get("enabled", True),
-                "schedule": job.get("schedule", ""),
+                "enabled": bool(job.get("enabled", True)),
+                "schedule": job.get("schedule") or "",
                 # node/storage are nullable FKs — send null rather than raw
                 # Proxmox name strings, which DRF would reject as invalid PKs.
                 "node": None,
                 "storage": None,
                 "fleecing_storage": None,
-                "selection": job.get("selection", []),
-                "keep_last": job.get("keep_last"),
-                "keep_daily": job.get("keep_daily"),
-                "keep_weekly": job.get("keep_weekly"),
-                "keep_monthly": job.get("keep_monthly"),
-                "keep_yearly": job.get("keep_yearly"),
-                "keep_all": job.get("keep_all"),
+                # Proxmox uses vmid for VM ID list; selection is the selection type string
+                "selection": _parse_vmid_selection(job.get("vmid")),
+                "keep_last": retention["keep_last"],
+                "keep_daily": retention["keep_daily"],
+                "keep_weekly": retention["keep_weekly"],
+                "keep_monthly": retention["keep_monthly"],
+                "keep_yearly": retention["keep_yearly"],
+                "keep_all": retention["keep_all"],
                 "bwlimit": job.get("bwlimit"),
                 "zstd": job.get("zstd"),
                 "io_workers": job.get("io_workers"),
                 "fleecing": job.get("fleecing"),
-                "repeat_missed": job.get("repeat_missed"),
-                "pbs_change_detection_mode": job.get("pbs_change_detection_mode"),
+                "repeat_missed": job.get("repeat-missed") if "repeat-missed" in job else job.get("repeat_missed"),
+                "pbs_change_detection_mode": job.get("pbs-change-detection-mode") if "pbs-change-detection-mode" in job else job.get("pbs_change_detection_mode"),
                 "raw_config": job,
                 "status": "active",
             })
@@ -184,6 +236,29 @@ async def _fetch_session_payloads(px, nb, results: dict) -> list[dict]:  # noqa:
             results["errors"] += 1
 
     return payloads
+
+
+async def _mark_stale_routines(nb: object, synced_payloads: list[dict]) -> int:
+    """PATCH any existing backup routine not in synced_payloads to status='stale'."""
+    synced_keys = {(p["endpoint"], p["job_id"]) for p in synced_payloads}
+    try:
+        all_existing = await rest_list_paginated_async(nb, "/api/plugins/proxbox/backup-routines/")
+        stale_updates = []
+        for record in all_existing:
+            serialized = record.serialize()
+            ep_id = _extract_fk_id(serialized.get("endpoint"))
+            job_id = serialized.get("job_id")
+            current_status = _extract_choice_value(serialized.get("status"))
+            record_id = serialized.get("id")
+            if record_id and (ep_id, job_id) not in synced_keys and current_status != "stale":
+                stale_updates.append({"id": record_id, "status": "stale"})
+        if stale_updates:
+            await rest_bulk_patch_async(nb, "/api/plugins/proxbox/backup-routines/", stale_updates)
+            logger.info("Marked %s backup routine(s) as stale", len(stale_updates))
+        return len(stale_updates)
+    except Exception as exc:
+        logger.warning("Failed to mark stale backup routines: %s", exc)
+        return 0
 
 
 async def sync_all_backup_routines(
@@ -203,7 +278,7 @@ async def sync_all_backup_routines(
         Dict with sync results (created, updated, errors counts).
     """
     nb = netbox_session
-    results: dict = {"created": 0, "updated": 0, "errors": 0}
+    results: dict = {"created": 0, "updated": 0, "stale": 0, "errors": 0}
 
     fetch_tasks = [_fetch_session_payloads(px, nb, results) for px in pxs]
     all_payloads_by_session = await asyncio.gather(*fetch_tasks, return_exceptions=True)
@@ -238,7 +313,7 @@ async def sync_all_backup_routines(
             nb,
             "/api/plugins/proxbox/backup-routines/",
             payloads=all_payloads,
-            lookup_fields=["job_id"],
+            lookup_fields=["job_id", "endpoint"],
             schema=dict,
             current_normalizer=lambda record: {
                 "job_id": record.get("job_id"),
@@ -246,6 +321,19 @@ async def sync_all_backup_routines(
                 "enabled": record.get("enabled"),
                 "schedule": record.get("schedule"),
                 "selection": record.get("selection"),
+                "keep_last": record.get("keep_last"),
+                "keep_daily": record.get("keep_daily"),
+                "keep_weekly": record.get("keep_weekly"),
+                "keep_monthly": record.get("keep_monthly"),
+                "keep_yearly": record.get("keep_yearly"),
+                "keep_all": record.get("keep_all"),
+                "bwlimit": record.get("bwlimit"),
+                "zstd": record.get("zstd"),
+                "io_workers": record.get("io_workers"),
+                "fleecing": record.get("fleecing"),
+                "repeat_missed": record.get("repeat_missed"),
+                "pbs_change_detection_mode": record.get("pbs_change_detection_mode"),
+                "raw_config": record.get("raw_config"),
                 "status": _extract_choice_value(record.get("status")),
             },
         )
@@ -253,10 +341,13 @@ async def sync_all_backup_routines(
         results["created"] = reconcile_result.created
         results["updated"] = reconcile_result.updated
         results["errors"] += reconcile_result.failed
+        results["stale"] = await _mark_stale_routines(nb, all_payloads)
+
         logger.info(
-            "Backup routines sync completed: created=%s, updated=%s, failed=%s",
+            "Backup routines sync completed: created=%s, updated=%s, stale=%s, failed=%s",
             reconcile_result.created,
             reconcile_result.updated,
+            results["stale"],
             reconcile_result.failed,
         )
 
@@ -268,7 +359,8 @@ async def sync_all_backup_routines(
                 failed=reconcile_result.failed,
                 message=(
                     f"Backup routines sync completed: {reconcile_result.created} created, "
-                    f"{reconcile_result.updated} updated, {reconcile_result.failed} failed"
+                    f"{reconcile_result.updated} updated, {results['stale']} stale, "
+                    f"{reconcile_result.failed} failed"
                 ),
             )
 
