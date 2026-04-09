@@ -511,6 +511,18 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     storage_index = await _load_storage_index(nb)
 
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
+
+    # Emit structured discovery event so the live panel shows total VM count
+    if use_websocket and websocket and hasattr(websocket, "emit_discovery"):
+        await websocket.emit_discovery(
+            phase="vm-snapshots",
+            items=[
+                {"name": str(vm.get("name", "")), "type": "virtual-machine"}
+                for vm in vms
+            ],
+            message=f"Discovered {total_vms} VM(s) to scan for snapshots",
+        )
+
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
     vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
 
@@ -536,14 +548,28 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     sync_tasks = [_sync_vm_with_semaphore(vm) for vm in vms]
     results = await asyncio.gather(*sync_tasks, return_exceptions=True)
 
-    # Collect all snapshot payloads from all VMs
+    # Collect all snapshot payloads from all VMs, emit per-VM item_progress
     all_snapshot_payloads: list[dict] = []
     proxmox_snapshot_names_by_vmid: dict[int, set[str]] = {}
+    vm_failed = 0
 
-    for vm, result in zip(vms, results):
+    for idx, (vm, result) in enumerate(zip(vms, results), start=1):
+        vm_name = str(vm.get("name", ""))
         if isinstance(result, Exception):
             logger.warning("Snapshot sync task failed: %s", result)
             skipped += 1
+            vm_failed += 1
+            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
+                await websocket.emit_item_progress(
+                    phase="vm-snapshots",
+                    item={"name": vm_name, "type": "virtual-machine"},
+                    operation="failed",
+                    status="failed",
+                    message=f"Snapshot fetch failed for VM '{vm_name}': {result}",
+                    progress_current=idx,
+                    progress_total=total_vms,
+                    error=str(result),
+                )
         else:
             snapshot_payloads, snapshot_names = result
             all_snapshot_payloads.extend(snapshot_payloads)
@@ -553,6 +579,17 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                     proxmox_snapshot_names_by_vmid[int(vm_vmid)] = snapshot_names
                 except (ValueError, TypeError):
                     pass
+            snap_count = len(snapshot_payloads)
+            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
+                await websocket.emit_item_progress(
+                    phase="vm-snapshots",
+                    item={"name": vm_name, "type": "virtual-machine"},
+                    operation="updated",
+                    status="completed",
+                    message=f"Scanned VM '{vm_name}': {snap_count} snapshot(s) found",
+                    progress_current=idx,
+                    progress_total=total_vms,
+                )
 
     # Perform bulk reconciliation if we have payloads
     if all_snapshot_payloads:
@@ -580,6 +617,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
         except Exception as e:
             logger.error("Error during bulk snapshot reconciliation: %s", e)
             skipped = len(all_snapshot_payloads)
+            vm_failed += 1
 
     if delete_nonexistent_snapshot and proxmox_snapshot_names_by_vmid:
         try:
@@ -611,6 +649,20 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     logger.info(
         f"Snapshot sync completed: {created} created/updated, {skipped} skipped, {deleted} deleted"
     )
+
+    if use_websocket and websocket and hasattr(websocket, "emit_phase_summary"):
+        await websocket.emit_phase_summary(
+            phase="vm-snapshots",
+            created=created,
+            updated=updated,
+            deleted=deleted,
+            failed=vm_failed,
+            skipped=skipped,
+            message=(
+                f"Snapshot sync completed: {created} created, {updated} updated, "
+                f"{deleted} deleted, {skipped} skipped"
+            ),
+        )
 
     return {
         "count": total_vms,

@@ -849,6 +849,7 @@ async def full_update_sync_stream(  # noqa: C901
                     return await sync_all_backup_routines(
                         netbox_session=netbox_session,
                         pxs=pxs,
+                        bridge=backup_routines_bridge,
                     )
                 finally:
                     await backup_routines_bridge.close()

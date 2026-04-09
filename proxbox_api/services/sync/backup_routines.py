@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
+
+if TYPE_CHECKING:
+    from proxbox_api.utils.streaming import WebSocketSSEBridge
 
 
 def _extract_fk_id(value: object) -> object:
@@ -185,12 +189,15 @@ async def _fetch_session_payloads(px, nb, results: dict) -> list[dict]:  # noqa:
 async def sync_all_backup_routines(
     netbox_session,
     pxs: ProxmoxSessionsDep,
+    *,
+    bridge: "WebSocketSSEBridge | None" = None,
 ) -> dict:
     """Sync all backup routines (vzdump schedules) from Proxmox to NetBox using bulk operations.
 
     Args:
         netbox_session: NetBox async session.
         pxs: Proxmox sessions dependency.
+        bridge: Optional SSE bridge for streaming progress events.
 
     Returns:
         Dict with sync results (created, updated, errors counts).
@@ -208,7 +215,23 @@ async def sync_all_backup_routines(
 
     if not all_payloads:
         logger.info("No backup routines to sync")
+        if bridge:
+            await bridge.emit_phase_summary(
+                phase="backup-routines",
+                message="No backup routines found in Proxmox",
+            )
         return results
+
+    # Emit discovery so the live panel shows how many items will be processed
+    if bridge:
+        await bridge.emit_discovery(
+            phase="backup-routines",
+            items=[
+                {"name": str(p.get("job_id", "")), "type": "backup-routine"}
+                for p in all_payloads
+            ],
+            message=f"Discovered {len(all_payloads)} backup routine(s) to synchronize",
+        )
 
     try:
         reconcile_result = await rest_bulk_reconcile_async(
@@ -237,8 +260,27 @@ async def sync_all_backup_routines(
             reconcile_result.failed,
         )
 
+        if bridge:
+            await bridge.emit_phase_summary(
+                phase="backup-routines",
+                created=reconcile_result.created,
+                updated=reconcile_result.updated,
+                failed=reconcile_result.failed,
+                message=(
+                    f"Backup routines sync completed: {reconcile_result.created} created, "
+                    f"{reconcile_result.updated} updated, {reconcile_result.failed} failed"
+                ),
+            )
+
     except Exception as e:
         logger.error("Error during bulk backup routines reconciliation: %s", e, exc_info=True)
         results["errors"] = len(all_payloads)
+        if bridge:
+            await bridge.emit_error_detail(
+                message=f"Backup routines bulk reconciliation failed: {e}",
+                category="internal",
+                phase="backup-routines",
+                detail=str(e),
+            )
 
     return results
