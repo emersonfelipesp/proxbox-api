@@ -225,6 +225,7 @@ class NetBoxCustomFieldSyncState(BaseModel):
     search_weight: int = 1000
     group_name: str | None = None
     object_types: list[str] = Field(default_factory=list)
+    related_object_type: str | None = None
 
     @field_validator(
         "name",
