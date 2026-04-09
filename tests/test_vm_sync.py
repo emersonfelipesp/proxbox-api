@@ -148,3 +148,27 @@ def test_interface_state_accepts_choice_object_mode():
     )
 
     assert state.mode == "access"
+
+
+def test_interface_state_accepts_choice_object_type():
+    state = NetBoxInterfaceSyncState.model_validate(
+        {
+            "device": 1,
+            "name": "vmbr0",
+            "type": {"value": "bridge", "label": "Bridge"},
+        }
+    )
+
+    assert state.type == "bridge"
+
+
+def test_virtual_machine_interface_state_accepts_choice_object_type():
+    state = NetBoxVirtualMachineInterfaceSyncState.model_validate(
+        {
+            "virtual_machine": 1,
+            "name": "vmbr0",
+            "type": {"value": "bridge", "label": "Bridge"},
+        }
+    )
+
+    assert state.type == "bridge"

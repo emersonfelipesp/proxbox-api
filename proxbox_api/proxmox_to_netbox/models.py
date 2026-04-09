@@ -282,6 +282,12 @@ class NetBoxInterfaceSyncState(BaseModel):
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
 
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: object) -> str:
+        text = str(_choice_value(value) or "").strip().lower()
+        return text or "other"
+
     @field_validator("mode", mode="before")
     @classmethod
     def normalize_mode(cls, value: object) -> object:
@@ -315,6 +321,14 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: object) -> object:
+        normalized = _choice_value(value)
+        if normalized in (None, ""):
+            return None
+        return str(normalized).strip().lower() or None
 
     @field_validator("mode", mode="before")
     @classmethod
