@@ -541,7 +541,16 @@ def _extract_payload(response: ApiResponse) -> object:
             message="NetBox REST request failed",
             detail=detail,
         )
-    return response.json()
+    if not response.text:
+        return None
+    try:
+        return response.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ProxboxException(
+            message="NetBox returned non-JSON success response",
+            detail=response.text[:500] if response.text else "(empty body)",
+            python_exception=str(exc),
+        ) from exc
 
 
 def _handle_netbox_error(error: Exception, operation: str) -> None:
@@ -1593,6 +1602,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
                         getattr(reconcile_exc, "detail", str(reconcile_exc)),
                         exc_info=True,
                     )
+                    failed += 1
         if offset + resolved_batch_size < len(to_create) and resolved_batch_delay_ms > 0:
             await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
 
@@ -1644,7 +1654,6 @@ async def rest_bulk_reconcile_async(  # noqa: C901
                         getattr(save_exc, "detail", str(save_exc)),
                         exc_info=True,
                     )
-                    records.append(record)
                     failed += 1
         if offset + resolved_batch_size < len(to_patch) and resolved_batch_delay_ms > 0:
             await asyncio.sleep(resolved_batch_delay_ms / 1000.0)

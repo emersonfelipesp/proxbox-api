@@ -5,9 +5,29 @@ from __future__ import annotations
 import asyncio
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_bulk_reconcile_async
+from proxbox_api.netbox_rest import rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
+
+
+async def _get_netbox_endpoint_id(nb, endpoint_name: str) -> int | None:
+    """Look up the NetBox plugin ProxmoxEndpoint integer ID by name."""
+    try:
+        results = await rest_list_async(
+            nb,
+            "/api/plugins/proxbox/endpoints/proxmox/",
+            query={"name": endpoint_name},
+        )
+        if results:
+            record = results[0]
+            return record.id if hasattr(record, "id") else record.get("id")
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve NetBox ProxmoxEndpoint ID for '%s': %s",
+            endpoint_name,
+            exc,
+        )
+    return None
 
 
 async def sync_all_backup_routines(
@@ -34,6 +54,18 @@ async def sync_all_backup_routines(
             logger.warning("Error fetching backup routines for %s: %s", px.name, e)
             return []
 
+        # Resolve the NetBox plugin ProxmoxEndpoint ID for this session.
+        # The endpoint FK is required; skip this session's routines if it can't
+        # be resolved rather than sending 400-producing payloads.
+        netbox_endpoint_id = await _get_netbox_endpoint_id(nb, px.name)
+        if netbox_endpoint_id is None:
+            logger.warning(
+                "Skipping backup routines for Proxmox endpoint '%s': "
+                "no matching ProxmoxEndpoint found in NetBox plugin.",
+                px.name,
+            )
+            return []
+
         payloads = []
         for job in backup_jobs:
             try:
@@ -43,10 +75,14 @@ async def sync_all_backup_routines(
 
                 job_payload = {
                     "job_id": job_id,
+                    "endpoint": netbox_endpoint_id,
                     "enabled": job.get("enabled", True),
                     "schedule": job.get("schedule", ""),
-                    "node": job.get("node"),
-                    "storage": job.get("storage", ""),
+                    # node/storage are nullable FKs — send null rather than raw
+                    # Proxmox name strings, which DRF would reject as invalid PKs.
+                    "node": None,
+                    "storage": None,
+                    "fleecing_storage": None,
                     "selection": job.get("selection", []),
                     "keep_last": job.get("keep_last"),
                     "keep_daily": job.get("keep_daily"),
@@ -58,7 +94,6 @@ async def sync_all_backup_routines(
                     "zstd": job.get("zstd"),
                     "io_workers": job.get("io_workers"),
                     "fleecing": job.get("fleecing"),
-                    "fleecing_storage": job.get("fleecing_storage"),
                     "repeat_missed": job.get("repeat_missed"),
                     "pbs_change_detection_mode": job.get("pbs_change_detection_mode"),
                     "raw_config": job,
@@ -96,10 +131,9 @@ async def sync_all_backup_routines(
             schema=dict,
             current_normalizer=lambda record: {
                 "job_id": record.get("job_id"),
+                "endpoint": record.get("endpoint"),
                 "enabled": record.get("enabled"),
                 "schedule": record.get("schedule"),
-                "node": record.get("node"),
-                "storage": record.get("storage"),
                 "selection": record.get("selection"),
                 "status": record.get("status"),
             },
@@ -115,7 +149,7 @@ async def sync_all_backup_routines(
         )
 
     except Exception as e:
-        logger.error("Error during bulk backup routines reconciliation: %s", e)
+        logger.error("Error during bulk backup routines reconciliation: %s", e, exc_info=True)
         results["errors"] = len(all_payloads)
 
     return results

@@ -196,6 +196,12 @@ async def create_storages(  # noqa: C901
             )
             data = record.serialize()
         except Exception:
+            logger.warning(
+                "Storage reconcile failed for '%s/%s'",
+                cluster_name,
+                storage_name,
+                exc_info=True,
+            )
             failed_count += 1
             if bridge:
                 await bridge.emit_item_progress(
@@ -206,7 +212,7 @@ async def create_storages(  # noqa: C901
                     message=f"Failed to sync storage '{cluster_name}/{storage_name}'",
                     progress_current=processed_count,
                     progress_total=total_items,
-                    error="Storage missing from bulk reconcile result",
+                    error="Storage reconcile failed",
                 )
             continue
 

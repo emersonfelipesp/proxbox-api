@@ -22,7 +22,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProxboxException)
     async def proxbox_exception_handler(request: Request, exc: ProxboxException) -> JSONResponse:
         return JSONResponse(
-            status_code=400,
+            status_code=exc.http_status_code,
             content={
                 "message": exc.message,
                 "detail": exc.detail,

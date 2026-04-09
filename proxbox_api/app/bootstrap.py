@@ -97,5 +97,7 @@ def init_database_and_netbox() -> None:
                 logger.exception("Failed to load NetBox endpoint rows after schema retry")
                 netbox_endpoints = []
                 last_init_error = last_init_error or str(error)
+        finally:
+            database_session.close()
 
     _configure_backend_file_logging()

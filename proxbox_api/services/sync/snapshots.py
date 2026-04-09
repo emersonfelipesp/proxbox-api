@@ -569,7 +569,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                     proxmox_names = proxmox_snapshot_names_by_vmid.get(snapshot_vmid, set())
                     if snapshot_name not in proxmox_names:
                         try:
-                            nb_snapshot.delete()
+                            await nb_snapshot.delete()
                             deleted += 1
                             logger.info(
                                 "Deleted orphaned snapshot %s for VM vmid=%s",

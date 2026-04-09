@@ -8,6 +8,10 @@ from proxbox_api.logger import logger
 class ProxboxException(Exception):
     """Base exception for proxbox-api."""
 
+    # HTTP status code the exception handler should return.
+    # Subclasses representing upstream/server failures override this to 502.
+    http_status_code: int = 400
+
     def __init__(
         self,
         message: str,
@@ -172,6 +176,8 @@ class NetworkSyncError(SyncError):
 class NetBoxAPIError(ProxboxException):
     """Exception raised when NetBox API operations fail."""
 
+    http_status_code: int = 502
+
     def __init__(
         self,
         message: str,
@@ -204,6 +210,8 @@ class NetBoxAPIError(ProxboxException):
 
 class ProxmoxAPIError(ProxboxException):
     """Exception raised when Proxmox API operations fail."""
+
+    http_status_code: int = 502
 
     def __init__(
         self,

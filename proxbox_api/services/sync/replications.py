@@ -38,6 +38,19 @@ async def sync_all_replications(  # noqa: C901
         logger.warning("Error pre-fetching NetBox VMs: %s", e)
         vms_by_proxmox_id = {}
 
+    # Pre-fetch all ProxmoxNode records from the NetBox plugin, indexed by name
+    try:
+        all_nodes = await rest_list_async(nb, "/api/plugins/proxbox/nodes/")
+        nodes_by_name: dict[str, int] = {}
+        for node in all_nodes or []:
+            name = node.get("name")
+            node_id = node.get("id")
+            if name and node_id:
+                nodes_by_name[str(name)] = int(node_id)
+    except Exception as e:
+        logger.warning("Error pre-fetching NetBox ProxmoxNodes: %s", e)
+        nodes_by_name = {}
+
     async def fetch_replications_for_session(px):
         """Fetch replications for a single Proxmox session. Returns list of replication payloads."""
         try:
@@ -62,10 +75,11 @@ async def sync_all_replications(  # noqa: C901
                     )
                     continue
 
+                target_node_name = rep.get("target") or ""
                 replication_payload = {
                     "replication_id": rep.get("id", ""),
                     "guest": rep.get("guest"),
-                    "target": rep.get("target"),
+                    "target": target_node_name,
                     "job_type": rep.get("type"),
                     "schedule": rep.get("schedule"),
                     "rate": rep.get("rate"),
@@ -75,6 +89,7 @@ async def sync_all_replications(  # noqa: C901
                     "jobnum": rep.get("jobnum"),
                     "remove_job": rep.get("remove_job"),
                     "virtual_machine": netbox_vm_id,
+                    "proxmox_node": nodes_by_name.get(target_node_name),
                 }
                 payloads.append(replication_payload)
 
