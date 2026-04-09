@@ -10,9 +10,16 @@ from proxbox_api.services.sync.replications import sync_all_replications
 
 
 def test_backup_routines_includes_bulk_failed_count_in_errors(monkeypatch):
+    async def _fake_list_async(_nb, _path, **_kwargs):
+        return [{"id": 1, "name": "lab"}]
+
     async def _fake_bulk_reconcile(*_args, **_kwargs):
         return SimpleNamespace(created=3, updated=4, unchanged=0, failed=2, records=[])
 
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.backup_routines.rest_list_async",
+        _fake_list_async,
+    )
     monkeypatch.setattr(
         "proxbox_api.services.sync.backup_routines.rest_bulk_reconcile_async",
         _fake_bulk_reconcile,
