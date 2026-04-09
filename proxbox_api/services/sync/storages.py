@@ -6,9 +6,8 @@ import asyncio
 import inspect
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
-from proxbox_api.schemas.stream_messages import ItemOperation
 from proxbox_api.services.proxmox_helpers import dump_models, get_storage_config, get_storage_list
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 
@@ -125,29 +124,18 @@ async def create_storages(  # noqa: C901
             metadata={"fetch_concurrency": int(fetch_concurrency)},
         )
 
-    total_items = len(unique_payloads)
     skipped_count = 0
     storage_payloads: list[dict[str, object]] = []
-    ordered_items: list[tuple[str, str]] = []
 
     for (cluster_name, storage_name), config in unique_payloads.items():
         cluster_id = cluster_id_map.get(cluster_name)
         if cluster_id is None:
             skipped_count += 1
-            if bridge:
-                await bridge.emit_item_progress(
-                    phase="storage",
-                    item={"name": storage_name, "type": "storage", "cluster": cluster_name},
-                    operation=ItemOperation.SKIPPED,
-                    status="skipped",
-                    message=(
-                        f"Skipped storage '{cluster_name}/{storage_name}' "
-                        "because cluster was not found in NetBox"
-                    ),
-                    progress_current=skipped_count,
-                    progress_total=total_items,
-                    warning="Cluster not found in NetBox",
-                )
+            logger.warning(
+                "Skipped storage '%s/%s': cluster not found in NetBox",
+                cluster_name,
+                storage_name,
+            )
             continue
 
         storage_payloads.append(
@@ -163,21 +151,18 @@ async def create_storages(  # noqa: C901
                 "tags": tag_refs,
             }
         )
-        ordered_items.append((cluster_name, storage_name))
 
+    created_count = 0
+    updated_count = 0
     failed_count = 0
-    processed_count = skipped_count
-    for index, (cluster_name, storage_name) in enumerate(ordered_items):
-        processed_count += 1
-        payload = storage_payloads[index]
-        lookup = {"cluster": payload["cluster"], "name": payload["name"]}
 
+    if storage_payloads:
         try:
-            record = await rest_reconcile_async(
+            reconcile_result = await rest_bulk_reconcile_async(
                 nb,
                 "/api/plugins/proxbox/storage/",
-                lookup=lookup,
-                payload=payload,
+                payloads=storage_payloads,
+                lookup_fields=["cluster", "name"],
                 schema=NetBoxStorageSyncState,
                 current_normalizer=lambda item: {
                     "cluster": item.get("cluster", {}).get("id")
@@ -190,75 +175,42 @@ async def create_storages(  # noqa: C901
                     "nodes": item.get("nodes"),
                     "shared": item.get("shared"),
                     "enabled": item.get("enabled"),
-                    "backups": item.get("backups"),
                     "tags": item.get("tags"),
                 },
             )
-            data = record.serialize()
+            created_count = reconcile_result.created
+            updated_count = reconcile_result.updated
+            failed_count = reconcile_result.failed
         except Exception:
-            logger.warning(
-                "Storage reconcile failed for '%s/%s'",
-                cluster_name,
-                storage_name,
-                exc_info=True,
-            )
-            failed_count += 1
-            if bridge:
-                await bridge.emit_item_progress(
-                    phase="storage",
-                    item={"name": storage_name, "type": "storage", "cluster": cluster_name},
-                    operation=ItemOperation.FAILED,
-                    status="failed",
-                    message=f"Failed to sync storage '{cluster_name}/{storage_name}'",
-                    progress_current=processed_count,
-                    progress_total=total_items,
-                    error="Storage reconcile failed",
-                )
-            continue
-
-        synced.append(data)
-        if bridge:
-            await bridge.emit_item_progress(
-                phase="storage",
-                item={
-                    "name": storage_name,
-                    "type": "storage",
-                    "cluster": cluster_name,
-                    "netbox_id": data.get("id"),
-                    "netbox_url": data.get("url") or data.get("display_url"),
-                },
-                operation=ItemOperation.UPDATED,
-                status="completed",
-                message=f"Synced storage '{cluster_name}/{storage_name}'",
-                progress_current=processed_count,
-                progress_total=total_items,
-            )
-        elif use_websocket and websocket:
-            await websocket.send_json(
-                {
-                    "object": "storage",
-                    "type": "sync",
-                    "data": {
-                        "rowid": f"{cluster_name}/{storage_name}",
-                        "name": storage_name,
-                        "completed": True,
-                        "status": "synced",
-                        "message": f"Synced storage {cluster_name}/{storage_name}",
-                        "result": {"id": data.get("id"), "name": storage_name},
-                    },
-                }
-            )
+            logger.warning("Storage bulk reconcile failed", exc_info=True)
+            failed_count = len(storage_payloads)
 
     if bridge:
         await bridge.emit_phase_summary(
             phase="storage",
-            created=0,
-            updated=len(synced),
+            created=created_count,
+            updated=updated_count,
             failed=failed_count,
             skipped=skipped_count,
             message=(
-                f"Storage synchronization completed: {len(synced)} synced, {failed_count} failed"
+                f"Storage synchronization completed: {created_count} created, "
+                f"{updated_count} updated, {failed_count} failed"
             ),
+        )
+    elif use_websocket and websocket:
+        await websocket.send_json(
+            {
+                "object": "storage",
+                "type": "sync",
+                "data": {
+                    "completed": True,
+                    "status": "synced",
+                    "message": (
+                        f"Storage sync done: {created_count} created, "
+                        f"{updated_count} updated, {failed_count} failed"
+                    ),
+                },
+            }
         )
 
     return synced
