@@ -1720,7 +1720,7 @@ async def create_virtual_machines(  # noqa: C901
                     None,
                 )
                 if proxmox_session is not None:
-                    guest_agent_interfaces = get_qemu_guest_agent_network_interfaces(
+                    guest_agent_interfaces = await get_qemu_guest_agent_network_interfaces(
                         proxmox_session,
                         node=str(resource.get("node")),
                         vmid=int(resource.get("vmid")),

@@ -345,7 +345,7 @@ async def _sync_single_vm_snapshots(
 
         storage_record = await _resolve_snapshot_storage_record(
             nb,
-            vm_id=int(vmid),
+            vm_id=int(netbox_vm_id),
             cluster_name=cluster_name,
             storage_index=storage_index,
         )
