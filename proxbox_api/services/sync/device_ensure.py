@@ -359,6 +359,13 @@ async def ensure_proxmox_devices_bulk(
                 payloads=device_payloads,
                 lookup_fields=["name"],
                 schema=NetBoxDeviceSyncState,
+                # Do not patch 'site' on existing devices: moving a device
+                # between sites violates the unique-per-site name constraint
+                # when two Proxmox endpoints share node names across clusters.
+                # The site is set at create time and left authoritative after.
+                patchable_fields=frozenset(
+                    {"status", "cluster", "device_type", "role", "description", "tags", "custom_fields"}
+                ),
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "status": record.get("status"),
