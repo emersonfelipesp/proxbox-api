@@ -312,12 +312,13 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     mac_address: str | None = None
     type: str | None = None
     description: str | None = None
+    bridge: int | None = None
     untagged_vlan: int | None = None
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("virtual_machine", "untagged_vlan", mode="before")
+    @field_validator("virtual_machine", "untagged_vlan", "bridge", mode="before")
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)

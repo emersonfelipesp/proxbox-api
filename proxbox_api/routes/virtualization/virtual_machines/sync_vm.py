@@ -738,6 +738,7 @@ async def _create_vm_interface_parallel(
         "name": resolved_name,
         "enabled": True,
         "mac_address": mac_address,
+        "bridge": None,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
         "tags": tag_refs,
@@ -766,6 +767,7 @@ async def _create_vm_interface_parallel(
             "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
+            "bridge": record.get("bridge"),
             "untagged_vlan": record.get("untagged_vlan"),
             "mode": record.get("mode"),
             "tags": record.get("tags"),
@@ -2182,6 +2184,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                         "name": resolved_name,
                         "enabled": True,
                         "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
+                        "bridge": None,
                         "untagged_vlan": None,
                         "mode": None,
                         "tags": tag_refs,
@@ -2424,9 +2427,11 @@ async def create_only_vm_interfaces(  # noqa: C901
                                     else getattr(existing_iface, "id", None)
                                 )
                                 if iface_id:
-                                    await nb.patch(
-                                        f"/api/virtualization/interfaces/{iface_id}/",
-                                        json={"custom_fields": {"proxbox_bridge": vm_bridge_id}},
+                                    await rest_patch_async(
+                                        nb,
+                                        "/api/virtualization/interfaces/",
+                                        iface_id,
+                                        {"custom_fields": {"proxbox_bridge": vm_bridge_id}},
                                     )
                         except Exception as patch_exc:
                             logger.warning(

@@ -10,6 +10,7 @@ from datetime import datetime
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     RestRecord,
+    rest_bulk_delete_async,
     rest_bulk_reconcile_async,
     rest_list_async,
 )
@@ -350,8 +351,17 @@ async def _sync_single_vm_snapshots(
             storage_index=storage_index,
         )
 
+        # Only query the Proxmox session that owns this VM's cluster/node.
+        # Fanning out to all sessions causes N duplicate warnings per VM when
+        # a session doesn't host the VM (e.g. HTTP 501 for LXC snapshots on the
+        # wrong cluster).
+        matched_pxs = [
+            px for px in pxs if px.name and (px.name == cluster_name or px.name == node_name)
+        ]
+        effective_pxs = matched_pxs if matched_pxs else pxs
+
         snapshot_payloads, proxmox_snapshot_names = await _collect_snapshot_payloads_for_vm(
-            pxs,
+            effective_pxs,
             node_name=node_name,
             proxmox_type=proxmox_type,
             vmid=vmid,
@@ -619,27 +629,33 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     if delete_nonexistent_snapshot and proxmox_snapshot_names_by_vmid:
         try:
             netbox_snapshots = await rest_list_async(nb, "/api/plugins/proxbox/snapshots/")
+            orphan_ids: list[int] = []
             for nb_snapshot in netbox_snapshots or []:
                 snapshot_vmid = nb_snapshot.vmid
                 snapshot_name = nb_snapshot.name
-                if snapshot_vmid and snapshot_name:
+                snapshot_id = (
+                    nb_snapshot.id
+                    if hasattr(nb_snapshot, "id")
+                    else (nb_snapshot.get("id") if isinstance(nb_snapshot, dict) else None)
+                )
+                if snapshot_vmid and snapshot_name and snapshot_id:
                     proxmox_names = proxmox_snapshot_names_by_vmid.get(snapshot_vmid, set())
                     if snapshot_name not in proxmox_names:
-                        try:
-                            await nb_snapshot.delete()
-                            deleted += 1
-                            logger.info(
-                                "Deleted orphaned snapshot %s for VM vmid=%s",
-                                snapshot_name,
-                                snapshot_vmid,
-                            )
-                        except Exception as del_err:
-                            logger.warning(
-                                "Failed to delete orphaned snapshot %s for VM vmid=%s: %s",
-                                snapshot_name,
-                                snapshot_vmid,
-                                del_err,
-                            )
+                        orphan_ids.append(int(snapshot_id))
+                        logger.info(
+                            "Marking orphaned snapshot %s (id=%s) for VM vmid=%s for bulk deletion",
+                            snapshot_name,
+                            snapshot_id,
+                            snapshot_vmid,
+                        )
+            if orphan_ids:
+                try:
+                    deleted = await rest_bulk_delete_async(
+                        nb, "/api/plugins/proxbox/snapshots/", orphan_ids
+                    )
+                    logger.info("Bulk deleted %d orphaned snapshot(s)", deleted)
+                except Exception as del_err:
+                    logger.warning("Bulk delete of orphaned snapshots failed: %s", del_err)
         except Exception as list_err:
             logger.warning("Error loading NetBox snapshots for cleanup: %s", list_err)
 
