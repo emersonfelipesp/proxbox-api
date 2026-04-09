@@ -190,7 +190,11 @@ async def sync_snapshot_individual(  # noqa: C901
             "vmid": vmid,
             "node": node,
             "description": target_snapshot.get("description") if target_snapshot else None,
-            "snaptime": str(target_snapshot.get("snaptime", "")) if target_snapshot else None,
+            "snaptime": (
+                datetime.fromtimestamp(target_snapshot["snaptime"]).isoformat()
+                if target_snapshot and target_snapshot.get("snaptime")
+                else None
+            ),
             "parent": target_snapshot.get("parent") if target_snapshot else None,
             "subtype": vm_type,
             "status": "active",
@@ -198,13 +202,13 @@ async def sync_snapshot_individual(  # noqa: C901
         existing_snapshots = await rest_list_async(
             nb,
             "/api/plugins/proxbox/snapshots/",
-            query={"vmid": vmid, "name": snapshot_name},
+            query={"vmid": vmid, "name": snapshot_name, "node": node},
         )
 
         snapshot_record = await rest_reconcile_async(
             nb,
             "/api/plugins/proxbox/snapshots/",
-            lookup={"vmid": vmid, "name": snapshot_name},
+            lookup={"vmid": vmid, "name": snapshot_name, "node": node},
             payload=snapshot_payload,
             schema=NetBoxSnapshotSyncState,
             current_normalizer=lambda record: {
