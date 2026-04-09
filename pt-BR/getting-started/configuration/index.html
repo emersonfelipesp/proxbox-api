@@ -1474,18 +1474,33 @@
 </tr>
 <tr>
 <td><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code></td>
-<td><code>8</code></td>
-<td>Maximo de operacoes concorrentes de escrita no NetBox.</td>
+<td><code>8</code> (sync de VM) / <code>4</code> (task-history, snapshots)</td>
+<td>Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_PROXMOX_FETCH_CONCURRENCY</code></td>
-<td><code>8</code></td>
-<td>Maximo de operacoes concorrentes de leitura no Proxmox.</td>
+<td><code>8</code> (maioria dos fluxos) / <code>4</code> (task-history)</td>
+<td>Maximo de operacoes concorrentes de leitura no Proxmox. O padrao varia por servico de sync.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_FETCH_MAX_CONCURRENCY</code></td>
 <td><code>8</code></td>
 <td>Override legado de concorrencia usado por alguns entrypoints de sync.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RATE_LIMIT</code></td>
+<td><code>60</code></td>
+<td>Maximo de requisicoes por minuto por endereco IP.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_BACKUP_BATCH_SIZE</code></td>
+<td><code>5</code></td>
+<td>Tamanho do lote de sync de backups. Reduza para diminuir a pressao de escrita no NetBox.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_BACKUP_BATCH_DELAY_MS</code></td>
+<td><code>200</code></td>
+<td>Delay em milissegundos entre lotes de backup.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_CORS_EXTRA_ORIGINS</code></td>

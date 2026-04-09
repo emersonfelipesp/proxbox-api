@@ -668,6 +668,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#authentication-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication (/auth)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#admin" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1266,6 +1277,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#authentication-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication (/auth)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#admin" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1499,10 +1521,22 @@
 <li><code>GET /cache</code> - Inspect the in-memory cache snapshot.</li>
 <li><code>GET /clear-cache</code> - Clear the in-memory cache.</li>
 </ul>
+<h2 id="authentication-auth">Authentication (<code>/auth</code>)<a class="headerlink" href="#authentication-auth" title="Permanent link">&para;</a></h2>
+<p>All requests except bootstrap endpoints require the <code>X-Proxbox-API-Key</code> header. See <a href="../../getting-started/authentication/">Authentication</a> for the full bootstrap flow and key management guide.</p>
+<ul>
+<li><code>GET /auth/bootstrap-status</code> - Check whether first-time key registration is still needed. Auth-exempt.</li>
+<li><code>POST /auth/register-key</code> - Register the first API key. Auth-exempt; fails once a key already exists.</li>
+<li><code>POST /auth/keys</code> - Create a new API key. Returns the raw key value once; store it securely.</li>
+<li><code>GET /auth/keys</code> - List all API keys. Key values are redacted (only metadata is returned).</li>
+<li><code>DELETE /auth/keys/{key_id}</code> - Delete an API key by ID.</li>
+<li><code>POST /auth/keys/{key_id}/activate</code> - Re-activate a previously deactivated key.</li>
+<li><code>POST /auth/keys/{key_id}/deactivate</code> - Deactivate an active key without deleting it.</li>
+</ul>
 <h2 id="admin">Admin<a class="headerlink" href="#admin" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /admin/</code> - HTML admin dashboard for the configured NetBox endpoint records. This route is excluded from OpenAPI.</li>
 <li><code>GET /admin/logs</code> - In-memory backend log buffer with optional filters for <code>level</code>, <code>limit</code>, <code>offset</code>, <code>since</code>, and <code>operation_id</code>.</li>
+<li><code>GET /admin/logs/stream</code> - SSE real-time log stream. Supports query parameters <code>level</code>, <code>errors_only</code>, <code>operation_id</code>, and <code>newer_than_id</code>.</li>
 </ul>
 <h2 id="netbox-routes-netbox">NetBox Routes (<code>/netbox</code>)<a class="headerlink" href="#netbox-routes-netbox" title="Permanent link">&para;</a></h2>
 <ul>

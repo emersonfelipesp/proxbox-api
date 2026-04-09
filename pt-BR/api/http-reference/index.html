@@ -668,6 +668,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#autenticacao-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Autenticacao (/auth)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#admin" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1266,6 +1277,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#autenticacao-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Autenticacao (/auth)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#admin" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1499,10 +1521,22 @@
 <li><code>GET /cache</code> - Inspeciona o cache em memoria.</li>
 <li><code>GET /clear-cache</code> - Limpa o cache em memoria.</li>
 </ul>
+<h2 id="autenticacao-auth">Autenticacao (<code>/auth</code>)<a class="headerlink" href="#autenticacao-auth" title="Permanent link">&para;</a></h2>
+<p>Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header <code>X-Proxbox-API-Key</code>. Consulte <a href="../../getting-started/authentication/">Autenticacao</a> para o fluxo completo de bootstrap e gerenciamento de chaves.</p>
+<ul>
+<li><code>GET /auth/bootstrap-status</code> - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao.</li>
+<li><code>POST /auth/register-key</code> - Registra a primeira chave de API. Isento de autenticacao; falha se ja existir uma chave.</li>
+<li><code>POST /auth/keys</code> - Cria uma nova chave de API. Retorna o valor da chave uma unica vez; armazene com seguranca.</li>
+<li><code>GET /auth/keys</code> - Lista todas as chaves de API. Os valores sao ocultados (apenas metadados sao retornados).</li>
+<li><code>DELETE /auth/keys/{key_id}</code> - Remove uma chave de API pelo ID.</li>
+<li><code>POST /auth/keys/{key_id}/activate</code> - Reativa uma chave previamente desativada.</li>
+<li><code>POST /auth/keys/{key_id}/deactivate</code> - Desativa uma chave ativa sem remove-la.</li>
+</ul>
 <h2 id="admin">Admin<a class="headerlink" href="#admin" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /admin/</code> - Dashboard HTML do admin para os registros configurados do NetBox. Esta rota fica fora do OpenAPI.</li>
 <li><code>GET /admin/logs</code> - Buffer de logs em memoria com filtros opcionais para <code>level</code>, <code>limit</code>, <code>offset</code>, <code>since</code> e <code>operation_id</code>.</li>
+<li><code>GET /admin/logs/stream</code> - Stream SSE de logs em tempo real. Suporta os parametros <code>level</code>, <code>errors_only</code>, <code>operation_id</code> e <code>newer_than_id</code>.</li>
 </ul>
 <h2 id="rotas-netbox-netbox">Rotas NetBox (<code>/netbox</code>)<a class="headerlink" href="#rotas-netbox-netbox" title="Permanent link">&para;</a></h2>
 <ul>

@@ -1505,18 +1505,33 @@
 </tr>
 <tr>
 <td><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code></td>
-<td><code>8</code></td>
-<td>Maximum number of concurrent NetBox write operations.</td>
+<td><code>8</code> (VM sync) / <code>4</code> (task-history, snapshots)</td>
+<td>Maximum number of concurrent NetBox write operations. Default varies by sync service.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_PROXMOX_FETCH_CONCURRENCY</code></td>
-<td><code>8</code></td>
-<td>Maximum number of concurrent Proxmox read operations.</td>
+<td><code>8</code> (most paths) / <code>4</code> (task-history)</td>
+<td>Maximum number of concurrent Proxmox read operations. Default varies by sync service.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_FETCH_MAX_CONCURRENCY</code></td>
 <td><code>8</code></td>
 <td>Legacy fetch concurrency override used by some sync entrypoints.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RATE_LIMIT</code></td>
+<td><code>60</code></td>
+<td>Maximum API requests per minute per IP address.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_BACKUP_BATCH_SIZE</code></td>
+<td><code>5</code></td>
+<td>Backup sync batch size. Reduce to lower NetBox write pressure during backup sync.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_BACKUP_BATCH_DELAY_MS</code></td>
+<td><code>200</code></td>
+<td>Delay in milliseconds between backup batches.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_CORS_EXTRA_ORIGINS</code></td>
