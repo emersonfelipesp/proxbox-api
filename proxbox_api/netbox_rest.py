@@ -918,7 +918,17 @@ async def rest_reconcile_async(  # noqa: C901
     schema: type[BaseModel] | type[dict],
     current_normalizer,
     patchable_fields: set[str] | frozenset[str] | None = None,
+    nullable_fields: set[str] | frozenset[str] | None = None,
 ) -> RestRecord:
+    """Reconcile a NetBox record with the desired payload.
+
+    Args:
+        nullable_fields: Field names that should be explicitly set to ``None``
+            during a PATCH if the current record has a non-null value for them.
+            Use this to clear stale FK or choice values that are no longer managed
+            by this sync path (e.g. the VMInterface ``bridge`` FK after switching
+            to the ``proxbox_bridge`` custom field).
+    """
     supports_model_validation = hasattr(schema, "model_validate") and hasattr(schema, "model_dump")
 
     if supports_model_validation:
@@ -991,6 +1001,11 @@ async def rest_reconcile_async(  # noqa: C901
             for key, value in desired_payload.items()
             if current_payload.get(key) != value
         }
+        # Explicitly null out stale non-null fields that are no longer managed by this path.
+        if nullable_fields:
+            for field in nullable_fields:
+                if current_payload.get(field) is not None and field not in patch_payload:
+                    patch_payload[field] = None
         if patchable_fields is not None:
             allowed = {str(field) for field in patchable_fields}
             patch_payload = {key: value for key, value in patch_payload.items() if key in allowed}
