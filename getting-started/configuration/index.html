@@ -16,7 +16,7 @@
         <link rel="prev" href="../installation/">
       
       
-        <link rel="next" href="../../architecture/overview/">
+        <link rel="next" href="../authentication/">
       
       
         
@@ -523,6 +523,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -530,6 +541,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#handling-netbox-overwhelmed-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handling NetBox Overwhelmed Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -548,6 +576,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -629,6 +685,34 @@
     
   
     Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
   
 
     
@@ -759,6 +843,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -835,6 +947,34 @@
     
   
     Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
   
 
     
@@ -1155,6 +1295,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1162,6 +1313,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#handling-netbox-overwhelmed-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handling NetBox Overwhelmed Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1291,6 +1459,15 @@
 <li>Proxmox sessions default to local database endpoint records.</li>
 <li>Legacy source mode (<code>source=netbox</code>) is still supported in Proxmox session dependency behavior.</li>
 </ul>
+<h2 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h2>
+<p>All API requests (except bootstrap endpoints) require authentication via the <code>X-Proxbox-API-Key</code> header. Keys are stored in the SQLite database with bcrypt hashing.</p>
+<p>See <a href="../authentication/">Authentication</a> for complete documentation on:</p>
+<ul>
+<li>Bootstrap flow for first-time setup</li>
+<li>Key registration and management</li>
+<li>Auth-exempt endpoints</li>
+<li>Brute-force protection</li>
+</ul>
 <h2 id="environment-variables">Environment Variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1308,13 +1485,18 @@
 </tr>
 <tr>
 <td><code>PROXBOX_NETBOX_MAX_RETRIES</code></td>
-<td><code>3</code></td>
+<td><code>5</code></td>
 <td>Retry attempts for transient NetBox connection failures.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_NETBOX_RETRY_DELAY</code></td>
-<td><code>1.0</code></td>
+<td><code>2.0</code></td>
 <td>Initial retry delay in seconds for NetBox retries.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_MAX_CONCURRENT</code></td>
+<td><code>1</code></td>
+<td>Maximum concurrent NetBox API requests. Keep low (1-2) to avoid exhausting NetBox's PostgreSQL connection pool.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code></td>
@@ -1358,6 +1540,14 @@
 </tr>
 </tbody>
 </table>
+<h3 id="handling-netbox-overwhelmed-errors">Handling NetBox Overwhelmed Errors<a class="headerlink" href="#handling-netbox-overwhelmed-errors" title="Permanent link">&para;</a></h3>
+<p>When NetBox's PostgreSQL connection pool is saturated, proxbox-api returns <code>netbox_overwhelmed</code> errors. To mitigate:</p>
+<ol>
+<li><strong>Reduce concurrency</strong>: Set <code>PROXBOX_NETBOX_MAX_CONCURRENT=1</code> to serialize requests</li>
+<li><strong>Increase retries</strong>: More attempts with longer delays give NetBox time to recover</li>
+<li><strong>Extend cache TTL</strong>: Use <code>PROXBOX_NETBOX_GET_CACHE_TTL=300</code> to reduce redundant fetches</li>
+</ol>
+<p>The retry logic applies aggressive backoff (up to 30 seconds) when overwhelmed errors are detected.</p>
 <h2 id="cors-behavior">CORS Behavior<a class="headerlink" href="#cors-behavior" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Origins are populated from NetBox endpoint records plus default development origins.</li>

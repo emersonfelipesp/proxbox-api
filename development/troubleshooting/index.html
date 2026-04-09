@@ -384,6 +384,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -460,6 +488,34 @@
     
   
     Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
   
 
     
@@ -590,6 +646,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -666,6 +750,34 @@
     
   
     Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
   
 
     
@@ -907,6 +1019,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#netbox-cache-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBox Cache Issues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="NetBox Cache Issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stale-data-after-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale data after sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-cache-miss-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High cache miss rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-performance-debugging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache performance debugging
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#proxmox-connection-failures" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1115,6 +1277,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#netbox-cache-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBox Cache Issues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="NetBox Cache Issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stale-data-after-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale data after sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-cache-miss-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High cache miss rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-performance-debugging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache performance debugging
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#proxmox-connection-failures" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1278,6 +1490,33 @@
 <li>Confirm frontend origin is included in app CORS origin list.</li>
 <li>Confirm requests target expected API host and port.</li>
 </ul>
+<h2 id="netbox-cache-issues">NetBox Cache Issues<a class="headerlink" href="#netbox-cache-issues" title="Permanent link">&para;</a></h2>
+<h3 id="stale-data-after-sync">Stale data after sync<a class="headerlink" href="#stale-data-after-sync" title="Permanent link">&para;</a></h3>
+<p>Symptom:</p>
+<ul>
+<li>NetBox UI shows old values after sync completes.</li>
+</ul>
+<p>Resolution:</p>
+<p><code>bash
+curl http://localhost:8000/clear-cache</code></p>
+<h3 id="high-cache-miss-rate">High cache miss rate<a class="headerlink" href="#high-cache-miss-rate" title="Permanent link">&para;</a></h3>
+<p>Symptom:</p>
+<ul>
+<li><code>/cache</code> endpoint shows &gt;80% miss rate.</li>
+</ul>
+<p>Resolution:</p>
+<ol>
+<li>Increase <code>PROXBOX_NETBOX_GET_CACHE_TTL</code>:
+   <code>bash
+   export PROXBOX_NETBOX_GET_CACHE_TTL=300  # 5 minutes</code></li>
+<li>Check query patterns: identical queries are required for cache hits (same path, same query params).</li>
+<li>Monitor with: <code>curl http://localhost:8000/cache/metrics</code></li>
+</ol>
+<h3 id="cache-performance-debugging">Cache performance debugging<a class="headerlink" href="#cache-performance-debugging" title="Permanent link">&para;</a></h3>
+<p>Enable debug logging:</p>
+<p><code>bash
+export PROXBOX_DEBUG_CACHE=1</code></p>
+<p>Then check application logs for cache HIT/MISS/INVALIDATE messages.</p>
 <h2 id="proxmox-connection-failures">Proxmox connection failures<a class="headerlink" href="#proxmox-connection-failures" title="Permanent link">&para;</a></h2>
 <p>Symptom:</p>
 <ul>

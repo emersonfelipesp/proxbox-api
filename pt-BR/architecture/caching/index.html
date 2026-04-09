@@ -10,17 +10,17 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/troubleshooting/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/architecture/caching/">
       
       
-        <link rel="prev" href="../deployment/">
+        <link rel="prev" href="../overview/">
       
       
-        <link rel="next" href="../contributing/">
+        <link rel="next" href="../../api/http-reference/">
       
       
         
-          <link rel="alternate" href="../../../development/troubleshooting/" hreflang="en">
+          <link rel="alternate" href="../../../architecture/caching/" hreflang="en">
         
           <link rel="alternate" href="./" hreflang="pt-BR">
         
@@ -31,7 +31,7 @@
     
     
       
-        <title>Troubleshooting - proxbox-api</title>
+        <title>Caching - proxbox-api</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#solucao-de-problemas" class="md-skip">
+        <a href="#arquitetura-de-cache" class="md-skip">
           Pular para conteúdo
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Troubleshooting
+              Caching
             
           </span>
         </div>
@@ -129,7 +129,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../development/troubleshooting/" hreflang="en" class="md-select__link">
+            <a href="../../../architecture/caching/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -423,8 +423,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -435,13 +437,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -462,7 +462,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -480,7 +480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/overview/" class="md-nav__link">
+      <a href="../overview/" class="md-nav__link">
         
   
   
@@ -505,10 +505,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../architecture/caching/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -524,6 +551,287 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Índice
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#visao-geral" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Visão Geral
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tipos-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tipos de Cache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tipos de Cache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cache-get-do-netbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache GET do NetBox
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-interno-do-proxbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Interno do Proxbox
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fluxo-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fluxo de Cache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fluxo de Cache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fluxo-de-requisicao-get" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fluxo de Requisição GET
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fluxo-de-invalidacao-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fluxo de Invalidação de Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuracao-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuração de Cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#politica-de-evictacao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Política de Evictação
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Política de Evictação">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gatilhos-de-evictacao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gatilhos de Evictação
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ordem-de-evictacao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ordem de Evictação
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#estrategia-de-invalidacao-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Estratégia de Invalidação de Cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metricas-e-observabilidade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Métricas e Observabilidade
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Métricas e Observabilidade">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metricas-disponiveis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Métricas Disponíveis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoints-de-metricas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints de Métricas
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#log-de-debug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log de Debug
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pontos-de-integracao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pontos de Integração
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consideracoes-de-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Considerações de Performance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Considerações de Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#taxa-de-acerto-do-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Taxa de Acerto do Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uso-de-memoria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uso de Memória
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#benchmarking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmarking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -802,8 +1110,6 @@
       
   
   
-    
-  
   
   
     
@@ -816,11 +1122,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
         
           
           <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
@@ -841,7 +1149,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -859,7 +1167,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../testing/" class="md-nav__link">
+      <a href="../../development/testing/" class="md-nav__link">
         
   
   
@@ -887,7 +1195,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deployment/" class="md-nav__link">
+      <a href="../../development/deployment/" class="md-nav__link">
         
   
   
@@ -912,37 +1220,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Troubleshooting
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../development/troubleshooting/" class="md-nav__link">
         
   
   
@@ -958,164 +1239,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Índice">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Índice
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#falta-endpoint-netbox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falta endpoint NetBox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#erros-de-autenticacao-proxmox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Erros de autenticacao Proxmox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falha-no-mount-de-rotas-proxmox-geradas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falha no mount de rotas Proxmox geradas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-de-cors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas de CORS
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falhas-de-conexao-com-proxmox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falhas de conexao com Proxmox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoints-de-sync-retornam-dados-parciais" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoints de sync retornam dados parciais
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#estado-do-banco" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Estado do banco
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-com-sse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas com SSE
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Problemas com SSE">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#stream-vazio-ou-travado" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stream vazio ou travado
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timeout-do-stream" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Timeout do stream
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#resposta-sse-com-erro-de-hop-by-hop-header" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Resposta SSE com erro de hop-by-hop header
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#stream-retorna-event-error-em-vez-de-complete" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stream retorna event error em vez de complete
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1128,7 +1251,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../contributing/" class="md-nav__link">
+      <a href="../../development/contributing/" class="md-nav__link">
         
   
   
@@ -1183,10 +1306,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#falta-endpoint-netbox" class="md-nav__link">
+  <a href="#visao-geral" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Falta endpoint NetBox
+        Visão Geral
       
     </span>
   </a>
@@ -1194,88 +1317,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#erros-de-autenticacao-proxmox" class="md-nav__link">
+  <a href="#tipos-de-cache" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Erros de autenticacao Proxmox
+        Tipos de Cache
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falha-no-mount-de-rotas-proxmox-geradas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falha no mount de rotas Proxmox geradas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-de-cors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas de CORS
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falhas-de-conexao-com-proxmox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falhas de conexao com Proxmox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoints-de-sync-retornam-dados-parciais" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoints de sync retornam dados parciais
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#estado-do-banco" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Estado do banco
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-com-sse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas com SSE
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Problemas com SSE">
+    <nav class="md-nav" aria-label="Tipos de Cache">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#stream-vazio-ou-travado" class="md-nav__link">
+  <a href="#cache-get-do-netbox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Stream vazio ou travado
+        Cache GET do NetBox
       
     </span>
   </a>
@@ -1283,10 +1340,38 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#timeout-do-stream" class="md-nav__link">
+  <a href="#cache-interno-do-proxbox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Timeout do stream
+        Cache Interno do Proxbox
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fluxo-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fluxo de Cache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fluxo de Cache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fluxo-de-requisicao-get" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fluxo de Requisição GET
       
     </span>
   </a>
@@ -1294,10 +1379,49 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#resposta-sse-com-erro-de-hop-by-hop-header" class="md-nav__link">
+  <a href="#fluxo-de-invalidacao-de-cache" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Resposta SSE com erro de hop-by-hop header
+        Fluxo de Invalidação de Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuracao-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuração de Cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#politica-de-evictacao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Política de Evictação
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Política de Evictação">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gatilhos-de-evictacao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gatilhos de Evictação
       
     </span>
   </a>
@@ -1305,10 +1429,132 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#stream-retorna-event-error-em-vez-de-complete" class="md-nav__link">
+  <a href="#ordem-de-evictacao" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Stream retorna event error em vez de complete
+        Ordem de Evictação
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#estrategia-de-invalidacao-de-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Estratégia de Invalidação de Cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metricas-e-observabilidade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Métricas e Observabilidade
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Métricas e Observabilidade">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metricas-disponiveis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Métricas Disponíveis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoints-de-metricas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints de Métricas
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#log-de-debug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log de Debug
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pontos-de-integracao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pontos de Integração
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consideracoes-de-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Considerações de Performance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Considerações de Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#taxa-de-acerto-do-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Taxa de Acerto do Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uso-de-memoria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uso de Memória
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#benchmarking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmarking
       
     </span>
   </a>
@@ -1337,7 +1583,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/development/troubleshooting.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/architecture/caching.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1345,128 +1591,232 @@
   
 
 
-<h1 id="solucao-de-problemas">Solucao de problemas<a class="headerlink" href="#solucao-de-problemas" title="Permanent link">&para;</a></h1>
-<h2 id="falta-endpoint-netbox">Falta endpoint NetBox<a class="headerlink" href="#falta-endpoint-netbox" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
+<h1 id="arquitetura-de-cache">Arquitetura de Cache<a class="headerlink" href="#arquitetura-de-cache" title="Permanent link">&para;</a></h1>
+<p>Este documento descreve a arquitetura de cache no proxbox-api, incluindo decisões de design, fluxogramas e opções de configuração.</p>
+<h2 id="visao-geral">Visão Geral<a class="headerlink" href="#visao-geral" title="Permanent link">&para;</a></h2>
+<p>O proxbox-api implementa uma camada de cache em nível de requisição para operações GET do NetBox para reduzir a carga no banco de dados durante operações de sincronização. O cache é apenas em memória e não persiste entre reinicializações.</p>
+<h2 id="tipos-de-cache">Tipos de Cache<a class="headerlink" href="#tipos-de-cache" title="Permanent link">&para;</a></h2>
+<h3 id="cache-get-do-netbox">Cache GET do NetBox<a class="headerlink" href="#cache-get-do-netbox" title="Permanent link">&para;</a></h3>
+<p>Localizado em <code>proxbox_api/netbox_rest.py</code>, este cache armazena respostas de requisições GET da API REST do NetBox. Ele foi projetado para:</p>
 <ul>
-<li>Rotas que precisam de sessao NetBox falham com mensagem indicando que nao existe endpoint configurado.</li>
+<li>Reduzir chamadas redundantes à API do NetBox durante sincronização</li>
+<li>Prover invalidação automática em mutações (POST/PATCH/PUT/DELETE)</li>
+<li>Oferecer observabilidade através de endpoints de métricas</li>
+<li>Suportar limites de contagem de entradas e tamanho em bytes</li>
 </ul>
-<p>Resolucao:</p>
+<h3 id="cache-interno-do-proxbox">Cache Interno do Proxbox<a class="headerlink" href="#cache-interno-do-proxbox" title="Permanent link">&para;</a></h3>
+<p>Localizado em <code>proxbox_api/cache.py</code>, este é um cache em memória separado para estruturas de dados internas do Proxbox. É usado para cache de propósito geral dentro da aplicação.</p>
+<h2 id="fluxo-de-cache">Fluxo de Cache<a class="headerlink" href="#fluxo-de-cache" title="Permanent link">&para;</a></h2>
+<h3 id="fluxo-de-requisicao-get">Fluxo de Requisição GET<a class="headerlink" href="#fluxo-de-requisicao-get" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Svc as Serviço de Sync
+    participant Cache as Cache GET NetBox
+    participant NetBox as API NetBox
+
+    Svc-&gt;&gt;Cache: Requisição GET /api/dcim/devices/
+    Note over Cache: Remove entradas expiradas (TTL)
+    Cache-&gt;&gt;Cache: Verifica se está em cache
+    alt Cache Hit
+        Cache--&gt;&gt;Svc: Retorna registros em cache
+        Note over Cache: Incrementa métrica de acertos
+    else Cache Miss
+        Cache--&gt;&gt;Svc: Sem entrada em cache
+        Note over Cache: Incrementa métrica de erros
+        Svc-&gt;&gt;NetBox: GET /api/dcim/devices/
+        NetBox--&gt;&gt;Svc: Retorna registros
+        Svc-&gt;&gt;Cache: Armazena em cache (com tamanho)
+        Note over Cache: Remove se necessário (LRU)
+    end</code></pre>
+<h3 id="fluxo-de-invalidacao-de-cache">Fluxo de Invalidação de Cache<a class="headerlink" href="#fluxo-de-invalidacao-de-cache" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Svc as Serviço de Sync
+    participant Cache as Cache GET NetBox
+    participant NetBox as API NetBox
+
+    Svc-&gt;&gt;NetBox: PATCH /api/dcim/devices/55/
+    NetBox--&gt;&gt;Svc: Sucesso
+    Svc-&gt;&gt;Cache: Invalida /api/dcim/devices/55/
+    Note over Cache: Encontra correspondências exatas de caminho
+    Note over Cache: Encontra caminho da lista pai
+    Note over Cache: Encontra filhos diretos
+    Cache-&gt;&gt;Cache: Remove entradas invalidadas
+    Note over Cache: Incrementa métrica de invalidações</code></pre>
+<h2 id="configuracao-de-cache">Configuração de Cache<a class="headerlink" href="#configuracao-de-cache" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Variável de Ambiente</th>
+<th>Padrão</th>
+<th>Descrição</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_TTL</code></td>
+<td>60.0</td>
+<td>TTL do cache em segundos (0 para desabilitar)</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES</code></td>
+<td>4096</td>
+<td>Número máximo de entradas em cache</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_BYTES</code></td>
+<td>52428800</td>
+<td>Tamanho máximo do cache em bytes (50MB)</td>
+</tr>
+<tr>
+<td><code>PROXBOX_DEBUG_CACHE</code></td>
+<td>0</td>
+<td>Habilitar log de debug (1 para habilitar)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="politica-de-evictacao">Política de Evictação<a class="headerlink" href="#politica-de-evictacao" title="Permanent link">&para;</a></h2>
+<p>O cache usa uma política de evictação <strong>LRU (Least Recently Used)</strong>. Quando o limite de contagem de entradas ou o limite de tamanho em bytes é atingido, as entradas mais antigas (por timestamp de cache) são removidas primeiro.</p>
+<h3 id="gatilhos-de-evictacao">Gatilhos de Evictação<a class="headerlink" href="#gatilhos-de-evictacao" title="Permanent link">&para;</a></h3>
 <ol>
-<li>Crie o endpoint com <code>POST /netbox/endpoint</code>.</li>
-<li>Valide com <code>GET /netbox/endpoint</code>.</li>
-<li>Se o bootstrap foi pulado de forma intencional, confirme que <code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code> nao esta definido.</li>
+<li><strong>Expiração de TTL</strong>: Entradas mais antigas que <code>PROXBOX_NETBOX_GET_CACHE_TTL</code> segundos são automaticamente removidas</li>
+<li><strong>Limite de Contagem de Entradas</strong>: Quando <code>len(cache) &gt;= max_entries</code>, entradas mais antigas são removidas</li>
+<li><strong>Limite de Tamanho em Bytes</strong>: Quando <code>current_bytes + nova_entrada &gt; max_bytes</code>, entradas mais antigas são removidas</li>
 </ol>
-<h2 id="erros-de-autenticacao-proxmox">Erros de autenticacao Proxmox<a class="headerlink" href="#erros-de-autenticacao-proxmox" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
+<h3 id="ordem-de-evictacao">Ordem de Evictação<a class="headerlink" href="#ordem-de-evictacao" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A[Nova entrada para escrever] --&gt; B{Contagem &gt;= máx?}
+    B --&gt;|Sim| C[Remove mais antigo por timestamp]
+    B --&gt;|Não| D{Tamanho em bytes &gt;= máx?}
+    D --&gt;|Sim| E[Remove mais antigo por timestamp]
+    D --&gt;|Não| F[Escreve entrada]
+    C --&gt; F
+    E --&gt; F</code></pre>
+<h2 id="estrategia-de-invalidacao-de-cache">Estratégia de Invalidação de Cache<a class="headerlink" href="#estrategia-de-invalidacao-de-cache" title="Permanent link">&para;</a></h2>
+<p>A invalidação de cache é <strong>precisa</strong> (não baseada em prefixo) para evitar over-invalidação:</p>
 <ul>
-<li><code>400</code> com <code>Provide password or both token_name/token_value</code>.</li>
-<li><code>400</code> com <code>token_name and token_value must be provided together</code>.</li>
+<li>Atualizando <code>/api/dcim/devices/55/</code> invalida:</li>
+<li>Caminho exato: <code>/api/dcim/devices/55/</code></li>
+<li>Lista pai: <code>/api/dcim/devices/</code></li>
+<li>
+<p>Filhos diretos (se houver): nenhum para caminhos de detalhe</p>
+</li>
+<li>
+<p>Atualizando <code>/api/dcim/devices/</code> (lista) invalida:</p>
+</li>
+<li>Caminho exato: <code>/api/dcim/devices/</code></li>
+<li>Filhos diretos: <code>/api/dcim/devices/1/</code>, <code>/api/dcim/devices/2/</code>, etc.</li>
 </ul>
-<p>Resolucao:</p>
+<p>Isso previne o problema de atualizar o dispositivo ID 1 incorretamente invalidar o dispositivo ID 10.</p>
+<h2 id="metricas-e-observabilidade">Métricas e Observabilidade<a class="headerlink" href="#metricas-e-observabilidade" title="Permanent link">&para;</a></h2>
+<h3 id="metricas-disponiveis">Métricas Disponíveis<a class="headerlink" href="#metricas-disponiveis" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Métrica</th>
+<th>Tipo</th>
+<th>Descrição</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hits</code></td>
+<td>counter</td>
+<td>Total de acertos no cache</td>
+</tr>
+<tr>
+<td><code>misses</code></td>
+<td>counter</td>
+<td>Total de erros no cache</td>
+</tr>
+<tr>
+<td><code>hit_rate</code></td>
+<td>gauge</td>
+<td>Porcentagem de acertos no cache</td>
+</tr>
+<tr>
+<td><code>invalidations</code></td>
+<td>counter</td>
+<td>Número de invalidações de cache</td>
+</tr>
+<tr>
+<td><code>evictions_ttl</code></td>
+<td>counter</td>
+<td>Entradas removidas por expiração de TTL</td>
+</tr>
+<tr>
+<td><code>evictions_size</code></td>
+<td>counter</td>
+<td>Entradas removidas por limite de entradas</td>
+</tr>
+<tr>
+<td><code>evictions_bytes</code></td>
+<td>counter</td>
+<td>Bytes removidos por limite de bytes</td>
+</tr>
+<tr>
+<td><code>current_entries</code></td>
+<td>gauge</td>
+<td>Contagem atual de entradas em cache</td>
+</tr>
+<tr>
+<td><code>current_bytes</code></td>
+<td>gauge</td>
+<td>Tamanho atual do cache em bytes</td>
+</tr>
+<tr>
+<td><code>max_entries</code></td>
+<td>gauge</td>
+<td>Máximo de entradas permitidas</td>
+</tr>
+<tr>
+<td><code>max_bytes</code></td>
+<td>gauge</td>
+<td>Máximo de bytes permitidos</td>
+</tr>
+</tbody>
+</table>
+<h3 id="endpoints-de-metricas">Endpoints de Métricas<a class="headerlink" href="#endpoints-de-metricas" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Forneca <code>password</code> ou o par completo <code>token_name</code> + <code>token_value</code>.</li>
-<li>Para o endpoint NetBox, lembre que token v1 usa apenas <code>token</code>, enquanto token v2 exige <code>token_key</code> e <code>token</code>.</li>
+<li><code>GET /cache</code> - Visualização combinada de cache com métricas</li>
+<li><code>GET /cache/metrics</code> - Métricas em JSON</li>
+<li><code>GET /cache/metrics/prometheus</code> - Formato Prometheus</li>
 </ul>
-<h2 id="falha-no-mount-de-rotas-proxmox-geradas">Falha no mount de rotas Proxmox geradas<a class="headerlink" href="#falha-no-mount-de-rotas-proxmox-geradas" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
+<h2 id="log-de-debug">Log de Debug<a class="headerlink" href="#log-de-debug" title="Permanent link">&para;</a></h2>
+<p>Habilite o logging detalhado de cache com:</p>
+<p><code>bash
+export PROXBOX_DEBUG_CACHE=1</code></p>
+<p>Isso registra:
+- Eventos de Cache HIT/MISS
+- Cache DESABILITADO (TTL=0)
+- Eventos de Cache EXPIRADO
+- Eventos de Cache INVALIDATE com contagem</p>
+<h2 id="pontos-de-integracao">Pontos de Integração<a class="headerlink" href="#pontos-de-integracao" title="Permanent link">&para;</a></h2>
+<p>O cache está integrado na camada de helpers REST em <code>proxbox_api/netbox_rest.py</code>:</p>
 <ul>
-<li>Os logs de startup informam que as rotas Proxmox geradas nao puderam ser montadas.</li>
+<li><code>rest_list_async()</code> - Listar recursos com cache</li>
+<li><code>rest_first_async()</code> - Obter primeiro resultado com cache</li>
+<li><code>rest_get_async()</code> - Obter único recurso com cache</li>
+<li><code>rest_create_async()</code> - Criar com invalidação de cache</li>
+<li><code>rest_update_async()</code> - Atualizar com invalidação de cache</li>
+<li><code>rest_delete_async()</code> - Deletar com invalidação de cache</li>
 </ul>
-<p>Resolucao:</p>
-<ul>
-<li>Confirme que o snapshot gerado existe em <code>proxbox_api/generated/proxmox/latest/openapi.json</code>.</li>
-<li>Recrie o contrato Proxmox em tempo de execucao com <code>POST /proxmox/viewer/generate</code> se o snapshot estiver ausente.</li>
-<li>Se a aplicacao precisar falhar fechada, habilite <code>PROXBOX_STRICT_STARTUP</code>.</li>
-</ul>
-<h2 id="problemas-de-cors">Problemas de CORS<a class="headerlink" href="#problemas-de-cors" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>O browser bloqueia requests por politica de CORS.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Verifique o dominio do endpoint NetBox.</li>
-<li>Confirme que a origem do frontend esta na allowlist de CORS.</li>
-<li>Confirme que os requests usam o host e a porta esperados.</li>
-</ul>
-<h2 id="falhas-de-conexao-com-proxmox">Falhas de conexao com Proxmox<a class="headerlink" href="#falhas-de-conexao-com-proxmox" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>Excecoes de conexao durante a criacao da sessao.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Valide host, porta e credenciais do Proxmox.</li>
-<li>Confira o comportamento de <code>verify_ssl</code> e certificados.</li>
-<li>Confirme as permissoes do usuario ou token no Proxmox.</li>
-<li>Em deploys com multiplos endpoints, confirme os valores de target e <code>source</code> passados na requisicao.</li>
-</ul>
-<h2 id="endpoints-de-sync-retornam-dados-parciais">Endpoints de sync retornam dados parciais<a class="headerlink" href="#endpoints-de-sync-retornam-dados-parciais" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>Alguns objetos sincronizam enquanto outros falham.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Inspecione os logs da API com <code>GET /admin/logs</code>.</li>
-<li>Valide se os objetos obrigatorios do NetBox e os modelos do plugin existem.</li>
-<li>Refaca o sync usando o modo WebSocket para visibilidade ao vivo.</li>
-</ul>
-<h2 id="estado-do-banco">Estado do banco<a class="headerlink" href="#estado-do-banco" title="Permanent link">&para;</a></h2>
-<p>Nota:</p>
-<ul>
-<li>O startup atual cria tabelas ausentes sem apagar dados existentes.</li>
-</ul>
-<p>Se necessario:</p>
-<ul>
-<li>Faca backup de <code>database.db</code> antes de experimentos com schema.</li>
-</ul>
-<h2 id="problemas-com-sse">Problemas com SSE<a class="headerlink" href="#problemas-com-sse" title="Permanent link">&para;</a></h2>
-<h3 id="stream-vazio-ou-travado">Stream vazio ou travado<a class="headerlink" href="#stream-vazio-ou-travado" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>O endpoint SSE <code>/stream</code> conecta, mas nenhum evento chega.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Verifique se os endpoints NetBox e Proxmox estao configurados (<code>GET /netbox/endpoint</code>, <code>GET /proxmox/endpoints</code>).</li>
-<li>Confira os logs da API para excecoes durante o sync.</li>
-<li>Confirme que o cliente HTTP nao esta fazendo buffering (use o header <code>Accept: text/event-stream</code>).</li>
-<li>Garanta que <code>Cache-Control: no-cache</code> seja respeitado por proxies intermediarios.</li>
-</ul>
-<h3 id="timeout-do-stream">Timeout do stream<a class="headerlink" href="#timeout-do-stream" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>O stream SSE cai antes do sync terminar.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Aumente o timeout do cliente ou use um cliente ciente de streaming.</li>
-<li>Para inventarios grandes, considere reduzir <code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code> e <code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code> para diminuir a pressao sobre o NetBox.</li>
-<li>Confira se <code>PROXBOX_NETBOX_TIMEOUT</code> e suficiente para a latencia do seu servidor NetBox.</li>
-</ul>
-<h3 id="resposta-sse-com-erro-de-hop-by-hop-header">Resposta SSE com erro de hop-by-hop header<a class="headerlink" href="#resposta-sse-com-erro-de-hop-by-hop-header" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>HTTP 500 com <code>AssertionError: Hop-by-hop header not allowed</code> em ambientes com proxy Django.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>As respostas SSE nao devem incluir <code>Connection: keep-alive</code> quando servidas por middleware WSGI.</li>
-<li>Use apenas <code>Cache-Control: no-cache</code> e <code>X-Accel-Buffering: no</code> nos stream responses.</li>
-</ul>
-<h3 id="stream-retorna-event-error-em-vez-de-complete">Stream retorna event error em vez de complete<a class="headerlink" href="#stream-retorna-event-error-em-vez-de-complete" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>O sync termina com <code>event: error</code> seguido de <code>event: complete</code> com <code>ok: false</code>.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Verifique os campos <code>error</code> e <code>detail</code> no payload do evento de erro.</li>
-<li>Causas comuns: NetBox indisponivel, falha de autenticacao no Proxmox, modelos obrigatorios do plugin NetBox ausentes.</li>
-<li>Refaca com o modo WebSocket (<code>/ws</code>) para logging mais verboso, se necessario.</li>
-</ul>
+<p>Todos os serviços de sincronização se beneficiam automaticamente desta camada de cache centralizada sem necessidade de alterações.</p>
+<h2 id="consideracoes-de-performance">Considerações de Performance<a class="headerlink" href="#consideracoes-de-performance" title="Permanent link">&para;</a></h2>
+<h3 id="taxa-de-acerto-do-cache">Taxa de Acerto do Cache<a class="headerlink" href="#taxa-de-acerto-do-cache" title="Permanent link">&para;</a></h3>
+<p>Uma alta taxa de acerto do cache (&gt;70%) indica cache efetivo. Para melhorar a taxa de acerto:</p>
+<ol>
+<li>Aumente o TTL para dados estáveis</li>
+<li>Ajuste os limites de tamanho de cache para sua carga de trabalho</li>
+<li>Certifique-se de que queries são determinísticas (mesma query = mesma chave de cache)</li>
+</ol>
+<h3 id="uso-de-memoria">Uso de Memória<a class="headerlink" href="#uso-de-memoria" title="Permanent link">&para;</a></h3>
+<p>O limite de bytes previne crescimento ilimitado de memória. Monitore a métrica <code>current_bytes</code> para garantir folga adequada.</p>
+<h3 id="benchmarking">Benchmarking<a class="headerlink" href="#benchmarking" title="Permanent link">&para;</a></h3>
+<p>Execute benchmarks de performance na CI para detectar regressões:</p>
+<p>```bash</p>
+<h1 id="exemplo-de-comando-de-benchmark">Exemplo de comando de benchmark<a class="headerlink" href="#exemplo-de-comando-de-benchmark" title="Permanent link">&para;</a></h1>
+<p>uv run pytest tests/ --benchmark-only</p>
+<p>```</p>
+<p>Veja o workflow do GitHub Actions para benchmark automatizado.</p>
 
 
 

@@ -2,154 +2,224 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/CLAUDE/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/CLAUDE/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/CLAUDE/"/>
+    </url>
+    <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/api/cache/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/cache/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cache/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/api/http-reference/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/http-reference/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/http-reference/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/api/websocket-reference/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/websocket-reference/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/websocket-reference/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/architecture/caching/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/architecture/caching/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/architecture/caching/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/architecture/overview/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/architecture/overview/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/architecture/overview/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/development/contributing/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/contributing/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/contributing/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/development/deployment/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/deployment/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/deployment/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/development/testing/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/testing/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/testing/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/development/troubleshooting/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/troubleshooting/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/troubleshooting/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/getting-started/authentication/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/authentication/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/authentication/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/getting-started/configuration/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/configuration/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/configuration/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/getting-started/installation/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/installation/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/installation/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/sync/reconciliation-architecture/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/sync/reconciliation-architecture/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/reconciliation-architecture/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/sync/workflows/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/sync/workflows/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/workflows/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/CLAUDE/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/CLAUDE/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/CLAUDE/"/>
+    </url>
+    <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cache/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cache/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/cache/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/http-reference/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/http-reference/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/http-reference/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/websocket-reference/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/websocket-reference/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/websocket-reference/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/architecture/caching/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/architecture/caching/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/architecture/caching/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/architecture/overview/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/architecture/overview/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/architecture/overview/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/contributing/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/contributing/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/contributing/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/deployment/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/deployment/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/deployment/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/testing/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/testing/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/testing/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/troubleshooting/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/troubleshooting/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/troubleshooting/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/authentication/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/authentication/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/authentication/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/configuration/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/configuration/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/configuration/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/installation/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/installation/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/installation/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/reconciliation-architecture/</loc>
+        <lastmod>2026-04-09</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/reconciliation-architecture/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/sync/reconciliation-architecture/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/workflows/</loc>
-        <lastmod>2026-04-04</lastmod>
+        <lastmod>2026-04-09</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/workflows/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/sync/workflows/"/>

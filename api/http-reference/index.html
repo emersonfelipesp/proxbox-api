@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/api/http-reference/">
       
       
-        <link rel="prev" href="../../architecture/overview/">
+        <link rel="prev" href="../../architecture/caching/">
       
       
         <link rel="next" href="../websocket-reference/">
@@ -384,6 +384,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -460,6 +488,34 @@
     
   
     Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
   
 
     
@@ -847,6 +903,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -923,6 +1007,34 @@
     
   
     Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
   
 
     
@@ -1479,7 +1591,7 @@
 <li>Example:</li>
 <li>Proxmox contract path: <code>/nodes/{node}/hardware/pci/{pci-id-or-mapping}</code></li>
 <li>Mounted FastAPI path: <code>/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}</code></li>
-<li>The upstream proxmoxer call still uses the original Proxmox parameter name from the generated OpenAPI contract.</li>
+<li>The upstream proxmox-openapi SDK call still uses the original Proxmox parameter name from the generated OpenAPI contract.</li>
 </ul>
 <p>Version discovery:</p>
 <ul>
@@ -1497,8 +1609,8 @@
 </ul>
 <p>Typed sync integration:</p>
 <ul>
-<li>Handcrafted sync-facing routes still call proxmoxer directly, but now do so through <code>proxbox_api/services/proxmox_helpers.py</code>.</li>
-<li>That helper layer validates live proxmoxer payloads with the generated models in <code>proxbox_api/generated/proxmox/latest/pydantic_models.py</code> before returning data to route handlers.</li>
+<li>Handcrafted sync-facing routes still call Proxmox directly, but now do so through <code>proxbox_api/services/proxmox_helpers.py</code> backed by the proxmox-openapi SDK.</li>
+<li>That helper layer validates live proxmox-openapi payloads with the generated models in <code>proxbox_api/generated/proxmox/latest/pydantic_models.py</code> before returning data to route handlers.</li>
 <li>This avoids internal HTTP round-trips while keeping VM config, cluster status, cluster resources, storage listing, and node storage content aligned with the generated contract used by <code>/proxmox/api2/*</code>.</li>
 </ul>
 <p>Examples of generated route shapes:</p>

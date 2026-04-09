@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/workflows/">
       
       
-        <link rel="prev" href="../../api/websocket-reference/">
+        <link rel="prev" href="../../api/cache/">
       
       
-        <link rel="next" href="../../development/testing/">
+        <link rel="next" href="../reconciliation-architecture/">
       
       
         
@@ -384,6 +384,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -460,6 +488,34 @@
     
   
     Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
   
 
     
@@ -577,6 +633,34 @@
     
   
     WebSocket Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache API
   
 
     
@@ -737,6 +821,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Fluxo de Sync de VM">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#modelo-assincrono-com-ordem-de-dependencias" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modelo Assincrono com Ordem de Dependencias
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#regras-de-paralelismo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regras de Paralelismo
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -881,6 +993,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1112,6 +1252,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Fluxo de Sync de VM">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#modelo-assincrono-com-ordem-de-dependencias" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modelo Assincrono com Ordem de Dependencias
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#regras-de-paralelismo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regras de Paralelismo
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1312,6 +1480,51 @@
 <li>Cria interfaces e IPs da VM quando possivel.</li>
 <li>Escreve journal entries para auditoria.</li>
 <li>No modo full-update, a criacao de VM nao faz writes de rede, porque as etapas dedicadas de interface e IP cuidam disso.</li>
+</ul>
+<h3 id="modelo-assincrono-com-ordem-de-dependencias">Modelo Assincrono com Ordem de Dependencias<a class="headerlink" href="#modelo-assincrono-com-ordem-de-dependencias" title="Permanent link">&para;</a></h3>
+<p>O sync de VM e assincrono de ponta a ponta, mas nem todas as etapas podem rodar em paralelo. O fluxo aplica uma cadeia estrita de dependencias antes de abrir fan-out por VM.</p>
+<p>Preflight sequencial de dependencias:</p>
+<ol>
+<li>Garante objetos pai globais no NetBox:<ul>
+<li>Manufacturer</li>
+<li>Device type (depende de manufacturer)</li>
+<li>Role de node Proxmox</li>
+</ul>
+</li>
+<li>Para cada cluster, garante objetos pai do escopo do cluster:<ul>
+<li>Cluster type</li>
+<li>Cluster</li>
+<li>Site</li>
+</ul>
+</li>
+<li>Para cada node do cluster, garante o device:<ul>
+<li>Device (depende de cluster + device type + role + site)</li>
+</ul>
+</li>
+<li>Garante objetos de role de VM por tipo (<code>qemu</code> e <code>lxc</code>).</li>
+</ol>
+<p>Depois desse preflight, as operacoes por VM rodam concorrentemente com limite por semaforo.</p>
+<p>Ordem obrigatoria por VM:</p>
+<ol>
+<li>Buscar dados da VM no Proxmox (resource/config).</li>
+<li>Reconciliar VM no NetBox (create/patch).</li>
+<li>Reconciliar interfaces e IPs da VM (quando habilitado).</li>
+<li>Reconciliar discos da VM.</li>
+<li>Reconciliar task history da VM.</li>
+</ol>
+<p>Assim, o async e usado para throughput quando os objetos sao independentes, mas dependencias pai-filho sempre sao aguardadas em sequencia.</p>
+<h3 id="regras-de-paralelismo">Regras de Paralelismo<a class="headerlink" href="#regras-de-paralelismo" title="Permanent link">&para;</a></h3>
+<p>Permitido em paralelo:</p>
+<ul>
+<li>VMs diferentes no mesmo cluster ou em clusters diferentes, depois do preflight.</li>
+<li>Operacoes de interface de uma VM quando o objeto VM ja existe.</li>
+<li>Operacoes de disco de uma VM quando o objeto VM ja existe.</li>
+</ul>
+<p>Nao permitido em paralelo:</p>
+<ul>
+<li>Criar objetos filho antes dos objetos pai necessarios existirem.</li>
+<li>Reconciliar estado da VM no NetBox antes de buscar os dados da VM no Proxmox.</li>
+<li>Criar device antes de manufacturer/device type/site/cluster estarem prontos.</li>
 </ul>
 <h2 id="fluxo-de-backup">Fluxo de Backup<a class="headerlink" href="#fluxo-de-backup" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>

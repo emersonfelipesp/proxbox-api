@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="pt" class="no-js">
+<html lang="en" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -10,32 +10,32 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/troubleshooting/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/authentication/">
       
       
-        <link rel="prev" href="../deployment/">
+        <link rel="prev" href="../configuration/">
       
       
-        <link rel="next" href="../contributing/">
+        <link rel="next" href="../../architecture/overview/">
       
       
         
-          <link rel="alternate" href="../../../development/troubleshooting/" hreflang="en">
+          <link rel="alternate" href="./" hreflang="en">
         
-          <link rel="alternate" href="./" hreflang="pt-BR">
+          <link rel="alternate" href="../../pt-BR/getting-started/authentication/" hreflang="pt-BR">
         
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Troubleshooting - proxbox-api</title>
+        <title>Authentication - proxbox-api</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -54,7 +54,7 @@
       
     
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -72,8 +72,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#solucao-de-problemas" class="md-skip">
-          Pular para conteúdo
+        <a href="#authentication" class="md-skip">
+          Skip to content
         </a>
       
     </div>
@@ -87,8 +87,8 @@
   
 
 <header class="md-header md-header--shadow" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="Cabeçalho">
-    <a href="../../" title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Troubleshooting
+              Authentication
             
           </span>
         </div>
@@ -122,20 +122,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="Selecione o idioma">
+    <button class="md-header__button md-icon" aria-label="Select language">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../development/troubleshooting/" hreflang="en" class="md-select__link">
+            <a href="./" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="./" hreflang="pt-BR" class="md-select__link">
+            <a href="../../pt-BR/getting-started/authentication/" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -156,16 +156,16 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="Buscar" placeholder="Buscar" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="Pesquisar">
+      <nav class="md-search__options" aria-label="Search">
         
-        <button type="reset" class="md-search__icon md-icon" title="Limpar" aria-label="Limpar" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -176,7 +176,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            Inicializando busca
+            Initializing search
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -188,7 +188,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
+        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -222,9 +222,9 @@
 
 
 
-<nav class="md-nav md-nav--primary" aria-label="Navegação" data-md-level="0">
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../" title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+    <a href="../.." title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -234,7 +234,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
+      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -254,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -278,8 +278,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -290,13 +292,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
@@ -317,7 +317,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -335,7 +335,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/installation/" class="md-nav__link">
+      <a href="../installation/" class="md-nav__link">
         
   
   
@@ -363,7 +363,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/configuration/" class="md-nav__link">
+      <a href="../configuration/" class="md-nav__link">
         
   
   
@@ -388,10 +388,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../getting-started/authentication/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -407,6 +434,37 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#bootstrap-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bootstrap Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -802,8 +860,6 @@
       
   
   
-    
-  
   
   
     
@@ -816,11 +872,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
         
           
           <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
@@ -841,7 +899,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -859,7 +917,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../testing/" class="md-nav__link">
+      <a href="../../development/testing/" class="md-nav__link">
         
   
   
@@ -887,7 +945,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deployment/" class="md-nav__link">
+      <a href="../../development/deployment/" class="md-nav__link">
         
   
   
@@ -912,37 +970,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Troubleshooting
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../development/troubleshooting/" class="md-nav__link">
         
   
   
@@ -958,164 +989,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Índice">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Índice
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#falta-endpoint-netbox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falta endpoint NetBox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#erros-de-autenticacao-proxmox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Erros de autenticacao Proxmox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falha-no-mount-de-rotas-proxmox-geradas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falha no mount de rotas Proxmox geradas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-de-cors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas de CORS
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falhas-de-conexao-com-proxmox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falhas de conexao com Proxmox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoints-de-sync-retornam-dados-parciais" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoints de sync retornam dados parciais
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#estado-do-banco" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Estado do banco
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-com-sse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas com SSE
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Problemas com SSE">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#stream-vazio-ou-travado" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stream vazio ou travado
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timeout-do-stream" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Timeout do stream
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#resposta-sse-com-erro-de-hop-by-hop-header" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Resposta SSE com erro de hop-by-hop header
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#stream-retorna-event-error-em-vez-de-complete" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stream retorna event error em vez de complete
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1128,7 +1001,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../contributing/" class="md-nav__link">
+      <a href="../../development/contributing/" class="md-nav__link">
         
   
   
@@ -1169,7 +1042,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="Índice">
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
   
   
   
@@ -1178,145 +1051,18 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Índice
+      Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#falta-endpoint-netbox" class="md-nav__link">
+  <a href="#bootstrap-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Falta endpoint NetBox
+        Bootstrap Flow
       
     </span>
   </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#erros-de-autenticacao-proxmox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Erros de autenticacao Proxmox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falha-no-mount-de-rotas-proxmox-geradas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falha no mount de rotas Proxmox geradas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-de-cors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas de CORS
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#falhas-de-conexao-com-proxmox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Falhas de conexao com Proxmox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoints-de-sync-retornam-dados-parciais" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoints de sync retornam dados parciais
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#estado-do-banco" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Estado do banco
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problemas-com-sse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problemas com SSE
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Problemas com SSE">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#stream-vazio-ou-travado" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stream vazio ou travado
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timeout-do-stream" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Timeout do stream
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#resposta-sse-com-erro-de-hop-by-hop-header" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Resposta SSE com erro de hop-by-hop header
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#stream-retorna-event-error-em-vez-de-complete" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stream retorna event error em vez de complete
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1337,7 +1083,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/development/troubleshooting.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/getting-started/authentication.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1345,128 +1091,141 @@
   
 
 
-<h1 id="solucao-de-problemas">Solucao de problemas<a class="headerlink" href="#solucao-de-problemas" title="Permanent link">&para;</a></h1>
-<h2 id="falta-endpoint-netbox">Falta endpoint NetBox<a class="headerlink" href="#falta-endpoint-netbox" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>Rotas que precisam de sessao NetBox falham com mensagem indicando que nao existe endpoint configurado.</li>
-</ul>
-<p>Resolucao:</p>
+<h1 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h1>
+<p><code>proxbox-api</code> uses database-backed API key authentication. All API keys are stored in the SQLite database with bcrypt hashing. There is no environment variable authentication — all key management happens through the API endpoints.</p>
+<h2 id="bootstrap-flow">Bootstrap Flow<a class="headerlink" href="#bootstrap-flow" title="Permanent link">&para;</a></h2>
+<p>When the backend starts with an empty database, it returns <code>needs_bootstrap: true</code> from the status endpoint:</p>
+<p>```bash
+curl http://localhost:8800/auth/bootstrap-status</p>
+<h1 id="needs_bootstrap-true-has_db_keys-false">{"needs_bootstrap": true, "has_db_keys": false}<a class="headerlink" href="#needs_bootstrap-true-has_db_keys-false" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<h3 id="first-key-registration">First Key Registration<a class="headerlink" href="#first-key-registration" title="Permanent link">&para;</a></h3>
+<p>The first API key can be registered without authentication (bootstrap mode):</p>
+<p>```bash
+curl -X POST http://localhost:8800/auth/register-key \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "your-secure-api-key-at-least-32-chars", "label": "bootstrap-key"}'</p>
+<h1 id="detail-api-key-registered">{"detail": "API key registered."}<a class="headerlink" href="#detail-api-key-registered" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<p>Once a key exists, subsequent calls to <code>/auth/register-key</code> return <code>409 Conflict</code>.</p>
+<h3 id="netbox-plugin-integration">NetBox Plugin Integration<a class="headerlink" href="#netbox-plugin-integration" title="Permanent link">&para;</a></h3>
+<p>When you save a <code>FastAPIEndpoint</code> in NetBox, the plugin automatically:</p>
 <ol>
-<li>Crie o endpoint com <code>POST /netbox/endpoint</code>.</li>
-<li>Valide com <code>GET /netbox/endpoint</code>.</li>
-<li>Se o bootstrap foi pulado de forma intencional, confirme que <code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code> nao esta definido.</li>
+<li>Generates a 64-character secure token</li>
+<li>Calls <code>/auth/bootstrap-status</code> to check if registration is needed</li>
+<li>Calls <code>/auth/register-key</code> to register the token with the backend</li>
+<li>Stores the token in NetBox for future authenticated requests</li>
 </ol>
-<h2 id="erros-de-autenticacao-proxmox">Erros de autenticacao Proxmox<a class="headerlink" href="#erros-de-autenticacao-proxmox" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
+<h2 id="using-api-keys">Using API Keys<a class="headerlink" href="#using-api-keys" title="Permanent link">&para;</a></h2>
+<p>All requests (except bootstrap endpoints) require the <code>X-Proxbox-API-Key</code> header:</p>
+<p><code>bash
+curl http://localhost:8800/proxmox/endpoints \
+  -H "X-Proxbox-API-Key: your-secure-api-key-at-least-32-chars"</code></p>
+<h2 id="auth-exempt-endpoints">Auth-Exempt Endpoints<a class="headerlink" href="#auth-exempt-endpoints" title="Permanent link">&para;</a></h2>
+<p>These endpoints do not require authentication:</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /</code></td>
+<td>Root metadata</td>
+</tr>
+<tr>
+<td><code>GET /docs</code></td>
+<td>OpenAPI documentation</td>
+</tr>
+<tr>
+<td><code>GET /redoc</code></td>
+<td>ReDoc documentation</td>
+</tr>
+<tr>
+<td><code>GET /openapi.json</code></td>
+<td>OpenAPI schema</td>
+</tr>
+<tr>
+<td><code>GET /health</code></td>
+<td>Health check</td>
+</tr>
+<tr>
+<td><code>GET /meta</code></td>
+<td>Service metadata</td>
+</tr>
+<tr>
+<td><code>GET /auth/bootstrap-status</code></td>
+<td>Check if bootstrap is needed</td>
+</tr>
+<tr>
+<td><code>POST /auth/register-key</code></td>
+<td>Register first key (only when no keys exist)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="key-management-endpoints">Key Management Endpoints<a class="headerlink" href="#key-management-endpoints" title="Permanent link">&para;</a></h2>
+<p>All key management endpoints require authentication:</p>
+<h3 id="list-api-keys">List API Keys<a class="headerlink" href="#list-api-keys" title="Permanent link">&para;</a></h3>
+<p>```bash
+curl http://localhost:8800/auth/keys \
+  -H "X-Proxbox-API-Key: your-key"</p>
+<h1 id="keys-id-1-label-bootstrap-key-is_active-true-created_at-1712345678123">{"keys": [{"id": 1, "label": "bootstrap-key", "is_active": true, "created_at": 1712345678.123}]}<a class="headerlink" href="#keys-id-1-label-bootstrap-key-is_active-true-created_at-1712345678123" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<h3 id="create-a-new-key">Create a New Key<a class="headerlink" href="#create-a-new-key" title="Permanent link">&para;</a></h3>
+<p>```bash
+curl -X POST http://localhost:8800/auth/keys \
+  -H "X-Proxbox-API-Key: your-key"</p>
+<h1 id="id-2-label-is_active-true-created_at-1712345678456-raw_key-the-newly-generated-key">{"id": 2, "label": "", "is_active": true, "created_at": 1712345678.456, "raw_key": "the-newly-generated-key"}<a class="headerlink" href="#id-2-label-is_active-true-created_at-1712345678456-raw_key-the-newly-generated-key" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<p>The <code>raw_key</code> is only returned once — store it securely.</p>
+<h3 id="deactivate-a-key">Deactivate a Key<a class="headerlink" href="#deactivate-a-key" title="Permanent link">&para;</a></h3>
+<p>```bash
+curl -X POST http://localhost:8800/auth/keys/1/deactivate \
+  -H "X-Proxbox-API-Key: your-key"</p>
+<h1 id="id-1-label-bootstrap-key-is_active-false-created_at-1712345678123">{"id": 1, "label": "bootstrap-key", "is_active": false, "created_at": 1712345678.123}<a class="headerlink" href="#id-1-label-bootstrap-key-is_active-false-created_at-1712345678123" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<h3 id="reactivate-a-key">Reactivate a Key<a class="headerlink" href="#reactivate-a-key" title="Permanent link">&para;</a></h3>
+<p>```bash
+curl -X POST http://localhost:8800/auth/keys/1/activate \
+  -H "X-Proxbox-API-Key: your-key"</p>
+<h1 id="id-1-label-bootstrap-key-is_active-true-created_at-1712345678123">{"id": 1, "label": "bootstrap-key", "is_active": true, "created_at": 1712345678.123}<a class="headerlink" href="#id-1-label-bootstrap-key-is_active-true-created_at-1712345678123" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<h3 id="delete-a-key">Delete a Key<a class="headerlink" href="#delete-a-key" title="Permanent link">&para;</a></h3>
+<p>```bash
+curl -X DELETE http://localhost:8800/auth/keys/1 \
+  -H "X-Proxbox-API-Key: your-key"</p>
+<h1 id="204-no-content">(204 No Content)<a class="headerlink" href="#204-no-content" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<h2 id="brute-force-protection">Brute-Force Protection<a class="headerlink" href="#brute-force-protection" title="Permanent link">&para;</a></h2>
+<p>The backend implements IP-based lockout:</p>
 <ul>
-<li><code>400</code> com <code>Provide password or both token_name/token_value</code>.</li>
-<li><code>400</code> com <code>token_name and token_value must be provided together</code>.</li>
+<li>Maximum 5 failed attempts</li>
+<li>5-minute lockout duration</li>
+<li>Lockout is cleared on successful authentication</li>
 </ul>
-<p>Resolucao:</p>
-<ul>
-<li>Forneca <code>password</code> ou o par completo <code>token_name</code> + <code>token_value</code>.</li>
-<li>Para o endpoint NetBox, lembre que token v1 usa apenas <code>token</code>, enquanto token v2 exige <code>token_key</code> e <code>token</code>.</li>
-</ul>
-<h2 id="falha-no-mount-de-rotas-proxmox-geradas">Falha no mount de rotas Proxmox geradas<a class="headerlink" href="#falha-no-mount-de-rotas-proxmox-geradas" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>Os logs de startup informam que as rotas Proxmox geradas nao puderam ser montadas.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Confirme que o snapshot gerado existe em <code>proxbox_api/generated/proxmox/latest/openapi.json</code>.</li>
-<li>Recrie o contrato Proxmox em tempo de execucao com <code>POST /proxmox/viewer/generate</code> se o snapshot estiver ausente.</li>
-<li>Se a aplicacao precisar falhar fechada, habilite <code>PROXBOX_STRICT_STARTUP</code>.</li>
-</ul>
-<h2 id="problemas-de-cors">Problemas de CORS<a class="headerlink" href="#problemas-de-cors" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>O browser bloqueia requests por politica de CORS.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Verifique o dominio do endpoint NetBox.</li>
-<li>Confirme que a origem do frontend esta na allowlist de CORS.</li>
-<li>Confirme que os requests usam o host e a porta esperados.</li>
-</ul>
-<h2 id="falhas-de-conexao-com-proxmox">Falhas de conexao com Proxmox<a class="headerlink" href="#falhas-de-conexao-com-proxmox" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>Excecoes de conexao durante a criacao da sessao.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Valide host, porta e credenciais do Proxmox.</li>
-<li>Confira o comportamento de <code>verify_ssl</code> e certificados.</li>
-<li>Confirme as permissoes do usuario ou token no Proxmox.</li>
-<li>Em deploys com multiplos endpoints, confirme os valores de target e <code>source</code> passados na requisicao.</li>
-</ul>
-<h2 id="endpoints-de-sync-retornam-dados-parciais">Endpoints de sync retornam dados parciais<a class="headerlink" href="#endpoints-de-sync-retornam-dados-parciais" title="Permanent link">&para;</a></h2>
-<p>Sintoma:</p>
-<ul>
-<li>Alguns objetos sincronizam enquanto outros falham.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Inspecione os logs da API com <code>GET /admin/logs</code>.</li>
-<li>Valide se os objetos obrigatorios do NetBox e os modelos do plugin existem.</li>
-<li>Refaca o sync usando o modo WebSocket para visibilidade ao vivo.</li>
-</ul>
-<h2 id="estado-do-banco">Estado do banco<a class="headerlink" href="#estado-do-banco" title="Permanent link">&para;</a></h2>
-<p>Nota:</p>
-<ul>
-<li>O startup atual cria tabelas ausentes sem apagar dados existentes.</li>
-</ul>
-<p>Se necessario:</p>
-<ul>
-<li>Faca backup de <code>database.db</code> antes de experimentos com schema.</li>
-</ul>
-<h2 id="problemas-com-sse">Problemas com SSE<a class="headerlink" href="#problemas-com-sse" title="Permanent link">&para;</a></h2>
-<h3 id="stream-vazio-ou-travado">Stream vazio ou travado<a class="headerlink" href="#stream-vazio-ou-travado" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>O endpoint SSE <code>/stream</code> conecta, mas nenhum evento chega.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Verifique se os endpoints NetBox e Proxmox estao configurados (<code>GET /netbox/endpoint</code>, <code>GET /proxmox/endpoints</code>).</li>
-<li>Confira os logs da API para excecoes durante o sync.</li>
-<li>Confirme que o cliente HTTP nao esta fazendo buffering (use o header <code>Accept: text/event-stream</code>).</li>
-<li>Garanta que <code>Cache-Control: no-cache</code> seja respeitado por proxies intermediarios.</li>
-</ul>
-<h3 id="timeout-do-stream">Timeout do stream<a class="headerlink" href="#timeout-do-stream" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>O stream SSE cai antes do sync terminar.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Aumente o timeout do cliente ou use um cliente ciente de streaming.</li>
-<li>Para inventarios grandes, considere reduzir <code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code> e <code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code> para diminuir a pressao sobre o NetBox.</li>
-<li>Confira se <code>PROXBOX_NETBOX_TIMEOUT</code> e suficiente para a latencia do seu servidor NetBox.</li>
-</ul>
-<h3 id="resposta-sse-com-erro-de-hop-by-hop-header">Resposta SSE com erro de hop-by-hop header<a class="headerlink" href="#resposta-sse-com-erro-de-hop-by-hop-header" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>HTTP 500 com <code>AssertionError: Hop-by-hop header not allowed</code> em ambientes com proxy Django.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>As respostas SSE nao devem incluir <code>Connection: keep-alive</code> quando servidas por middleware WSGI.</li>
-<li>Use apenas <code>Cache-Control: no-cache</code> e <code>X-Accel-Buffering: no</code> nos stream responses.</li>
-</ul>
-<h3 id="stream-retorna-event-error-em-vez-de-complete">Stream retorna event error em vez de complete<a class="headerlink" href="#stream-retorna-event-error-em-vez-de-complete" title="Permanent link">&para;</a></h3>
-<p>Sintoma:</p>
-<ul>
-<li>O sync termina com <code>event: error</code> seguido de <code>event: complete</code> com <code>ok: false</code>.</li>
-</ul>
-<p>Resolucao:</p>
-<ul>
-<li>Verifique os campos <code>error</code> e <code>detail</code> no payload do evento de erro.</li>
-<li>Causas comuns: NetBox indisponivel, falha de autenticacao no Proxmox, modelos obrigatorios do plugin NetBox ausentes.</li>
-<li>Refaca com o modo WebSocket (<code>/ws</code>) para logging mais verboso, se necessario.</li>
-</ul>
+<h2 id="security-best-practices">Security Best Practices<a class="headerlink" href="#security-best-practices" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Use strong keys</strong>: At least 32 characters, preferably 64 characters</li>
+<li><strong>Store keys securely</strong>: Treat the <code>raw_key</code> from <code>/auth/keys</code> as a password — store it once</li>
+<li><strong>Rotate keys regularly</strong>: Create a new key, update your applications, delete the old one</li>
+<li><strong>Use HTTPS in production</strong>: Keys are sent in headers — protect them in transit</li>
+<li><strong>Limit key scope</strong>: Create separate keys for different purposes (monitoring, sync, admin)</li>
+</ol>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="no-api-key-configured">"No API key configured"<a class="headerlink" href="#no-api-key-configured" title="Permanent link">&para;</a></h3>
+<p><code>{"detail": "No API key configured. Register a key via POST /auth/register-key or use an existing key."}</code></p>
+<p>The database has no API keys. Call <code>/auth/register-key</code> with a new key to bootstrap.</p>
+<h3 id="invalid-api-key">"Invalid API key"<a class="headerlink" href="#invalid-api-key" title="Permanent link">&para;</a></h3>
+<p>Check that:</p>
+<ol>
+<li>You're sending the <code>X-Proxbox-API-Key</code> header</li>
+<li>The key value matches exactly (no extra spaces or newlines)</li>
+<li>The key hasn't been deactivated or deleted</li>
+</ol>
+<h3 id="too-many-failed-authentication-attempts">"Too many failed authentication attempts"<a class="headerlink" href="#too-many-failed-authentication-attempts" title="Permanent link">&para;</a></h3>
+<p>Wait 5 minutes for the lockout to expire, or restart the backend to reset the in-memory lockout state.</p>
 
 
 
@@ -1490,7 +1249,7 @@
           <button type="button" class="md-top md-icon" data-md-component="top" hidden>
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
-  Voltar para o topo
+  Back to top
 </button>
         
       </main>
@@ -1522,10 +1281,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado para \u00e1rea de transfer\u00eancia", "clipboard.copy": "Copiar para \u00e1rea de transfer\u00eancia", "search.result.more.one": "mais 1 nesta p\u00e1gina", "search.result.more.other": "# mais nesta p\u00e1gina", "search.result.none": "Nenhum documento encontrado", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Digite para iniciar a busca", "search.result.term.missing": "Ausente", "select.version": "Selecione a vers\u00e3o"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

@@ -16,7 +16,7 @@
         <link rel="prev" href="../installation/">
       
       
-        <link rel="next" href="../../architecture/overview/">
+        <link rel="next" href="../authentication/">
       
       
         
@@ -531,6 +531,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Variaveis de ambiente">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tratando-erros-de-netbox-sobrecarregado" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tratando erros de NetBox sobrecarregado
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -548,6 +565,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -629,6 +674,34 @@
     
   
     Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
   
 
     
@@ -759,6 +832,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -835,6 +936,34 @@
     
   
     Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
   
 
     
@@ -1163,6 +1292,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Variaveis de ambiente">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tratando-erros-de-netbox-sobrecarregado" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tratando erros de NetBox sobrecarregado
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1308,13 +1454,18 @@
 </tr>
 <tr>
 <td><code>PROXBOX_NETBOX_MAX_RETRIES</code></td>
-<td><code>3</code></td>
+<td><code>5</code></td>
 <td>Numero de tentativas para falhas transientes do NetBox.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_NETBOX_RETRY_DELAY</code></td>
-<td><code>1.0</code></td>
+<td><code>2.0</code></td>
 <td>Delay inicial, em segundos, para retries do NetBox.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_MAX_CONCURRENT</code></td>
+<td><code>1</code></td>
+<td>Maximo de requisicoes simultaneas ao NetBox. Mantenha baixo (1-2) para evitar agotar o pool de conexoes PostgreSQL do NetBox.</td>
 </tr>
 <tr>
 <td><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code></td>
@@ -1358,6 +1509,14 @@
 </tr>
 </tbody>
 </table>
+<h3 id="tratando-erros-de-netbox-sobrecarregado">Tratando erros de NetBox sobrecarregado<a class="headerlink" href="#tratando-erros-de-netbox-sobrecarregado" title="Permanent link">&para;</a></h3>
+<p>Quando o pool de conexoes PostgreSQL do NetBox esta saturado, o proxbox-api retorna erros <code>netbox_overwhelmed</code>. Para mitigar:</p>
+<ol>
+<li><strong>Reduza a concorrencia</strong>: Defina <code>PROXBOX_NETBOX_MAX_CONCURRENT=1</code> para serializar requisicoes</li>
+<li><strong>Aumente os retries</strong>: Mais tentativas com delays maiores dao tempo ao NetBox para recuperar</li>
+<li><strong>Estenda o TTL do cache</strong>: Use <code>PROXBOX_NETBOX_GET_CACHE_TTL=300</code> para reduzir fetches redundantes</li>
+</ol>
+<p>A logica de retry aplica backoff agressivo (ate 30 segundos) quando erros de sobrecarga sao detectados.</p>
 <h2 id="comportamento-de-cors">Comportamento de CORS<a class="headerlink" href="#comportamento-de-cors" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Origens sao montadas a partir de endpoints NetBox mais origens de desenvolvimento padrao.</li>

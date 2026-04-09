@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/architecture/overview/">
       
       
-        <link rel="prev" href="../../getting-started/configuration/">
+        <link rel="prev" href="../../getting-started/authentication/">
       
       
-        <link rel="next" href="../../api/http-reference/">
+        <link rel="next" href="../caching/">
       
       
         
@@ -384,6 +384,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -523,6 +551,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#request-level-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request-Level Caching
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-components" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -609,6 +648,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -731,6 +798,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -807,6 +902,34 @@
     
   
     Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
   
 
     
@@ -1038,6 +1161,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#request-level-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request-Level Caching
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-components" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1156,6 +1290,18 @@
 <li>Persistence layer: <code>proxbox_api/database.py</code></li>
 <li>Utility layer: streaming, logging, cache, retry, and error helpers</li>
 </ul>
+<h2 id="request-level-caching">Request-Level Caching<a class="headerlink" href="#request-level-caching" title="Permanent link">&para;</a></h2>
+<p>NetBox GET requests are cached in-memory to reduce database load during sync operations:</p>
+<ul>
+<li><strong>Cache location</strong>: <code>proxbox_api/netbox_rest.py</code> provides <code>rest_list_async()</code>, <code>rest_first_async()</code>, etc.</li>
+<li><strong>TTL</strong>: configurable via <code>PROXBOX_NETBOX_GET_CACHE_TTL</code> (default: 60 seconds)</li>
+<li><strong>Entry limit</strong>: configurable via <code>PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES</code> (default: 4096)</li>
+<li><strong>Byte limit</strong>: configurable via <code>PROXBOX_NETBOX_GET_CACHE_MAX_BYTES</code> (default: 52428800 = 50MB)</li>
+<li><strong>Eviction policy</strong>: LRU (Least Recently Used) when either entry or byte limit is reached</li>
+<li><strong>Invalidation</strong>: automatic on POST/PATCH/DELETE to related endpoints</li>
+<li><strong>Observability</strong>: metrics available at <code>/cache</code> and <code>/cache/metrics/prometheus</code></li>
+</ul>
+<p>Cache invalidation is precise (not prefix-based): updating <code>/api/dcim/devices/55/</code> only invalidates that exact path and its parent list, not other device detail paths like <code>/api/dcim/devices/10/</code>.</p>
 <h2 id="runtime-components">Runtime Components<a class="headerlink" href="#runtime-components" title="Permanent link">&para;</a></h2>
 <ul>
 <li>FastAPI app mounts the current route groups:</li>
@@ -1174,7 +1320,7 @@
 <li><code>/sync/individual</code></li>
 <li>SQLite-backed endpoint configuration and bootstrap state.</li>
 <li>NetBox API access via <code>netbox-sdk</code> sync and async clients.</li>
-<li>Proxmox API access via <code>proxmoxer</code> sessions and typed helper wrappers.</li>
+<li>Proxmox API access via <code>proxmox-openapi</code> sync SDK sessions and typed helper wrappers.</li>
 <li>Runtime-generated Proxmox live routes mounted during app lifespan startup.</li>
 </ul>
 <h2 id="core-data-models">Core Data Models<a class="headerlink" href="#core-data-models" title="Permanent link">&para;</a></h2>

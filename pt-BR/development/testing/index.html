@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/testing/">
       
       
-        <link rel="prev" href="../../sync/workflows/">
+        <link rel="prev" href="../../sync/reconciliation-architecture/">
       
       
         <link rel="next" href="../deployment/">
@@ -384,6 +384,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -460,6 +488,34 @@
     
   
     Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
   
 
     
@@ -590,6 +646,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -666,6 +750,34 @@
     
   
     Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
   
 
     
@@ -829,46 +941,74 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#testes-direcionados-de-endpoints" class="md-nav__link">
+  <a href="#testes-com-mock-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Testes direcionados de endpoints
+        Testes com Mock Proxmox
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testes com Mock Proxmox">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tres-modos-mock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tres Modos Mock
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#verificacao-de-compilacao" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#1-mockbackend-in-process-pytestmarkmock_backend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verificacao de compilacao
+        1. MockBackend In-process (@pytest.mark.mock_backend)
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#checks-recomendados-antes-de-pr" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#2-container-http-published-pytestmarkmock_http" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checks recomendados antes de PR
+        2. Container HTTP Published (@pytest.mark.mock_http)
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#checks-de-contrato-proxmox-gerado" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#3-container-http-local-pytestmarkmock_http" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checks de contrato Proxmox gerado
+        3. Container HTTP Local (@pytest.mark.mock_http)
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#executando-testes-com-containers-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executando Testes com Containers Docker
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1021,46 +1161,74 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#testes-direcionados-de-endpoints" class="md-nav__link">
+  <a href="#testes-com-mock-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Testes direcionados de endpoints
+        Testes com Mock Proxmox
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testes com Mock Proxmox">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tres-modos-mock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tres Modos Mock
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#verificacao-de-compilacao" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#1-mockbackend-in-process-pytestmarkmock_backend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verificacao de compilacao
+        1. MockBackend In-process (@pytest.mark.mock_backend)
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#checks-recomendados-antes-de-pr" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#2-container-http-published-pytestmarkmock_http" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checks recomendados antes de PR
+        2. Container HTTP Published (@pytest.mark.mock_http)
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#checks-de-contrato-proxmox-gerado" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#3-container-http-local-pytestmarkmock_http" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checks de contrato Proxmox gerado
+        3. Container HTTP Local (@pytest.mark.mock_http)
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#executando-testes-com-containers-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executando Testes com Containers Docker
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1095,6 +1263,7 @@
 <li><code>pytest</code></li>
 <li><code>httpx</code></li>
 <li>FastAPI <code>TestClient</code></li>
+<li><code>proxmox-openapi</code> (testes com mock)</li>
 </ul>
 <p>As dependencias de teste sao definidas em <code>pyproject.toml</code> em
 <code>[project.optional-dependencies] -&gt; test</code>.</p>
@@ -1110,6 +1279,177 @@ pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py
 <p>Para a superficie atual de rotas e contratos de docs:</p>
 <p><code>bash
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py</code></p>
+<h2 id="testes-com-mock-proxmox">Testes com Mock Proxmox<a class="headerlink" href="#testes-com-mock-proxmox" title="Permanent link">&para;</a></h2>
+<p>Todos os testes usam recursos mock do <code>proxmox-openapi</code> para validar a integracao com a API Proxmox. A suite de testes suporta tres modos mock:</p>
+<h3 id="tres-modos-mock">Tres Modos Mock<a class="headerlink" href="#tres-modos-mock" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Modo</th>
+<th>Fixture</th>
+<th>Porta</th>
+<th>Velocidade</th>
+<th>Caso de Uso</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MockBackend</strong></td>
+<td><code>proxmox_mock_backend</code></td>
+<td>N/A</td>
+<td>Mais rapido</td>
+<td>Iteracao de desenvolvimento</td>
+</tr>
+<tr>
+<td><strong>HTTP Published</strong></td>
+<td><code>proxmox_mock_http_published</code></td>
+<td>8006</td>
+<td>Rapido</td>
+<td>Validacao de experiencia do usuario</td>
+</tr>
+<tr>
+<td><strong>HTTP Local</strong></td>
+<td><code>proxmox_mock_http_local</code></td>
+<td>8007</td>
+<td>Rapido</td>
+<td>Validacao pre-lancamento</td>
+</tr>
+</tbody>
+</table>
+<h3 id="1-mockbackend-in-process-pytestmarkmock_backend">1. MockBackend In-process (<code>@pytest.mark.mock_backend</code>)<a class="headerlink" href="#1-mockbackend-in-process-pytestmarkmock_backend" title="Permanent link">&para;</a></h3>
+<p>O modo mais rapido usando <code>proxmox_openapi.sdk.backends.mock.MockBackend</code>. Nao requer servidor HTTP.</p>
+<p><code>python
+@pytest.mark.mock_backend
+async def test_vm_sync(proxmox_mock_backend):
+    """Teste rapido usando MockBackend in-process."""
+    vms = await proxmox_mock_backend.request("GET", "/api2/json/nodes/pve01/qemu")</code></p>
+<h3 id="2-container-http-published-pytestmarkmock_http">2. Container HTTP Published (<code>@pytest.mark.mock_http</code>)<a class="headerlink" href="#2-container-http-published-pytestmarkmock_http" title="Permanent link">&para;</a></h3>
+<p>Usa a imagem Docker publicada <code>emersonfelipesp/proxmox-openapi:latest</code> na porta 8006.</p>
+<p><code>python
+@pytest.mark.mock_http
+async def test_vm_sync_http(proxmox_mock_http_published):
+    """Teste realista usando container HTTP (imagem publicada)."""
+    vms = await proxmox_mock_http_published.nodes.get()</code></p>
+<h3 id="3-container-http-local-pytestmarkmock_http">3. Container HTTP Local (<code>@pytest.mark.mock_http</code>)<a class="headerlink" href="#3-container-http-local-pytestmarkmock_http" title="Permanent link">&para;</a></h3>
+<p>Usa uma imagem Docker construida localmente de <code>./proxmox-openapi</code> na porta 8007.</p>
+<p><code>python
+@pytest.mark.mock_http
+async def test_vm_sync_http_local(proxmox_mock_http_local):
+    """Teste realista usando container HTTP (build local)."""
+    vms = await proxmox_mock_http_local.nodes.get()</code></p>
+<h3 id="executando-testes-com-containers-docker">Executando Testes com Containers Docker<a class="headerlink" href="#executando-testes-com-containers-docker" title="Permanent link">&para;</a></h3>
+<p>Inicie ambos os containers mock:</p>
+<p>```bash</p>
+<h1 id="usando-docker-compose-v2">Usando docker compose (v2)<a class="headerlink" href="#usando-docker-compose-v2" title="Permanent link">&para;</a></h1>
+<p>docker compose up -d</p>
+<h1 id="ou-usando-docker-compose-v1">Ou usando docker-compose (v1)<a class="headerlink" href="#ou-usando-docker-compose-v1" title="Permanent link">&para;</a></h1>
+<p>docker-compose up -d
+```</p>
+<p>Execute a suite completa de testes com o script de orquestracao:</p>
+<p><code>bash
+./scripts/test-with-mock.sh</code></p>
+<p>Execute modos de teste especificos:</p>
+<p>```bash</p>
+<h1 id="apenas-mockbackend-rapido-sem-http">Apenas MockBackend (rapido, sem HTTP)<a class="headerlink" href="#apenas-mockbackend-rapido-sem-http" title="Permanent link">&para;</a></h1>
+<p>PROXMOX_API_MODE=mock uv run pytest tests --ignore=tests/e2e -m "mock_backend"</p>
+<h1 id="apenas-http-published">Apenas HTTP published<a class="headerlink" href="#apenas-http-published" title="Permanent link">&para;</a></h1>
+<p>PROXMOX_API_MODE=mock PROXMOX_MOCK_PUBLISHED_URL=http://localhost:8006 \
+  uv run pytest tests --ignore=tests/e2e -m "mock_http"</p>
+<h1 id="apenas-http-local">Apenas HTTP local<a class="headerlink" href="#apenas-http-local" title="Permanent link">&para;</a></h1>
+<p>PROXMOX_API_MODE=mock PROXMOX_MOCK_LOCAL_URL=http://localhost:8007 \
+  uv run pytest tests --ignore=tests/e2e -m "mock_http"
+```</p>
+<h3 id="teste-em-modo-dual">Teste em Modo Dual<a class="headerlink" href="#teste-em-modo-dual" title="Permanent link">&para;</a></h3>
+<p>Testes podem executar contra MockBackend E containers HTTP:</p>
+<p><code>python
+@pytest.mark.mock_backend
+@pytest.mark.mock_http
+async def test_vm_sync_all_modes(request, proxmox_mock_backend,
+                                   proxmox_mock_http_published,
+                                   proxmox_mock_http_local):
+    """Teste executa 3 vezes: backend, HTTP published, e HTTP local."""
+    ...</code></p>
+<h3 id="servicos-docker-compose">Servicos Docker Compose<a class="headerlink" href="#servicos-docker-compose" title="Permanent link">&para;</a></h3>
+<p>O <code>docker-compose.yml</code> define dois servicos:</p>
+<p>```yaml
+services:
+  proxmox-mock-published:
+    image: emersonfelipesp/proxmox-openapi:latest
+    ports:
+      - "8006:8000"
+    environment:
+      - PROXMOX_API_MODE=mock
+      - PROXMOX_MOCK_SCHEMA_VERSION=latest</p>
+<p>proxmox-mock-local:
+    build:
+      context: ./proxmox-openapi
+      dockerfile: Dockerfile
+    ports:
+      - "8007:8000"
+    environment:
+      - PROXMOX_API_MODE=mock
+      - PROXMOX_MOCK_SCHEMA_VERSION=latest
+```</p>
+<p>Ambos os servicos:
+- Usam <code>PROXMOX_API_MODE=mock</code>
+- Definem <code>PROXMOX_MOCK_SCHEMA_VERSION=latest</code>
+- Tem health checks habilitados
+- Nao tem volumes persistentes (estado fresco a cada reinicio)</p>
+<h3 id="variaveis-de-ambiente">Variaveis de Ambiente<a class="headerlink" href="#variaveis-de-ambiente" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variavel</th>
+<th>Padrao</th>
+<th>Descricao</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PROXMOX_API_MODE</code></td>
+<td><code>real</code></td>
+<td>Defina como <code>mock</code> para modo teste</td>
+</tr>
+<tr>
+<td><code>PROXMOX_MOCK_PUBLISHED_URL</code></td>
+<td><code>http://localhost:8006</code></td>
+<td>URL do container published</td>
+</tr>
+<tr>
+<td><code>PROXMOX_MOCK_LOCAL_URL</code></td>
+<td><code>http://localhost:8007</code></td>
+<td>URL do container local</td>
+</tr>
+<tr>
+<td><code>PYTEST_CURRENT_TEST</code></td>
+<td>auto-definido</td>
+<td>Auto-detecta ambiente pytest</td>
+</tr>
+</tbody>
+</table>
+<h3 id="marcadores-pytest">Marcadores pytest<a class="headerlink" href="#marcadores-pytest" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Marcador</th>
+<th>Descricao</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mock_backend</code></td>
+<td>Testes usando MockBackend in-process (rapido)</td>
+</tr>
+<tr>
+<td><code>mock_http</code></td>
+<td>Testes usando container HTTP mock</td>
+</tr>
+<tr>
+<td><code>image_http</code></td>
+<td>Smoke tests contra imagens Docker publicadas</td>
+</tr>
+</tbody>
+</table>
 <h2 id="testes-direcionados-de-endpoints">Testes direcionados de endpoints<a class="headerlink" href="#testes-direcionados-de-endpoints" title="Permanent link">&para;</a></h2>
 <p>O arquivo <code>proxbox_api/test_endpoint_crud.py</code> cobre:</p>
 <ul>
@@ -1136,6 +1476,30 @@ python -m compileall proxbox_api</code></p>
 <li>Confirme que respostas array-de-objetos continuam emitindo schemas concretos <code>...ResponseItem</code>.</li>
 <li>Confirme que rotas com helpers continuam retornando payloads compativeis com o codigo de sync existente.</li>
 </ul>
+<h2 id="solucao-de-problemas">Solucao de Problemas<a class="headerlink" href="#solucao-de-problemas" title="Permanent link">&para;</a></h2>
+<h3 id="container-nao-inicia">Container Nao Inicia<a class="headerlink" href="#container-nao-inicia" title="Permanent link">&para;</a></h3>
+<p>```bash</p>
+<h1 id="ver-logs-do-container">Ver logs do container<a class="headerlink" href="#ver-logs-do-container" title="Permanent link">&para;</a></h1>
+<p>docker compose logs proxmox-mock-published
+docker compose logs proxmox-mock-local</p>
+<h1 id="verificar-status-de-health">Verificar status de health<a class="headerlink" href="#verificar-status-de-health" title="Permanent link">&para;</a></h1>
+<p>docker compose ps</p>
+<h1 id="reiniciar-containers">Reiniciar containers<a class="headerlink" href="#reiniciar-containers" title="Permanent link">&para;</a></h1>
+<p>docker compose restart
+```</p>
+<h3 id="testes-timeout">Testes Timeout<a class="headerlink" href="#testes-timeout" title="Permanent link">&para;</a></h3>
+<p>```bash</p>
+<h1 id="aumente-o-timeout-de-health-check-em-docker-composeyml">Aumente o timeout de health check em docker-compose.yml<a class="headerlink" href="#aumente-o-timeout-de-health-check-em-docker-composeyml" title="Permanent link">&para;</a></h1>
+<h1 id="ou-aguarde-mais-antes-de-executar-testes">Ou aguarde mais antes de executar testes:<a class="headerlink" href="#ou-aguarde-mais-antes-de-executar-testes" title="Permanent link">&para;</a></h1>
+<p>sleep 30
+```</p>
+<h3 id="erros-de-import">Erros de Import<a class="headerlink" href="#erros-de-import" title="Permanent link">&para;</a></h3>
+<p>```bash</p>
+<h1 id="garanta-que-dependencias-estao-instaladas">Garanta que dependencias estao instaladas<a class="headerlink" href="#garanta-que-dependencias-estao-instaladas" title="Permanent link">&para;</a></h1>
+<p>uv sync --frozen --extra test --group dev</p>
+<h1 id="verificar-imports">Verificar imports<a class="headerlink" href="#verificar-imports" title="Permanent link">&para;</a></h1>
+<p>uv run python -c "from proxbox_api.testing import MockProxmoxContext"
+```</p>
 
 
 

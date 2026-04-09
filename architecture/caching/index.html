@@ -10,19 +10,19 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/sync/workflows/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/architecture/caching/">
       
       
-        <link rel="prev" href="../../api/cache/">
+        <link rel="prev" href="../overview/">
       
       
-        <link rel="next" href="../reconciliation-architecture/">
+        <link rel="next" href="../../api/http-reference/">
       
       
         
           <link rel="alternate" href="./" hreflang="en">
         
-          <link rel="alternate" href="../../pt-BR/sync/workflows/" hreflang="pt-BR">
+          <link rel="alternate" href="../../pt-BR/architecture/caching/" hreflang="pt-BR">
         
       
       
@@ -31,7 +31,7 @@
     
     
       
-        <title>Workflows - proxbox-api</title>
+        <title>Caching - proxbox-api</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#synchronization-workflows" class="md-skip">
+        <a href="#caching-architecture" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Workflows
+              Caching
             
           </span>
         </div>
@@ -135,7 +135,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../pt-BR/sync/workflows/" hreflang="pt-BR" class="md-select__link">
+            <a href="../../pt-BR/architecture/caching/" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -423,8 +423,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -435,13 +437,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -462,7 +462,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -480,7 +480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/overview/" class="md-nav__link">
+      <a href="../overview/" class="md-nav__link">
         
   
   
@@ -505,10 +505,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../architecture/caching/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -524,6 +551,287 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Types
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cache Types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#netbox-get-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBox GET Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#proxbox-internal-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proxbox Internal Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Flow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cache Flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get-request-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET Request Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-invalidation-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Invalidation Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eviction-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eviction Policy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Eviction Policy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#eviction-triggers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eviction Triggers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#eviction-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eviction Order
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-invalidation-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Invalidation Strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-and-observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics and Observability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics and Observability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#available-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integration-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration Points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cache-hit-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Hit Rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory Usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#benchmarking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmarking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -685,8 +993,6 @@
       
   
   
-    
-  
   
   
     
@@ -699,11 +1005,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
@@ -724,7 +1032,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -739,37 +1047,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Workflows
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../sync/workflows/" class="md-nav__link">
         
   
   
@@ -785,214 +1066,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#full-update-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Full Update Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#virtual-machine-sync-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Virtual Machine Sync Flow
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Virtual Machine Sync Flow">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#dependency-ordered-async-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Dependency-Ordered Async Model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#parallelism-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Parallelism Rules
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#backup-sync-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backup Sync Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#snapshot-sync-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Snapshot Sync Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-sync-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Storage Sync Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sse-streaming-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SSE Streaming Mode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#websocket-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        WebSocket Mode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#tracking-and-observability" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tracking and Observability
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#failure-handling" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Failure Handling
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Failure Handling">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#error-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Error Validation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sync-error-hierarchy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Sync Error Hierarchy
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#retry-and-resilience" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Retry and Resilience
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#structured-logging" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Structured Logging
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#response-handling" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Response Handling
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1005,7 +1078,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reconciliation-architecture/" class="md-nav__link">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
         
   
   
@@ -1233,10 +1306,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#full-update-flow" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Full Update Flow
+        Overview
       
     </span>
   </a>
@@ -1244,22 +1317,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#virtual-machine-sync-flow" class="md-nav__link">
+  <a href="#cache-types" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Virtual Machine Sync Flow
+        Cache Types
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Virtual Machine Sync Flow">
+    <nav class="md-nav" aria-label="Cache Types">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#dependency-ordered-async-model" class="md-nav__link">
+  <a href="#netbox-get-cache" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Dependency-Ordered Async Model
+        NetBox GET Cache
       
     </span>
   </a>
@@ -1267,10 +1340,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#parallelism-rules" class="md-nav__link">
+  <a href="#proxbox-internal-cache" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Parallelism Rules
+        Proxbox Internal Cache
       
     </span>
   </a>
@@ -1283,88 +1356,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#backup-sync-flow" class="md-nav__link">
+  <a href="#cache-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup Sync Flow
+        Cache Flow
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#snapshot-sync-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Snapshot Sync Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-sync-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Storage Sync Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sse-streaming-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SSE Streaming Mode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#websocket-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        WebSocket Mode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#tracking-and-observability" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tracking and Observability
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#failure-handling" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Failure Handling
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Failure Handling">
+    <nav class="md-nav" aria-label="Cache Flow">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#error-validation" class="md-nav__link">
+  <a href="#get-request-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Error Validation
+        GET Request Flow
       
     </span>
   </a>
@@ -1372,10 +1379,49 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#sync-error-hierarchy" class="md-nav__link">
+  <a href="#cache-invalidation-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sync Error Hierarchy
+        Cache Invalidation Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eviction-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eviction Policy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Eviction Policy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#eviction-triggers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eviction Triggers
       
     </span>
   </a>
@@ -1383,10 +1429,49 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#retry-and-resilience" class="md-nav__link">
+  <a href="#eviction-order" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Retry and Resilience
+        Eviction Order
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-invalidation-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Invalidation Strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-and-observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics and Observability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics and Observability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#available-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Metrics
       
     </span>
   </a>
@@ -1394,10 +1479,60 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#structured-logging" class="md-nav__link">
+  <a href="#metrics-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Structured Logging
+        Metrics Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integration-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration Points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cache-hit-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Hit Rate
       
     </span>
   </a>
@@ -1405,10 +1540,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#response-handling" class="md-nav__link">
+  <a href="#memory-usage" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Response Handling
+        Memory Usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#benchmarking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmarking
       
     </span>
   </a>
@@ -1437,7 +1583,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/sync/workflows.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/architecture/caching.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1445,198 +1591,232 @@
   
 
 
-<h1 id="synchronization-workflows">Synchronization Workflows<a class="headerlink" href="#synchronization-workflows" title="Permanent link">&para;</a></h1>
-<p>This page explains the major synchronization workflows between Proxmox and NetBox.</p>
-<h2 id="full-update-flow">Full Update Flow<a class="headerlink" href="#full-update-flow" title="Permanent link">&para;</a></h2>
-<p>HTTP endpoint:</p>
+<h1 id="caching-architecture">Caching Architecture<a class="headerlink" href="#caching-architecture" title="Permanent link">&para;</a></h1>
+<p>This document describes the caching architecture in proxbox-api, including design decisions, flow diagrams, and configuration options.</p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>proxbox-api implements a request-level caching layer for NetBox GET operations to reduce database load during sync operations. The cache is in-memory only and does not persist across restarts.</p>
+<h2 id="cache-types">Cache Types<a class="headerlink" href="#cache-types" title="Permanent link">&para;</a></h2>
+<h3 id="netbox-get-cache">NetBox GET Cache<a class="headerlink" href="#netbox-get-cache" title="Permanent link">&para;</a></h3>
+<p>Located in <code>proxbox_api/netbox_rest.py</code>, this cache stores responses from NetBox REST API GET requests. It's designed to:</p>
 <ul>
-<li><code>GET /full-update</code></li>
+<li>Reduce redundant NetBox API calls during sync operations</li>
+<li>Provide automatic cache invalidation on mutations (POST/PATCH/PUT/DELETE)</li>
+<li>Offer observability through metrics endpoints</li>
+<li>Support both entry count and byte size limits</li>
 </ul>
-<p>Current execution order:</p>
+<h3 id="proxbox-internal-cache">Proxbox Internal Cache<a class="headerlink" href="#proxbox-internal-cache" title="Permanent link">&para;</a></h3>
+<p>Located in <code>proxbox_api/cache.py</code>, this is a separate in-memory cache for internal Proxbox data structures. It's used for general-purpose caching within the application.</p>
+<h2 id="cache-flow">Cache Flow<a class="headerlink" href="#cache-flow" title="Permanent link">&para;</a></h2>
+<h3 id="get-request-flow">GET Request Flow<a class="headerlink" href="#get-request-flow" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Svc as Sync Service
+    participant Cache as NetBox GET Cache
+    participant NetBox as NetBox API
+
+    Svc-&gt;&gt;Cache: Request GET /api/dcim/devices/
+    Note over Cache: Prune expired entries (TTL)
+    Cache-&gt;&gt;Cache: Check if cached
+    alt Cache Hit
+        Cache--&gt;&gt;Svc: Return cached records
+        Note over Cache: Increment hits metric
+    else Cache Miss
+        Cache--&gt;&gt;Svc: No cache entry
+        Note over Cache: Increment misses metric
+        Svc-&gt;&gt;NetBox: GET /api/dcim/devices/
+        NetBox--&gt;&gt;Svc: Return records
+        Svc-&gt;&gt;Cache: Store in cache (with size)
+        Note over Cache: Evict if needed (LRU)
+    end</code></pre>
+<h3 id="cache-invalidation-flow">Cache Invalidation Flow<a class="headerlink" href="#cache-invalidation-flow" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Svc as Sync Service
+    participant Cache as NetBox GET Cache
+    participant NetBox as NetBox API
+
+    Svc-&gt;&gt;NetBox: PATCH /api/dcim/devices/55/
+    NetBox--&gt;&gt;Svc: Success
+    Svc-&gt;&gt;Cache: Invalidate /api/dcim/devices/55/
+    Note over Cache: Find exact path matches
+    Note over Cache: Find parent list path
+    Note over Cache: Find direct children
+    Cache-&gt;&gt;Cache: Remove invalidated entries
+    Note over Cache: Increment invalidations metric</code></pre>
+<h2 id="cache-configuration">Cache Configuration<a class="headerlink" href="#cache-configuration" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Environment Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_TTL</code></td>
+<td>60.0</td>
+<td>Cache TTL in seconds (0 to disable)</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES</code></td>
+<td>4096</td>
+<td>Maximum number of cached entries</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_BYTES</code></td>
+<td>52428800</td>
+<td>Maximum cache size in bytes (50MB)</td>
+</tr>
+<tr>
+<td><code>PROXBOX_DEBUG_CACHE</code></td>
+<td>0</td>
+<td>Enable debug logging (1 to enable)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="eviction-policy">Eviction Policy<a class="headerlink" href="#eviction-policy" title="Permanent link">&para;</a></h2>
+<p>The cache uses a <strong>Least Recently Used (LRU)</strong> eviction policy. When either the entry count limit or byte size limit is reached, the oldest entries (by cached timestamp) are evicted first.</p>
+<h3 id="eviction-triggers">Eviction Triggers<a class="headerlink" href="#eviction-triggers" title="Permanent link">&para;</a></h3>
 <ol>
-<li>Sync Proxmox nodes into NetBox devices.</li>
-<li>Sync Proxmox storages into NetBox plugin storage records.</li>
-<li>Sync Proxmox virtual machines into NetBox VMs.</li>
-<li>Sync task history records.</li>
-<li>Sync virtual disks for discovered VMs.</li>
-<li>Sync VM backups.</li>
-<li>Sync VM snapshots.</li>
-<li>Sync node interfaces and IP addresses.</li>
-<li>Sync VM interfaces.</li>
-<li>Sync VM IP addresses and primary IP assignment.</li>
+<li><strong>TTL Expiry</strong>: Entries older than <code>PROXBOX_NETBOX_GET_CACHE_TTL</code> seconds are automatically removed</li>
+<li><strong>Entry Count Limit</strong>: When <code>len(cache) &gt;= max_entries</code>, oldest entries are evicted</li>
+<li><strong>Byte Size Limit</strong>: When <code>current_bytes + new_entry &gt; max_bytes</code>, oldest entries are evicted</li>
 </ol>
-<p>The streaming variant at <code>GET /full-update/stream</code> emits the same stage transitions over Server-Sent Events.</p>
-<h2 id="virtual-machine-sync-flow">Virtual Machine Sync Flow<a class="headerlink" href="#virtual-machine-sync-flow" title="Permanent link">&para;</a></h2>
-<p>Primary endpoint:</p>
+<h3 id="eviction-order">Eviction Order<a class="headerlink" href="#eviction-order" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A[New entry to write] --&gt; B{Entry count &gt;= max?}
+    B --&gt;|Yes| C[Evict oldest by timestamp]
+    B --&gt;|No| D{Byte size &gt;= max?}
+    D --&gt;|Yes| E[Evict oldest by timestamp]
+    D --&gt;|No| F[Write entry]
+    C --&gt; F
+    E --&gt; F</code></pre>
+<h2 id="cache-invalidation-strategy">Cache Invalidation Strategy<a class="headerlink" href="#cache-invalidation-strategy" title="Permanent link">&para;</a></h2>
+<p>Cache invalidation is <strong>precise</strong> (not prefix-based) to avoid over-invalidation:</p>
 <ul>
-<li><code>GET /virtualization/virtual-machines/create</code></li>
-</ul>
-<p>Core behavior:</p>
-<ul>
-<li>Reads cluster resources from Proxmox sessions.</li>
-<li>Resolves VM configs per VM (<code>qemu</code> and <code>lxc</code>).</li>
-<li>Builds normalized NetBox payloads.</li>
-<li>Creates dependencies such as cluster, device, and role as needed.</li>
-<li>Creates VM interfaces and IP addresses when possible.</li>
-<li>Writes journal entries for auditability.</li>
-<li>In full-update mode, VM creation skips network writes so the dedicated VM interface and IP stages own that work.</li>
-</ul>
-<h3 id="dependency-ordered-async-model">Dependency-Ordered Async Model<a class="headerlink" href="#dependency-ordered-async-model" title="Permanent link">&para;</a></h3>
-<p>VM sync is async end-to-end, but not every step can run in parallel. The workflow enforces a strict dependency chain before running VM-level fan-out.</p>
-<p>Sequential dependency preflight:</p>
-<ol>
-<li>Ensure global parent objects exist in NetBox:<ul>
-<li>Manufacturer</li>
-<li>Device type (depends on manufacturer)</li>
-<li>Proxmox node role</li>
-</ul>
+<li>Updating <code>/api/dcim/devices/55/</code> invalidates:</li>
+<li>Exact path: <code>/api/dcim/devices/55/</code></li>
+<li>Parent list: <code>/api/dcim/devices/</code></li>
+<li>
+<p>Direct children (if any): none for detail paths</p>
 </li>
-<li>For each cluster, ensure cluster-scoped parents:<ul>
-<li>Cluster type</li>
-<li>Cluster</li>
-<li>Site</li>
-</ul>
+<li>
+<p>Updating <code>/api/dcim/devices/</code> (list) invalidates:</p>
 </li>
-<li>For each node in the cluster, ensure device:<ul>
-<li>Device (depends on cluster + device type + role + site)</li>
+<li>Exact path: <code>/api/dcim/devices/</code></li>
+<li>Direct children: <code>/api/dcim/devices/1/</code>, <code>/api/dcim/devices/2/</code>, etc.</li>
 </ul>
-</li>
-<li>Ensure VM role objects by VM type (<code>qemu</code> and <code>lxc</code>).</li>
-</ol>
-<p>After this preflight, VM operations run concurrently per VM with a semaphore limit.</p>
-<p>Per-VM required order:</p>
+<p>This prevents the issue where updating device ID 1 would incorrectly invalidate device ID 10.</p>
+<h2 id="metrics-and-observability">Metrics and Observability<a class="headerlink" href="#metrics-and-observability" title="Permanent link">&para;</a></h2>
+<h3 id="available-metrics">Available Metrics<a class="headerlink" href="#available-metrics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hits</code></td>
+<td>counter</td>
+<td>Total cache hits</td>
+</tr>
+<tr>
+<td><code>misses</code></td>
+<td>counter</td>
+<td>Total cache misses</td>
+</tr>
+<tr>
+<td><code>hit_rate</code></td>
+<td>gauge</td>
+<td>Cache hit rate percentage</td>
+</tr>
+<tr>
+<td><code>invalidations</code></td>
+<td>counter</td>
+<td>Number of cache invalidations</td>
+</tr>
+<tr>
+<td><code>evictions_ttl</code></td>
+<td>counter</td>
+<td>Entries evicted due to TTL expiry</td>
+</tr>
+<tr>
+<td><code>evictions_size</code></td>
+<td>counter</td>
+<td>Entries evicted due to entry limit</td>
+</tr>
+<tr>
+<td><code>evictions_bytes</code></td>
+<td>counter</td>
+<td>Bytes evicted due to byte limit</td>
+</tr>
+<tr>
+<td><code>current_entries</code></td>
+<td>gauge</td>
+<td>Current cached entry count</td>
+</tr>
+<tr>
+<td><code>current_bytes</code></td>
+<td>gauge</td>
+<td>Current cache size in bytes</td>
+</tr>
+<tr>
+<td><code>max_entries</code></td>
+<td>gauge</td>
+<td>Maximum allowed entries</td>
+</tr>
+<tr>
+<td><code>max_bytes</code></td>
+<td>gauge</td>
+<td>Maximum allowed bytes</td>
+</tr>
+</tbody>
+</table>
+<h3 id="metrics-endpoints">Metrics Endpoints<a class="headerlink" href="#metrics-endpoints" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GET /cache</code> - Combined cache view with metrics</li>
+<li><code>GET /cache/metrics</code> - JSON metrics</li>
+<li><code>GET /cache/metrics/prometheus</code> - Prometheus format</li>
+</ul>
+<h2 id="debug-logging">Debug Logging<a class="headerlink" href="#debug-logging" title="Permanent link">&para;</a></h2>
+<p>Enable detailed cache logging with:</p>
+<p><code>bash
+export PROXBOX_DEBUG_CACHE=1</code></p>
+<p>This logs:
+- Cache HIT/MISS events
+- Cache DISABLED (TTL=0)
+- Cache EXPIRED events
+- Cache INVALIDATE events with count</p>
+<h2 id="integration-points">Integration Points<a class="headerlink" href="#integration-points" title="Permanent link">&para;</a></h2>
+<p>The cache is integrated at the REST helper layer in <code>proxbox_api/netbox_rest.py</code>:</p>
+<ul>
+<li><code>rest_list_async()</code> - List resources with caching</li>
+<li><code>rest_first_async()</code> - Get first result with caching</li>
+<li><code>rest_get_async()</code> - Get single resource with caching</li>
+<li><code>rest_create_async()</code> - Create with cache invalidation</li>
+<li><code>rest_update_async()</code> - Update with cache invalidation</li>
+<li><code>rest_delete_async()</code> - Delete with cache invalidation</li>
+</ul>
+<p>All sync services automatically benefit from this centralized cache layer without any changes needed.</p>
+<h2 id="performance-considerations">Performance Considerations<a class="headerlink" href="#performance-considerations" title="Permanent link">&para;</a></h2>
+<h3 id="cache-hit-rate">Cache Hit Rate<a class="headerlink" href="#cache-hit-rate" title="Permanent link">&para;</a></h3>
+<p>A high cache hit rate (&gt;70%) indicates effective caching. To improve hit rate:</p>
 <ol>
-<li>Fetch VM data from Proxmox (resource/config).</li>
-<li>Reconcile VM in NetBox (create/patch).</li>
-<li>Reconcile VM interfaces and IPs (if enabled).</li>
-<li>Reconcile VM disks.</li>
-<li>Reconcile VM task history.</li>
+<li>Increase TTL for stable data</li>
+<li>Adjust cache size limits for your workload</li>
+<li>Ensure queries are deterministic (same query = same cache key)</li>
 </ol>
-<p>This means async is used for throughput where objects are independent, while parent-child dependencies are always awaited in sequence.</p>
-<h3 id="parallelism-rules">Parallelism Rules<a class="headerlink" href="#parallelism-rules" title="Permanent link">&para;</a></h3>
-<p>Allowed in parallel:</p>
-<ul>
-<li>Different VMs in the same or different clusters, after preflight dependencies are ready.</li>
-<li>Interface operations for a single VM once the VM object exists.</li>
-<li>Disk operations for a single VM once the VM object exists.</li>
-</ul>
-<p>Not allowed in parallel:</p>
-<ul>
-<li>Creating child objects before required parent objects exist.</li>
-<li>Reconciling NetBox VM state before Proxmox VM data is fetched.</li>
-<li>Creating a device before manufacturer/device type/site/cluster prerequisites exist.</li>
-</ul>
-<h2 id="backup-sync-flow">Backup Sync Flow<a class="headerlink" href="#backup-sync-flow" title="Permanent link">&para;</a></h2>
-<p>Endpoints:</p>
-<ul>
-<li><code>GET /virtualization/virtual-machines/backups/create</code></li>
-<li><code>GET /virtualization/virtual-machines/backups/all/create</code></li>
-<li><code>GET /virtualization/virtual-machines/backups/all/create/stream</code></li>
-</ul>
-<p>Core behavior:</p>
-<ul>
-<li>Discovers backup content in Proxmox storage.</li>
-<li>Maps backups to NetBox VMs.</li>
-<li>Creates backup objects under the NetBox plugin model.</li>
-<li>Handles duplicate detection.</li>
-<li>Optional deletion of backups missing from the Proxmox source.</li>
-</ul>
-<h2 id="snapshot-sync-flow">Snapshot Sync Flow<a class="headerlink" href="#snapshot-sync-flow" title="Permanent link">&para;</a></h2>
-<p>Endpoints:</p>
-<ul>
-<li><code>GET /virtualization/virtual-machines/snapshots/create</code></li>
-<li><code>GET /virtualization/virtual-machines/snapshots/all/create</code></li>
-<li><code>GET /virtualization/virtual-machines/snapshots/all/create/stream</code></li>
-</ul>
-<p>Core behavior:</p>
-<ul>
-<li>Discovers snapshots for NetBox VMs mapped to Proxmox VM IDs.</li>
-<li>Reconciles snapshot objects in the NetBox plugin model.</li>
-<li>Resolves related storage records when possible.</li>
-</ul>
-<h2 id="storage-sync-flow">Storage Sync Flow<a class="headerlink" href="#storage-sync-flow" title="Permanent link">&para;</a></h2>
-<p>Endpoints:</p>
-<ul>
-<li><code>GET /virtualization/virtual-machines/storage/create</code></li>
-<li><code>GET /virtualization/virtual-machines/storage/create/stream</code></li>
-</ul>
-<p>Core behavior:</p>
-<ul>
-<li>Discovers Proxmox storage definitions.</li>
-<li>Reconciles NetBox plugin storage records used by backup and snapshot flows.</li>
-</ul>
-<h2 id="sse-streaming-mode">SSE Streaming Mode<a class="headerlink" href="#sse-streaming-mode" title="Permanent link">&para;</a></h2>
-<p>Each sync flow has a corresponding <code>/stream</code> endpoint that emits Server-Sent Events in real time:</p>
-<ul>
-<li><code>GET /full-update/stream</code></li>
-<li><code>GET /dcim/devices/create/stream</code></li>
-<li><code>GET /virtualization/virtual-machines/create/stream</code></li>
-</ul>
-<p>How it works:</p>
-<ol>
-<li>The stream endpoint creates a <code>WebSocketSSEBridge</code> instance.</li>
-<li>The sync service is called with <code>use_websocket=True</code> and the bridge as the <code>websocket</code> argument.</li>
-<li>As the sync service processes each object, it calls <code>await websocket.send_json(...)</code> with per-object progress.</li>
-<li>The bridge converts each websocket payload into an SSE <code>step</code> event with normalized fields.</li>
-<li>The stream endpoint iterates <code>bridge.iter_sse()</code> and yields each SSE frame to the HTTP client.</li>
-<li>On completion, the bridge is closed and a final <code>complete</code> event is emitted.</li>
-</ol>
-<p>This provides granular progress like:</p>
-<ul>
-<li><code>Processing device pve01</code></li>
-<li><code>Synced device pve01</code></li>
-<li><code>Processing virtual_machine vm101</code></li>
-<li><code>Synced virtual_machine vm101</code></li>
-</ul>
-<h2 id="websocket-mode">WebSocket Mode<a class="headerlink" href="#websocket-mode" title="Permanent link">&para;</a></h2>
-<p>The <code>/ws</code> websocket endpoint provides interactive sync with the same per-object progress, but over a bidirectional WebSocket channel.
-The <code>full-update</code> command triggers the same sync logic but sends JSON messages directly to the websocket client.</p>
-<h2 id="tracking-and-observability">Tracking and Observability<a class="headerlink" href="#tracking-and-observability" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Sync process records are created in NetBox plugin objects.</li>
-<li>Journal entries are written with summaries and errors.</li>
-<li>WebSocket and SSE workflows provide interactive, real-time status output.</li>
-</ul>
-<h2 id="failure-handling">Failure Handling<a class="headerlink" href="#failure-handling" title="Permanent link">&para;</a></h2>
-<p>Comprehensive error handling is implemented via decorators and validation utilities:</p>
-<h3 id="error-validation">Error Validation<a class="headerlink" href="#error-validation" title="Permanent link">&para;</a></h3>
-<ul>
-<li>NetBox responses are validated to ensure they contain required fields before processing.</li>
-<li>Proxmox responses are validated against Pydantic models where typed helpers are available.</li>
-<li>Invalid responses raise typed exceptions such as <code>NetBoxAPIError</code> or <code>ProxmoxAPIError</code>.</li>
-</ul>
-<h3 id="sync-error-hierarchy">Sync Error Hierarchy<a class="headerlink" href="#sync-error-hierarchy" title="Permanent link">&para;</a></h3>
-<p>Custom exception types provide detailed context:</p>
-<ul>
-<li><code>VMSyncError</code>: Virtual machine sync failures</li>
-<li><code>DeviceSyncError</code>: Node/device sync failures</li>
-<li><code>StorageSyncError</code>: Storage definition failures</li>
-<li><code>NetworkSyncError</code>: Network interface and VLAN failures</li>
-<li>Base: <code>SyncError</code> for generic sync operation failures</li>
-</ul>
-<h3 id="retry-and-resilience">Retry and Resilience<a class="headerlink" href="#retry-and-resilience" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Retry helpers apply exponential backoff to transient failures.</li>
-<li>The retry behavior is configurable through <code>PROXBOX_NETBOX_MAX_RETRIES</code> and <code>PROXBOX_NETBOX_RETRY_DELAY</code>.</li>
-<li>Failed attempts are logged with context before retry.</li>
-<li>Final failures bubble up with full error context.</li>
-</ul>
-<h3 id="structured-logging">Structured Logging<a class="headerlink" href="#structured-logging" title="Permanent link">&para;</a></h3>
-<p>All sync operations use structured logging for observability:</p>
-<ul>
-<li>Phase logging: each distinct phase emits logs with operation and phase context.</li>
-<li>Resource logging: per-object events are logged with resource ID, type, and status.</li>
-<li>Completion logging: sync results include success and failure counts plus elapsed time.</li>
-<li>Error logging: failures include exception details, stack traces, and full operation context.</li>
-</ul>
-<h3 id="response-handling">Response Handling<a class="headerlink" href="#response-handling" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Domain errors are raised via <code>ProxboxException</code> and returned as structured JSON by app-level handlers.</li>
-<li>Unhandled exceptions are caught by the global exception handler and returned as structured JSON with status 500.</li>
-<li>Route handlers perform best-effort continuation in certain batch loops.</li>
-<li>In SSE streaming mode, errors are emitted as <code>event: error</code> frames followed by a final <code>event: complete</code> with <code>ok: false</code>.</li>
-</ul>
-<p>For details on error handling implementation, see <code>proxbox_api/utils/sync_error_handling.py</code> and <code>proxbox_api/utils/structured_logging.py</code>.</p>
+<h3 id="memory-usage">Memory Usage<a class="headerlink" href="#memory-usage" title="Permanent link">&para;</a></h3>
+<p>The byte limit prevents unbounded memory growth. Monitor <code>current_bytes</code> metric to ensure adequate headroom.</p>
+<h3 id="benchmarking">Benchmarking<a class="headerlink" href="#benchmarking" title="Permanent link">&para;</a></h3>
+<p>Run performance benchmarks in CI to detect regressions:</p>
+<p>```bash</p>
+<h1 id="example-benchmark-command">Example benchmark command<a class="headerlink" href="#example-benchmark-command" title="Permanent link">&para;</a></h1>
+<p>uv run pytest tests/ --benchmark-only
+```</p>
+<p>See the GitHub Actions workflow for automated benchmarking.</p>
 
 
 
