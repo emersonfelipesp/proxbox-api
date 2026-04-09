@@ -115,7 +115,7 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
     }
     assert calls["rest_list_async"][2] == {
         "path": "/api/virtualization/virtual-disks/",
-        "query": {"virtual_machine_id": 101, "ordering": "name"},
+        "query": {"virtual_machine_id": 7, "ordering": "name"},
     }
     assert len(reconciled) == 1
     assert reconciled[0][0] == {"vmid": 101, "name": "pre-upgrade", "node": "pve01"}

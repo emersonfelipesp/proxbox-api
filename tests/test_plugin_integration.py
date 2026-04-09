@@ -112,6 +112,26 @@ class TestPluginAPIPath:
             resp = await client.get("/full-update")
             assert resp.status_code != 404
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/dcim/devices/interfaces/create",
+            "/virtualization/virtual-machines/interfaces/create",
+            "/virtualization/virtual-machines/interfaces/ip-address/create",
+            "/proxmox/replication",
+            "/proxmox/cluster/backup",
+        ],
+    )
+    async def test_additional_plugin_sync_paths_exist(self, client_with_fake_netbox, path):
+        """Plugin-consumed sync routes beyond core VM/storage/full-update must stay mounted."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get(path)
+            assert resp.status_code != 404
+
 
 class TestStreamEndpoints:
     """Test stream endpoint variants."""
@@ -149,6 +169,33 @@ class TestStreamEndpoints:
             base_url="http://test",
         ) as client:
             async with client.stream("GET", "/full-update/stream") as resp:
+                assert resp.status_code != 404
+                assert resp.status_code != 405
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/virtualization/virtual-machines/storage/create/stream",
+            "/virtualization/virtual-machines/virtual-disks/create/stream",
+            "/virtualization/virtual-machines/backups/all/create/stream",
+            "/virtualization/virtual-machines/snapshots/all/create/stream",
+            "/dcim/devices/interfaces/create/stream",
+            "/virtualization/virtual-machines/interfaces/create/stream",
+            "/virtualization/virtual-machines/interfaces/ip-address/create/stream",
+            "/proxmox/replication/stream",
+            "/proxmox/cluster/backup/stream",
+        ],
+    )
+    async def test_additional_plugin_stream_paths_exist(
+        self, client_with_fake_netbox, path
+    ):
+        """Every sync stream path consumed by plugin jobs must remain routable."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            async with client.stream("GET", path) as resp:
                 assert resp.status_code != 404
                 assert resp.status_code != 405
 
