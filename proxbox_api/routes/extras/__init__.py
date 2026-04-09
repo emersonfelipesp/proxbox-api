@@ -548,6 +548,20 @@ async def create_custom_fields(  # noqa: C901
                 "group_name": "Proxmox",
             },
             {
+                "object_types": ["virtualization.virtualdisk"],
+                "type": "object",
+                "name": "proxbox_storage_id",
+                "label": "Proxbox Storage",
+                "related_object_type": "netbox_proxbox.proxmoxstorage",
+                "description": "Proxmox storage hosting this virtual disk",
+                "ui_visible": "always",
+                "ui_editable": "hidden",
+                "weight": 100,
+                "filter_logic": "loose",
+                "search_weight": 1000,
+                "group_name": "Proxmox",
+            },
+            {
                 "object_types": [
                     "dcim.devicerole",
                     "dcim.manufacturer",

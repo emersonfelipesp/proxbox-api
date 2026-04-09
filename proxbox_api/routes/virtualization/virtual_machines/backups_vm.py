@@ -28,6 +28,7 @@ from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.proxmox_helpers import dump_models, get_node_storage_content
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
+    find_storage_record,
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
@@ -145,6 +146,7 @@ async def _load_storage_index(netbox_session) -> dict[tuple[str, str], dict]:
 def _build_backup_normalizer():
     return lambda record: {
         "storage": record.get("storage"),
+        "proxmox_storage": _relation_id_or_none(record.get("proxmox_storage")),
         "virtual_machine": _relation_id_or_none(record.get("virtual_machine")),
         "subtype": record.get("subtype"),
         "creation_time": record.get("creation_time"),
@@ -193,6 +195,14 @@ def compute_backup_payload(
     volume_id = backup.get("volid", None)
     storage_name = storage_name_from_volume_id(volume_id)
 
+    proxmox_storage_id = None
+    if storage_index and storage_name and cluster_name:
+        storage_record = find_storage_record(
+            storage_index, cluster_name=cluster_name, storage_name=storage_name
+        )
+        if storage_record:
+            proxmox_storage_id = storage_record.get("id")
+
     creation_time = None
     ctime = backup.get("ctime", None)
     if ctime:
@@ -200,6 +210,7 @@ def compute_backup_payload(
 
     return {
         "storage": storage_name,
+        "proxmox_storage": proxmox_storage_id,
         "virtual_machine": virtual_machine.get("id"),
         "subtype": _normalize_backup_subtype(backup.get("subtype"), volume_id),
         "creation_time": creation_time,
@@ -262,8 +273,17 @@ async def create_netbox_backups(
         if ctime:
             creation_time = datetime.fromtimestamp(ctime).isoformat()
 
+        proxmox_storage_id = None
+        if storage_index and storage_name and cluster_name:
+            storage_rec = find_storage_record(
+                storage_index, cluster_name=cluster_name, storage_name=storage_name
+            )
+            if storage_rec:
+                proxmox_storage_id = storage_rec.get("id")
+
         backup_payload = {
             "storage": storage_name,
+            "proxmox_storage": proxmox_storage_id,
             "virtual_machine": virtual_machine.get("id"),
             "subtype": _normalize_backup_subtype(backup.get("subtype"), volume_id),
             "creation_time": creation_time,
@@ -286,6 +306,7 @@ async def create_netbox_backups(
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
                 "storage": record.get("storage"),
+                "proxmox_storage": _relation_id_or_none(record.get("proxmox_storage")),
                 "virtual_machine": _relation_id_or_none(record.get("virtual_machine")),
                 "subtype": record.get("subtype"),
                 "creation_time": record.get("creation_time"),
@@ -328,6 +349,7 @@ def _normalize_existing_backup(
     raw = record.serialize() if isinstance(record, RestRecord) else record
     return {
         "storage": raw.get("storage"),
+        "proxmox_storage": _relation_id_or_none(raw.get("proxmox_storage")),
         "virtual_machine": _relation_id_or_none(raw.get("virtual_machine")),
         "subtype": raw.get("subtype"),
         "creation_time": raw.get("creation_time"),

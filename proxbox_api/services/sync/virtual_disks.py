@@ -271,6 +271,19 @@ async def create_virtual_disks(  # noqa: C901
                     cluster_name=cluster_name,
                     storage_name=storage_name,
                 )
+                storage_id = storage_record.get("id") if storage_record else None
+                custom_fields: dict[str, object] = {}
+                if storage_id is not None:
+                    custom_fields["proxbox_storage_id"] = storage_id
+                disk_payload: dict[str, object] = {
+                    "virtual_machine": vm_id,
+                    "name": disk_entry.name,
+                    "size": disk_entry.size,
+                    "description": disk_entry.description,
+                    "tags": tag_refs,
+                }
+                if custom_fields:
+                    disk_payload["custom_fields"] = custom_fields
                 result = await rest_reconcile_async(
                     nb,
                     "/api/virtualization/virtual-disks/",
@@ -278,22 +291,15 @@ async def create_virtual_disks(  # noqa: C901
                         "virtual_machine_id": vm_id,
                         "name": disk_entry.name,
                     },
-                    payload={
-                        "virtual_machine": vm_id,
-                        "name": disk_entry.name,
-                        "size": disk_entry.size,
-                        "storage": storage_record.get("id") if storage_record else None,
-                        "description": disk_entry.description,
-                        "tags": tag_refs,
-                    },
+                    payload=disk_payload,
                     schema=NetBoxVirtualDiskSyncState,
                     current_normalizer=lambda record: {
                         "virtual_machine": record.get("virtual_machine"),
                         "name": record.get("name"),
                         "size": record.get("size"),
-                        "storage": record.get("storage"),
                         "description": record.get("description"),
                         "tags": record.get("tags"),
+                        "custom_fields": record.get("custom_fields"),
                     },
                 )
 
