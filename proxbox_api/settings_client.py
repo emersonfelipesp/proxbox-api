@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 _SETTINGS_CACHE: ProxboxSettingsDict | None = None
 _SETTINGS_CACHE_TIME: float = 0.0
 _SETTINGS_CACHE_TTL: float = 300.0  # 5 minutes
+_FETCHING_SETTINGS: bool = False  # reentrance guard against credential-decryption recursion
 
 
 def parse_cidr_list(text: str | None) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
@@ -160,7 +161,13 @@ def get_settings(
     Falls back to defaults if NetBox is unavailable.
     Uses a 5-minute cache TTL.
     """
-    global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME
+    global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME, _FETCHING_SETTINGS
+
+    # Break the circular dependency: credential decryption calls get_settings()
+    # to read the encryption key, which calls get_raw_netbox_session(), which
+    # calls decrypt_value(), which calls get_settings() again indefinitely.
+    if _FETCHING_SETTINGS:
+        return get_default_settings()
 
     now = time.time()
 
@@ -168,20 +175,20 @@ def get_settings(
         if now - _SETTINGS_CACHE_TIME < _SETTINGS_CACHE_TTL:
             return _SETTINGS_CACHE
 
-    if netbox_session is None:
-        from proxbox_api.app.netbox_session import get_raw_netbox_session
+    _FETCHING_SETTINGS = True
+    try:
+        if netbox_session is None:
+            from proxbox_api.app.netbox_session import get_raw_netbox_session
 
-        try:
-            netbox_session = get_raw_netbox_session()
-            if netbox_session is None:
-                return get_default_settings()
-        except Exception as exc:
-            logger.debug("Could not get NetBox session for settings: %s", exc)
-            return get_default_settings()
+            try:
+                netbox_session = get_raw_netbox_session()
+            except Exception as exc:
+                logger.debug("Could not get NetBox session for settings: %s", exc)
 
-    settings = fetch_settings_from_netbox(netbox_session)
-    if settings is None:
-        settings = get_default_settings()
+        fetched = fetch_settings_from_netbox(netbox_session) if netbox_session is not None else None
+        settings = fetched if fetched is not None else get_default_settings()
+    finally:
+        _FETCHING_SETTINGS = False
 
     _SETTINGS_CACHE = settings
     _SETTINGS_CACHE_TIME = now
