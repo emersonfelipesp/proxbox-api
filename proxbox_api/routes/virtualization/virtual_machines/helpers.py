@@ -6,6 +6,7 @@ import os
 def resolve_vm_sync_concurrency() -> int:
     """Get max concurrency for VM sync operations from settings, with env var fallback."""
     from proxbox_api.settings_client import get_settings
+
     try:
         return max(1, int(get_settings().get("vm_sync_max_concurrency", 4)))
     except Exception:

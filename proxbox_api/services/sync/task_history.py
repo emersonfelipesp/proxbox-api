@@ -530,6 +530,7 @@ async def sync_virtual_machine_task_history(  # noqa: C901
         # Fall back to per-task writes on bulk failure
         reconciled = 0
         from proxbox_api.netbox_rest import rest_reconcile_async
+
         for payload in task_payloads:
             try:
                 await rest_reconcile_async(

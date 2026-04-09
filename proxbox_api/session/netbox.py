@@ -188,9 +188,7 @@ async def get_netbox_async_session(
             return netbox_api_from_endpoint(netbox_endpoint)
 
         # Fetch all endpoints to determine how many exist
-        endpoints = await _maybe_await(
-            database_session.exec(select(NetBoxEndpoint))
-        )
+        endpoints = await _maybe_await(database_session.exec(select(NetBoxEndpoint)))
         endpoints_list = endpoints.all() if endpoints else []
         count = len(endpoints_list) if endpoints_list else 0
 

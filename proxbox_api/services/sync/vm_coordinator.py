@@ -86,6 +86,7 @@ class VMSyncCoordinator:
     def _resolve_vm_sync_concurrency(self) -> int:
         """Resolve VM sync concurrency from settings, with fallback."""
         from proxbox_api.settings_client import get_settings
+
         try:
             return int(get_settings().get("vm_sync_max_concurrency", 4))
         except Exception:
@@ -232,7 +233,11 @@ async def create_virtual_machines_v2(
             use_guest_agent = settings.get("use_guest_agent_interface_name", True)
         ignore_ipv6 = settings.get("ignore_ipv6_link_local_addresses", True)
     except Exception:
-        use_guest_agent = context.use_guest_agent_interface_name if context.use_guest_agent_interface_name is not None else True
+        use_guest_agent = (
+            context.use_guest_agent_interface_name
+            if context.use_guest_agent_interface_name is not None
+            else True
+        )
         ignore_ipv6 = True
 
     try:

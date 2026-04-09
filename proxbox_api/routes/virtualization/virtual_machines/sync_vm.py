@@ -2295,12 +2295,11 @@ async def create_only_vm_interfaces(  # noqa: C901
                 bulk_reconcile_vlans,
             )
 
-            vlan_payloads = [
-                build_vlan_payload(vid, tag_refs, now)
-                for vid in all_vlan_tags.keys()
-            ]
+            vlan_payloads = [build_vlan_payload(vid, tag_refs, now) for vid in all_vlan_tags.keys()]
             vlan_vid_to_id = await bulk_reconcile_vlans(nb, vlan_payloads)
-            logger.info("Bulk VLAN reconciliation completed: %d VLANs processed", len(vlan_payloads))
+            logger.info(
+                "Bulk VLAN reconciliation completed: %d VLANs processed", len(vlan_payloads)
+            )
         except Exception as e:
             logger.error("Error during VLAN bulk reconciliation: %s", e)
 
@@ -2421,7 +2420,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
-    async def _sync_vm_ips(cluster_name: str, resource: dict) -> tuple[list[dict], list[dict], dict]:  # noqa: C901
+    async def _sync_vm_ips(
+        cluster_name: str, resource: dict
+    ) -> tuple[list[dict], list[dict], dict]:  # noqa: C901
         """Collect IP payloads for a single VM. Returns (ip_payloads, first_ip_per_vm, ip_info)."""
         cluster_name_str = str(cluster_name)
         resource_node = str(resource.get("node", ""))
@@ -2500,7 +2501,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             "/api/virtualization/interfaces/",
             query={"virtual_machine_id": netbox_vm.get("id"), "limit": 500},
         )
-        interface_name_to_id = {iface.get("name"): iface.get("id") for iface in (vm_interfaces or [])}
+        interface_name_to_id = {
+            iface.get("name"): iface.get("id") for iface in (vm_interfaces or [])
+        }
 
         for network in vm_networks:
             for iface_name, config_dict in network.items():
@@ -2549,7 +2552,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     if guest_iface:
                         from proxbox_api.services.sync.network import _best_guest_agent_ip
 
-                        interface_ip = _best_guest_agent_ip(guest_iface, ignore_ipv6_link_local_addresses)
+                        interface_ip = _best_guest_agent_ip(
+                            guest_iface, ignore_ipv6_link_local_addresses
+                        )
                     if not interface_ip:
                         interface_ip = config_dict.get("ip")
 
@@ -2566,11 +2571,13 @@ async def create_only_vm_ip_addresses(  # noqa: C901
 
                         # Track first IP for primary assignment
                         if not first_ips:
-                            first_ips.append({
-                                "vm_id": netbox_vm.get("id"),
-                                "netbox_vm": netbox_vm,
-                                "address": interface_ip,
-                            })
+                            first_ips.append(
+                                {
+                                    "vm_id": netbox_vm.get("id"),
+                                    "netbox_vm": netbox_vm,
+                                    "address": interface_ip,
+                                }
+                            )
 
                         ip_info[interface_ip] = {
                             "address": interface_ip,
@@ -2710,7 +2717,11 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                         query={"address": vm_info.get("address"), "limit": 1},
                     )
                     if ip_record:
-                        ip_id = ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+                        ip_id = (
+                            ip_record.get("id")
+                            if isinstance(ip_record, dict)
+                            else getattr(ip_record, "id", None)
+                        )
                         if ip_id:
                             await set_primary_ip(
                                 nb=nb,

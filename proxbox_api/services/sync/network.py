@@ -572,7 +572,7 @@ async def bulk_reconcile_vm_interfaces(
                 interface_name_vm_to_id[(name, vm_id)] = iface_id
     except Exception as e:
         logger.error("Error during bulk VM interface reconciliation: %s", e)
-    return result.records if result and hasattr(result, 'records') else [], interface_name_vm_to_id
+    return result.records if result and hasattr(result, "records") else [], interface_name_vm_to_id
 
 
 async def bulk_reconcile_vm_interface_ips(
@@ -603,7 +603,7 @@ async def bulk_reconcile_vm_interface_ips(
                 "tags": record.get("tags"),
             },
         )
-        return result.records if result and hasattr(result, 'records') else []
+        return result.records if result and hasattr(result, "records") else []
     except Exception as e:
         logger.error("Error during bulk VM interface IP reconciliation: %s", e)
         return []

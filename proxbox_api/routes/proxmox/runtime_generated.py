@@ -17,6 +17,7 @@ from fastapi import Body, Depends, FastAPI, Path, Query
 from proxbox_api.database import get_async_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
@@ -27,7 +28,6 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     load_proxmox_generated_openapi,
     proxmox_generated_route_cache_path,
 )
-from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import resolve_proxmox_target_session
 
 _GENERATED_ROUTE_TAG_PREFIX = "proxmox / live-generated"

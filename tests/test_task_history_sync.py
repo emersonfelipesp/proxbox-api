@@ -24,7 +24,9 @@ def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeyp
         patchable_fields=None,
     ):
         normalized_payloads = [
-            schema.model_validate(payload).model_dump(mode="python", by_alias=True, exclude_none=True)
+            schema.model_validate(payload).model_dump(
+                mode="python", by_alias=True, exclude_none=True
+            )
             for payload in payloads
         ]
         bulk_calls.append(

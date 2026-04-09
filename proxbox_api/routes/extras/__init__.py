@@ -21,6 +21,7 @@ _CUSTOM_FIELDS_LOCK = asyncio.Lock()
 def _resolve_custom_field_delay() -> float:
     """Resolve optional delay between custom-field operations from settings, with env var fallback."""
     from proxbox_api.settings_client import get_settings
+
     try:
         return float(get_settings().get("custom_fields_request_delay", 0.0))
     except Exception:
