@@ -5,7 +5,6 @@ import asyncio
 import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from ipaddress import ip_address
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -53,7 +52,6 @@ from proxbox_api.services.sync.devices import (
 )
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
-    _resolve_vm_interface_ip,
 )
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -612,70 +610,6 @@ def _normalized_mac(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def _guest_agent_ip_with_prefix(addr: dict, ignore_ipv6_link_local: bool = True) -> str | None:
-    """Extract IP address with CIDR prefix from guest agent address dict.
-
-    Filters out loopback and optionally link-local addresses. Returns the IP in CIDR
-    notation (e.g., "192.168.1.1/24") when prefix is available.
-
-    Args:
-        addr: Address dict from guest agent with 'ip_address', 'prefix' keys
-        ignore_ipv6_link_local: If True, skip IPv6 link-local addresses (fe80::/64)
-
-    Returns:
-        IP address with CIDR prefix, just IP, or None if invalid
-    """
-    ip_text = str(addr.get("ip_address") or "").strip()
-    if not ip_text:
-        return None
-    try:
-        parsed = ip_address(ip_text)
-    except ValueError:
-        return None
-    if parsed.is_loopback:
-        return None
-    if ignore_ipv6_link_local and parsed.is_link_local:
-        return None
-    prefix = addr.get("prefix")
-    if isinstance(prefix, int) and 0 <= prefix <= 128:
-        return f"{parsed.compressed}/{prefix}"
-    return parsed.compressed
-
-
-def _best_guest_agent_ip(
-    guest_iface: dict | None, ignore_ipv6_link_local: bool = True
-) -> str | None:
-    """Select the best IP address from guest agent interface data.
-
-    Prioritizes IPv4 addresses with valid CIDR prefixes, then falls back to
-    any valid IPv4 address. Skips loopback and optionally link-local addresses.
-
-    Args:
-        guest_iface: Guest agent interface dict with 'ip_addresses' list
-        ignore_ipv6_link_local: If True, skip IPv6 link-local addresses
-
-    Returns:
-        Best available IP address (with prefix if available), or None
-    """
-    if not isinstance(guest_iface, dict):
-        return None
-    for addr in guest_iface.get("ip_addresses") or []:
-        if not isinstance(addr, dict):
-            continue
-        if str(addr.get("ip_address_type") or "").lower() == "ipv6":
-            continue
-        candidate = _guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
-        if candidate:
-            return candidate
-    for addr in guest_iface.get("ip_addresses") or []:
-        if not isinstance(addr, dict):
-            continue
-        candidate = _guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
-        if candidate:
-            return candidate
-    return None
-
-
 async def _create_vm_interface_parallel(
     nb,
     virtual_machine: dict,
@@ -800,7 +734,9 @@ async def _create_vm_interface_parallel(
     )
     result["interface"] = vm_interface
 
-    ip_id, interface_ip = await _resolve_vm_interface_ip(
+    from proxbox_api.services.sync.network import _resolve_vm_interface_ips
+
+    ip_results = await _resolve_vm_interface_ips(
         nb,
         interface_config,
         guest_iface,
@@ -811,9 +747,10 @@ async def _create_vm_interface_parallel(
         create_ip=True,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
     )
-    if interface_ip and interface_ip != "dhcp":
-        result["ip"] = {"id": ip_id, "address": interface_ip}
-        result["first_ip_id"] = ip_id
+    if ip_results:
+        first_ip_id, first_ip = ip_results[0]
+        result["ip"] = {"id": first_ip_id, "address": first_ip}
+        result["first_ip_id"] = first_ip_id
 
     return result
 
@@ -2656,44 +2593,48 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     )
 
                 try:
-                    # Resolve IP address from guest agent or config
-                    interface_ip: str | None = None
-                    if guest_iface:
-                        from proxbox_api.services.sync.network import _best_guest_agent_ip
+                    # Collect ALL IPs from guest agent (or fallback to config)
+                    from proxbox_api.services.sync.network import build_vm_interface_ip_payload
+                    from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
 
-                        interface_ip = _best_guest_agent_ip(
+                    all_ips_for_iface: list[str] = []
+                    if guest_iface:
+                        all_ips_for_iface = all_guest_agent_ips(
                             guest_iface, ignore_ipv6_link_local_addresses
                         )
-                    if not interface_ip:
-                        interface_ip = config_dict.get("ip")
+                    if not all_ips_for_iface:
+                        config_ip = config_dict.get("ip")
+                        if config_ip and str(config_ip) != "dhcp":
+                            all_ips_for_iface = [str(config_ip)]
 
-                    if interface_ip and interface_ip != "dhcp":
-                        from proxbox_api.services.sync.network import build_vm_interface_ip_payload
-
-                        payload = build_vm_interface_ip_payload(
-                            interface_ip,
-                            interface_id,
-                            tag_refs,
-                            now,
-                        )
-                        ip_payloads.append(payload)
-
-                        # Track first IP for primary assignment
-                        if not first_ips:
-                            first_ips.append(
-                                {
-                                    "vm_id": netbox_vm.get("id"),
-                                    "netbox_vm": netbox_vm,
-                                    "address": interface_ip,
-                                }
+                    if all_ips_for_iface:
+                        for interface_ip in all_ips_for_iface:
+                            if interface_ip == "dhcp":
+                                continue
+                            payload = build_vm_interface_ip_payload(
+                                interface_ip,
+                                interface_id,
+                                tag_refs,
+                                now,
                             )
+                            ip_payloads.append(payload)
 
-                        ip_info[interface_ip] = {
-                            "address": interface_ip,
-                            "interface_name": resolved_name,
-                            "interface_id": interface_id,
-                            "vm_name": vm_name,
-                        }
+                            # Track first IP for primary assignment
+                            if not first_ips:
+                                first_ips.append(
+                                    {
+                                        "vm_id": netbox_vm.get("id"),
+                                        "netbox_vm": netbox_vm,
+                                        "address": interface_ip,
+                                    }
+                                )
+
+                            ip_info[interface_ip] = {
+                                "address": interface_ip,
+                                "interface_name": resolved_name,
+                                "interface_id": interface_id,
+                                "vm_name": vm_name,
+                            }
                     else:
                         if use_websocket and websocket:
                             await websocket.send_json(
@@ -2806,6 +2747,28 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 }
                 for ip in created_ips
             ]
+
+            # Cleanup stale IPs per interface: remove any Proxbox-tagged IPs on the
+            # interface that were NOT in this sync run
+            from proxbox_api.services.sync.network import cleanup_stale_ips_for_interface
+
+            interface_current_ips: dict[int, set[str]] = {}
+            for payload in all_ip_payloads:
+                iface_id = payload.get("assigned_object_id")
+                address = payload.get("address")
+                if iface_id and address:
+                    interface_current_ips.setdefault(int(iface_id), set()).add(str(address))
+
+            for iface_id, current_set in interface_current_ips.items():
+                try:
+                    await cleanup_stale_ips_for_interface(nb, iface_id, current_set)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Failed to cleanup stale IPs for interface id=%s: %s",
+                        iface_id,
+                        cleanup_exc,
+                    )
+
         except Exception as e:
             logger.error("Error during bulk IP reconciliation: %s", e)
     else:

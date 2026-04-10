@@ -606,6 +606,165 @@ async def bulk_reconcile_vm_interface_ips(
         return []
 
 
+async def cleanup_stale_ips_for_interface(
+    nb,
+    interface_id: int,
+    current_ips: set[str],
+    tag_slug: str = "proxbox",
+) -> int:
+    """Delete Proxbox-managed IPs assigned to an interface that are no longer current.
+
+    Args:
+        nb: NetBox session
+        interface_id: The VM interface ID in NetBox
+        current_ips: Set of IP addresses (CIDR notation) that SHOULD exist
+        tag_slug: Only delete IPs with this tag (safety guard against deleting manually-added IPs)
+
+    Returns:
+        Number of stale IPs deleted
+    """
+    from ipaddress import ip_interface as _ip_interface
+
+    from proxbox_api.netbox_rest import rest_bulk_delete_async, rest_list_async
+
+    existing_ips = await rest_list_async(
+        nb,
+        "/api/ipam/ip-addresses/",
+        query={
+            "vminterface_id": interface_id,
+            "tag": tag_slug,
+            "limit": 500,
+        },
+    )
+    if not existing_ips:
+        return 0
+
+    # Normalize current IPs for comparison (NetBox normalizes CIDR notation)
+    normalized_current: set[str] = set()
+    for ip in current_ips:
+        try:
+            normalized_current.add(str(_ip_interface(ip)))
+        except ValueError:
+            normalized_current.add(ip)
+
+    stale_ids: list[int] = []
+    for ip_record in existing_ips:
+        address = ip_record.get("address") if isinstance(ip_record, dict) else getattr(ip_record, "address", None)
+        record_id = ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+        if record_id is None:
+            continue
+        # Normalize the stored address for comparison
+        try:
+            normalized_address = str(_ip_interface(str(address or "")))
+        except ValueError:
+            normalized_address = str(address or "")
+        if normalized_address not in normalized_current:
+            stale_ids.append(int(record_id))
+
+    if not stale_ids:
+        return 0
+
+    logger.info(
+        "Cleaning up %d stale IPs for interface id=%s (keeping %d current IPs)",
+        len(stale_ids),
+        interface_id,
+        len(normalized_current),
+    )
+    try:
+        deleted = await rest_bulk_delete_async(nb, "/api/ipam/ip-addresses/", stale_ids)
+        return deleted
+    except Exception as exc:
+        logger.warning("Failed to bulk-delete stale IPs for interface id=%s: %s", interface_id, exc)
+        return 0
+
+
+async def _resolve_vm_interface_ips(  # noqa: C901
+    nb,
+    interface_config: dict,
+    guest_iface: dict | None,
+    tag_refs: list[dict],
+    *,
+    interface_id: int | None,
+    interface_name: str,
+    now: datetime,
+    create_ip: bool,
+    ignore_ipv6_link_local: bool = True,
+    tag_slug: str = "proxbox",
+) -> list[tuple[int | None, str]]:
+    """Create or update ALL IPs attached to a VM interface, then clean up stale ones.
+
+    Returns list of (ip_id, ip_address) tuples for all synced IPs.
+    """
+    from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
+
+    if not create_ip or interface_id is None:
+        return []
+
+    all_ips: list[str] = []
+    if guest_iface:
+        all_ips = all_guest_agent_ips(guest_iface, ignore_ipv6_link_local)
+    if not all_ips:
+        config_ip = interface_config.get("ip")
+        if config_ip and config_ip != "dhcp":
+            all_ips = [str(config_ip)]
+
+    if not all_ips:
+        return []
+
+    results: list[tuple[int | None, str]] = []
+    for ip_addr in all_ips:
+        if ip_addr == "dhcp":
+            continue
+        try:
+            ip_record = await rest_reconcile_async(
+                nb,
+                "/api/ipam/ip-addresses/",
+                lookup={"address": ip_addr},
+                payload={
+                    "address": ip_addr,
+                    "assigned_object_type": "virtualization.vminterface",
+                    "assigned_object_id": interface_id,
+                    "status": "active",
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                schema=NetBoxIpAddressSyncState,
+                current_normalizer=lambda record: {
+                    "address": record.get("address"),
+                    "assigned_object_type": record.get("assigned_object_type"),
+                    "assigned_object_id": record.get("assigned_object_id"),
+                    "status": record.get("status"),
+                    "tags": record.get("tags"),
+                },
+            )
+            ip_id = (
+                ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+            )
+            results.append((ip_id, ip_addr))
+        except Exception as ip_exc:
+            logger.warning(
+                "Failed to create IP %s for VM interface %s: %s",
+                ip_addr,
+                interface_name,
+                ip_exc,
+            )
+
+    if results:
+        current_ip_set = {ip_addr for _, ip_addr in results}
+        try:
+            await cleanup_stale_ips_for_interface(
+                nb, interface_id, current_ip_set, tag_slug=tag_slug
+            )
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Failed to cleanup stale IPs for interface %s: %s",
+                interface_name,
+                cleanup_exc,
+            )
+
+    return results
+
+
 async def sync_vm_interface_and_ip(
     nb,
     virtual_machine: dict,
@@ -671,7 +830,7 @@ async def sync_vm_interface_and_ip(
         "interface": vm_interface,
     }
 
-    ip_id, interface_ip = await _resolve_vm_interface_ip(
+    ip_results = await _resolve_vm_interface_ips(
         nb,
         interface_config,
         guest_iface,
@@ -682,9 +841,11 @@ async def sync_vm_interface_and_ip(
         create_ip=create_ip,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
     )
-    if ip_id is not None:
-        result["ip_id"] = ip_id
-    if interface_ip is not None:
-        result["ip_address"] = interface_ip
+    if ip_results:
+        first_ip_id, first_ip = ip_results[0]
+        if first_ip_id is not None:
+            result["ip_id"] = first_ip_id
+        result["ip_address"] = first_ip
+        result["all_ips"] = [{"id": iid, "address": addr} for iid, addr in ip_results]
 
     return result

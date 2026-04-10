@@ -20,7 +20,6 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVlanSyncState,
 )
 from proxbox_api.services.sync.storage_links import find_storage_record
-from proxbox_api.services.sync.vm_helpers import best_guest_agent_ip
 
 
 async def sync_vm_interfaces(  # noqa: C901
@@ -189,9 +188,23 @@ async def sync_vm_interfaces(  # noqa: C901
 
             netbox_vm_interfaces.append(vm_interface)
 
-            # Create IP address if available
-            interface_ip = best_guest_agent_ip(guest_iface) or config_dict.get("ip")
-            if interface_ip and interface_ip != "dhcp":
+            # Create IP addresses for all IPs from guest agent (or fallback to config)
+            from proxbox_api.services.sync.network import (
+                cleanup_stale_ips_for_interface,
+            )
+            from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
+
+            all_ips = all_guest_agent_ips(guest_iface) if guest_iface else []
+            if not all_ips:
+                config_ip = config_dict.get("ip")
+                if config_ip and str(config_ip) != "dhcp":
+                    all_ips = [str(config_ip)]
+
+            interface_id_for_ip = vm_interface.get("id")
+            synced_ip_addrs: set[str] = set()
+            for interface_ip in all_ips:
+                if interface_ip == "dhcp":
+                    continue
                 try:
                     ip_record = await rest_reconcile_async(
                         nb,
@@ -200,7 +213,7 @@ async def sync_vm_interfaces(  # noqa: C901
                         payload={
                             "address": interface_ip,
                             "assigned_object_type": "virtualization.vminterface",
-                            "assigned_object_id": vm_interface.get("id"),
+                            "assigned_object_id": interface_id_for_ip,
                             "status": "active",
                             "tags": tag_refs,
                             "custom_fields": {"proxmox_last_updated": now.isoformat()},
@@ -215,6 +228,7 @@ async def sync_vm_interfaces(  # noqa: C901
                             "custom_fields": record.get("custom_fields"),
                         },
                     )
+                    synced_ip_addrs.add(interface_ip)
                     if first_ip_id is None:
                         first_ip_id = (
                             ip_record.get("id")
@@ -223,6 +237,16 @@ async def sync_vm_interfaces(  # noqa: C901
                         )
                 except Exception as ip_exc:
                     logger.warning("Failed to create IP address %s: %s", interface_ip, ip_exc)
+
+            if interface_id_for_ip and synced_ip_addrs:
+                try:
+                    await cleanup_stale_ips_for_interface(nb, interface_id_for_ip, synced_ip_addrs)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Failed to cleanup stale IPs for interface id=%s: %s",
+                        interface_id_for_ip,
+                        cleanup_exc,
+                    )
 
     return netbox_vm_interfaces, first_ip_id
 

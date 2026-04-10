@@ -26,38 +26,6 @@ from proxbox_api.services.sync.individual.helpers import (
 )
 
 
-def _best_guest_agent_ip(
-    guest_iface: dict | None,
-    ignore_ipv6_link_local: bool = True,
-) -> str | None:
-    """Select the best IP address from guest agent interface data."""
-    from ipaddress import ip_address
-
-    if not isinstance(guest_iface, dict):
-        return None
-    for addr in guest_iface.get("ip_addresses") or []:
-        if not isinstance(addr, dict):
-            continue
-        if str(addr.get("ip_address_type") or "").lower() == "ipv6":
-            continue
-        ip_text = str(addr.get("ip_address") or "").strip()
-        if not ip_text:
-            continue
-        try:
-            parsed = ip_address(ip_text)
-        except ValueError:
-            continue
-        if parsed.is_loopback:
-            continue
-        if ignore_ipv6_link_local and parsed.is_link_local:
-            continue
-        prefix = addr.get("prefix")
-        if isinstance(prefix, int) and 0 <= prefix <= 128:
-            return f"{parsed.compressed}/{prefix}"
-        return parsed.compressed
-    return None
-
-
 async def _resolve_vlan_id(
     nb: object,
     tag_refs: list[dict[str, object]],

@@ -138,6 +138,28 @@ def best_guest_agent_ip(
     return None
 
 
+def all_guest_agent_ips(
+    guest_iface: dict[str, object] | None,
+    ignore_ipv6_link_local: bool = True,
+) -> list[str]:
+    """Return ALL valid IP addresses from guest agent interface data.
+
+    Unlike best_guest_agent_ip() which returns only one, this returns every
+    non-loopback IP (optionally filtering link-local). Each IP is returned
+    in CIDR notation when prefix info is available.
+    """
+    if not isinstance(guest_iface, dict):
+        return []
+    results: list[str] = []
+    for addr in guest_iface.get("ip_addresses") or []:
+        if not isinstance(addr, dict):
+            continue
+        candidate = guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
+        if candidate:
+            results.append(candidate)
+    return results
+
+
 def _matches_vm_criteria(
     resource: dict[str, object],
     vm_name: str,
