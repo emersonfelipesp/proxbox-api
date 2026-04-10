@@ -216,6 +216,8 @@ def compute_backup_payload(
         "subtype": _normalize_backup_subtype(backup.get("subtype"), volume_id),
         "creation_time": creation_time,
         "size": backup.get("size"),
+        "used": backup.get("used"),
+        "encrypted": backup.get("encrypted"),
         "verification_state": verification_state,
         "verification_upid": verification_upid,
         "volume_id": volume_id,

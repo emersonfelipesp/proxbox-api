@@ -269,6 +269,8 @@ def test_sync_all_backup_routines_reports_reconcile_and_stale_counts(monkeypatch
             "endpoint": 9,
             "enabled": True,
             "schedule": "daily",
+            "comment": "",
+            "notes_template": "",
             "node": None,
             "storage": None,
             "fleecing_storage": None,

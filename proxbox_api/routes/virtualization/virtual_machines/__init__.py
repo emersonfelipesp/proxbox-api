@@ -11,6 +11,7 @@ from proxbox_api.routes.virtualization.virtual_machines import (
     snapshots_vm,
     storages_vm,
     sync_vm,
+    task_history_vm,
 )
 from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
     _volids_from_proxmox_storage_backup_items,
@@ -30,6 +31,7 @@ router.include_router(disks_vm.router)
 router.include_router(sync_vm.router)
 router.include_router(backups_vm.router)
 router.include_router(snapshots_vm.router)
+router.include_router(task_history_vm.router)
 
 __all__ = (
     "create_netbox_backups",

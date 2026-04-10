@@ -53,7 +53,7 @@ def _parse_vmid_selection(vmid_raw: object) -> list[int]:
     return []
 
 
-def _parse_retention(job: dict) -> dict:
+def _parse_retention(job: dict) -> dict:  # noqa: C901
     """Parse Proxmox prune-backups string into individual retention fields."""
     raw = job.get("prune-backups") or job.get("prune_backups") or ""
     result: dict[str, int | bool | None] = {
@@ -235,6 +235,8 @@ async def _fetch_session_payloads(px, nb, results: dict) -> list[dict]:  # noqa:
                     "endpoint": netbox_endpoint_id,
                     "enabled": bool(job.get("enabled", True)),
                     "schedule": job.get("schedule") or "",
+                    "comment": job.get("comment") or "",
+                    "notes_template": job.get("notes-template") or job.get("notes_template") or "",
                     # node/storage are nullable FKs — send null rather than raw
                     # Proxmox name strings, which DRF would reject as invalid PKs.
                     "node": None,

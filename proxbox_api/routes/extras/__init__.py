@@ -393,7 +393,7 @@ async def create_custom_fields(  # noqa: C901
                     "virtualization.virtualmachine",
                 ],
                 "type": "text",
-                "name": "proxmix_tcp_states",
+                "name": "proxmox_tcp_states",
                 "label": "TCP States",
                 "description": "TCP connection states",
                 "ui_visible": "if-set",
