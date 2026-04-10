@@ -715,6 +715,7 @@ async def _create_vm_interface_parallel(
             "custom_fields": record.get("custom_fields"),
         },
         nullable_fields={"bridge"},
+        strict_lookup=True,
     )
     if not isinstance(vm_interface, dict):
         vm_interface = getattr(vm_interface, "dict", lambda: {})()
