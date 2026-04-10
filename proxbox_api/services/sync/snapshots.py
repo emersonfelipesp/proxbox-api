@@ -672,8 +672,8 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                     if hasattr(nb_snapshot, "id")
                     else (nb_snapshot.get("id") if isinstance(nb_snapshot, dict) else None)
                 )
-                if snapshot_vmid and snapshot_name and snapshot_id:
-                    proxmox_names = proxmox_snapshot_names_by_vmid.get(snapshot_vmid, set())
+                if snapshot_vmid and snapshot_name and snapshot_id and snapshot_vmid in proxmox_snapshot_names_by_vmid:
+                    proxmox_names = proxmox_snapshot_names_by_vmid[snapshot_vmid]
                     if snapshot_name not in proxmox_names:
                         orphan_ids.append(int(snapshot_id))
                         logger.info(

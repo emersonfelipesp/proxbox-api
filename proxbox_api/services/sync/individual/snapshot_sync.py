@@ -48,11 +48,11 @@ async def sync_snapshot_individual(  # noqa: C901
     now = datetime.now(timezone.utc)
 
     try:
-        snapshots = get_vm_snapshots_individual(px, node, vm_type, vmid)
+        snapshots = await get_vm_snapshots_individual(px, node, vm_type, vmid)
     except Exception:
         snapshots = []
     try:
-        vm_config = get_vm_config_individual(px, node, vm_type, vmid)
+        vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
     except Exception:
         vm_config = {}
 
