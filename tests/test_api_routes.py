@@ -667,6 +667,26 @@ def test_full_update_sync_handles_empty_device_result(monkeypatch):
         "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories",
         lambda **kwargs: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0}),
     )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_device_interfaces",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_only_vm_interfaces",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_only_vm_ip_addresses",
+        lambda **kwargs: asyncio.sleep(0, result=[]),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_replications",
+        lambda **kwargs: asyncio.sleep(0, result={"created": 0, "updated": 0}),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_backup_routines",
+        lambda **kwargs: asyncio.sleep(0, result={"created": 0, "updated": 0}),
+    )
 
     body = asyncio.run(
         full_update_sync(

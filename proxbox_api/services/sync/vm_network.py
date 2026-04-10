@@ -383,7 +383,7 @@ async def ensure_ip_assigned_to_vm(
         first_iface_id = (
             first_iface.get("id") if isinstance(first_iface, dict) else getattr(first_iface, "id", None)
         )
-        await rest_patch_async(
+        patched = await rest_patch_async(
             nb,
             "/api/ipam/ip-addresses/",
             ip_id,
@@ -392,13 +392,28 @@ async def ensure_ip_assigned_to_vm(
                 "assigned_object_id": first_iface_id,
             },
         )
-        logger.info(
-            "ensure_ip_assigned_to_vm: reassigned IP id=%s to interface id=%s on VM id=%s",
+        # Verify the PATCH took effect by inspecting the returned record
+        patched_obj_id = patched.get("assigned_object_id") if isinstance(patched, dict) else None
+        if isinstance(patched_obj_id, dict):
+            patched_obj_id = patched_obj_id.get("id")
+        patched_obj_type = patched.get("assigned_object_type") if isinstance(patched, dict) else None
+        if patched_obj_type == "virtualization.vminterface" and patched_obj_id == first_iface_id:
+            logger.info(
+                "ensure_ip_assigned_to_vm: reassigned IP id=%s to interface id=%s on VM id=%s",
+                ip_id,
+                first_iface_id,
+                vm_id,
+            )
+            return True
+        logger.warning(
+            "ensure_ip_assigned_to_vm: PATCH did not take effect for IP id=%s "
+            "(got type=%s obj_id=%s, expected type=virtualization.vminterface obj_id=%s)",
             ip_id,
+            patched_obj_type,
+            patched_obj_id,
             first_iface_id,
-            vm_id,
         )
-        return True
+        return False
     except Exception as exc:
         logger.warning(
             "ensure_ip_assigned_to_vm: failed for IP id=%s VM id=%s: %s",
