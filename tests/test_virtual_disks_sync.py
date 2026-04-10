@@ -78,5 +78,5 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     ]
     assert len(reconciled_payloads) == 1
     assert reconciled_payloads[0]["virtual_machine"] == 7
-    assert reconciled_payloads[0]["storage"] == 42
     assert reconciled_payloads[0]["name"] == "scsi0"
+    assert reconciled_payloads[0].get("custom_fields", {}).get("proxbox_storage_id") == 42

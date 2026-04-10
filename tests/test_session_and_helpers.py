@@ -549,6 +549,10 @@ def test_ensure_tag_async_reuses_duplicate_tag_after_failed_create_with_stale_lo
             },
             True,
         ),
+        # After duplicate error: cache is invalidated, _find_existing() retries the lookups
+        ("GET", "/api/extras/tags/", {"slug": "proxbox", "limit": 2}, None, True),
+        ("GET", "/api/extras/tags/", {"name": "Proxbox", "limit": 2}, None, True),
+        # Lookups still return empty, so _scan_existing() does a full paginated scan
         ("GET", "/api/extras/tags/", {"limit": 200, "offset": 0}, None, True),
     ]
 
@@ -1209,7 +1213,10 @@ def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
             },
             True,
         ),
-        ("GET", "/api/dcim/sites/", {"limit": 200, "offset": 0}, None, True),
+        # After duplicate error: cache is invalidated, _find_existing() retries the lookups
+        ("GET", "/api/dcim/sites/", {"slug": "proxmox-default-site-lab", "limit": 2}, None, True),
+        # Name lookup now returns the site on the second call (site_queries["count"] > 1)
+        ("GET", "/api/dcim/sites/", {"name": "Proxmox Default Site - lab", "limit": 2}, None, True),
     ]
 
 
