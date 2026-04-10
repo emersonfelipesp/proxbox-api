@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 from fastapi import APIRouter
@@ -438,6 +439,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await devices_bridge.close()
 
+            _devices_start = time.monotonic()
             devices_task = asyncio.create_task(_run_devices_sync())
             async for frame in devices_bridge.iter_sse():
                 yield frame
@@ -450,6 +452,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Devices synchronization finished.",
                     "result": {"count": len(sync_nodes)},
+                    "duration_seconds": round(time.monotonic() - _devices_start, 3),
                 },
             )
 
@@ -475,6 +478,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await storage_bridge.close()
 
+            _storage_start = time.monotonic()
             storage_task = asyncio.create_task(_run_storage_sync())
             async for frame in storage_bridge.iter_sse():
                 yield frame
@@ -487,6 +491,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Storage synchronization finished.",
                     "result": {"count": len(sync_storage)},
+                    "duration_seconds": round(time.monotonic() - _storage_start, 3),
                 },
             )
 
@@ -515,6 +520,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await vm_bridge.close()
 
+            _vms_start = time.monotonic()
             vms_task = asyncio.create_task(_run_vms_sync())
             async for frame in vm_bridge.iter_sse():
                 yield frame
@@ -527,6 +533,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Virtual machines synchronization finished.",
                     "result": {"count": len(sync_vms)},
+                    "duration_seconds": round(time.monotonic() - _vms_start, 3),
                 },
             )
 
@@ -554,6 +561,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await disks_bridge.close()
 
+            _disks_start = time.monotonic()
             disks_task = asyncio.create_task(_run_disks_sync())
             async for frame in disks_bridge.iter_sse():
                 yield frame
@@ -566,6 +574,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Virtual disks synchronization finished.",
                     "result": {"count": _result_count(sync_disks)},
+                    "duration_seconds": round(time.monotonic() - _disks_start, 3),
                 },
             )
 
@@ -592,6 +601,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await task_history_bridge.close()
 
+            _task_history_start = time.monotonic()
             task_history_task = asyncio.create_task(_run_task_history_sync())
             async for frame in task_history_bridge.iter_sse():
                 yield frame
@@ -604,6 +614,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Task history synchronization finished.",
                     "result": {"count": _result_count(sync_task_history)},
+                    "duration_seconds": round(time.monotonic() - _task_history_start, 3),
                 },
             )
 
@@ -631,6 +642,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await backups_bridge.close()
 
+            _backups_start = time.monotonic()
             backups_task = asyncio.create_task(_run_backups_sync())
             async for frame in backups_bridge.iter_sse():
                 yield frame
@@ -643,6 +655,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Backup synchronization finished.",
                     "result": {"count": len(sync_backups)},
+                    "duration_seconds": round(time.monotonic() - _backups_start, 3),
                 },
             )
 
@@ -670,6 +683,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await snapshots_bridge.close()
 
+            _snapshots_start = time.monotonic()
             snapshots_task = asyncio.create_task(_run_snapshots_sync())
             async for frame in snapshots_bridge.iter_sse():
                 yield frame
@@ -682,6 +696,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Snapshot synchronization finished.",
                     "result": {"count": _result_count(sync_snapshots)},
+                    "duration_seconds": round(time.monotonic() - _snapshots_start, 3),
                 },
             )
 
@@ -706,6 +721,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await node_interfaces_bridge.close()
 
+            _node_interfaces_start = time.monotonic()
             node_interfaces_task = asyncio.create_task(_run_node_interfaces_sync())
             async for frame in node_interfaces_bridge.iter_sse():
                 yield frame
@@ -718,6 +734,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Node interfaces synchronization finished.",
                     "result": {"count": len(sync_node_interfaces)},
+                    "duration_seconds": round(time.monotonic() - _node_interfaces_start, 3),
                 },
             )
 
@@ -745,6 +762,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await vm_interfaces_bridge.close()
 
+            _vm_interfaces_start = time.monotonic()
             vm_interfaces_task = asyncio.create_task(_run_vm_interfaces_sync())
             async for frame in vm_interfaces_bridge.iter_sse():
                 yield frame
@@ -757,6 +775,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "VM interfaces synchronization finished.",
                     "result": {"count": len(sync_vm_interfaces)},
+                    "duration_seconds": round(time.monotonic() - _vm_interfaces_start, 3),
                 },
             )
 
@@ -784,6 +803,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await vm_ip_addresses_bridge.close()
 
+            _vm_ip_addresses_start = time.monotonic()
             vm_ip_addresses_task = asyncio.create_task(_run_vm_ip_addresses_sync())
             async for frame in vm_ip_addresses_bridge.iter_sse():
                 yield frame
@@ -796,6 +816,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "VM IP address synchronization finished.",
                     "result": {"count": len(sync_vm_ip_addresses)},
+                    "duration_seconds": round(time.monotonic() - _vm_ip_addresses_start, 3),
                 },
             )
 
@@ -817,6 +838,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await replications_bridge.close()
 
+            _replications_start = time.monotonic()
             replications_task = asyncio.create_task(_run_replications_sync())
             async for frame in replications_bridge.iter_sse():
                 yield frame
@@ -832,6 +854,7 @@ async def full_update_sync_stream(  # noqa: C901
                         "created": sync_replications.get("created", 0),
                         "updated": sync_replications.get("updated", 0),
                     },
+                    "duration_seconds": round(time.monotonic() - _replications_start, 3),
                 },
             )
 
@@ -854,6 +877,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await backup_routines_bridge.close()
 
+            _backup_routines_start = time.monotonic()
             backup_routines_task = asyncio.create_task(_run_backup_routines_sync())
             async for frame in backup_routines_bridge.iter_sse():
                 yield frame
@@ -869,6 +893,7 @@ async def full_update_sync_stream(  # noqa: C901
                         "created": sync_backup_routines.get("created", 0),
                         "updated": sync_backup_routines.get("updated", 0),
                     },
+                    "duration_seconds": round(time.monotonic() - _backup_routines_start, 3),
                 },
             )
 
