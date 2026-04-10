@@ -525,6 +525,9 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
     async def _fake_resolve_netbox_vm(*args, **kwargs):
         return {"id": 55, "name": "vm01"}
 
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
         _fake_get_vm_config,
@@ -536,6 +539,10 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
         _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
@@ -583,6 +590,9 @@ def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
     async def _fake_resolve_netbox_vm(*args, **kwargs):
         return {"id": 55, "name": "vm01"}
 
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
         _fake_get_vm_config,
@@ -594,6 +604,10 @@ def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
         _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
@@ -645,6 +659,9 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     async def _fake_resolve_netbox_vm(*args, **kwargs):
         return {"id": 55, "name": "vm01"}
 
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
         _fake_get_vm_config,
@@ -656,6 +673,10 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
         _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
     )
     monkeypatch.setattr(
         "proxbox_api.netbox_rest.rest_list_async",

@@ -934,6 +934,8 @@ async def rest_reconcile_async(  # noqa: C901
             by this sync path (e.g. the VMInterface ``bridge`` FK after switching
             to the ``proxbox_bridge`` custom field).
     """
+    api = _unwrap_api(nb)
+    normalized_path = _normalize_path(path)
     supports_model_validation = hasattr(schema, "model_validate") and hasattr(schema, "model_dump")
 
     if supports_model_validation:
