@@ -65,6 +65,7 @@ from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
 from proxbox_api.services.sync.vm_helpers import (
+    normalized_mac,
     parse_comma_separated_ints,
     parse_key_value_string,
 )
@@ -598,16 +599,6 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
     return None
 
 
-def _normalized_mac(value: str | None) -> str:
-    """Normalize a MAC address to lowercase string.
-
-    Args:
-        value: MAC address string or None
-
-    Returns:
-        Normalized (lowercase, trimmed) MAC address string, or empty string
-    """
-    return str(value or "").strip().lower()
 
 
 async def _create_vm_interface_parallel(
@@ -1702,9 +1693,9 @@ async def create_virtual_machines(  # noqa: C901
                 for iface in guest_agent_interfaces
             }
             guest_by_mac = {
-                _normalized_mac(iface.get("mac_address")): iface
+                normalized_mac(iface.get("mac_address")): iface
                 for iface in guest_agent_interfaces
-                if _normalized_mac(iface.get("mac_address"))
+                if normalized_mac(iface.get("mac_address"))
             }
 
             vm_networks = _parse_vm_networks(vm_config)
@@ -1719,7 +1710,7 @@ async def create_virtual_machines(  # noqa: C901
                         interface_mac = value.get("virtio", value.get("hwaddr", None))
                         guest_iface = None
                         if interface_mac:
-                            guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                            guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
                         if guest_iface is None:
                             guest_iface = guest_by_name.get(config_interface_name.lower())
                         resolved_interface_name = config_interface_name
@@ -2109,9 +2100,9 @@ async def create_only_vm_interfaces(  # noqa: C901
             str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
         }
         guest_by_mac = {
-            _normalized_mac(iface.get("mac_address")): iface
+            normalized_mac(iface.get("mac_address")): iface
             for iface in guest_agent_interfaces
-            if _normalized_mac(iface.get("mac_address"))
+            if normalized_mac(iface.get("mac_address"))
         }
 
         vm_networks = _parse_vm_networks(vm_config)
@@ -2126,7 +2117,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                 interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                 guest_iface = None
                 if interface_mac:
-                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                    guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
                 if guest_iface is None:
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 
@@ -2542,9 +2533,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
         }
         guest_by_mac = {
-            _normalized_mac(iface.get("mac_address")): iface
+            normalized_mac(iface.get("mac_address")): iface
             for iface in guest_agent_interfaces
-            if _normalized_mac(iface.get("mac_address"))
+            if normalized_mac(iface.get("mac_address"))
         }
 
         vm_networks = _parse_vm_networks(vm_config)
@@ -2572,7 +2563,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                 guest_iface = None
                 if interface_mac:
-                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                    guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
                 if guest_iface is None:
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 

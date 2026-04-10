@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import rest_list_async
+from proxbox_api.services.sync.vm_helpers import parse_key_value_string
 
 
 def normalize_mac(value: str | None) -> str:
@@ -172,29 +173,6 @@ def resolve_guest_interface_by_ip(
             if addr_ip_clean == ip_address_clean:
                 return str(iface.get("name") or "").strip() or None
     return None
-
-
-def parse_key_value_string(raw_value: object) -> dict[str, str]:
-    """Parse a Proxmox `netX` or `virtio` config entry into a key/value mapping.
-
-    Proxmox returns these values as comma-separated `key=value` pairs.
-
-    Args:
-        raw_value: Raw config value (string or None).
-
-    Returns:
-        Dict of parsed key-value pairs.
-    """
-    if raw_value is None:
-        return {}
-    if not isinstance(raw_value, str):
-        return {}
-    result: dict[str, str] = {}
-    for part in raw_value.split(","):
-        if "=" in part:
-            key, value = part.split("=", 1)
-            result[key.strip()] = value.strip()
-    return result
 
 
 def parse_disk_config_entry(raw_value: object) -> dict[str, str]:

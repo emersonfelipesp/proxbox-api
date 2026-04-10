@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
@@ -14,12 +14,14 @@ from proxbox_api.netbox_rest import (
     rest_reconcile_async,
 )
 from proxbox_api.proxmox_to_netbox.models import (
-    NetBoxIpAddressSyncState,
     NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
-from proxbox_api.services.sync.storage_links import find_storage_record
+from proxbox_api.services.sync.network import _resolve_vm_interface_ips
+from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
+from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
+from proxbox_api.services.sync.vm_helpers import normalized_mac
 
 
 async def sync_vm_interfaces(  # noqa: C901
@@ -50,7 +52,7 @@ async def sync_vm_interfaces(  # noqa: C901
         Tuple of (created_interfaces, first_ip_id)
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
     vm_id = virtual_machine.get("id")
     if not vm_id:
@@ -58,9 +60,6 @@ async def sync_vm_interfaces(  # noqa: C901
 
     netbox_vm_interfaces: list[dict[str, object]] = []
     first_ip_id: int | None = None
-
-    from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
-    from proxbox_api.services.sync.vm_helpers import normalized_mac
 
     guest_by_name = {
         str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
@@ -188,65 +187,19 @@ async def sync_vm_interfaces(  # noqa: C901
 
             netbox_vm_interfaces.append(vm_interface)
 
-            # Create IP addresses for all IPs from guest agent (or fallback to config)
-            from proxbox_api.services.sync.network import (
-                cleanup_stale_ips_for_interface,
-            )
-            from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
-
-            all_ips = all_guest_agent_ips(guest_iface) if guest_iface else []
-            if not all_ips:
-                config_ip = config_dict.get("ip")
-                if config_ip and str(config_ip) != "dhcp":
-                    all_ips = [str(config_ip)]
-
             interface_id_for_ip = vm_interface.get("id")
-            synced_ip_addrs: set[str] = set()
-            for interface_ip in all_ips:
-                if interface_ip == "dhcp":
-                    continue
-                try:
-                    ip_record = await rest_reconcile_async(
-                        nb,
-                        "/api/ipam/ip-addresses/",
-                        lookup={"address": interface_ip},
-                        payload={
-                            "address": interface_ip,
-                            "assigned_object_type": "virtualization.vminterface",
-                            "assigned_object_id": interface_id_for_ip,
-                            "status": "active",
-                            "tags": tag_refs,
-                            "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                        },
-                        schema=NetBoxIpAddressSyncState,
-                        current_normalizer=lambda record: {
-                            "address": record.get("address"),
-                            "assigned_object_type": record.get("assigned_object_type"),
-                            "assigned_object_id": record.get("assigned_object_id"),
-                            "status": record.get("status"),
-                            "tags": record.get("tags"),
-                            "custom_fields": record.get("custom_fields"),
-                        },
-                    )
-                    synced_ip_addrs.add(interface_ip)
-                    if first_ip_id is None:
-                        first_ip_id = (
-                            ip_record.get("id")
-                            if isinstance(ip_record, dict)
-                            else getattr(ip_record, "id", None)
-                        )
-                except Exception as ip_exc:
-                    logger.warning("Failed to create IP address %s: %s", interface_ip, ip_exc)
-
-            if interface_id_for_ip and synced_ip_addrs:
-                try:
-                    await cleanup_stale_ips_for_interface(nb, interface_id_for_ip, synced_ip_addrs)
-                except Exception as cleanup_exc:
-                    logger.warning(
-                        "Failed to cleanup stale IPs for interface id=%s: %s",
-                        interface_id_for_ip,
-                        cleanup_exc,
-                    )
+            ip_results = await _resolve_vm_interface_ips(
+                nb,
+                config_dict,
+                guest_iface,
+                tag_refs,
+                interface_id=interface_id_for_ip,
+                interface_name=resolved_interface_name,
+                now=now,
+                create_ip=True,
+            )
+            if ip_results and first_ip_id is None:
+                first_ip_id = ip_results[0][0]
 
     return netbox_vm_interfaces, first_ip_id
 
@@ -275,15 +228,13 @@ async def sync_vm_disks(
         Number of disks synced
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
     vm_id = virtual_machine.get("id")
     if not vm_id:
         raise ProxboxException(message="Virtual machine missing ID")
 
     disk_count = 0
-
-    from proxbox_api.services.sync.storage_links import storage_name_from_volume_id
 
     for disk_entry in disk_entries:
         storage_name = disk_entry.storage_name or storage_name_from_volume_id(disk_entry.storage)

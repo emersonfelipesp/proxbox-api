@@ -177,11 +177,11 @@ def test_cleanup_stale_ips_preserves_current_ips():
             {"id": 2, "address": "2804:2cac::168:0:96:30/64"},
         ]
         with patch(
-            "proxbox_api.netbox_rest.rest_list_async",
+            "proxbox_api.services.sync.network.rest_list_async",
             new=AsyncMock(return_value=existing),
         ):
             with patch(
-                "proxbox_api.netbox_rest.rest_bulk_delete_async",
+                "proxbox_api.services.sync.network.rest_bulk_delete_async",
                 new=AsyncMock(return_value=0),
             ) as mock_delete:
                 from proxbox_api.services.sync.network import cleanup_stale_ips_for_interface
@@ -208,11 +208,11 @@ def test_cleanup_stale_ips_deletes_only_stale():
             {"id": 100, "address": "192.168.1.1/32"},   # stale — delete
         ]
         with patch(
-            "proxbox_api.netbox_rest.rest_list_async",
+            "proxbox_api.services.sync.network.rest_list_async",
             new=AsyncMock(return_value=existing),
         ):
             with patch(
-                "proxbox_api.netbox_rest.rest_bulk_delete_async",
+                "proxbox_api.services.sync.network.rest_bulk_delete_async",
                 new=AsyncMock(return_value=2),
             ) as mock_delete:
                 from proxbox_api.services.sync.network import cleanup_stale_ips_for_interface
@@ -236,7 +236,7 @@ def test_cleanup_stale_ips_returns_zero_when_no_existing():
 
     async def _run():
         with patch(
-            "proxbox_api.netbox_rest.rest_list_async",
+            "proxbox_api.services.sync.network.rest_list_async",
             new=AsyncMock(return_value=[]),
         ):
             from proxbox_api.services.sync.network import cleanup_stale_ips_for_interface
