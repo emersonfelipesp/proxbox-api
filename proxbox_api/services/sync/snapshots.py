@@ -101,6 +101,7 @@ async def build_snapshot_payload(
     node: str,
     netbox_vm_id: int,
     storage_record: dict | None = None,
+    proxmox_type: str = "qemu",
 ) -> dict | None:
     """
     Build a snapshot payload dict for bulk operations (no NetBox writes).
@@ -131,7 +132,7 @@ async def build_snapshot_payload(
             except (ValueError, OSError, TypeError) as error:
                 logger.debug("Invalid snapshot snaptime for vmid=%s: %s (%s)", vmid, st, error)
 
-        subtype = snapshot.get("type", "qemu")
+        subtype = proxmox_type if proxmox_type in ("qemu", "lxc") else "qemu"
 
         return {
             "virtual_machine": netbox_vm_id,
@@ -244,6 +245,14 @@ async def _collect_snapshot_payloads_for_vm(
         *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],
         return_exceptions=True,
     )
+    logger.debug(
+        "VM vmid=%s node=%s type=%s: fetched snapshots from %d Proxmox endpoint(s), %d result set(s)",
+        vmid,
+        node_name,
+        proxmox_type,
+        len(pxs),
+        len(snapshot_results),
+    )
     for result in snapshot_results:
         if isinstance(result, Exception):
             logger.warning(
@@ -255,17 +264,26 @@ async def _collect_snapshot_payloads_for_vm(
             continue
         for snapshot in result:
             snap_name = snapshot.get("name")
-            if snap_name:
-                proxmox_snapshot_names.add(snap_name)
-                payload = await build_snapshot_payload(
-                    snapshot,
+            if not snap_name:
+                continue
+            if snap_name == "current":
+                logger.debug(
+                    "Skipping 'current' pseudo-snapshot for vmid=%s on node=%s",
                     vmid,
                     node_name,
-                    netbox_vm_id,
-                    storage_record=storage_record,
                 )
-                if payload is not None:
-                    snapshot_payloads.append(payload)
+                continue
+            proxmox_snapshot_names.add(snap_name)
+            payload = await build_snapshot_payload(
+                snapshot,
+                vmid,
+                node_name,
+                netbox_vm_id,
+                storage_record=storage_record,
+                proxmox_type=proxmox_type,
+            )
+            if payload is not None:
+                snapshot_payloads.append(payload)
 
     return snapshot_payloads, proxmox_snapshot_names
 
@@ -321,6 +339,15 @@ async def _sync_single_vm_snapshots(
             node,
             cluster_status,
             cluster_resources,
+        )
+
+        logger.debug(
+            "VM %s (vmid=%s): resolved node=%s cluster=%s type=%s",
+            vm_name,
+            vmid,
+            node_name,
+            cluster_name,
+            proxmox_type,
         )
 
         if not node_name:
@@ -597,6 +624,13 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                     progress_current=idx,
                     progress_total=total_vms,
                 )
+
+    logger.info(
+        "Collected %d total snapshot payload(s) from %d VM(s) (%d failed/skipped)",
+        len(all_snapshot_payloads),
+        total_vms,
+        vm_failed,
+    )
 
     # Perform bulk reconciliation if we have payloads
     if all_snapshot_payloads:
