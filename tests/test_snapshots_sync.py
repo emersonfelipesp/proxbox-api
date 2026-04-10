@@ -88,10 +88,11 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
         _fake_bulk_reconcile,
     )
 
+    px = type("P", (), {"session": proxmox_session, "name": "lab"})()
     result = asyncio.run(
         create_virtual_machine_snapshots(
             netbox_session=session,
-            pxs=[type("P", (), {"session": proxmox_session, "name": "lab"})()],
+            pxs=[px],
             cluster_status=[],
             cluster_resources=[
                 {"cluster-a": [{"type": "qemu", "name": "vm-101", "vmid": "101", "node": "pve01"}]}
@@ -103,7 +104,7 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
 
     assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0, "deleted": 0}
     assert calls["get_vm_snapshots"] == [
-        {"session": proxmox_session, "node": "pve01", "vm_type": "qemu", "vmid": 101}
+        {"session": px, "node": "pve01", "vm_type": "qemu", "vmid": 101}
     ]
     assert calls["rest_list_async"][0] == {
         "path": "/api/virtualization/virtual-machines/",

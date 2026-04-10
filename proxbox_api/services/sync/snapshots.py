@@ -232,7 +232,7 @@ async def _collect_snapshot_payloads_for_vm(
     async def _fetch_snapshots_for_endpoint(proxmox):
         async with fetch_semaphore:
             result = get_vm_snapshots(
-                session=proxmox.session,
+                session=proxmox,
                 node=node_name,
                 vm_type=proxmox_type,
                 vmid=int(vmid),
