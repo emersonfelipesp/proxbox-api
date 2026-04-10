@@ -264,13 +264,19 @@ async def test_sync_snapshot_individual_links_storage(monkeypatch):
     async def _fake_sync_storage(*args, **kwargs):
         return {"netbox_object": {"id": 33}}
 
+    async def _fake_get_vm_snapshots(*args, **kwargs):
+        return [{"name": "snap1", "description": "before-upgrade"}]
+
+    async def _fake_get_vm_config(*args, **kwargs):
+        return {"scsi0": "local-lvm:vm-101-disk-0,size=34359738368"}
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.snapshot_sync.get_vm_snapshots_individual",
-        lambda *args, **kwargs: [{"name": "snap1", "description": "before-upgrade"}],
+        _fake_get_vm_snapshots,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.snapshot_sync.get_vm_config_individual",
-        lambda *args, **kwargs: {"scsi0": "local-lvm:vm-101-disk-0,size=34359738368"},
+        _fake_get_vm_config,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.snapshot_sync.rest_list_async",
