@@ -150,6 +150,10 @@ dmypy.json
 # proxmox-openapi is a local dev copy; installed from PyPI, not tracked as a submodule
 /proxmox-openapi/
 
+# Local dev copies of SDK packages
+/netbox-sdk/
+/proxmox-sdk/
+
 # Docker compose
 docker-compose.override.yml
 .env.test

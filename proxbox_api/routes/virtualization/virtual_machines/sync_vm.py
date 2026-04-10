@@ -166,6 +166,21 @@ async def _load_netbox_virtual_machine_snapshot(nb: object) -> list[dict[str, ob
     return snapshot
 
 
+def _build_vm_index_by_proxmox_id(
+    snapshot: list[dict[str, object]],
+) -> dict[int, dict[str, object]]:
+    """Index a VM snapshot by cf_proxmox_vm_id for O(1) lookup."""
+    index: dict[int, dict[str, object]] = {}
+    for vm in snapshot:
+        try:
+            vmid = int(vm.get("custom_fields", {}).get("proxmox_vm_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if vmid and vmid not in index:
+            index[vmid] = vm
+    return index
+
+
 def _build_vm_operation_queue(
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
@@ -2066,6 +2081,9 @@ async def create_only_vm_interfaces(  # noqa: C901
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
+    vm_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
+    vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
+
     async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> tuple[list[dict], dict]:  # noqa: C901
         """Collect interface payloads for a single VM. Returns (payloads, interface_info_dict)."""
         cluster_name_str = str(cluster_name)
@@ -2090,7 +2108,10 @@ async def create_only_vm_interfaces(  # noqa: C901
         if vmid is None:
             return [], {}
 
-        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
+        try:
+            netbox_vm = vm_index.get(int(str(vmid).strip()))
+        except (TypeError, ValueError):
+            netbox_vm = None
         if not netbox_vm:
             logger.warning(
                 "Skipping VM interface sync for %s (vmid=%s): NetBox VM not found",
@@ -2502,6 +2523,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
+    vm_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
+    vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
+
     async def _sync_vm_ips(
         cluster_name: str, resource: dict
     ) -> tuple[list[dict], list[dict], dict]:  # noqa: C901
@@ -2515,7 +2539,10 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         if vmid is None:
             return [], [], {}
 
-        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
+        try:
+            netbox_vm = vm_index.get(int(str(vmid).strip()))
+        except (TypeError, ValueError):
+            netbox_vm = None
         if not netbox_vm:
             logger.warning(
                 "Skipping VM IP sync for %s (vmid=%s): NetBox VM not found",

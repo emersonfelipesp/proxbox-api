@@ -1484,6 +1484,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
     batch_size: int | None = None,
     batch_delay_ms: int | None = None,
     selector=None,
+    base_query: dict[str, object] | None = None,
 ) -> BulkReconcileResult:
     if not payloads:
         return BulkReconcileResult(records=[], created=0, updated=0, unchanged=0, failed=0)
@@ -1514,7 +1515,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
         seen_desired.add(lookup_key)
         desired_entries.append((desired_payload, lookup))
 
-    existing_records = await rest_list_paginated_async(nb, path)
+    existing_records = await rest_list_paginated_async(nb, path, base_query=base_query)
     existing_groups: dict[tuple[tuple[str, object], ...], list[RestRecord]] = {}
     for record in existing_records:
         try:
