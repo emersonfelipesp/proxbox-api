@@ -1297,11 +1297,10 @@ async def rest_bulk_delete_async(
     path: str,
     ids: list[int],
 ) -> int:
-    """Bulk-delete NetBox records by ID via DELETE with query params ?id=1&id=2&...
+    """Bulk-delete NetBox records by ID via DELETE with a JSON body [{"id": 1}, ...].
 
-    Note: For single-item deletes, uses detail-path DELETE (/{id}/) instead of list-endpoint
-    query params. This accommodates plugin endpoints that don't support query-param-based
-    bulk operations (e.g., NetBox plugins often only support detail-path DELETE).
+    Note: For single-item deletes, uses detail-path DELETE (/{id}/) instead of a body,
+    to accommodate plugin endpoints that only support detail-path DELETE.
     """
     if not ids:
         return 0
@@ -1310,19 +1309,18 @@ async def rest_bulk_delete_async(
     normalized_path = _normalize_path(path)
     unique_ids = list(dict.fromkeys(ids))  # deduplicate, preserve order
 
-    # For single-item deletes, use detail-path DELETE instead of query params.
-    # Many plugin endpoints don't support query-param-based bulk operations.
+    # For single-item deletes, use detail-path DELETE.
     if len(unique_ids) == 1:
         return await _delete_single_record_async(nb, api, normalized_path, unique_ids[0])
 
-    query: dict[str, object] = {"id": [str(i) for i in unique_ids]}
+    body = [{"id": i} for i in unique_ids]
 
     async def _do_request() -> int:
         try:
             response = await api.client.request(
                 "DELETE",
                 normalized_path,
-                query=query,
+                payload=body,
                 expect_json=False,
             )
         except Exception as e:
