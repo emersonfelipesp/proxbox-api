@@ -53,6 +53,8 @@ def _build_netbox_vm_payload(
     role_id: int | None,
     tag_ids: list[int],
     last_updated: datetime,
+    cluster_name: str | None = None,
+    proxmox_url: str | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -72,16 +74,25 @@ def _build_netbox_vm_payload(
     disk_mb = _mb_from_bytes(maxdisk)
 
     status = _status_value(resource.get("status", "stopped"))
+    node = resource.get("node", "unknown")
+    proxmox_status = str(resource.get("status", "stopped"))
 
-    vm_custom_fields = {
+    vm_custom_fields: dict[str, object] = {
         "proxmox_vm_id": int(resource.get("vmid") or 0),
         "proxmox_vm_type": vm_type,
         "proxmox_start_at_boot": _as_bool(onboot),
         "proxmox_unprivileged_container": _as_bool(unprivileged),
         "proxmox_qemu_agent": _as_bool(agent),
         "proxmox_search_domain": searchdomain,
+        "proxmox_node": node,
+        "proxmox_status": proxmox_status,
         "proxmox_last_updated": last_updated.isoformat(),
     }
+    if cluster_name:
+        vm_custom_fields["proxmox_cluster"] = cluster_name
+    if proxmox_url:
+        vmid = int(resource.get("vmid") or 0)
+        vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
     return {
         "name": str(resource.get("name", "")),
@@ -94,7 +105,7 @@ def _build_netbox_vm_payload(
         "disk": disk_mb,
         "tags": tag_ids,
         "custom_fields": vm_custom_fields,
-        "description": f"Synced from Proxmox node {resource.get('node', 'unknown')}",
+        "description": f"Synced from Proxmox node {node}",
     }
 
 
@@ -196,6 +207,10 @@ async def sync_vm_individual(
         device_id = int(getattr(device, "id", 0) or 0) if device else None
         role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
 
+        px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
+        px_port = getattr(px, "http_port", 8006)
+        px_url = f"https://{px_domain}:{px_port}" if px_domain else None
+
         netbox_vm_payload = _build_netbox_vm_payload(
             resource=proxmox_resource,
             config=proxmox_config,
@@ -204,6 +219,8 @@ async def sync_vm_individual(
             role_id=role_id,
             tag_ids=tag_ids,
             last_updated=now,
+            cluster_name=cluster_name,
+            proxmox_url=px_url,
         )
         existing_vms = await rest_list_async(
             nb,

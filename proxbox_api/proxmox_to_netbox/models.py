@@ -930,6 +930,8 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     role_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
     last_updated: datetime | None = None
+    cluster_name: str | None = None
+    proxmox_url: str | None = None
 
     @computed_field(return_type=dict)
     @property
@@ -942,7 +944,13 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             "proxmox_unprivileged_container": self.config.unprivileged_container,
             "proxmox_qemu_agent": self.config.qemu_agent_enabled,
             "proxmox_search_domain": self.config.searchdomain,
+            "proxmox_node": self.resource.node,
+            "proxmox_status": self.resource.status,
         }
+        if self.cluster_name:
+            fields["proxmox_cluster"] = self.cluster_name
+        if self.proxmox_url:
+            fields["proxmox_link"] = f"{self.proxmox_url}/#v1:0:={vm_type}/{self.resource.vmid}"
         if self.last_updated:
             fields["proxmox_last_updated"] = self.last_updated.isoformat()
         return fields

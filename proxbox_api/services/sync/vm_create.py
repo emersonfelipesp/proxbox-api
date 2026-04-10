@@ -186,6 +186,7 @@ async def create_or_update_virtual_machine(
     role_id: int,
     tag_id: int,
     tag_refs: list[dict[str, object]],
+    cluster_name: str | None = None,
 ) -> dict:
     """Create or update a virtual machine in NetBox.
 
@@ -198,6 +199,7 @@ async def create_or_update_virtual_machine(
         role_id: NetBox role ID
         tag_id: NetBox tag ID
         tag_refs: Tag references
+        cluster_name: Proxmox cluster name for custom field population.
 
     Returns:
         NetBox virtual machine dict
@@ -215,6 +217,7 @@ async def create_or_update_virtual_machine(
         role_id=role_id,
         tag_ids=[tag_id],
         last_updated=now,
+        cluster_name=cluster_name,
     )
 
     virtual_machine = await rest_reconcile_async(

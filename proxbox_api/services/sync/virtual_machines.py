@@ -21,6 +21,8 @@ def build_netbox_virtual_machine_payload(
     role_id: int | None,
     tag_ids: list[int],
     last_updated: datetime | None = None,
+    cluster_name: str | None = None,
+    proxmox_url: str | None = None,
 ) -> VMPayloadDict:
     """Build NetBox virtual machine payload from Proxmox raw resource/config payloads.
 
@@ -32,6 +34,8 @@ def build_netbox_virtual_machine_payload(
         role_id: Optional NetBox VM role ID.
         tag_ids: List of NetBox tag IDs to apply.
         last_updated: Optional timestamp for last update.
+        cluster_name: Proxmox cluster name for custom field population.
+        proxmox_url: Proxmox base URL for link custom field population.
 
     Returns:
         VMPayloadDict with structure for NetBox VM creation/update.
@@ -45,4 +49,6 @@ def build_netbox_virtual_machine_payload(
         role_id=role_id,
         tag_ids=tag_ids,
         last_updated=last_updated,
+        cluster_name=cluster_name,
+        proxmox_url=proxmox_url,
     )

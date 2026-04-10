@@ -1022,6 +1022,15 @@ async def create_virtual_machines(  # noqa: C901
 
     nb = netbox_session
 
+    # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link.
+    proxmox_url_by_cluster: dict[str, str] = {}
+    for px, cs in zip(pxs, cluster_status):
+        cluster_n = getattr(cs, "name", None) or getattr(px, "cluster_name", None)
+        px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
+        px_port = getattr(px, "http_port", 8006)
+        if cluster_n and px_domain:
+            proxmox_url_by_cluster[str(cluster_n)] = f"https://{px_domain}:{px_port}"
+
     total_vms = 0  # Track total VMs processed
     successful_vms = 0  # Track successful VM creations
     failed_vms = 0  # Track failed VM creations
@@ -1297,6 +1306,8 @@ async def create_virtual_machines(  # noqa: C901
             role_id=int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
             last_updated=now,
+            cluster_name=str(cluster_name),
+            proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
         )
         lookup = {
             "cf_proxmox_vm_id": int(resource.get("vmid")),
@@ -1598,6 +1609,8 @@ async def create_virtual_machines(  # noqa: C901
             role_id=int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
             last_updated=now,
+            cluster_name=str(cluster_name),
+            proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
         )
 
         if bridge:
