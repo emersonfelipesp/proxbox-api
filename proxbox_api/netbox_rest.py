@@ -265,6 +265,11 @@ def _cache_key(api: object, path: str, query: dict[str, object] | None) -> tuple
     return (id(api), _normalize_path(path), _serialize_query(query))
 
 
+def clear_rest_get_cache_for_path(nb: object, path: str) -> None:
+    """Invalidate all in-memory GET cache entries for *path* (and its direct children)."""
+    _invalidate_get_cache_for_path(_unwrap_api(nb), path)
+
+
 def clear_rest_get_cache() -> None:
     """Clear the in-memory NetBox GET response cache."""
     global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
@@ -1019,9 +1024,13 @@ async def rest_reconcile_async(  # noqa: C901
     if existing is None:
         try:
             return await rest_create_async(nb, path, desired_payload)
-        except ProxboxException:
+        except ProxboxException as exc:
             # Re-fetch and scan: list filters can miss rows (API quirks); duplicate errors
             # are not always phrased with "already exists" / "must be unique".
+            # When the error is a duplicate, clear the path cache so _find_existing()
+            # below issues a fresh request rather than returning a stale empty result.
+            if _is_duplicate_error(getattr(exc, "detail", str(exc))):
+                _invalidate_get_cache_for_path(api, normalized_path)
             existing = await _find_existing()
             if existing is None:
                 existing = await _scan_existing()

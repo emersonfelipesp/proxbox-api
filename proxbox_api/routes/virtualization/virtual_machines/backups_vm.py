@@ -14,6 +14,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     RestRecord,
+    clear_rest_get_cache_for_path,
     rest_bulk_create_async,
     rest_bulk_delete_async,
     rest_bulk_patch_async,
@@ -393,6 +394,10 @@ async def _bulk_reconcile_backups(  # noqa: C901
     )
     normalizer = _build_backup_normalizer()
 
+    # Force a fresh fetch: discard any cached list so the pre-fetch reflects the
+    # actual current NetBox state and avoids placing already-existing records in
+    # `to_create`, which would otherwise cause spurious 400 "already exists" errors.
+    clear_rest_get_cache_for_path(nb, "/api/plugins/proxbox/backups/")
     existing_backups_raw = await rest_list_paginated_async(nb, "/api/plugins/proxbox/backups/")
     existing_by_volume_id: dict[str, RestRecord] = {}
     for rec in existing_backups_raw:

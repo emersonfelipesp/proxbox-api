@@ -46,6 +46,7 @@ def _is_transient_netbox_error(error: Exception) -> bool:
         "connection refused",
         "cannot connect",
         "connect call failed",
+        "server disconnected",
         "timeout",
         "temporarily unavailable",
         "name or service not known",
