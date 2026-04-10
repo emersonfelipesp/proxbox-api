@@ -202,20 +202,29 @@ async def cluster_resources(
     """
 
     resource_type = type if isinstance(type, str) else None
-    json_response = []
+
+    # Deduplicate resources across sessions that belong to the same Proxmox cluster.
+    # When multiple Proxmox endpoints are nodes of the same cluster, each one returns
+    # the full cluster resource list.  Track seen resource IDs globally so that the
+    # same VM/LXC is never submitted to NetBox twice.
+    cluster_resource_map: dict[str, list[dict]] = {}
+    seen_resource_ids: set[str] = set()
 
     for px in pxs:
         resources = await get_typed_cluster_resources(px, resource_type=resource_type)
-        json_response.append(
-            {
-                px.name: [
-                    resource.model_dump(mode="python", by_alias=True, exclude_none=True)
-                    for resource in resources
-                ]
-            }
-        )
+        cluster_name = px.name
+        if cluster_name not in cluster_resource_map:
+            cluster_resource_map[cluster_name] = []
+        for resource in resources:
+            resource_id: str = resource.id
+            if resource_id in seen_resource_ids:
+                continue
+            seen_resource_ids.add(resource_id)
+            cluster_resource_map[cluster_name].append(
+                resource.model_dump(mode="python", by_alias=True, exclude_none=True)
+            )
 
-    return json_response
+    return [{name: items} for name, items in cluster_resource_map.items()]
 
 
 ClusterResourcesDep = Annotated[ClusterResourcesList, Depends(cluster_resources)]
