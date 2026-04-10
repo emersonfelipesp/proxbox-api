@@ -454,7 +454,7 @@ async def bulk_reconcile_vm_interfaces(
             nb,
             "/api/virtualization/interfaces/",
             payloads=interface_payloads,
-            lookup_fields=["name", "virtual_machine_id"],
+            lookup_fields=["name", "virtual_machine"],
             schema=NetBoxVirtualMachineInterfaceSyncState,
             current_normalizer=lambda record: {
                 "name": record.get("name"),
@@ -472,7 +472,8 @@ async def bulk_reconcile_vm_interfaces(
         # Build mapping (name, vm_id) → interface_id
         for record in result.records:
             name = record.get("name")
-            vm_id = record.get("virtual_machine")
+            vm_obj = record.get("virtual_machine")
+            vm_id = vm_obj.get("id") if isinstance(vm_obj, dict) else vm_obj
             iface_id = record.get("id")
             if name and vm_id and iface_id:
                 interface_name_vm_to_id[(name, vm_id)] = iface_id

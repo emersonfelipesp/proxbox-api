@@ -396,6 +396,19 @@ async def _bulk_reconcile_backups(  # noqa: C901
     )
     normalizer = _build_backup_normalizer()
 
+    # Deduplicate input payloads by volume_id.  PBS storage content lists all
+    # backups for every VM; when multiple VMs share a PBS storage they can each
+    # contribute the same volume_id to the payload list, causing bulk-create to
+    # fail with a duplicate constraint even though no race condition is present.
+    seen_volume_ids: set[str] = set()
+    deduped_payloads: list[dict] = []
+    for _p in proxmox_backup_payloads:
+        _vid = _p.get("volume_id")
+        if _vid and str(_vid) not in seen_volume_ids:
+            seen_volume_ids.add(str(_vid))
+            deduped_payloads.append(_p)
+    proxmox_backup_payloads = deduped_payloads
+
     # Force a fresh fetch: discard any cached list so the pre-fetch reflects the
     # actual current NetBox state and avoids placing already-existing records in
     # `to_create`, which would otherwise cause spurious 400 "already exists" errors.
