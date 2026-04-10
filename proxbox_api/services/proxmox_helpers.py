@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import functools
 
+from proxmox_openapi.sdk.exceptions import ResourceException
+
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
@@ -325,6 +327,23 @@ async def get_vm_snapshots(
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
         return payload if isinstance(payload, list) else []
+    except ResourceException as error:
+        if error.status_code == 501:
+            logger.debug(
+                "Snapshots not supported for vmid=%s node=%s type=%s (501 Not Implemented)",
+                vmid,
+                node,
+                vm_type,
+            )
+        else:
+            logger.warning(
+                "Error fetching snapshots for vmid=%s node=%s type=%s: %s",
+                vmid,
+                node,
+                vm_type,
+                error,
+            )
+        return []
     except Exception as error:
         logger.warning(
             "Error fetching snapshots for vmid=%s node=%s type=%s: %s",
