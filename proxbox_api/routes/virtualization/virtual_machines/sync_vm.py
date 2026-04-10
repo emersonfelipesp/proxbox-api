@@ -16,6 +16,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import VirtualMachine
 from proxbox_api.netbox_rest import (
+    clear_rest_get_cache_for_path,
     rest_create_async,
     rest_first_async,
     rest_list_async,
@@ -1768,20 +1769,41 @@ async def create_virtual_machines(  # noqa: C901
             if first_ip_id is not None:
                 from proxbox_api.services.sync.vm_network import ensure_ip_assigned_to_vm
 
-                ip_assigned = await ensure_ip_assigned_to_vm(nb, first_ip_id, vm_id)
+                # Flush GET cache before the check so concurrent reconciles don't cause
+                # stale data to be returned by the interface/IP list queries.
+                clear_rest_get_cache_for_path(nb, "/api/ipam/ip-addresses/")
+                clear_rest_get_cache_for_path(nb, "/api/virtualization/interfaces/")
+
+                ip_assigned, reason = await ensure_ip_assigned_to_vm(nb, first_ip_id, vm_id)
+
+                if not ip_assigned:
+                    # Single retry after 1 s to handle transient failures or race conditions
+                    # where a concurrent VM sync temporarily held the same IP record.
+                    logger.info(
+                        "Primary IP check failed (reason=%s) for VM %s (id=%s); retrying once",
+                        reason,
+                        virtual_machine.get("name"),
+                        vm_id,
+                    )
+                    await asyncio.sleep(1.0)
+                    clear_rest_get_cache_for_path(nb, "/api/ipam/ip-addresses/")
+                    clear_rest_get_cache_for_path(nb, "/api/virtualization/interfaces/")
+                    ip_assigned, reason = await ensure_ip_assigned_to_vm(nb, first_ip_id, vm_id)
+
                 if not ip_assigned:
                     logger.warning(
-                        "IP id=%s is not assigned to VM %s (id=%s); skipping primary_ip4 assignment",
+                        "IP id=%s is not assigned to VM %s (id=%s) after retry (reason=%s); skipping primary_ip4 assignment",
                         first_ip_id,
                         virtual_machine.get("name"),
                         vm_id,
+                        reason,
                     )
                     if websocket:
                         await websocket.send_json(
                             {
                                 "object": "virtual_machine",
                                 "data": {
-                                    "error": "Could not set primary IP: IP address is not assigned to any interface on this VM",
+                                    "error": f"Could not set primary IP: {reason}",
                                     "rowid": virtual_machine.get("name"),
                                 },
                             }

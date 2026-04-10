@@ -282,14 +282,15 @@ async def ensure_ip_assigned_to_vm(
     nb: NetBoxSessionDep,
     ip_id: int,
     vm_id: int,
-) -> bool:
+) -> tuple[bool, str]:
     """Verify the IP address is assigned to an interface on the given VM.
 
     If the IP exists but is assigned to the wrong object (or unassigned), this
     function PATCHes the IP to assign it to the VM's first interface so that
     NetBox will accept it as the VM's primary IP.
 
-    Returns True if the IP is (or was fixed to be) assigned to the VM, False otherwise.
+    Returns (True, reason) if the IP is (or was fixed to be) assigned to the VM,
+    (False, reason) otherwise. The reason string describes the outcome for diagnostics.
     """
     try:
         ip_record = await rest_first_async(
@@ -297,7 +298,7 @@ async def ensure_ip_assigned_to_vm(
         )
         if not ip_record:
             logger.warning("ensure_ip_assigned_to_vm: IP id=%s not found in NetBox", ip_id)
-            return False
+            return False, "ip_not_found"
 
         raw_assigned_id = ip_record.get("assigned_object_id")
         assigned_object_id = (
@@ -316,7 +317,7 @@ async def ensure_ip_assigned_to_vm(
                 vm_id,
                 ip_id,
             )
-            return False
+            return False, "no_interfaces"
 
         vm_interface_ids = {
             iface.get("id") if isinstance(iface, dict) else getattr(iface, "id", None)
@@ -327,7 +328,7 @@ async def ensure_ip_assigned_to_vm(
             assigned_object_type == "virtualization.vminterface"
             and assigned_object_id in vm_interface_ids
         ):
-            return True
+            return True, "already_assigned"
 
         # IP is not assigned to this VM — reassign to the first available interface
         first_iface = ifaces[0]
@@ -355,7 +356,7 @@ async def ensure_ip_assigned_to_vm(
                 first_iface_id,
                 vm_id,
             )
-            return True
+            return True, "reassigned"
         logger.warning(
             "ensure_ip_assigned_to_vm: PATCH did not take effect for IP id=%s "
             "(got type=%s obj_id=%s, expected type=virtualization.vminterface obj_id=%s)",
@@ -364,7 +365,7 @@ async def ensure_ip_assigned_to_vm(
             patched_obj_id,
             first_iface_id,
         )
-        return False
+        return False, f"reassign_failed(type={patched_obj_type},obj_id={patched_obj_id})"
     except Exception as exc:
         logger.warning(
             "ensure_ip_assigned_to_vm: failed for IP id=%s VM id=%s: %s",
@@ -372,7 +373,7 @@ async def ensure_ip_assigned_to_vm(
             vm_id,
             exc,
         )
-        return False
+        return False, f"exception: {exc}"
 
 
 async def set_primary_ip(
@@ -399,12 +400,13 @@ async def set_primary_ip(
         return False
 
     # Verify (and fix if needed) that the IP is assigned to this VM before setting primary
-    assigned = await ensure_ip_assigned_to_vm(nb, primary_ip_id, vm_id)
+    assigned, reason = await ensure_ip_assigned_to_vm(nb, primary_ip_id, vm_id)
     if not assigned:
         logger.warning(
-            "IP id=%s is not assigned to VM id=%s; skipping primary_ip4 assignment",
+            "IP id=%s is not assigned to VM id=%s (reason=%s); skipping primary_ip4 assignment",
             primary_ip_id,
             vm_id,
+            reason,
         )
         return False
 

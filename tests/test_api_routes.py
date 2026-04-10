@@ -946,7 +946,7 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
         _fake_task_history,
     )
     async def _fake_ensure_ip_assigned(*args, **kwargs):
-        return True
+        return True, "already_assigned"
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.vm_network.ensure_ip_assigned_to_vm",
