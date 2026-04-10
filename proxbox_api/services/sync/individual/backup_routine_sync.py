@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.sync.backup_routines import (
+    _coerce_kv_string,
     _extract_choice_value,
     _extract_fk_id,
     _get_netbox_endpoint_id,
@@ -121,7 +122,7 @@ async def sync_backup_routine_individual(
             "bwlimit": target_job.get("bwlimit"),
             "zstd": target_job.get("zstd"),
             "io_workers": target_job.get("io_workers"),
-            "fleecing": target_job.get("fleecing"),
+            "fleecing": _coerce_kv_string(target_job.get("fleecing")),
             "repeat_missed": target_job.get("repeat-missed")
             if "repeat-missed" in target_job
             else target_job.get("repeat_missed"),

@@ -19,6 +19,15 @@ if TYPE_CHECKING:
     from proxbox_api.utils.streaming import WebSocketSSEBridge
 
 
+def _coerce_kv_string(value: object) -> str | None:
+    """Convert a dict of key=value pairs to a comma-separated string, or pass through strings."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return ",".join(f"{k}={v}" for k, v in value.items())
+    return str(value)
+
+
 def _extract_fk_id(value: object) -> object:
     """Return the integer ID from a nested FK dict, or the value itself."""
     if isinstance(value, dict):
@@ -56,6 +65,22 @@ def _parse_retention(job: dict) -> dict:
         "keep_all": None,
     }
     if not raw:
+        return result
+    if isinstance(raw, dict):
+        # proxmoxer already parsed the key=value string into a dict
+        mapping = {
+            "keep-last": "keep_last",
+            "keep-daily": "keep_daily",
+            "keep-weekly": "keep_weekly",
+            "keep-monthly": "keep_monthly",
+            "keep-yearly": "keep_yearly",
+        }
+        for px_key, nb_key in mapping.items():
+            val = raw.get(px_key)
+            if val is not None:
+                result[nb_key] = int(val) if str(val).isdigit() else None
+        if "keep-all" in raw:
+            result["keep_all"] = True
         return result
     for part in raw.split(","):
         part = part.strip()
@@ -226,7 +251,7 @@ async def _fetch_session_payloads(px, nb, results: dict) -> list[dict]:  # noqa:
                     "bwlimit": job.get("bwlimit"),
                     "zstd": job.get("zstd"),
                     "io_workers": job.get("io_workers"),
-                    "fleecing": job.get("fleecing"),
+                    "fleecing": _coerce_kv_string(job.get("fleecing")),
                     "repeat_missed": job.get("repeat-missed")
                     if "repeat-missed" in job
                     else job.get("repeat_missed"),
