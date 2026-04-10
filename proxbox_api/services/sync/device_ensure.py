@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
@@ -44,7 +43,7 @@ def _relation_id_or_none(value: object) -> int | None:
         return None
 
 
-def _record_has_tag(record: Any, tag_slug: str) -> bool:
+def _record_has_tag(record: object, tag_slug: str) -> bool:
     if record is None:
         return False
     if hasattr(record, "serialize"):
@@ -63,7 +62,7 @@ def _record_has_tag(record: Any, tag_slug: str) -> bool:
     )
 
 
-def _prefer_existing_device(records: list[Any]) -> NetBoxRecord | None:
+def _prefer_existing_device(records: list[object]) -> NetBoxRecord | None:
     """Prefer the ProxBox-managed record when multiple same-name devices exist."""
     proxbox_records = [record for record in records if _record_has_tag(record, "proxbox")]
     if proxbox_records:
@@ -71,7 +70,7 @@ def _prefer_existing_device(records: list[Any]) -> NetBoxRecord | None:
     return records[0] if records else None
 
 
-def _cluster_type_payload(mode: str, tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+def _cluster_type_payload(mode: str, tag_refs: list[dict[str, object]]) -> dict[str, object]:
     return {
         "name": mode.capitalize(),
         "slug": mode,
@@ -86,8 +85,8 @@ def _cluster_payload(
     *,
     cluster_type_id: int | None,
     mode: str,
-    tag_refs: list[dict[str, Any]],
-) -> dict[str, Any]:
+    tag_refs: list[dict[str, object]],
+) -> dict[str, object]:
     return {
         "name": cluster_name,
         "type": cluster_type_id,
@@ -97,7 +96,7 @@ def _cluster_payload(
     }
 
 
-def _manufacturer_payload(tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+def _manufacturer_payload(tag_refs: list[dict[str, object]]) -> dict[str, object]:
     return {
         "name": "Proxmox",
         "slug": "proxmox",
@@ -108,8 +107,8 @@ def _manufacturer_payload(tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _device_type_payload(
     manufacturer_id: int | None,
-    tag_refs: list[dict[str, Any]],
-) -> dict[str, Any]:
+    tag_refs: list[dict[str, object]],
+) -> dict[str, object]:
     return {
         "model": "Proxmox Generic Device",
         "slug": "proxmox-generic-device",
@@ -119,7 +118,7 @@ def _device_type_payload(
     }
 
 
-def _device_role_payload(tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+def _device_role_payload(tag_refs: list[dict[str, object]]) -> dict[str, object]:
     return {
         "name": "Proxmox Node",
         "slug": "proxmox-node",
@@ -129,7 +128,7 @@ def _device_role_payload(tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _site_payload(cluster_name: str, tag_refs: list[dict[str, Any]]) -> dict[str, Any]:
+def _site_payload(cluster_name: str, tag_refs: list[dict[str, object]]) -> dict[str, object]:
     site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
     return {
         "name": f"Proxmox Default Site - {cluster_name}",
@@ -147,8 +146,8 @@ def _device_payload(
     device_type_id: int | None,
     role_id: int | None,
     site_id: int | None,
-    tag_refs: list[dict[str, Any]],
-) -> dict[str, Any]:
+    tag_refs: list[dict[str, object]],
+) -> dict[str, object]:
     return {
         "name": device_name,
         "tags": tag_refs,
@@ -162,15 +161,15 @@ def _device_payload(
     }
 
 
-def _device_selector(records: list[Any]) -> NetBoxRecord | None:
+def _device_selector(records: list[object]) -> NetBoxRecord | None:
     return _prefer_existing_device(records)
 
 
 async def ensure_proxmox_devices_bulk(
-    nb: Any,
+    nb: object,
     *,
-    clusters_status: list[Any] | None,
-    tag_refs: list[dict[str, Any]],
+    clusters_status: list[object] | None,
+    tag_refs: list[dict[str, object]],
 ) -> dict[str, NetBoxRecord]:
     """Create/update Proxmox prerequisite NetBox objects in dependency order."""
     if not clusters_status:
@@ -329,7 +328,7 @@ async def ensure_proxmox_devices_bulk(
         else None
     )
 
-    device_payloads: list[dict[str, Any]] = []
+    device_payloads: list[dict[str, object]] = []
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
         site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
@@ -395,10 +394,10 @@ async def ensure_proxmox_devices_bulk(
 
 
 async def _ensure_cluster_type(
-    nb: Any,
+    nb: object,
     *,
     mode: str,
-    tag_refs: list[dict[str, Any]],
+    tag_refs: list[dict[str, object]],
 ) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
@@ -423,12 +422,12 @@ async def _ensure_cluster_type(
 
 
 async def _ensure_cluster(
-    nb: Any,
+    nb: object,
     *,
     cluster_name: str,
     cluster_type_id: int | None,
     mode: str,
-    tag_refs: list[dict[str, Any]],
+    tag_refs: list[dict[str, object]],
 ) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
@@ -452,7 +451,7 @@ async def _ensure_cluster(
     )
 
 
-async def _ensure_manufacturer(nb: Any, *, tag_refs: list[dict[str, Any]]) -> NetBoxRecord:
+async def _ensure_manufacturer(nb: object, *, tag_refs: list[dict[str, object]]) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/manufacturers/",
@@ -474,10 +473,10 @@ async def _ensure_manufacturer(nb: Any, *, tag_refs: list[dict[str, Any]]) -> Ne
 
 
 async def _ensure_device_type(
-    nb: Any,
+    nb: object,
     *,
     manufacturer_id: int | None,
-    tag_refs: list[dict[str, Any]],
+    tag_refs: list[dict[str, object]],
 ) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
@@ -501,7 +500,7 @@ async def _ensure_device_type(
     )
 
 
-async def _ensure_device_role(nb: Any, *, tag_refs: list[dict[str, Any]]) -> NetBoxRecord:
+async def _ensure_device_role(nb: object, *, tag_refs: list[dict[str, object]]) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/dcim/device-roles/",
@@ -525,7 +524,7 @@ async def _ensure_device_role(nb: Any, *, tag_refs: list[dict[str, Any]]) -> Net
 
 
 async def _ensure_site(
-    nb: Any, *, cluster_name: str, tag_refs: list[dict[str, Any]]
+    nb: object, *, cluster_name: str, tag_refs: list[dict[str, object]]
 ) -> NetBoxRecord:
     site_name = f"Proxmox Default Site - {cluster_name}"
     site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
@@ -552,14 +551,14 @@ async def _ensure_site(
 
 
 async def _ensure_device(
-    nb: Any,
+    nb: object,
     *,
     device_name: str,
     cluster_id: int | None,
     device_type_id: int | None,
     role_id: int | None,
     site_id: int | None,
-    tag_refs: list[dict[str, Any]],
+    tag_refs: list[dict[str, object]],
 ) -> NetBoxRecord:
     existing_devices = await rest_list_async(
         nb,

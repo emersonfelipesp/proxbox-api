@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import functools
+from collections.abc import Callable
+from typing import TypeVar
 
 from proxmox_openapi.sdk.exceptions import ResourceException
 
@@ -18,11 +20,14 @@ def _model_dump(model: object) -> dict[str, object]:
     return model.model_dump(mode="python", by_alias=True, exclude_none=True)
 
 
-def _dual_mode(async_fn):
+_T = TypeVar("_T")
+
+
+def _dual_mode(async_fn: Callable[..., _T]) -> Callable[..., _T]:
     """Allow async helpers to be called from both async and sync contexts."""
 
     @functools.wraps(async_fn)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object) -> _T:
         try:
             asyncio.get_running_loop()
         except RuntimeError:

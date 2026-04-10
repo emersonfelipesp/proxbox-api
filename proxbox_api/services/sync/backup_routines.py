@@ -103,15 +103,15 @@ def _parse_retention(job: dict) -> dict:  # noqa: C901
     return result
 
 
-def _record_id(record) -> int | None:
-    return record.id if hasattr(record, "id") else record.get("id")
+def _record_id(record: object) -> int | None:
+    return record.id if hasattr(record, "id") else record.get("id")  # type: ignore[union-attr]
 
 
-def _record_get(record, key: str):
-    return record.get(key) if hasattr(record, "get") else getattr(record, key, None)
+def _record_get(record: object, key: str) -> object:
+    return record.get(key) if hasattr(record, "get") else getattr(record, key, None)  # type: ignore[union-attr]
 
 
-def _match_by_domain(endpoints, px_domain: str) -> int | None:
+def _match_by_domain(endpoints: object, px_domain: str) -> int | None:
     for ep in endpoints:
         ep_domain = _record_get(ep, "domain")
         if ep_domain and str(ep_domain).strip() == px_domain.strip():

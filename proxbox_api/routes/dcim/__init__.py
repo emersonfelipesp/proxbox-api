@@ -33,7 +33,7 @@ async def get_devices():
 
 @router.get(
     "/devices/create",
-    response_model=list[dict],
+    response_model=list[dict[str, object]],
     response_model_exclude={"websocket"},
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
@@ -230,7 +230,7 @@ async def create_interface_and_ip(
 
 @router.get(
     "/devices/{node}/interfaces/create",
-    response_model=list[dict],
+    response_model=list[dict[str, object]],
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )

@@ -73,10 +73,10 @@ async def _mark_stale_replications(
 
 
 async def sync_all_replications(  # noqa: C901
-    netbox_session,
+    netbox_session: object,
     pxs: ProxmoxSessionsDep,
-    tag_refs: list[dict] | None = None,
-) -> dict:
+    tag_refs: list[dict[str, object]] | None = None,
+) -> dict[str, int]:
     """Sync all replication jobs from Proxmox to NetBox using bulk operations.
 
     Args:
@@ -88,7 +88,7 @@ async def sync_all_replications(  # noqa: C901
         Dict with sync results (created, updated, stale, errors counts).
     """
     nb = netbox_session
-    results = {"created": 0, "updated": 0, "stale": 0, "errors": 0}
+    results: dict[str, int] = {"created": 0, "updated": 0, "stale": 0, "errors": 0}
     _tag_refs = tag_refs or []
 
     # Pre-fetch all VMs once, indexed by proxmox_vm_id
@@ -116,7 +116,9 @@ async def sync_all_replications(  # noqa: C901
         logger.warning("Error pre-fetching NetBox ProxmoxNodes: %s", e)
         nodes_by_name = {}
 
-    async def fetch_replications_for_session(px):
+    async def fetch_replications_for_session(
+        px: object,
+    ) -> tuple[int | None, list[dict[str, object]]]:
         """Fetch replications for a single Proxmox session. Returns (endpoint_id, payloads)."""
         endpoint_id = await _get_netbox_endpoint_id(nb, px)
 
@@ -126,7 +128,7 @@ async def sync_all_replications(  # noqa: C901
             logger.warning("Error fetching replications for %s: %s", px.name, e)
             return endpoint_id, []
 
-        payloads = []
+        payloads: list[dict[str, object]] = []
         for rep in replications:
             try:
                 guest_vmid = rep.get("guest")
@@ -175,7 +177,7 @@ async def sync_all_replications(  # noqa: C901
     all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
     # Flatten all payloads from all sessions, collect per-endpoint IDs
-    all_payloads: list[dict] = []
+    all_payloads: list[dict[str, object]] = []
     endpoint_ids: set[int] = set()
     for result in all_results:
         if isinstance(result, tuple):

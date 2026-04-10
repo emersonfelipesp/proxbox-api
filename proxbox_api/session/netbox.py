@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import os
 from functools import lru_cache
 from typing import Annotated
@@ -17,6 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
+from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 _DEFAULT_NETBOX_TIMEOUT = 120.0
 
@@ -88,12 +88,6 @@ def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
         bool(endpoint.verify_ssl),
     )
 
-
-async def _maybe_await(value):
-    """Await async SQLModel results while tolerating sync test sessions."""
-    if inspect.isawaitable(value):
-        return await value
-    return value
 
 
 def get_netbox_session(

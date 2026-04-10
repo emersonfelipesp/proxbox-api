@@ -12,7 +12,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import Response
 
 from proxbox_api.app import bootstrap
 from proxbox_api.app.cache_routes import register_cache_routes
@@ -64,7 +65,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     Limits requests to a configurable rate per minute.
     """
 
-    def __init__(self, app, requests_per_minute: int = 60):
+    def __init__(self, app: FastAPI, requests_per_minute: int = 60) -> None:
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
         self.window_size = 60.0
@@ -83,7 +84,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return forwarded.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         if path.startswith("/static/") or path in AUTH_EXEMPT_PATHS:
             return await call_next(request)
@@ -106,7 +107,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security headers to all responses."""
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -121,7 +122,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """Middleware to enforce API key authentication on protected routes."""
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
 
         if path in AUTH_EXEMPT_PATHS or path.startswith("/static/"):

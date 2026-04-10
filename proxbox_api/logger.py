@@ -163,7 +163,7 @@ class OperationLogger:
             await sync_operation()
     """
 
-    def __init__(self, operation: str, **context: object):
+    def __init__(self, operation: str, **context: object) -> None:
         """Initialize the operation logger.
 
         Args:

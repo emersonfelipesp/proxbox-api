@@ -16,10 +16,10 @@ class ProxboxBaseModel(BaseModel):
         str_strip_whitespace=True,
     )
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> object:
         return getattr(self, key)
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None) -> object:
         return getattr(self, key, default)
 
     def __iter__(self) -> Iterator[tuple[str, object]]:

@@ -6,11 +6,11 @@ from typing import Annotated
 from fastapi import Depends
 
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import ensure_tag_async
+from proxbox_api.netbox_rest import RestRecord, ensure_tag_async
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep  # noqa: F401
 
 
-async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep):
+async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep) -> RestRecord:
     try:
         return await ensure_tag_async(
             netbox_session,
@@ -34,4 +34,4 @@ async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep):
 # Proxbox Tag Dependency (used to identify the items the plugin created)
 # It's used to tag the items created by the plugin
 # NetBox Tag Object.
-ProxboxTagDep = Annotated[object, Depends(proxbox_tag)]
+ProxboxTagDep = Annotated[RestRecord, Depends(proxbox_tag)]

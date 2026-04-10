@@ -36,7 +36,7 @@ def _resolve_custom_field_delay() -> float:
 
 @router.get(
     "/extras/custom-fields/create",
-    response_model=list[dict],
+    response_model=list[dict[str, object]],
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )

@@ -7,12 +7,16 @@ import inspect
 import json
 import re
 from collections.abc import Mapping
-from typing import Any
+from types import TracebackType
+from typing import TYPE_CHECKING
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
+
+if TYPE_CHECKING:
+    from proxmox_openapi import ProxmoxSDK
 
 
 class SensitiveString:
@@ -38,7 +42,7 @@ class SensitiveString:
         return self._value
 
 
-def _proxmox_api_factory() -> Any:
+def _proxmox_api_factory() -> type[ProxmoxSDK]:
     """Return ``ProxmoxAPI`` from ``session.proxmox`` so tests can monkeypatch it."""
     import proxbox_api.session.proxmox as prox_mod
 
@@ -66,10 +70,10 @@ class ProxmoxSession:
         self.token_name: str | None = None
         self.token_value: SensitiveString | None = None
         self.ssl: bool = True
-        self.proxmox: Any = None
-        self.session: Any = None
+        self.proxmox: ProxmoxSDK | None = None
+        self.session: ProxmoxSDK | None = None
         self.version: str | None = None
-        self.cluster_status: list[dict[str, Any]] = []
+        self.cluster_status: list[dict[str, object]] = []
         self.mode: str | None = None
         self.cluster_name: str | None = None
         self.node_name: str | None = None
@@ -88,7 +92,12 @@ class ProxmoxSession:
     async def __aenter__(self) -> "ProxmoxSession":
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         await self.aclose()
 
     @classmethod
@@ -122,7 +131,7 @@ class ProxmoxSession:
 
     def _parse_config(
         self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Parse and validate cluster configuration."""
         if isinstance(cluster_config, ProxmoxSessionSchema):
             logger.info("INPUT is Pydantic Model ProxmoxSessionSchema")
@@ -150,7 +159,7 @@ class ProxmoxSession:
             message=f"INPUT of ProxmoxSession() must be a pydantic model or dict (either one will work). Input type provided: {type(cluster_config)}",
         )
 
-    def _set_attributes_from_config(self, config: dict[str, Any]) -> None:
+    def _set_attributes_from_config(self, config: dict[str, object]) -> None:
         """Set instance attributes from parsed config."""
         try:
             self.ip_address = config["ip_address"]
@@ -208,7 +217,7 @@ class ProxmoxSession:
                     self.name = self.node_name
                     self.fingerprints = None
 
-    async def _auth_async(self) -> Any:
+    async def _auth_async(self) -> ProxmoxSDK:
         """Async authentication to Proxmox."""
         auth_method = "token" if (self.token_name and self._get_token_value()) else "password"
         target = self.domain or self.ip_address
@@ -244,7 +253,7 @@ class ProxmoxSession:
                 python_exception=f"{error}",
             ) from error
 
-    def _build_auth_kwargs(self, auth_method: str) -> dict[str, Any]:
+    def _build_auth_kwargs(self, auth_method: str) -> dict[str, object]:
         """Build authentication kwargs for Proxmox API."""
         if auth_method == "token":
             return {
@@ -344,7 +353,7 @@ class ProxmoxSession:
                 python_exception=f"{error}",
             ) from error
 
-    async def _get_node_fingerprints_async(self, px: Any) -> list[str]:
+    async def _get_node_fingerprints_async(self, px: ProxmoxSDK) -> list[str]:
         """Get Nodes Fingerprints asynchronously."""
         try:
             join_info = px("cluster/config/join").get()

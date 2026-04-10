@@ -7,8 +7,8 @@ import json
 import os
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 from urllib.parse import urlsplit
 
 from netbox_sdk.client import ApiResponse
@@ -79,7 +79,7 @@ def _resolve_netbox_retry_delay() -> float:
 
 _netbox_request_semaphore: asyncio.Semaphore | None = None
 _netbox_request_semaphore_loop_id: int | None = None
-_netbox_get_cache: dict[tuple[int, str, str], tuple[float, int, list[dict[str, Any]]]] = {}
+_netbox_get_cache: dict[tuple[int, str, str], tuple[float, int, list[dict[str, object]]]] = {}
 
 _cache_metrics_hits: int = 0
 _cache_metrics_misses: int = 0
@@ -108,7 +108,7 @@ def _reset_netbox_globals() -> None:
     _cache_metrics_evictions_bytes = 0
 
 
-def get_cache_metrics() -> dict[str, Any]:
+def get_cache_metrics() -> dict[str, object]:
     """Return current cache metrics for observability."""
     global _cache_metrics_hits, _cache_metrics_misses, _cache_metrics_invalidations
     global \
@@ -242,7 +242,7 @@ def _resolve_get_cache_max_bytes() -> int:
         return 50 * 1024 * 1024
 
 
-def _calculate_cache_entry_size(records: list[dict[str, Any]]) -> int:
+def _calculate_cache_entry_size(records: list[dict[str, object]]) -> int:
     """Calculate approximate memory size of cache entry in bytes."""
     try:
         return len(json.dumps(records, default=str))
@@ -921,7 +921,7 @@ async def rest_reconcile_async(  # noqa: C901
     lookup: dict[str, object],
     payload: dict[str, object],
     schema: type[BaseModel] | type[dict],
-    current_normalizer,
+    current_normalizer: Callable[[dict[str, object]], dict[str, object]],
     patchable_fields: set[str] | frozenset[str] | None = None,
     nullable_fields: set[str] | frozenset[str] | None = None,
 ) -> RestRecord:
@@ -1388,11 +1388,11 @@ class BulkReconcilePhase:
     payloads: list[dict[str, object]]
     lookup_fields: list[str]
     schema: type[BaseModel] | type[dict]
-    current_normalizer: Any
+    current_normalizer: Callable[[dict[str, object]], dict[str, object]]
     patchable_fields: set[str] | frozenset[str] | None = None
     batch_size: int | None = None
     batch_delay_ms: int | None = None
-    selector: Any = None
+    selector: Callable[[list[RestRecord]], RestRecord | None] | None = None
 
 
 def _normalize_bulk_batch_size(batch_size: int | None) -> int:
@@ -1481,11 +1481,11 @@ async def rest_bulk_reconcile_async(  # noqa: C901
     payloads: list[dict[str, object]],
     lookup_fields: list[str],
     schema: type[BaseModel] | type[dict],
-    current_normalizer,
+    current_normalizer: Callable[[dict[str, object]], dict[str, object]],
     patchable_fields: set[str] | frozenset[str] | None = None,
     batch_size: int | None = None,
     batch_delay_ms: int | None = None,
-    selector=None,
+    selector: Callable[[list[RestRecord]], RestRecord | None] | None = None,
     base_query: dict[str, object] | None = None,
 ) -> BulkReconcileResult:
     if not payloads:

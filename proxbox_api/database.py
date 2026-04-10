@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from typing import Annotated
 
@@ -262,17 +263,17 @@ def _migrate_netbox_endpoint_columns() -> None:
         )
 
 
-def create_db_and_tables():
+def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_netbox_endpoint_columns()
 
 
-def get_session():
+def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:
         yield session
 
 
-async def get_async_session():
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
 

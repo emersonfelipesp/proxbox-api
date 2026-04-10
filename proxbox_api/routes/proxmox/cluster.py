@@ -222,7 +222,7 @@ ClusterResourcesDep = Annotated[ClusterResourcesList, Depends(cluster_resources)
 
 
 # Backup routines endpoint
-@router.get("/backup", response_model=list)
+@router.get("/backup", response_model=list[dict[str, object]])
 async def cluster_backup(pxs: ProxmoxSessionsDep):
     """
     ### Retrieve backup job configurations from multiple Proxmox sessions.

@@ -229,7 +229,7 @@ async def _collect_snapshot_payloads_for_vm(
     snapshot_payloads: list[dict] = []
     proxmox_snapshot_names: set[str] = set()
 
-    async def _fetch_snapshots_for_endpoint(proxmox):
+    async def _fetch_snapshots_for_endpoint(proxmox: object) -> list[dict[str, object]]:
         async with fetch_semaphore:
             result = get_vm_snapshots(
                 session=proxmox,
@@ -560,7 +560,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
     vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
 
-    async def _sync_vm_with_semaphore(vm):
+    async def _sync_vm_with_semaphore(vm: object) -> tuple[list[dict[str, object]], set[str]]:
         async with vm_sync_semaphore:
             return await _sync_single_vm_snapshots(
                 vm=vm,

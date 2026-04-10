@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends
 
@@ -41,18 +41,18 @@ __all__ = [
 
 async def create_proxmox_devices(  # noqa: C901
     netbox_session: object,
-    clusters_status: list[Any] | None,
+    clusters_status: list[object] | None,
     tag: ProxboxTagDep,
-    websocket: Any = None,
+    websocket: Annotated[WebSocketSSEBridge | None, Depends(lambda: None)] = None,
     node: str | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Create and synchronize devices from Proxmox nodes to NetBox."""
     tag_refs = nested_tag_payload(tag)
     nb = netbox_session
     phase_logger = SyncPhaseLogger("device_sync", cluster_mode="proxmox")
-    device_list: list[dict[str, Any]] = []
+    device_list: list[dict[str, object]] = []
 
     if not clusters_status:
         phase_logger.log_phase("validation", "No cluster status data provided", level="warning")
@@ -62,7 +62,7 @@ async def create_proxmox_devices(  # noqa: C901
         websocket if use_websocket and isinstance(websocket, WebSocketSSEBridge) else None
     )
 
-    all_devices: list[dict[str, Any]] = []
+    all_devices: list[dict[str, object]] = []
     device_cluster_map: dict[str, str] = {}
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()

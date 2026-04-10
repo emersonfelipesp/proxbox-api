@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from proxbox_api.logger import logger
 from proxbox_api.types import NetBoxRecord, TagLike
@@ -10,7 +10,7 @@ from proxbox_api.types import NetBoxRecord, TagLike
 T = TypeVar("T", bound=NetBoxRecord)
 
 
-def to_dict(value: object) -> dict[str, Any]:
+def to_dict(value: object) -> dict[str, object]:
     """Convert netbox-sdk records or plain objects into dictionaries."""
     if value is None:
         return {}
@@ -43,13 +43,13 @@ def _is_duplicate_error(detail: object) -> bool:
 
 
 def _candidate_reuse_lookups(
-    lookup: dict[str, Any],
-    payload: dict[str, Any],
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    seen: set[tuple[tuple[str, Any], ...]] = set()
+    lookup: dict[str, object],
+    payload: dict[str, object],
+) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    seen: set[tuple[tuple[str, object], ...]] = set()
 
-    def _add(candidate: dict[str, Any]) -> None:
+    def _add(candidate: dict[str, object]) -> None:
         normalized = {key: value for key, value in candidate.items() if value not in (None, "")}
         if not normalized:
             return
@@ -87,7 +87,7 @@ def _candidate_reuse_lookups(
 
 
 async def ensure_record(
-    endpoint: Any, lookup: dict[str, Any], payload: dict[str, Any]
+    endpoint: object, lookup: dict[str, object], payload: dict[str, object]
 ) -> NetBoxRecord:
     """Get a record by lookup fields or create it when missing.
 
@@ -121,7 +121,7 @@ async def ensure_record(
         raise error
 
 
-async def ensure_tag(nb: Any, *, name: str, slug: str, color: str, description: str) -> TagLike:
+async def ensure_tag(nb: object, *, name: str, slug: str, color: str, description: str) -> TagLike:
     """Get or create a NetBox tag.
 
     Args:

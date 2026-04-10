@@ -461,7 +461,7 @@ def create_error_detail_event(
 class TimingContext:
     """Context manager for timing operations."""
 
-    def __init__(self, bridge: WebSocketSSEBridge, key: str):
+    def __init__(self, bridge: WebSocketSSEBridge, key: str) -> None:
         self.bridge = bridge
         self.key = key
         self.elapsed_ms: int | None = None

@@ -112,7 +112,11 @@ def _format_task_description(vm_type: str, task_id: str | None, task_type: str) 
     return f"{vm_display} - {action}"
 
 
-def _find_cluster_session(pxs: list | None, cluster_status: list | None, cluster_name: str | None):
+def _find_cluster_session(
+    pxs: list[object] | None,
+    cluster_status: list[object] | None,
+    cluster_name: str | None,
+) -> object | None:
     """Find Proxmox session for a cluster."""
     if not pxs or not cluster_status:
         return None

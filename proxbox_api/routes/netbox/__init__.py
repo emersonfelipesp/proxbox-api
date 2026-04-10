@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,14 +14,9 @@ from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, validate_endpoint_host
+from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
-
-
-async def _maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
 
 
 class NetBoxEndpointCreate(BaseModel):

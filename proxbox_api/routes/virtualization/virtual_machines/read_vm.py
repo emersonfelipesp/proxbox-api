@@ -26,7 +26,7 @@ router = APIRouter()
 
 @router.get(
     "/",
-    response_model=list[dict],
+    response_model=list[dict[str, object]],
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
