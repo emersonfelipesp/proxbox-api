@@ -1940,7 +1940,10 @@ async def create_virtual_machines(  # noqa: C901
             return_exceptions=True,
         )
 
-        logger.info(f"VM Creation Result list: {result_list}")
+        logger.info(
+            "VM creation gather complete: %d cluster result(s)",
+            len(result_list),
+        )
         for cluster_result in result_list:
             if isinstance(cluster_result, Exception):
                 continue
@@ -3017,6 +3020,13 @@ async def create_virtual_machines_stream(
                     "errors": [{"detail": str(error)}],
                 },
             )
+        finally:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await asyncio.shield(sync_task)
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     return StreamingResponse(
         event_stream(),
