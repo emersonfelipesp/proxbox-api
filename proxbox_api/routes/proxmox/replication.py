@@ -1,5 +1,7 @@
 """Proxmox cluster replication endpoints and response schemas."""
 
+import asyncio
+
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -145,6 +147,24 @@ async def cluster_replication_stream(
                     "ok": True,
                     "message": "Replications sync completed.",
                     "result": result,
+                },
+            )
+        except asyncio.CancelledError:
+            yield sse_event(
+                "error",
+                {
+                    "step": "replications",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Replications sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
                 },
             )
         except Exception as error:  # noqa: BLE001

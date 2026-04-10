@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from proxbox_api.schemas.stream_messages import (
     ErrorCategory,
@@ -90,9 +90,21 @@ class WebSocketSSEBridge:
     async def close(self) -> None:
         await self._queue.put(None)
 
-    async def iter_sse(self) -> AsyncIterator[str]:
+    async def iter_sse(self, keepalive_interval: float = 15.0) -> AsyncIterator[str]:
+        """Yield SSE frames from the queue, emitting keepalive comments when idle.
+
+        SSE comment lines (starting with ``:``) are ignored by all spec-compliant
+        consumers including the plugin's ``_iter_sse_frames`` parser, so keepalives
+        are transparent to callers.  The interval prevents intermediate proxies from
+        closing a long-running stream when the sync task is doing heavy work and not
+        emitting progress events.
+        """
         while True:
-            item = await self._queue.get()
+            try:
+                item = await asyncio.wait_for(self._queue.get(), timeout=keepalive_interval)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
             if item is None:
                 break
             event, data = item
@@ -321,6 +333,148 @@ class WebSocketSSEBridge:
             if row_id:
                 return f"Processing {object_name} {row_id}"
         return f"{object_name} {status}"
+
+
+async def sse_stream_generator(  # noqa: C901
+    bridge: WebSocketSSEBridge,
+    sync_task: asyncio.Task,
+    step_name: str,
+    *,
+    started_message: str | None = None,
+    completed_message: str | None = None,
+    failed_message: str | None = None,
+    result_extractor: Callable[[object], dict[str, object]] | None = None,
+    keepalive_interval: float = 15.0,
+) -> AsyncIterator[str]:
+    """Shared SSE generator for bridge-pattern streaming endpoints.
+
+    Encapsulates try/except-CancelledError/except-Exception/finally in one place so
+    every streaming endpoint gets consistent keepalive, clean CancelledError handling,
+    and guaranteed task cleanup.  All three are required to prevent the 502 "stream
+    ended without a complete event" error.
+
+    Usage::
+
+        async def event_stream():
+            bridge = WebSocketSSEBridge()
+            async def _run_sync():
+                try:
+                    return await my_sync_func(websocket=bridge, use_websocket=True)
+                finally:
+                    await bridge.close()
+            sync_task = asyncio.create_task(_run_sync())
+            async for frame in sse_stream_generator(bridge, sync_task, "my-stage"):
+                yield frame
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    Args:
+        bridge: The ``WebSocketSSEBridge`` used by the sync function for progress events.
+        sync_task: The asyncio.Task running the sync function.
+        step_name: Stage identifier used in SSE event payloads (e.g. ``"virtual-machines"``).
+        started_message: Optional override for the "started" event message.
+        completed_message: Optional override for the "completed" and "complete" event messages.
+        failed_message: Optional override for the "complete" event message on failure.
+        result_extractor: Callable that receives the task return value and returns a dict for
+            the SSE result payload.  Defaults to ``{"count": len(result)}``.
+        keepalive_interval: Seconds between keepalive comments when the bridge queue is idle.
+    """
+    def _default_extract(result: object) -> dict[str, object]:
+        if isinstance(result, list):
+            return {"count": len(result)}
+        if isinstance(result, dict):
+            return result
+        return {}
+
+    extract = result_extractor or _default_extract
+
+    try:
+        yield sse_event(
+            "step",
+            {
+                "step": step_name,
+                "status": "started",
+                "message": started_message or f"Starting {step_name} synchronization.",
+            },
+        )
+        async for frame in bridge.iter_sse(keepalive_interval=keepalive_interval):
+            yield frame
+
+        result = await sync_task
+        result_data = extract(result)
+        yield sse_event(
+            "step",
+            {
+                "step": step_name,
+                "status": "completed",
+                "message": completed_message or f"{step_name} synchronization finished.",
+                "result": result_data,
+            },
+        )
+        yield sse_event(
+            "complete",
+            {
+                "ok": True,
+                "message": completed_message or f"{step_name} sync completed.",
+                "result": result_data,
+            },
+        )
+    except asyncio.CancelledError:
+        if not sync_task.done():
+            sync_task.cancel()
+            try:
+                await sync_task
+            except asyncio.CancelledError:
+                pass
+        yield sse_event(
+            "error",
+            {
+                "step": step_name,
+                "status": "failed",
+                "error": "Server shutdown or request cancelled.",
+                "detail": "Server shutdown or request cancelled.",
+            },
+        )
+        yield sse_event(
+            "complete",
+            {
+                "ok": False,
+                "message": f"{step_name} sync cancelled.",
+                "errors": [{"detail": "Server shutdown or request cancelled."}],
+            },
+        )
+    except Exception as error:  # noqa: BLE001
+        if not sync_task.done():
+            sync_task.cancel()
+            try:
+                await sync_task
+            except asyncio.CancelledError:
+                pass
+        yield sse_event(
+            "error",
+            {
+                "step": step_name,
+                "status": "failed",
+                "error": str(error),
+                "detail": str(error),
+            },
+        )
+        yield sse_event(
+            "complete",
+            {
+                "ok": False,
+                "message": failed_message or f"{step_name} sync failed.",
+                "errors": [{"detail": str(error)}],
+            },
+        )
+    finally:
+        if not sync_task.done():
+            sync_task.cancel()
+            try:
+                await asyncio.shield(sync_task)
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
 
 # Standalone helper functions for use outside WebSocketSSEBridge context

@@ -3118,6 +3118,12 @@ async def create_virtual_machine_by_netbox_id_stream(
                 },
             )
         except asyncio.CancelledError:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
@@ -3136,6 +3142,12 @@ async def create_virtual_machine_by_netbox_id_stream(
                 },
             )
         except HTTPException as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
@@ -3154,6 +3166,12 @@ async def create_virtual_machine_by_netbox_id_stream(
                 },
             )
         except Exception as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
@@ -3171,6 +3189,13 @@ async def create_virtual_machine_by_netbox_id_stream(
                     "errors": [{"detail": str(error)}],
                 },
             )
+        finally:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await asyncio.shield(sync_task)
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     return StreamingResponse(
         event_stream(),

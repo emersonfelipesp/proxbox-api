@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.services.sync.storages import create_storages as sync_storages
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
@@ -59,60 +59,8 @@ async def create_storages_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "storage",
-                    "status": "started",
-                    "message": "Starting storage synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "storage",
-                    "status": "completed",
-                    "message": "Storage synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Storage sync completed.",
-                    "result": {"count": len(result)},
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "storage",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Storage sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "storage"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

@@ -20,7 +20,7 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
@@ -269,59 +269,8 @@ async def cluster_backup_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "backup-routines",
-                    "status": "started",
-                    "message": "Starting backup routines synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "backup-routines",
-                    "status": "completed",
-                    "message": "Backup routines synchronization finished.",
-                    "result": result,
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Backup routines sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:  # noqa: BLE001
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "backup-routines",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Backup routines sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "backup-routines"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

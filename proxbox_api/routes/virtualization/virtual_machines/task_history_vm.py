@@ -9,7 +9,7 @@ from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.sync.task_history import sync_all_virtual_machine_task_histories
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
@@ -40,59 +40,8 @@ async def create_all_virtual_machine_task_histories_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "task-history",
-                    "status": "started",
-                    "message": "Starting task history synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "task-history",
-                    "status": "completed",
-                    "message": "Task history synchronization finished.",
-                    "result": {"created": result.get("created", 0) if result else 0},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Task history sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "task-history",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Task history sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "task-history"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

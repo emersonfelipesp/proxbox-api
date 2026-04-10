@@ -34,7 +34,7 @@ from proxbox_api.services.sync.storage_links import (
 )
 from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
@@ -1097,65 +1097,8 @@ async def create_all_virtual_machine_backups_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "backups",
-                    "status": "started",
-                    "message": "Starting backup synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "backups",
-                    "status": "completed",
-                    "message": "Backup synchronization finished.",
-                    "result": {"count": len(result) if result else 0},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Backup sync completed.",
-                    "result": {"count": len(result) if result else 0},
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "backups",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Backup sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "backups"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -1242,53 +1185,13 @@ async def create_virtual_machine_backups_by_id_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "backups",
-                    "status": "started",
-                    "message": f"Starting backup sync for VM id={netbox_vm_id}.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "backups",
-                    "status": "completed",
-                    "message": "Backup synchronization finished.",
-                    "result": {"count": len(result) if result else 0},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Backup sync completed.",
-                    "result": {"count": len(result) if result else 0},
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "backups",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Backup sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(
+            bridge,
+            sync_task,
+            "backups",
+            started_message=f"Starting backup sync for VM id={netbox_vm_id}.",
+        ):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

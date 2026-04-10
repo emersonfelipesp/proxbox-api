@@ -23,7 +23,7 @@ from proxbox_api.services.sync.snapshots import (
 )
 from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
@@ -267,59 +267,8 @@ async def create_all_virtual_machine_snapshots_stream(  # noqa: C901
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "snapshots",
-                    "status": "started",
-                    "message": "Starting snapshot synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "snapshots",
-                    "status": "completed",
-                    "message": "Snapshot synchronization finished.",
-                    "result": {"created": result.get("created", 0) if result else 0},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Snapshot sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "snapshots",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Snapshot sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "snapshots"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -401,53 +350,13 @@ async def create_virtual_machine_snapshots_by_id_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "snapshots",
-                    "status": "started",
-                    "message": f"Starting snapshot sync for VM id={netbox_vm_id}.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "snapshots",
-                    "status": "completed",
-                    "message": "Snapshot synchronization finished.",
-                    "result": {"created": result.get("created", 0) if result else 0},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Snapshot sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "snapshots",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Snapshot sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(
+            bridge,
+            sync_task,
+            "snapshots",
+            started_message=f"Starting snapshot sync for VM id={netbox_vm_id}.",
+        ):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

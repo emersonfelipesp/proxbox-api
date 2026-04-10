@@ -218,7 +218,7 @@ async def create_virtual_machines_interfaces_stream(
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
     )
-    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -241,59 +241,8 @@ async def create_virtual_machines_interfaces_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-interfaces",
-                    "status": "started",
-                    "message": "Starting VM interfaces synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-interfaces",
-                    "status": "completed",
-                    "message": "VM interfaces synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "VM interfaces sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "vm-interfaces",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "VM interfaces sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "vm-interfaces"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -371,7 +320,7 @@ async def create_virtual_machines_ip_address_stream(
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_ip_addresses,
     )
-    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -394,59 +343,8 @@ async def create_virtual_machines_ip_address_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-ip-addresses",
-                    "status": "started",
-                    "message": "Starting VM IP address synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-ip-addresses",
-                    "status": "completed",
-                    "message": "VM IP address synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "VM IP address sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "vm-ip-addresses",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "VM IP address sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "vm-ip-addresses"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

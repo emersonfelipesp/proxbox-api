@@ -21,7 +21,7 @@ from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfacesDep
 from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep, create_proxmox_devices
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
@@ -64,59 +64,8 @@ async def create_devices_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "devices",
-                    "status": "started",
-                    "message": "Starting devices synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "devices",
-                    "status": "completed",
-                    "message": "Devices synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Devices sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "devices",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Devices sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "devices"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -507,59 +456,8 @@ async def create_all_devices_interfaces_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "node-interfaces",
-                    "status": "started",
-                    "message": "Starting node interfaces synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "node-interfaces",
-                    "status": "completed",
-                    "message": "Node interfaces synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Node interfaces sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            if not sync_task.done():
-                sync_task.cancel()
-                try:
-                    await sync_task
-                except asyncio.CancelledError:
-                    pass
-            yield sse_event(
-                "error",
-                {
-                    "step": "node-interfaces",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Node interfaces sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "node-interfaces"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

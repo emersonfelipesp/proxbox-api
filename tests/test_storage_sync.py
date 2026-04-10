@@ -117,7 +117,7 @@ def test_create_storages_stream_emits_complete_event(monkeypatch):
     )
     payload = "".join(asyncio.run(_collect_async_frames(response.content)))
     assert "event: complete" in payload
-    assert "Storage sync completed." in payload
+    assert '"ok": true' in payload
     assert '"count": 2' in payload
 
 

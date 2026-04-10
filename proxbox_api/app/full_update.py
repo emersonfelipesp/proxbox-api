@@ -1008,9 +1008,6 @@ async def full_update_sync_stream(  # noqa: C901
                     "errors": [{"detail": str(error)}],
                 },
             )
-        finally:
-            return
-
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
