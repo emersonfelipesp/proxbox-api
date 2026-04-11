@@ -5,7 +5,7 @@
 - `pytest`
 - `httpx`
 - FastAPI `TestClient`
-- `proxmox-openapi` (testes com mock)
+- `proxmox-sdk` (testes com mock)
 
 As dependencias de teste sao definidas em `pyproject.toml` em
 `[project.optional-dependencies] -> test`.
@@ -36,7 +36,7 @@ pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py
 
 ## Testes com Mock Proxmox
 
-Todos os testes usam recursos mock do `proxmox-openapi` para validar a integracao com a API Proxmox. A suite de testes suporta tres modos mock:
+Todos os testes usam recursos mock do `proxmox-sdk` para validar a integracao com a API Proxmox. A suite de testes suporta tres modos mock:
 
 ### Tres Modos Mock
 
@@ -48,7 +48,7 @@ Todos os testes usam recursos mock do `proxmox-openapi` para validar a integraca
 
 ### 1. MockBackend In-process (`@pytest.mark.mock_backend`)
 
-O modo mais rapido usando `proxmox_openapi.sdk.backends.mock.MockBackend`. Nao requer servidor HTTP.
+O modo mais rapido usando `proxmox_sdk.sdk.backends.mock.MockBackend`. Nao requer servidor HTTP.
 
 ```python
 @pytest.mark.mock_backend
@@ -59,7 +59,7 @@ async def test_vm_sync(proxmox_mock_backend):
 
 ### 2. Container HTTP Published (`@pytest.mark.mock_http`)
 
-Usa a imagem Docker publicada `emersonfelipesp/proxmox-openapi:latest` na porta 8006.
+Usa a imagem Docker publicada `emersonfelipesp/proxmox-sdk:latest` na porta 8006.
 
 ```python
 @pytest.mark.mock_http
@@ -70,7 +70,7 @@ async def test_vm_sync_http(proxmox_mock_http_published):
 
 ### 3. Container HTTP Local (`@pytest.mark.mock_http`)
 
-Usa uma imagem Docker construida localmente de `./proxmox-openapi` na porta 8007.
+Usa uma imagem Docker construida localmente de `./proxmox-sdk` na porta 8007.
 
 ```python
 @pytest.mark.mock_http
@@ -133,7 +133,7 @@ O `docker-compose.yml` define dois servicos:
 ```yaml
 services:
   proxmox-mock-published:
-    image: emersonfelipesp/proxmox-openapi:latest
+    image: emersonfelipesp/proxmox-sdk:latest
     ports:
       - "8006:8000"
     environment:
@@ -142,7 +142,7 @@ services:
 
   proxmox-mock-local:
     build:
-      context: ./proxmox-openapi
+      context: ./proxmox-sdk
       dockerfile: Dockerfile
     ports:
       - "8007:8000"

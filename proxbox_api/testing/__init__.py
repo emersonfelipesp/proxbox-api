@@ -1,4 +1,4 @@
-"""Testing utilities for proxbox-api using proxmox-openapi mock features."""
+"""Testing utilities for proxbox-api using proxmox-sdk mock features."""
 
 from proxbox_api.testing.proxmox_mock import (
     MockProxmoxContext,

@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query
-from proxmox_openapi.sdk.exceptions import ResourceException
+from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel, Field, field_validator
 
 from proxbox_api.enum.proxmox import *
@@ -211,7 +211,7 @@ async def proxmox(pxs: ProxmoxSessionsDep):
             "github": {
                 "netbox": "https://github.com/netbox-community/netbox",
                 "netbox-sdk": "https://github.com/netbox-community/netbox-sdk",
-                "proxmox-openapi": "https://github.com/emersonfelipesp/proxmox-openapi",
+                "proxmox-sdk": "https://github.com/emersonfelipesp/proxmox-sdk",
                 "proxbox": "https://github.com/netdevopsbr/netbox-proxbox",
             },
             "clusters": json_response,

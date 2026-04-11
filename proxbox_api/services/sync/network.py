@@ -509,6 +509,12 @@ async def bulk_reconcile_vm_interface_ips(
                 "status": record.get("status"),
                 "tags": record.get("tags"),
             },
+            # Never patch assignment fields on existing IPs.  NetBox rejects
+            # reassignment when the IP is the primary IP of the parent object
+            # ("Cannot reassign IP address while it is designated as the
+            # primary IP for the parent object").  Assignment is established
+            # at create time; status/tags/custom_fields are safe to update.
+            patchable_fields=frozenset({"status", "tags", "custom_fields"}),
         )
         return result.records if result and hasattr(result, "records") else []
     except Exception as e:
@@ -555,8 +561,14 @@ async def cleanup_stale_ips_for_interface(
 
     stale_ids: list[int] = []
     for ip_record in existing_ips:
-        address = ip_record.get("address") if isinstance(ip_record, dict) else getattr(ip_record, "address", None)
-        record_id = ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+        address = (
+            ip_record.get("address")
+            if isinstance(ip_record, dict)
+            else getattr(ip_record, "address", None)
+        )
+        record_id = (
+            ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+        )
         if record_id is None:
             continue
         # Normalize the stored address for comparison
@@ -642,7 +654,9 @@ async def _resolve_vm_interface_ips(  # noqa: C901
                 },
             )
             ip_id = (
-                ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+                ip_record.get("id")
+                if isinstance(ip_record, dict)
+                else getattr(ip_record, "id", None)
             )
             results.append((ip_id, ip_addr))
         except Exception as ip_exc:

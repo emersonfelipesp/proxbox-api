@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from proxmox_openapi import ProxmoxSDK
+from proxmox_sdk import ProxmoxSDK
 
 from proxbox_api.session.proxmox_core import ProxmoxSession
 from proxbox_api.session.proxmox_providers import (
@@ -34,7 +34,7 @@ def _should_use_mock() -> bool:
 
 
 def ProxmoxAPI(host: str, backend: str | None = None, **kwargs: object) -> ProxmoxSDK:
-    """Compatibility adapter that returns an async proxmox-openapi SDK client.
+    """Compatibility adapter that returns an async proxmox-sdk SDK client.
 
     Automatically uses mock backend when:
     - PROXMOX_API_MODE=mock environment variable is set

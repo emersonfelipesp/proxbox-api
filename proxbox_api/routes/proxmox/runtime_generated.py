@@ -24,7 +24,7 @@ from proxbox_api.proxmox_codegen.pydantic_generator import (
 from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, slugify_identifier
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
-    available_proxmox_openapi_versions,
+    available_proxmox_sdk_versions,
     load_proxmox_generated_openapi,
     proxmox_generated_route_cache_path,
 )
@@ -578,7 +578,7 @@ def _load_documents_for_registration(
     if cached is not None:
         return cached["documents"]
 
-    versions = available_proxmox_openapi_versions()
+    versions = available_proxmox_sdk_versions()
     return {
         discovered_version: load_proxmox_generated_openapi(version_tag=discovered_version)
         for discovered_version in sorted(versions, key=_version_sort_key)

@@ -23,7 +23,7 @@ from proxbox_api.proxmox_codegen.pydantic_generator import (
 from proxbox_api.proxmox_codegen.utils import pascal_case
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
-    available_proxmox_openapi_versions,
+    available_proxmox_sdk_versions,
     load_proxmox_generated_openapi,
 )
 from proxbox_api.routes.proxmox.runtime_generated import (
@@ -368,7 +368,7 @@ def _build_request_inputs(openapi_path: str, operation: dict[str, Any]) -> dict[
 
 def _build_generated_route_cases() -> list[Any]:
     cases = []
-    for version_tag in available_proxmox_openapi_versions():
+    for version_tag in available_proxmox_sdk_versions():
         document = load_proxmox_generated_openapi(version_tag=version_tag)
         if not document:
             continue
@@ -658,7 +658,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
 ):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", ProxyFakeProxmoxAPI)
     monkeypatch.setattr(
-        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_openapi_versions",
+        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_sdk_versions",
         lambda: ["latest"],
     )
     monkeypatch.setattr(
@@ -731,7 +731,7 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
 ):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", ProxyFakeProxmoxAPI)
     monkeypatch.setattr(
-        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_openapi_versions",
+        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_sdk_versions",
         lambda: ["latest"],
     )
     monkeypatch.setattr(
@@ -926,7 +926,7 @@ def test_generated_proxy_route_closes_target_on_response_validation_failure(monk
 
 def test_refresh_generated_routes_endpoint_rebuilds_runtime_state(monkeypatch):
     monkeypatch.setattr(
-        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_openapi_versions",
+        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_sdk_versions",
         lambda: ["8.3.0", "latest"],
     )
     monkeypatch.setattr(
@@ -962,7 +962,7 @@ def test_refresh_generated_routes_endpoint_rebuilds_single_version(monkeypatch):
     assert result["cache_source"] == "generated-artifacts"
 
 
-def test_available_proxmox_openapi_versions_ignores_non_version_entries(tmp_path, monkeypatch):
+def test_available_proxmox_sdk_versions_ignores_non_version_entries(tmp_path, monkeypatch):
     generated_root = tmp_path / "generated" / "proxmox"
     latest_dir = generated_root / "latest"
     version_dir = generated_root / "8.3.0"
@@ -983,7 +983,7 @@ def test_available_proxmox_openapi_versions_ignores_non_version_entries(tmp_path
         lambda: Path(generated_root),
     )
 
-    assert available_proxmox_openapi_versions() == ["8.3.0", "latest"]
+    assert available_proxmox_sdk_versions() == ["8.3.0", "latest"]
 
 
 def test_register_generated_routes_uses_persisted_cache_on_reload(tmp_path, monkeypatch):
@@ -1001,7 +1001,7 @@ def test_register_generated_routes_uses_persisted_cache_on_reload(tmp_path, monk
         lambda: Path(cache_path),
     )
     monkeypatch.setattr(
-        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_openapi_versions",
+        "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_sdk_versions",
         lambda: [],
     )
     monkeypatch.setattr(

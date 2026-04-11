@@ -205,10 +205,10 @@ uv run mkdocs build --strict
 
 - Python target: `>=3.11`
 - API framework: FastAPI
-- Proxmox client: `proxmox-openapi`
+- Proxmox client: `proxmox-sdk`
 - NetBox client facade: `netbox-sdk`
 - ORM: SQLModel
 - Local DB default file: `database.db`
-- Runtime deps (notable): `fastapi[standard]`, `proxmox-openapi`, `netbox-sdk`, `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`
+- Runtime deps (notable): `fastapi[standard]`, `proxmox-sdk`, `netbox-sdk`, `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`
 
 End of llms context file.

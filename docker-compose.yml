@@ -2,7 +2,7 @@ name: proxbox-api-dev
 
 services:
   proxmox-mock-published:
-    image: emersonfelipesp/proxmox-openapi:latest
+    image: emersonfelipesp/proxmox-sdk:latest
     container_name: proxmox-mock-published
     ports:
       - "8006:8000"
@@ -23,7 +23,7 @@ services:
 
   proxmox-mock-local:
     build:
-      context: ./proxmox-openapi
+      context: ./proxmox-sdk
       dockerfile: Dockerfile
     container_name: proxmox-mock-local
     ports:

@@ -15,14 +15,14 @@ uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_
 rtk pytest tests
 ```
 
-If you edit `proxmox-openapi/`, also run:
+If you edit `proxmox-sdk/`, also run:
 
 ```bash
-cd proxmox-openapi
+cd proxmox-sdk
 uv run ruff check .
 uv run ruff format --check .
-uv run python -m compileall proxmox_openapi tests
-uv run python -c "import proxmox_openapi.mock_main"
+uv run python -m compileall proxmox_sdk tests
+uv run python -c "import proxmox_sdk.mock_main"
 uv run pytest tests
 ```
 
@@ -44,7 +44,7 @@ Fix failures locally before finishing the task.
 
 ### Top-level packages
 - `proxbox_api/CLAUDE.md`
-- `proxmox-openapi/CLAUDE.md`
+- `proxmox-sdk/CLAUDE.md`
 - `nextjs-ui/CLAUDE.md`
 - `nextjs-ui/AGENTS.md`
 

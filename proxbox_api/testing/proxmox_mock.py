@@ -1,4 +1,4 @@
-"""Mock Proxmox API utilities for testing using proxmox-openapi SDK."""
+"""Mock Proxmox API utilities for testing using proxmox-sdk SDK."""
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ class MockProxmoxContext:
 
     async def __aenter__(self) -> Any:
         """Create and return mock SDK session."""
-        from proxmox_openapi import ProxmoxSDK
+        from proxmox_sdk import ProxmoxSDK
 
         backend, host = self._detect_backend()
 
@@ -132,9 +132,9 @@ def reset_mock_state() -> None:
     Call this in test teardown to ensure test isolation.
     """
     try:
-        from proxmox_openapi.mock.schema_helpers import schema_fingerprint
-        from proxmox_openapi.mock.state import shared_mock_store
-        from proxmox_openapi.schema import load_proxmox_generated_openapi
+        from proxmox_sdk.mock.schema_helpers import schema_fingerprint
+        from proxmox_sdk.mock.state import shared_mock_store
+        from proxmox_sdk.schema import load_proxmox_generated_openapi
 
         doc = load_proxmox_generated_openapi()
         if doc:

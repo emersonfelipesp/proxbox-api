@@ -33,7 +33,7 @@ def proxmox_generated_route_cache_path() -> Path:
     return proxmox_generated_openapi_root() / RUNTIME_GENERATED_ROUTE_CACHE_FILENAME
 
 
-def available_proxmox_openapi_versions() -> list[str]:
+def available_proxmox_sdk_versions() -> list[str]:
     """List generated Proxmox version tags that have an embedded OpenAPI artifact."""
 
     root = proxmox_generated_openapi_root()

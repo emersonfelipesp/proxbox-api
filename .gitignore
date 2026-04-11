@@ -147,10 +147,7 @@ dmypy.json
 # other stuff
 .vscode
 
-# proxmox-openapi is a local dev copy; installed from PyPI, not tracked as a submodule
-/proxmox-openapi/
-
-# Local dev copies of SDK packages
+# Local dev copies of SDK packages (installed from PyPI, not tracked as submodules)
 /netbox-sdk/
 /proxmox-sdk/
 

@@ -122,7 +122,7 @@ Path parameter normalization:
 - Example:
   - Proxmox contract path: `/nodes/{node}/hardware/pci/{pci-id-or-mapping}`
   - Mounted FastAPI path: `/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}`
-- The upstream proxmox-openapi SDK call still uses the original Proxmox parameter name from the generated OpenAPI contract.
+- The upstream proxmox-sdk SDK call still uses the original Proxmox parameter name from the generated OpenAPI contract.
 
 Version discovery:
 
@@ -140,8 +140,8 @@ Target selection:
 
 Typed sync integration:
 
-- Handcrafted sync-facing routes still call Proxmox directly, but now do so through `proxbox_api/services/proxmox_helpers.py` backed by the proxmox-openapi SDK.
-- That helper layer validates live proxmox-openapi payloads with the generated models in `proxbox_api/generated/proxmox/latest/pydantic_models.py` before returning data to route handlers.
+- Handcrafted sync-facing routes still call Proxmox directly, but now do so through `proxbox_api/services/proxmox_helpers.py` backed by the proxmox-sdk SDK.
+- That helper layer validates live proxmox-sdk payloads with the generated models in `proxbox_api/generated/proxmox/latest/pydantic_models.py` before returning data to route handlers.
 - This avoids internal HTTP round-trips while keeping VM config, cluster status, cluster resources, storage listing, and node storage content aligned with the generated contract used by `/proxmox/api2/*`.
 
 Examples of generated route shapes:

@@ -10,6 +10,7 @@ from sqlmodel import select
 
 from proxbox_api.constants import DEFAULT_LOG_PATH
 from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
+from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import configure_file_logging_path, logger
 from proxbox_api.netbox_compat import NetBoxBase
 from proxbox_api.session.netbox import get_netbox_session
@@ -80,9 +81,15 @@ def init_database_and_netbox() -> None:
             netbox_session = get_netbox_session(database_session=database_session)
             NetBoxBase.nb = netbox_session
             init_ok = True
+    except ProxboxException as error:
+        last_init_error = str(error)
+        logger.warning("bootstrap: NetBox is not connected — %s", error)
+        netbox_session = None
+        NetBoxBase.nb = None
+        init_ok = True  # DB is healthy; missing NetBox endpoint is an expected state
     except Exception as error:  # noqa: BLE001
         last_init_error = str(error)
-        logger.exception("Database or NetBox client bootstrap failed")
+        logger.exception("bootstrap: Database or NetBox client bootstrap failed")
         netbox_session = None
         NetBoxBase.nb = None
 

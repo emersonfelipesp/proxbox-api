@@ -23,7 +23,7 @@ def test_custom_openapi_contains_embedded_generated_proxmox_schema():
     assert "x-proxmox-generated-openapi" in schema
 
 
-def test_generated_proxmox_openapi_snapshot_is_available():
+def test_generated_proxmox_sdk_snapshot_is_available():
     document = load_proxmox_generated_openapi()
     assert proxmox_generated_openapi_path().exists()
     assert document["openapi"] == "3.1.0"

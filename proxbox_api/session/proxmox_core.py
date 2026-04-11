@@ -16,7 +16,7 @@ from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 
 if TYPE_CHECKING:
-    from proxmox_openapi import ProxmoxSDK
+    from proxmox_sdk import ProxmoxSDK
 
 
 class SensitiveString:

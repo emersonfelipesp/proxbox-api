@@ -1,6 +1,6 @@
 """E2E test fixtures for proxbox-api."""
 
-from proxbox_api.e2e.fixtures.proxmox_openapi_mock import (
+from proxbox_api.e2e.fixtures.proxmox_sdk_mock import (
     MockProxmoxCluster,
     MockProxmoxNode,
     MockProxmoxVM,

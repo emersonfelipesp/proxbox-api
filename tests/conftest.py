@@ -309,7 +309,7 @@ async def proxmox_mock_backend():
     _prior = os.environ.get("PROXMOX_API_MODE")
     os.environ["PROXMOX_API_MODE"] = "mock"
 
-    from proxmox_openapi.sdk.backends.mock import MockBackend
+    from proxmox_sdk.sdk.backends.mock import MockBackend
 
     backend = MockBackend(schema_version="latest")
     yield backend
@@ -340,7 +340,7 @@ async def proxmox_mock_http_published():
     _prior = os.environ.get("PROXMOX_API_MODE")
     os.environ["PROXMOX_API_MODE"] = "mock"
 
-    from proxmox_openapi import ProxmoxSDK
+    from proxmox_sdk import ProxmoxSDK
 
     base_url = os.getenv("PROXMOX_MOCK_PUBLISHED_URL", "http://localhost:8006")
     sdk = ProxmoxSDK(host=base_url, backend="https", verify_ssl=False)
@@ -370,7 +370,7 @@ async def proxmox_mock_http_local():
     _prior = os.environ.get("PROXMOX_API_MODE")
     os.environ["PROXMOX_API_MODE"] = "mock"
 
-    from proxmox_openapi import ProxmoxSDK
+    from proxmox_sdk import ProxmoxSDK
 
     base_url = os.getenv("PROXMOX_MOCK_LOCAL_URL", "http://localhost:8007")
     sdk = ProxmoxSDK(host=base_url, backend="https", verify_ssl=False)

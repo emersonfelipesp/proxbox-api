@@ -5,7 +5,7 @@
 - `pytest`
 - `httpx`
 - FastAPI `TestClient`
-- `proxmox-openapi` (mock testing)
+- `proxmox-sdk` (mock testing)
 
 Test dependencies are defined in `pyproject.toml` under
 `[project.optional-dependencies] -> test`.
@@ -36,7 +36,7 @@ pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py
 
 ## Proxmox Mock Testing
 
-All tests use `proxmox-openapi` mock features to validate Proxmox API integration. The test suite supports three mock modes:
+All tests use `proxmox-sdk` mock features to validate Proxmox API integration. The test suite supports three mock modes:
 
 ### Three Mock Modes
 
@@ -48,7 +48,7 @@ All tests use `proxmox-openapi` mock features to validate Proxmox API integratio
 
 ### 1. In-process MockBackend (`@pytest.mark.mock_backend`)
 
-The fastest mode using the `proxmox_openapi.sdk.backends.mock.MockBackend`. No HTTP server required.
+The fastest mode using the `proxmox_sdk.sdk.backends.mock.MockBackend`. No HTTP server required.
 
 ```python
 @pytest.mark.mock_backend
@@ -59,7 +59,7 @@ async def test_vm_sync(proxmox_mock_backend):
 
 ### 2. HTTP Published Container (`@pytest.mark.mock_http`)
 
-Uses the published Docker image `emersonfelipesp/proxmox-openapi:latest` on port 8006.
+Uses the published Docker image `emersonfelipesp/proxmox-sdk:latest` on port 8006.
 
 ```python
 @pytest.mark.mock_http
@@ -70,7 +70,7 @@ async def test_vm_sync_http(proxmox_mock_http_published):
 
 ### 3. HTTP Local Build Container (`@pytest.mark.mock_http`)
 
-Uses a locally-built Docker image from `./proxmox-openapi` on port 8007.
+Uses a locally-built Docker image from `./proxmox-sdk` on port 8007.
 
 ```python
 @pytest.mark.mock_http
@@ -133,7 +133,7 @@ The `docker-compose.yml` defines two services:
 ```yaml
 services:
   proxmox-mock-published:
-    image: emersonfelipesp/proxmox-openapi:latest
+    image: emersonfelipesp/proxmox-sdk:latest
     ports:
       - "8006:8000"
     environment:
@@ -142,7 +142,7 @@ services:
 
   proxmox-mock-local:
     build:
-      context: ./proxmox-openapi
+      context: ./proxmox-sdk
       dockerfile: Dockerfile
     ports:
       - "8007:8000"

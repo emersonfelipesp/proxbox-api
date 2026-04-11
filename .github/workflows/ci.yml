@@ -39,7 +39,7 @@ jobs:
       - name: Import smoke checks
         run: |
           uv run python -c "import proxbox_api.main"
-          uv run python -c "import proxmox_openapi.mock_main"
+          uv run python -c "import proxmox_sdk.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Core tests
@@ -131,7 +131,7 @@ jobs:
             proxbox_curl_flags: ""
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:v4.5
-      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-openapi:latest
+      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
       UV_HTTP_TIMEOUT: "120"
     steps:

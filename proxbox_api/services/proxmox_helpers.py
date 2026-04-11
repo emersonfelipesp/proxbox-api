@@ -1,4 +1,4 @@
-"""Typed helpers for proxmox-openapi calls validated through generated models."""
+"""Typed helpers for proxmox-sdk calls validated through generated models."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import functools
 from collections.abc import Callable
 from typing import TypeVar
 
-from proxmox_openapi.sdk.exceptions import ResourceException
+from proxmox_sdk.sdk.exceptions import ResourceException
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models

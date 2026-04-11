@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from netbox_sdk.client import ApiResponse
-from proxmox_openapi.sdk.exceptions import ResourceException
+from proxmox_sdk.sdk.exceptions import ResourceException
 from sqlmodel import Session
 
 from proxbox_api.app.netbox_session import get_raw_netbox_session

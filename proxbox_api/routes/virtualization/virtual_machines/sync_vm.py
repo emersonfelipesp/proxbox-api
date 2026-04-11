@@ -600,8 +600,6 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
     return None
 
 
-
-
 async def _create_vm_interface_parallel(
     nb,
     virtual_machine: dict,
@@ -2116,7 +2114,7 @@ async def create_only_vm_interfaces(  # noqa: C901
         if vm_type == "qemu" and vm_config.get("agent"):
             if proxmox_session and resource_node:
                 guest_agent_interfaces = (
-                    get_qemu_guest_agent_network_interfaces(
+                    await get_qemu_guest_agent_network_interfaces(
                         proxmox_session, resource_node, int(vmid)
                     )
                     or []
@@ -2549,7 +2547,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         if vm_type == "qemu" and vm_config.get("agent"):
             if proxmox_session and resource_node:
                 guest_agent_interfaces = (
-                    get_qemu_guest_agent_network_interfaces(
+                    await get_qemu_guest_agent_network_interfaces(
                         proxmox_session, resource_node, int(vmid)
                     )
                     or []

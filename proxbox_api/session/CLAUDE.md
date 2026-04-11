@@ -18,7 +18,7 @@ Session management utilities for NetBox and Proxmox API clients.
 ## How These Sessions Flow
 
 - `netbox.py` is the source of truth for building NetBox client sessions from persisted endpoint records.
-- `proxmox_core.py` and `proxmox_providers.py` create proxmox-openapi async SDK sessions and enrich them with cluster metadata used by API request flows.
+- `proxmox_core.py` and `proxmox_providers.py` create proxmox-sdk async SDK sessions and enrich them with cluster metadata used by API request flows.
 - `proxmox_providers.py` validates `endpoint_ids` before filtering which Proxmox endpoints participate in a request.
 
 ## Extension Guidance

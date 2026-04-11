@@ -27,7 +27,7 @@ import pytest_asyncio
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
 
-from proxbox_api.e2e.fixtures.proxmox_openapi_mock import (
+from proxbox_api.e2e.fixtures.proxmox_sdk_mock import (
     MockProxmoxCluster,
     create_minimal_cluster,
     create_multi_cluster,
