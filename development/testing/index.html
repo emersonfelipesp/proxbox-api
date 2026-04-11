@@ -1263,7 +1263,7 @@
 <li><code>pytest</code></li>
 <li><code>httpx</code></li>
 <li>FastAPI <code>TestClient</code></li>
-<li><code>proxmox-openapi</code> (mock testing)</li>
+<li><code>proxmox-sdk</code> (mock testing)</li>
 </ul>
 <p>Test dependencies are defined in <code>pyproject.toml</code> under
 <code>[project.optional-dependencies] -&gt; test</code>.</p>
@@ -1280,7 +1280,7 @@ pytest tests/test_pydantic_generator_models.py tests/test_session_and_helpers.py
 <p><code>bash
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py</code></p>
 <h2 id="proxmox-mock-testing">Proxmox Mock Testing<a class="headerlink" href="#proxmox-mock-testing" title="Permanent link">&para;</a></h2>
-<p>All tests use <code>proxmox-openapi</code> mock features to validate Proxmox API integration. The test suite supports three mock modes:</p>
+<p>All tests use <code>proxmox-sdk</code> mock features to validate Proxmox API integration. The test suite supports three mock modes:</p>
 <h3 id="three-mock-modes">Three Mock Modes<a class="headerlink" href="#three-mock-modes" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -1317,21 +1317,21 @@ pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py
 </tbody>
 </table>
 <h3 id="1-in-process-mockbackend-pytestmarkmock_backend">1. In-process MockBackend (<code>@pytest.mark.mock_backend</code>)<a class="headerlink" href="#1-in-process-mockbackend-pytestmarkmock_backend" title="Permanent link">&para;</a></h3>
-<p>The fastest mode using the <code>proxmox_openapi.sdk.backends.mock.MockBackend</code>. No HTTP server required.</p>
+<p>The fastest mode using the <code>proxmox_sdk.sdk.backends.mock.MockBackend</code>. No HTTP server required.</p>
 <p><code>python
 @pytest.mark.mock_backend
 async def test_vm_sync(proxmox_mock_backend):
     """Fast test using in-process MockBackend."""
     vms = await proxmox_mock_backend.request("GET", "/api2/json/nodes/pve01/qemu")</code></p>
 <h3 id="2-http-published-container-pytestmarkmock_http">2. HTTP Published Container (<code>@pytest.mark.mock_http</code>)<a class="headerlink" href="#2-http-published-container-pytestmarkmock_http" title="Permanent link">&para;</a></h3>
-<p>Uses the published Docker image <code>emersonfelipesp/proxmox-openapi:latest</code> on port 8006.</p>
+<p>Uses the published Docker image <code>emersonfelipesp/proxmox-sdk:latest</code> on port 8006.</p>
 <p><code>python
 @pytest.mark.mock_http
 async def test_vm_sync_http(proxmox_mock_http_published):
     """Realistic test using HTTP container (published image)."""
     vms = await proxmox_mock_http_published.nodes.get()</code></p>
 <h3 id="3-http-local-build-container-pytestmarkmock_http">3. HTTP Local Build Container (<code>@pytest.mark.mock_http</code>)<a class="headerlink" href="#3-http-local-build-container-pytestmarkmock_http" title="Permanent link">&para;</a></h3>
-<p>Uses a locally-built Docker image from <code>./proxmox-openapi</code> on port 8007.</p>
+<p>Uses a locally-built Docker image from <code>./proxmox-sdk</code> on port 8007.</p>
 <p><code>python
 @pytest.mark.mock_http
 async def test_vm_sync_http_local(proxmox_mock_http_local):
@@ -1374,7 +1374,7 @@ async def test_vm_sync_all_modes(request, proxmox_mock_backend,
 <p>```yaml
 services:
   proxmox-mock-published:
-    image: emersonfelipesp/proxmox-openapi:latest
+    image: emersonfelipesp/proxmox-sdk:latest
     ports:
       - "8006:8000"
     environment:
@@ -1382,7 +1382,7 @@ services:
       - PROXMOX_MOCK_SCHEMA_VERSION=latest</p>
 <p>proxmox-mock-local:
     build:
-      context: ./proxmox-openapi
+      context: ./proxmox-sdk
       dockerfile: Dockerfile
     ports:
       - "8007:8000"

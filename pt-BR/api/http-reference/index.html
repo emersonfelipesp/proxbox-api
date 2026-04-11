@@ -1625,7 +1625,7 @@
 <li>Exemplo:</li>
 <li>Caminho do contrato Proxmox: <code>/nodes/{node}/hardware/pci/{pci-id-or-mapping}</code></li>
 <li>Caminho montado no FastAPI: <code>/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}</code></li>
-<li>A chamada via SDK proxmox-openapi continua usando o nome original do parameter do contrato gerado.</li>
+<li>A chamada via SDK proxmox-sdk continua usando o nome original do parameter do contrato gerado.</li>
 </ul>
 <p>Descoberta de versao:</p>
 <ul>
@@ -1643,7 +1643,7 @@
 </ul>
 <p>Integracao tipada do sync:</p>
 <ul>
-<li>As rotas de sync ainda chamam o Proxmox diretamente, mas passam por <code>proxbox_api/services/proxmox_helpers.py</code> com backend proxmox-openapi.</li>
+<li>As rotas de sync ainda chamam o Proxmox diretamente, mas passam por <code>proxbox_api/services/proxmox_helpers.py</code> com backend proxmox-sdk.</li>
 <li>Essa camada valida os payloads com os modelos gerados em <code>proxbox_api/generated/proxmox/latest/pydantic_models.py</code> antes de retornar para os handlers.</li>
 <li>Isso evita round-trips HTTP internos e mantem VM config, cluster status, cluster resources, storage listing e node storage content alinhados ao contrato usado por <code>/proxmox/api2/*</code>.</li>
 </ul>
