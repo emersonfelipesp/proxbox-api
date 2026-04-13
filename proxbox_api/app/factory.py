@@ -173,6 +173,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in ("1", "true", "yes")
         if strict:
             raise
+
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
+
+    bundled = available_proxmox_sdk_versions()
+    logger.info(
+        "Bundled Proxmox OpenAPI schema versions available: %s",
+        ", ".join(bundled) if bundled else "(none)",
+    )
+
     yield
 
 

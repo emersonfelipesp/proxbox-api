@@ -224,6 +224,41 @@ async def refresh_generated_proxmox_routes(
     return result
 
 
+@router.get("/schema-status")
+async def schema_generation_status(
+    version_tag: str | None = Query(
+        default=None,
+        description="Specific version tag to check. Omit to see all available versions.",
+    ),
+):
+    """Report schema availability and any active background generation status.
+
+    Returns which bundled Proxmox OpenAPI schemas are available and whether
+    any background generation tasks are in progress.
+    """
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
+    from proxbox_api.schema_version_manager import (
+        get_all_generation_statuses,
+        get_generation_status,
+        has_schema_for_release,
+    )
+
+    available = available_proxmox_sdk_versions()
+
+    if version_tag is not None:
+        gen_status = get_generation_status(version_tag)
+        return {
+            "version_tag": version_tag,
+            "schema_available": has_schema_for_release(version_tag),
+            "generation": gen_status,
+        }
+
+    return {
+        "available_versions": available,
+        "generation_tasks": get_all_generation_statuses(),
+    }
+
+
 @router.get("/pydantic", response_class=PlainTextResponse)
 async def proxmox_viewer_pydantic_models(
     regenerate: bool = Query(

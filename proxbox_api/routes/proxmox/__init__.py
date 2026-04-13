@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel, Field, field_validator
 
@@ -40,12 +40,13 @@ router.include_router(endpoints_router, tags=["proxmox / endpoints"])
 
 
 @router.get("/sessions")
-async def proxmox_sessions(pxs: ProxmoxSessionsDep):
+async def proxmox_sessions(pxs: ProxmoxSessionsDep, request: Request):
     """
     ### Asynchronously retrieves Proxmox session details and returns them as a JSON response.
 
     **Args:**
     - **pxs (`ProxmoxSessionsDep`):** A dependency injection of Proxmox sessions.
+    - **request (Request):** FastAPI request used to trigger schema auto-generation.
 
     **Returns:**
     - **list:** A list of dictionaries containing Proxmox session details, each with the following keys:
@@ -54,11 +55,22 @@ async def proxmox_sessions(pxs: ProxmoxSessionsDep):
         - **user (str):** The user associated with the Proxmox session.
         - **name (str):** The name of the Proxmox session.
         - **mode (str):** The mode of the Proxmox session.
+        - **proxmox_version:** The version info reported by the connected Proxmox host.
+        - **schema_status (dict):** Schema availability and any background generation status.
     """
+    from proxbox_api.schema_version_manager import ensure_schema_for_version, extract_release_tag
 
     json_response = []
 
     for px in pxs:
+        version_info = getattr(px, "version", None)
+        schema_status: dict | None = None
+        if version_info is not None:
+            try:
+                schema_status = await ensure_schema_for_version(request.app, version_info)
+            except Exception as schema_err:
+                logger.debug("Schema version check skipped: %s", schema_err)
+
         json_response.append(
             {
                 "ip_address": getattr(px, "ip_address", None),
@@ -67,6 +79,9 @@ async def proxmox_sessions(pxs: ProxmoxSessionsDep):
                 "user": getattr(px, "user", None),
                 "name": getattr(px, "name", None),
                 "mode": getattr(px, "mode", None),
+                "proxmox_version": version_info,
+                "schema_release": extract_release_tag(version_info),
+                "schema_status": schema_status,
             }
         )
 

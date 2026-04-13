@@ -67,6 +67,36 @@ def load_proxmox_generated_openapi(
         return {}
 
 
+def best_matching_version(release_tag: str) -> str | None:
+    """Find the best available bundled schema version for a given release tag.
+
+    Checks exact match first, then falls back to highest same-major version,
+    then to "latest". Returns None only when no schemas are available at all.
+    """
+    available = available_proxmox_sdk_versions()
+    if not available:
+        return None
+
+    # Exact match
+    if release_tag in available:
+        return release_tag
+
+    # Highest version sharing the same major number
+    major = release_tag.split(".")[0] if "." in release_tag else release_tag
+    candidates = sorted(
+        (v for v in available if v != "latest" and v.split(".")[0] == major),
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+
+    # Fall back to "latest"
+    if "latest" in available:
+        return "latest"
+
+    return available[0]
+
+
 def proxmox_operation_schema(
     path: str,
     method: str,

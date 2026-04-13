@@ -70,6 +70,7 @@ nav:
       - Workflows: sync/workflows.md
       - VM Reconciliation Architecture: sync/reconciliation-architecture.md
   - Development:
+      - Schema Management: development/schema-management.md
       - Testing: development/testing.md
       - Deployment: development/deployment.md
       - Troubleshooting: development/troubleshooting.md

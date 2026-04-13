@@ -86,12 +86,15 @@ Validation rules:
 
 ### Viewer and generated contract helpers
 
-- `POST /proxmox/viewer/generate`
-- `GET /proxmox/viewer/openapi`
-- `GET /proxmox/viewer/openapi/embedded`
-- `GET /proxmox/viewer/integration/contracts`
-- `POST /proxmox/viewer/routes/refresh`
-- `GET /proxmox/viewer/pydantic`
+- `POST /proxmox/viewer/generate` - Crawl the Proxmox API Viewer and generate OpenAPI + Pydantic artifacts. Accepts `version_tag`, `workers`, `persist`, and other tuning query parameters.
+- `GET /proxmox/viewer/openapi` - Return the generated Proxmox OpenAPI document.
+- `GET /proxmox/viewer/openapi/embedded` - Return an embedded subset of the generated OpenAPI.
+- `GET /proxmox/viewer/integration/contracts` - Report Proxmox and NetBox schema contract sources.
+- `POST /proxmox/viewer/routes/refresh` - Rebuild runtime-generated Proxmox routes from disk without restarting. Accepts optional `version_tag` to rebuild a single version.
+- `GET /proxmox/viewer/schema-status` - Report available bundled schema versions and active background generation tasks. Accepts optional `version_tag` to inspect a specific version.
+- `GET /proxmox/viewer/pydantic` - Return generated Pydantic v2 model source code.
+
+See [Schema Management](../development/schema-management.md) for the full workflow guide and the `proxbox-schema` CLI reference.
 
 ### Runtime-generated live proxy routes
 
@@ -107,7 +110,7 @@ Behavior:
 - On `uvicorn --reload`, startup prefers that cache manifest so the previously mounted live route set is preserved in development.
 - Routes are rebuilt on demand with `POST /proxmox/viewer/routes/refresh`.
 - `POST /proxmox/viewer/routes/refresh` with no query parameters rebuilds all available generated versions.
-- `POST /proxmox/viewer/routes/refresh?version_tag=8.3.0` rebuilds only that mounted version.
+- `POST /proxmox/viewer/routes/refresh?version_tag=8.3` rebuilds only that mounted version.
 - The unversioned `/proxmox/api2/*` alias forwards to the `latest` generated contract.
 - Request bodies and responses are validated with runtime-generated Pydantic models.
 - Generated response models cover object, array, scalar, and `null` response schemas.
@@ -147,7 +150,7 @@ Typed sync integration:
 Examples of generated route shapes:
 
 - `GET /proxmox/api2/latest/cluster/resources`
-- `GET /proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config`
+- `GET /proxmox/api2/8.3/nodes/{node}/qemu/{vmid}/config`
 - `POST /proxmox/api2/latest/access/acl`
 - `GET /proxmox/api2/cluster/resources` as the compatibility alias for `latest`
 

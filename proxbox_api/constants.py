@@ -64,7 +64,7 @@ DEFAULT_DB_PATH = "database.db"
 DEFAULT_LOG_PATH = "/var/log/proxbox.log"
 
 # Proxmox API versions
-SUPPORTED_PROXMOX_VERSIONS = ["8.3.0", "latest"]
+SUPPORTED_PROXMOX_VERSIONS = ["8.1", "8.2", "8.3", "latest"]
 DEFAULT_PROXMOX_VERSION = "latest"
 
 # NetBox object types
