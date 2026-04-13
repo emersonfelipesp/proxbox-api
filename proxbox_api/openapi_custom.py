@@ -45,7 +45,7 @@ def custom_openapi_builder(app: FastAPI) -> dict[str, object]:
             "version": proxmox_generated.get("info", {}).get("version"),
             "version_tag": DEFAULT_PROXMOX_OPENAPI_TAG,
         }
-        openapi_schema["x-proxmox-generated-openapi"] = proxmox_generated
+        # Full Proxmox schema available at GET /proxmox/viewer/openapi
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema

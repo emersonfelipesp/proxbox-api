@@ -528,6 +528,9 @@ def _build_version_route_specs(
                     "description": operation.get("description"),
                     "response_model": response_model,
                     "tags": [f"{_GENERATED_ROUTE_TAG_PREFIX} / {version_tag}"],
+                    # Only expose the latest version in Swagger UI; older versions
+                    # are still routable but hidden to keep /openapi.json small.
+                    "include_in_schema": version_tag == DEFAULT_PROXMOX_OPENAPI_TAG,
                 }
             )
             version_route_names.add(base_route_name)
@@ -544,6 +547,9 @@ def _build_version_route_specs(
                         "description": operation.get("description"),
                         "response_model": response_model,
                         "tags": [f"{_GENERATED_ROUTE_TAG_PREFIX} / {version_tag}"],
+                        # Alias duplicates the versioned latest route; hide to avoid
+                        # doubling the Swagger entry count.
+                        "include_in_schema": False,
                     }
                 )
                 version_route_names.add(alias_route_name)
