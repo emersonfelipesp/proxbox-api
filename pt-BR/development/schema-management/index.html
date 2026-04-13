@@ -10,28 +10,32 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/CLAUDE/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/schema-management/">
       
       
+        <link rel="prev" href="../../sync/reconciliation-architecture/">
+      
+      
+        <link rel="next" href="../testing/">
       
       
         
-          <link rel="alternate" href="../../CLAUDE/" hreflang="en">
+          <link rel="alternate" href="../../../development/schema-management/" hreflang="en">
         
           <link rel="alternate" href="./" hreflang="pt-BR">
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>docs/ Directory Guide - proxbox-api</title>
+        <title>Schema Management - proxbox-api</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -50,7 +54,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -68,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#docs-directory-guide" class="md-skip">
+        <a href="#gerenciamento-de-schemas-proxmox" class="md-skip">
           Pular para conteúdo
         </a>
       
@@ -84,7 +88,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Cabeçalho">
-    <a href="../" title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+    <a href="../../" title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -104,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              docs/ Directory Guide
+              Schema Management
             
           </span>
         </div>
@@ -125,7 +129,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../CLAUDE/" hreflang="en" class="md-select__link">
+            <a href="../../../development/schema-management/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -220,7 +224,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navegação" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../" title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+    <a href="../../" title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -250,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -331,7 +335,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../getting-started/installation/" class="md-nav__link">
+      <a href="../../getting-started/installation/" class="md-nav__link">
         
   
   
@@ -359,7 +363,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../getting-started/configuration/" class="md-nav__link">
+      <a href="../../getting-started/configuration/" class="md-nav__link">
         
   
   
@@ -387,7 +391,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../getting-started/authentication/" class="md-nav__link">
+      <a href="../../getting-started/authentication/" class="md-nav__link">
         
   
   
@@ -476,7 +480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../architecture/overview/" class="md-nav__link">
+      <a href="../../architecture/overview/" class="md-nav__link">
         
   
   
@@ -504,7 +508,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../architecture/caching/" class="md-nav__link">
+      <a href="../../architecture/caching/" class="md-nav__link">
         
   
   
@@ -593,7 +597,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api/http-reference/" class="md-nav__link">
+      <a href="../../api/http-reference/" class="md-nav__link">
         
   
   
@@ -621,7 +625,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api/websocket-reference/" class="md-nav__link">
+      <a href="../../api/websocket-reference/" class="md-nav__link">
         
   
   
@@ -649,7 +653,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api/cache/" class="md-nav__link">
+      <a href="../../api/cache/" class="md-nav__link">
         
   
   
@@ -738,7 +742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sync/workflows/" class="md-nav__link">
+      <a href="../../sync/workflows/" class="md-nav__link">
         
   
   
@@ -766,7 +770,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sync/reconciliation-architecture/" class="md-nav__link">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
         
   
   
@@ -798,8 +802,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -810,13 +816,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
           <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
@@ -837,7 +841,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -852,10 +856,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../development/schema-management/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Management
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -871,6 +902,209 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Índice
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#schemas-incluidos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schemas incluidos
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deteccao-automatica-de-versao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deteccao automatica de versao
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-proxbox-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI: proxbox-schema
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CLI: proxbox-schema">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#listar-versoes-disponiveis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Listar versoes disponiveis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verificar-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verificar status
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gerar-um-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gerar um schema
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gerar um schema">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#regenerar-um-schema-existente" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regenerar um schema existente
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diretorio-de-saida-personalizado" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diretorio de saida personalizado
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ajustar-desempenho-do-rastreamento" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ajustar desempenho do rastreamento
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API HTTP
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="API HTTP">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verificar-status-do-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verificar status do schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acionar-geracao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acionar geracao
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#atualizar-rotas-em-tempo-de-execucao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atualizar rotas em tempo de execucao
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requisitos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requisitos
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convencao-de-nomenclatura-de-versao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convencao de nomenclatura de versao
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -883,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../development/testing/" class="md-nav__link">
+      <a href="../testing/" class="md-nav__link">
         
   
   
@@ -911,7 +1145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../development/deployment/" class="md-nav__link">
+      <a href="../deployment/" class="md-nav__link">
         
   
   
@@ -939,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../development/troubleshooting/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -967,7 +1201,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../development/contributing/" class="md-nav__link">
+      <a href="../contributing/" class="md-nav__link">
         
   
   
@@ -1022,10 +1256,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
+  <a href="#schemas-incluidos" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Purpose
+        Schemas incluidos
       
     </span>
   </a>
@@ -1033,10 +1267,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#directory-structure" class="md-nav__link">
+  <a href="#deteccao-automatica-de-versao" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Directory Structure
+        Deteccao automatica de versao
       
     </span>
   </a>
@@ -1044,10 +1278,160 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#building-and-serving-docs" class="md-nav__link">
+  <a href="#cli-proxbox-schema" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Building and Serving Docs
+        CLI: proxbox-schema
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CLI: proxbox-schema">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#listar-versoes-disponiveis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Listar versoes disponiveis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verificar-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verificar status
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gerar-um-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gerar um schema
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gerar um schema">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#regenerar-um-schema-existente" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regenerar um schema existente
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diretorio-de-saida-personalizado" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diretorio de saida personalizado
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ajustar-desempenho-do-rastreamento" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ajustar desempenho do rastreamento
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API HTTP
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="API HTTP">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verificar-status-do-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verificar status do schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acionar-geracao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acionar geracao
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#atualizar-rotas-em-tempo-de-execucao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atualizar rotas em tempo de execucao
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requisitos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requisitos
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convencao-de-nomenclatura-de-versao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convencao de nomenclatura de versao
       
     </span>
   </a>
@@ -1071,7 +1455,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/CLAUDE.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/development/schema-management.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1079,39 +1463,180 @@
   
 
 
-<h1 id="docs-directory-guide">docs/ Directory Guide<a class="headerlink" href="#docs-directory-guide" title="Permanent link">&para;</a></h1>
-<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
-<p>MkDocs Material documentation for <code>proxbox-api</code>, published in English and Brazilian Portuguese. The <code>mkdocs.yml</code> at the repo root configures the site with <code>mkdocs-static-i18n</code> for bilingual support.</p>
-<h2 id="directory-structure">Directory Structure<a class="headerlink" href="#directory-structure" title="Permanent link">&para;</a></h2>
-<p><code>docs/
-├── index.md                    # Main landing page (English)
-├── getting-started/            # Installation and configuration guides
-├── development/                # Contributing, deployment, troubleshooting, testing
-├── architecture/               # System overview and design patterns
-├── api/                        # HTTP and WebSocket API reference
-├── sync/                       # Sync workflow documentation
-└── pt-BR/                      # Brazilian Portuguese translations
-    ├── api/
-    ├── architecture/
-    ├── development/
-    ├── getting-started/
-    └── sync/</code></p>
-<h2 id="building-and-serving-docs">Building and Serving Docs<a class="headerlink" href="#building-and-serving-docs" title="Permanent link">&para;</a></h2>
-<p>```bash</p>
-<h1 id="install-docs-dependencies">Install docs dependencies<a class="headerlink" href="#install-docs-dependencies" title="Permanent link">&para;</a></h1>
-<p>uv sync --extra docs</p>
-<h1 id="serve-locally-with-live-reload">Serve locally with live reload<a class="headerlink" href="#serve-locally-with-live-reload" title="Permanent link">&para;</a></h1>
-<p>uv run mkdocs serve</p>
-<h1 id="build-static-site">Build static site<a class="headerlink" href="#build-static-site" title="Permanent link">&para;</a></h1>
-<p>uv run mkdocs build
+<h1 id="gerenciamento-de-schemas-proxmox">Gerenciamento de Schemas Proxmox<a class="headerlink" href="#gerenciamento-de-schemas-proxmox" title="Permanent link">&para;</a></h1>
+<p>O <code>proxbox-api</code> inclui schemas OpenAPI do Proxmox pré-gerados para as três ultimas versoes estaveis do PVE. Esses schemas alimentam as rotas proxy geradas em tempo de execucao em <code>/proxmox/api2/*</code>. Esta pagina explica como listar, verificar e gerar schemas pela linha de comando ou pela API HTTP.</p>
+<h2 id="schemas-incluidos">Schemas incluidos<a class="headerlink" href="#schemas-incluidos" title="Permanent link">&para;</a></h2>
+<p>As seguintes versoes sao incluidas com o pacote em <code>proxbox_api/generated/proxmox/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Tag de versao</th>
+<th>Versao Proxmox</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>8.1</code></td>
+<td>PVE 8.1.x</td>
+</tr>
+<tr>
+<td><code>8.2</code></td>
+<td>PVE 8.2.x</td>
+</tr>
+<tr>
+<td><code>8.3</code></td>
+<td>PVE 8.3.x</td>
+</tr>
+<tr>
+<td><code>latest</code></td>
+<td>Snapshot atual do API Viewer</td>
+</tr>
+</tbody>
+</table>
+<p>Na inicializacao, o app carrega todos os diretorios de versao disponiveis e registra rotas para cada um. O log de inicializacao confirma quais versoes foram encontradas:</p>
+<p><code>[INFO] Bundled Proxmox OpenAPI schema versions available: 8.1, 8.2, 8.3, latest</code></p>
+<h2 id="deteccao-automatica-de-versao">Deteccao automatica de versao<a class="headerlink" href="#deteccao-automatica-de-versao" title="Permanent link">&para;</a></h2>
+<p>Ao chamar <code>GET /proxmox/sessions</code>, o app verifica a versao do cluster Proxmox conectado em relacao aos schemas incluidos. Cada entrada de sessao na resposta inclui um campo <code>schema_status</code>:</p>
+<p><code>json
+{
+  "name": "pve-cluster",
+  "proxmox_version": {"version": "8.3.2", "release": "8.3", "repoid": "abc123"},
+  "schema_release": "8.3",
+  "schema_status": {"status": "available", "version_tag": "8.3"}
+}</code></p>
+<p>Se a versao conectada nao tiver schema correspondente (por exemplo, um cluster futuro PVE 8.4), a geracao inicia automaticamente em segundo plano:</p>
+<p><code>json
+{
+  "schema_status": {
+    "status": "generating",
+    "version_tag": "8.4",
+    "message": "No bundled schema found for Proxmox 8.4. Background generation started. This may take several minutes."
+  }
+}</code></p>
+<p>As rotas para a nova versao sao registradas em tempo de execucao assim que a geracao termina — sem necessidade de reiniciar.</p>
+<h2 id="cli-proxbox-schema">CLI: <code>proxbox-schema</code><a class="headerlink" href="#cli-proxbox-schema" title="Permanent link">&para;</a></h2>
+<p>O comando <code>proxbox-schema</code> e a forma recomendada de gerenciar schemas manualmente.</p>
+<h3 id="listar-versoes-disponiveis">Listar versoes disponiveis<a class="headerlink" href="#listar-versoes-disponiveis" title="Permanent link">&para;</a></h3>
+<p><code>bash
+proxbox-schema list</code></p>
+<p>Saida:</p>
+<p><code>text
+Available Proxmox OpenAPI schema versions (4):
+         8.1   6.4 MB   /opt/proxbox_api/generated/proxmox/8.1/openapi.json
+         8.2   6.4 MB   /opt/proxbox_api/generated/proxmox/8.2/openapi.json
+         8.3   6.4 MB   /opt/proxbox_api/generated/proxmox/8.3/openapi.json
+      latest   7.3 MB   /opt/proxbox_api/generated/proxmox/latest/openapi.json</code></p>
+<h3 id="verificar-status">Verificar status<a class="headerlink" href="#verificar-status" title="Permanent link">&para;</a></h3>
+<p><code>bash
+proxbox-schema status</code></p>
+<p>Mostra versoes disponiveis e quaisquer tarefas de geracao ativas ou concluidas recentemente:</p>
+<p><code>Bundled versions: 8.1, 8.2, 8.3, latest
+No active or recent generation tasks.</code></p>
+<h3 id="gerar-um-schema">Gerar um schema<a class="headerlink" href="#gerar-um-schema" title="Permanent link">&para;</a></h3>
+<p><code>bash
+proxbox-schema generate 8.4</code></p>
+<p>Isso percorre o Proxmox API Viewer, analisa todos os endpoints e escreve os artefatos gerados em <code>proxbox_api/generated/proxmox/8.4/</code>. O comando imprime o progresso e um resumo de conclusao:</p>
+<p>```
+Generating Proxmox OpenAPI schema for version '8.4'...
+Output directory: proxbox_api/generated/proxmox/8.4
+Source URL: https://pve.proxmox.com/pve-docs/api-viewer/
+Workers: 10</p>
+<p>This may take several minutes. The pipeline crawls the Proxmox API Viewer,
+parses all endpoints, and generates OpenAPI + Pydantic artifacts.</p>
+<p>Generation completed for Proxmox 8.4
+  Endpoints:  493
+  Operations: 1284
+  Duration:   187.3s
+  Output:     proxbox_api/generated/proxmox/8.4</p>
+<p>Schema is ready. Restart the app or call POST /proxmox/viewer/routes/refresh
+to register the new routes at runtime.
 ```</p>
-<h2 id="content-guidelines">Content Guidelines<a class="headerlink" href="#content-guidelines" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Keep English (<code>docs/</code>) and Portuguese (<code>docs/pt-BR/</code>) files in sync when updating content.</li>
-<li>API reference in <code>docs/api/</code> should match the actual route signatures in <code>proxbox_api/routes/</code>.</li>
-<li>Architecture diagrams belong in <code>docs/architecture/</code>.</li>
-<li>Do not store generated artifacts or runtime data in <code>docs/</code>.</li>
-</ul>
+<p>Apos a geracao, registre as novas rotas sem reiniciar:</p>
+<p><code>bash
+curl -s -X POST http://localhost:8800/proxmox/viewer/routes/refresh \
+  -H "X-Proxbox-API-Key: SUA_CHAVE"</code></p>
+<h4 id="regenerar-um-schema-existente">Regenerar um schema existente<a class="headerlink" href="#regenerar-um-schema-existente" title="Permanent link">&para;</a></h4>
+<p><code>bash
+proxbox-schema generate 8.3 --force</code></p>
+<p>Sem <code>--force</code>, o comando encerra cedo quando um schema ja existe.</p>
+<h4 id="diretorio-de-saida-personalizado">Diretorio de saida personalizado<a class="headerlink" href="#diretorio-de-saida-personalizado" title="Permanent link">&para;</a></h4>
+<p><code>bash
+proxbox-schema generate 8.4 --output-dir /data/proxmox-schemas</code></p>
+<p>O app carrega schemas apenas de <code>proxbox_api/generated/proxmox/</code> por padrao.</p>
+<h4 id="ajustar-desempenho-do-rastreamento">Ajustar desempenho do rastreamento<a class="headerlink" href="#ajustar-desempenho-do-rastreamento" title="Permanent link">&para;</a></h4>
+<p><code>bash
+proxbox-schema generate 8.4 --workers 5 --retry-count 3 --retry-backoff 0.5</code></p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Padrao</th>
+<th>Descricao</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--workers</code></td>
+<td><code>10</code></td>
+<td>Numero de workers do Playwright</td>
+</tr>
+<tr>
+<td><code>--retry-count</code></td>
+<td><code>2</code></td>
+<td>Tentativas por endpoint em falhas transitorias</td>
+</tr>
+<tr>
+<td><code>--retry-backoff</code></td>
+<td><code>0.35</code></td>
+<td>Backoff exponencial base em segundos</td>
+</tr>
+<tr>
+<td><code>--checkpoint-every</code></td>
+<td><code>50</code></td>
+<td>Escrever checkpoint a cada N endpoints</td>
+</tr>
+</tbody>
+</table>
+<h2 id="api-http">API HTTP<a class="headerlink" href="#api-http" title="Permanent link">&para;</a></h2>
+<h3 id="verificar-status-do-schema">Verificar status do schema<a class="headerlink" href="#verificar-status-do-schema" title="Permanent link">&para;</a></h3>
+<p><code>http
+GET /proxmox/viewer/schema-status</code></p>
+<p>Resposta:</p>
+<p><code>json
+{
+  "available_versions": ["8.1", "8.2", "8.3", "latest"],
+  "generation_tasks": {}
+}</code></p>
+<p>Verificar uma versao especifica:</p>
+<p><code>http
+GET /proxmox/viewer/schema-status?version_tag=8.4</code></p>
+<p>Resposta enquanto a geracao esta em andamento:</p>
+<p><code>json
+{
+  "version_tag": "8.4",
+  "schema_available": false,
+  "generation": {"status": "running", "error": null}
+}</code></p>
+<p>Valores possiveis de <code>status</code>: <code>pending</code>, <code>running</code>, <code>completed</code>, <code>failed</code>.</p>
+<h3 id="acionar-geracao">Acionar geracao<a class="headerlink" href="#acionar-geracao" title="Permanent link">&para;</a></h3>
+<p><code>http
+POST /proxmox/viewer/generate?version_tag=8.4</code></p>
+<p>Esta e uma requisicao sincrona de longa duracao. Para geracao em segundo plano, prefira <code>proxbox-schema generate</code> ou deixe a deteccao automatica acionar via <code>GET /proxmox/sessions</code>.</p>
+<h3 id="atualizar-rotas-em-tempo-de-execucao">Atualizar rotas em tempo de execucao<a class="headerlink" href="#atualizar-rotas-em-tempo-de-execucao" title="Permanent link">&para;</a></h3>
+<p>Apos gerar um novo schema, registre suas rotas sem reiniciar:</p>
+<p><code>http
+POST /proxmox/viewer/routes/refresh</code></p>
+<p>Ou para uma versao especifica:</p>
+<p><code>http
+POST /proxmox/viewer/routes/refresh?version_tag=8.4</code></p>
+<h2 id="requisitos">Requisitos<a class="headerlink" href="#requisitos" title="Permanent link">&para;</a></h2>
+<p>A geracao de schemas usa o <a href="https://playwright.dev/python/">Playwright</a> para percorrer o Proxmox API Viewer. Instale o extra:</p>
+<p><code>bash
+pip install proxbox_api[playwright]
+playwright install chromium</code></p>
+<p>Sem o Playwright, o pipeline usa o parser <code>apidoc.js</code> como fallback.</p>
+<h2 id="convencao-de-nomenclatura-de-versao">Convencao de nomenclatura de versao<a class="headerlink" href="#convencao-de-nomenclatura-de-versao" title="Permanent link">&para;</a></h2>
+<p>As tags de versao usam o formato <code>major.minor</code> do campo <code>release</code> do Proxmox (por exemplo, <code>"8.3"</code> de <code>{"release": "8.3", "version": "8.3.2"}</code>). A tag <code>latest</code> e um alias especial para o snapshot mais recente do API Viewer oficial.</p>
 
 
 
@@ -1167,10 +1692,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado para \u00e1rea de transfer\u00eancia", "clipboard.copy": "Copiar para \u00e1rea de transfer\u00eancia", "search.result.more.one": "mais 1 nesta p\u00e1gina", "search.result.more.other": "# mais nesta p\u00e1gina", "search.result.none": "Nenhum documento encontrado", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Digite para iniciar a busca", "search.result.term.missing": "Ausente", "select.version": "Selecione a vers\u00e3o"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado para \u00e1rea de transfer\u00eancia", "clipboard.copy": "Copiar para \u00e1rea de transfer\u00eancia", "search.result.more.one": "mais 1 nesta p\u00e1gina", "search.result.more.other": "# mais nesta p\u00e1gina", "search.result.none": "Nenhum documento encontrado", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Digite para iniciar a busca", "search.result.term.missing": "Ausente", "select.version": "Selecione a vers\u00e3o"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

@@ -572,6 +572,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#credential-encryption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Credential Encryption
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Credential Encryption">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-resolution-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key resolution order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setting-the-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting the key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backwards-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backwards compatibility
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1056,6 +1106,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/schema-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/testing/" class="md-nav__link">
         
   
@@ -1344,6 +1422,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#credential-encryption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Credential Encryption
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Credential Encryption">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-resolution-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key resolution order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setting-the-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting the key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backwards-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backwards compatibility
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1553,6 +1681,11 @@
 <td>unset</td>
 <td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, skips creating the default NetBox client during app startup.</td>
 </tr>
+<tr>
+<td><code>PROXBOX_ENCRYPTION_KEY</code></td>
+<td>unset</td>
+<td>Secret key for encrypting credentials at rest. See <a href="#credential-encryption">Credential Encryption</a> below.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="handling-netbox-overwhelmed-errors">Handling NetBox Overwhelmed Errors<a class="headerlink" href="#handling-netbox-overwhelmed-errors" title="Permanent link">&para;</a></h3>
@@ -1568,6 +1701,26 @@
 <li>Origins are populated from NetBox endpoint records plus default development origins.</li>
 <li>Methods are currently allowed for all (<code>allow_methods=["*"]</code>).</li>
 </ul>
+<h2 id="credential-encryption">Credential Encryption<a class="headerlink" href="#credential-encryption" title="Permanent link">&para;</a></h2>
+<p>proxbox-api stores NetBox API tokens and Proxmox passwords/token values in a local SQLite database. When an encryption key is configured, these fields are encrypted at rest using <strong>Fernet</strong> (AES-128-CBC with HMAC-SHA256).</p>
+<h3 id="key-resolution-order">Key resolution order<a class="headerlink" href="#key-resolution-order" title="Permanent link">&para;</a></h3>
+<p>proxbox-api resolves the encryption key using the following priority chain:</p>
+<ol>
+<li><strong><code>PROXBOX_ENCRYPTION_KEY</code> environment variable</strong> — highest priority, takes effect immediately on startup.</li>
+<li><strong><code>ProxboxPluginSettings.encryption_key</code></strong> — fetched from the NetBox plugin settings API (configurable on the <code>/plugins/proxbox/settings/</code> page in NetBox). Checked only if the env var is not set.</li>
+<li><strong>None</strong> — no key configured. Credentials are stored in plaintext and a <code>CRITICAL</code> warning is logged. Never use this in production.</li>
+</ol>
+<h3 id="setting-the-key">Setting the key<a class="headerlink" href="#setting-the-key" title="Permanent link">&para;</a></h3>
+<p>Generate a secure key:</p>
+<p><code>bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code></p>
+<p>Then set it via environment variable:</p>
+<p><code>bash
+export PROXBOX_ENCRYPTION_KEY="&lt;paste key here&gt;"</code></p>
+<p>Or set it in the NetBox plugin settings page under <strong>Encryption</strong> → <strong>Encryption key</strong>.</p>
+<h3 id="backwards-compatibility">Backwards compatibility<a class="headerlink" href="#backwards-compatibility" title="Permanent link">&para;</a></h3>
+<p>If credentials were stored in plaintext before encryption was enabled, they continue to work — <code>decrypt_value</code> returns them unchanged when no <code>enc:</code> prefix is found. They are re-encrypted the next time the endpoint is saved.</p>
+<p>If the encryption key changes after credentials were already encrypted, proxbox-api logs a warning and returns the raw ciphertext (unusable as a credential). Re-save each endpoint with the correct credentials after rotating the key.</p>
 
 
 

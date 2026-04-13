@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/development/testing/">
       
       
-        <link rel="prev" href="../../sync/reconciliation-architecture/">
+        <link rel="prev" href="../schema-management/">
       
       
         <link rel="next" href="../deployment/">
@@ -856,6 +856,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1451,7 +1479,7 @@ services:
 </tbody>
 </table>
 <h2 id="targeted-endpoint-tests">Targeted endpoint tests<a class="headerlink" href="#targeted-endpoint-tests" title="Permanent link">&para;</a></h2>
-<p>The file <code>proxbox_api/test_endpoint_crud.py</code> includes dedicated coverage for:</p>
+<p>The file <code>tests/test_endpoint_crud.py</code> includes dedicated coverage for:</p>
 <ul>
 <li>Proxmox endpoint CRUD lifecycle.</li>
 <li>Proxmox endpoint auth validation rules.</li>
@@ -1459,7 +1487,7 @@ services:
 </ul>
 <p>Run only this test file:</p>
 <p><code>bash
-pytest proxbox_api/test_endpoint_crud.py</code></p>
+pytest tests/test_endpoint_crud.py</code></p>
 <h2 id="compile-check">Compile check<a class="headerlink" href="#compile-check" title="Permanent link">&para;</a></h2>
 <p><code>bash
 python -m compileall proxbox_api</code></p>

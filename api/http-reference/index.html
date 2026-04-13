@@ -1127,6 +1127,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/schema-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/testing/" class="md-nav__link">
         
   
@@ -1590,13 +1618,15 @@
 </ul>
 <h3 id="viewer-and-generated-contract-helpers">Viewer and generated contract helpers<a class="headerlink" href="#viewer-and-generated-contract-helpers" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>POST /proxmox/viewer/generate</code></li>
-<li><code>GET /proxmox/viewer/openapi</code></li>
-<li><code>GET /proxmox/viewer/openapi/embedded</code></li>
-<li><code>GET /proxmox/viewer/integration/contracts</code></li>
-<li><code>POST /proxmox/viewer/routes/refresh</code></li>
-<li><code>GET /proxmox/viewer/pydantic</code></li>
+<li><code>POST /proxmox/viewer/generate</code> - Crawl the Proxmox API Viewer and generate OpenAPI + Pydantic artifacts. Accepts <code>version_tag</code>, <code>workers</code>, <code>persist</code>, and other tuning query parameters.</li>
+<li><code>GET /proxmox/viewer/openapi</code> - Return the generated Proxmox OpenAPI document.</li>
+<li><code>GET /proxmox/viewer/openapi/embedded</code> - Return an embedded subset of the generated OpenAPI.</li>
+<li><code>GET /proxmox/viewer/integration/contracts</code> - Report Proxmox and NetBox schema contract sources.</li>
+<li><code>POST /proxmox/viewer/routes/refresh</code> - Rebuild runtime-generated Proxmox routes from disk without restarting. Accepts optional <code>version_tag</code> to rebuild a single version.</li>
+<li><code>GET /proxmox/viewer/schema-status</code> - Report available bundled schema versions and active background generation tasks. Accepts optional <code>version_tag</code> to inspect a specific version.</li>
+<li><code>GET /proxmox/viewer/pydantic</code> - Return generated Pydantic v2 model source code.</li>
 </ul>
+<p>See <a href="../../development/schema-management/">Schema Management</a> for the full workflow guide and the <code>proxbox-schema</code> CLI reference.</p>
 <h3 id="runtime-generated-live-proxy-routes">Runtime-generated live proxy routes<a class="headerlink" href="#runtime-generated-live-proxy-routes" title="Permanent link">&para;</a></h3>
 <p><code>proxbox-api</code> mounts runtime-generated Proxmox proxy routes from the embedded generated OpenAPI contract under:</p>
 <ul>
@@ -1610,7 +1640,7 @@
 <li>On <code>uvicorn --reload</code>, startup prefers that cache manifest so the previously mounted live route set is preserved in development.</li>
 <li>Routes are rebuilt on demand with <code>POST /proxmox/viewer/routes/refresh</code>.</li>
 <li><code>POST /proxmox/viewer/routes/refresh</code> with no query parameters rebuilds all available generated versions.</li>
-<li><code>POST /proxmox/viewer/routes/refresh?version_tag=8.3.0</code> rebuilds only that mounted version.</li>
+<li><code>POST /proxmox/viewer/routes/refresh?version_tag=8.3</code> rebuilds only that mounted version.</li>
 <li>The unversioned <code>/proxmox/api2/*</code> alias forwards to the <code>latest</code> generated contract.</li>
 <li>Request bodies and responses are validated with runtime-generated Pydantic models.</li>
 <li>Generated response models cover object, array, scalar, and <code>null</code> response schemas.</li>
@@ -1650,7 +1680,7 @@
 <p>Examples of generated route shapes:</p>
 <ul>
 <li><code>GET /proxmox/api2/latest/cluster/resources</code></li>
-<li><code>GET /proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config</code></li>
+<li><code>GET /proxmox/api2/8.3/nodes/{node}/qemu/{vmid}/config</code></li>
 <li><code>POST /proxmox/api2/latest/access/acl</code></li>
 <li><code>GET /proxmox/api2/cluster/resources</code> as the compatibility alias for <code>latest</code></li>
 </ul>
