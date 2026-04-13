@@ -4,16 +4,21 @@ SSRF protection validates that endpoints do not point to restricted IP addresses
 Settings can be configured via NetBox plugin (ProxboxPluginSettings) with caching.
 
 IPs that are already registered in ProxmoxEndpoint or NetBoxEndpoint are automatically allowed.
+IPs submitted during endpoint creation/update are pre-allowed so that the endpoint's
+own address passes SSRF validation within the same request.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
+
+logger = logging.getLogger(__name__)
 
 INTERNAL_IP_RANGES = (
     ipaddress.ip_network("10.0.0.0/8"),
@@ -92,6 +97,46 @@ def clear_endpoint_cache() -> None:
     global _registered_ips_cache, _registered_domains_cache
     _registered_ips_cache = set()
     _registered_domains_cache = set()
+
+
+def pre_allow_endpoint_hosts(*hosts: str, source: str = "endpoint") -> None:
+    """Pre-seed the SSRF cache with IPs/domains from an endpoint being created or updated.
+
+    Called before SSRF validation in create/update handlers so that the endpoint's
+    own address is treated as registered and passes validation in the same request.
+    Any internal or reserved address is automatically allowed and logged — users
+    are not asked to configure SSRF manually for their own endpoint addresses.
+
+    Args:
+        *hosts: IP address strings or domain names to allow.
+        source: Label used in log messages (e.g. "NetBox", "Proxmox").
+    """
+    global _registered_ips_cache, _registered_domains_cache
+
+    for host in hosts:
+        if not host:
+            continue
+        host = host.strip()
+        if not host:
+            continue
+        try:
+            ipaddress.ip_address(host)
+            if host not in _registered_ips_cache:
+                _registered_ips_cache.add(host)
+                logger.info(
+                    "SSRF: auto-allowed IP %s from %s endpoint configuration",
+                    host,
+                    source,
+                )
+        except ValueError:
+            host_lower = host.lower()
+            if host_lower not in _registered_domains_cache:
+                _registered_domains_cache.add(host_lower)
+                logger.info(
+                    "SSRF: auto-allowed domain %s from %s endpoint configuration",
+                    host,
+                    source,
+                )
 
 
 def is_registered_endpoint(host: str) -> bool:

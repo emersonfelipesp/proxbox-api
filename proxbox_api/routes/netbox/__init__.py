@@ -13,7 +13,7 @@ from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.settings_client import get_settings
-from proxbox_api.ssrf import clear_endpoint_cache, validate_endpoint_host
+from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
@@ -109,6 +109,9 @@ async def create_netbox_endpoint(
     if existing_name_result.first():
         raise HTTPException(status_code=400, detail="NetBox endpoint name already exists")
 
+    # Auto-allow the endpoint's own addresses so they pass SSRF validation below.
+    pre_allow_endpoint_hosts(netbox.ip_address, netbox.domain or "", source="NetBox")
+
     settings = get_settings()
     ip_safe, ip_reason = validate_endpoint_host(netbox.ip_address, settings)
     if not ip_safe:
@@ -169,6 +172,13 @@ async def update_netbox_endpoint(
         raise HTTPException(status_code=404, detail="NetBox Endpoint not found")
 
     update_data = netbox.model_dump(exclude_unset=True)
+
+    # Auto-allow any new addresses so they pass SSRF validation below.
+    pre_allow_endpoint_hosts(
+        update_data.get("ip_address", ""),
+        update_data.get("domain", ""),
+        source="NetBox",
+    )
 
     settings = get_settings()
     if "ip_address" in update_data:

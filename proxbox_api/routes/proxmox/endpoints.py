@@ -11,7 +11,7 @@ from sqlmodel import select
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.settings_client import get_settings
-from proxbox_api.ssrf import clear_endpoint_cache, validate_endpoint_host
+from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
@@ -88,6 +88,9 @@ async def create_proxmox_endpoint(
 ) -> ProxmoxEndpointPublic:
     _validate_auth_fields(endpoint.password, endpoint.token_name, endpoint.token_value)
 
+    # Auto-allow the endpoint's own addresses so they pass SSRF validation below.
+    pre_allow_endpoint_hosts(endpoint.ip_address, endpoint.domain or "", source="Proxmox")
+
     settings = get_settings()
     ip_safe, ip_reason = validate_endpoint_host(endpoint.ip_address, settings)
     if not ip_safe:
@@ -156,6 +159,13 @@ async def update_proxmox_endpoint(  # noqa: C901
         raise HTTPException(status_code=404, detail="Proxmox Endpoint not found")
 
     update_data = endpoint.model_dump(exclude_unset=True)
+
+    # Auto-allow any new addresses so they pass SSRF validation below.
+    pre_allow_endpoint_hosts(
+        update_data.get("ip_address", ""),
+        update_data.get("domain", "") or "",
+        source="Proxmox",
+    )
 
     settings = get_settings()
     if "ip_address" in update_data:
