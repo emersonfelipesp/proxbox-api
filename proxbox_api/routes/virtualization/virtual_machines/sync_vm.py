@@ -16,7 +16,6 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import VirtualMachine
 from proxbox_api.netbox_rest import (
-    clear_rest_get_cache_for_path,
     rest_create_async,
     rest_first_async,
     rest_list_async,
@@ -69,6 +68,7 @@ from proxbox_api.services.sync.vm_helpers import (
     normalized_mac,
     parse_comma_separated_ints,
     parse_key_value_string,
+    preferred_primary_ip_order,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
@@ -610,6 +610,7 @@ async def _create_vm_interface_parallel(
     use_guest_agent_interface_name: bool,
     ignore_ipv6_link_local_addresses: bool,
     now: datetime,
+    primary_ip_preference: str = "ipv4",
     device: dict | None = None,
 ) -> dict:
     """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
@@ -737,6 +738,7 @@ async def _create_vm_interface_parallel(
         now=now,
         create_ip=True,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
     if ip_results:
         first_ip_id, first_ip = ip_results[0]
@@ -819,6 +821,7 @@ async def _create_virtual_machine_by_netbox_id(
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
 ):
     """Create a single virtual machine by its NetBox ID.
 
@@ -839,6 +842,7 @@ async def _create_virtual_machine_by_netbox_id(
         use_websocket: Whether to send WebSocket updates.
         use_guest_agent_interface_name: Use guest-agent interface names if available.
         ignore_ipv6_link_local_addresses: Ignore IPv6 link-local addresses when selecting IPs.
+        primary_ip_preference: Preferred family when selecting VM primary IP.
 
     Returns:
         List of created/synced VM records from NetBox.
@@ -898,6 +902,7 @@ async def _create_virtual_machine_by_netbox_id(
         use_websocket=use_websocket,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
 
 
@@ -971,6 +976,11 @@ async def create_virtual_machines(  # noqa: C901
             "When true, IPv6 link-local addresses (fe80::/64) are ignored during "
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
+    ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
@@ -1730,6 +1740,7 @@ async def create_virtual_machines(  # noqa: C901
                                 tag_refs=tag_refs,
                                 use_guest_agent_interface_name=use_guest_agent_interface_name,
                                 ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                                primary_ip_preference=primary_ip_preference,
                                 now=now,
                                 device=device,
                             )
@@ -1763,79 +1774,34 @@ async def create_virtual_machines(  # noqa: C901
             if disk_tasks:
                 await asyncio.gather(*disk_tasks, return_exceptions=True)
 
-        # Set primary IP only when NetBox has no primary IP yet (user choice is preserved)
-        vm_id = virtual_machine.get("id")
-        if virtual_machine.get("primary_ip4") is None:
+        # Set primary IP only when NetBox has no primary IP yet (user choice is preserved).
+        has_primary_ip = (
+            virtual_machine.get("primary_ip4") is not None
+            or virtual_machine.get("primary_ip6") is not None
+        )
+        if not has_primary_ip:
             if first_ip_id is not None:
-                from proxbox_api.services.sync.vm_network import ensure_ip_assigned_to_vm
+                from proxbox_api.services.sync.vm_network import set_primary_ip
 
-                # Flush GET cache before the check so concurrent reconciles don't cause
-                # stale data to be returned by the interface/IP list queries.
-                clear_rest_get_cache_for_path(nb, "/api/ipam/ip-addresses/")
-                clear_rest_get_cache_for_path(nb, "/api/virtualization/interfaces/")
-
-                ip_assigned, reason = await ensure_ip_assigned_to_vm(nb, first_ip_id, vm_id)
-
-                if not ip_assigned:
-                    # Single retry after 1 s to handle transient failures or race conditions
-                    # where a concurrent VM sync temporarily held the same IP record.
-                    logger.info(
-                        "Primary IP check failed (reason=%s) for VM %s (id=%s); retrying once",
-                        reason,
-                        virtual_machine.get("name"),
-                        vm_id,
+                primary_set = await set_primary_ip(
+                    nb=nb,
+                    virtual_machine=virtual_machine,
+                    primary_ip_id=first_ip_id,
+                    primary_ip_preference=primary_ip_preference,
+                )
+                if not primary_set and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "virtual_machine",
+                            "data": {
+                                "error": "Could not set primary IP.",
+                                "rowid": virtual_machine.get("name"),
+                            },
+                        }
                     )
-                    await asyncio.sleep(1.0)
-                    clear_rest_get_cache_for_path(nb, "/api/ipam/ip-addresses/")
-                    clear_rest_get_cache_for_path(nb, "/api/virtualization/interfaces/")
-                    ip_assigned, reason = await ensure_ip_assigned_to_vm(nb, first_ip_id, vm_id)
-
-                if not ip_assigned:
-                    logger.warning(
-                        "IP id=%s is not assigned to VM %s (id=%s) after retry (reason=%s); skipping primary_ip4 assignment",
-                        first_ip_id,
-                        virtual_machine.get("name"),
-                        vm_id,
-                        reason,
-                    )
-                    if websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "virtual_machine",
-                                "data": {
-                                    "error": f"Could not set primary IP: {reason}",
-                                    "rowid": virtual_machine.get("name"),
-                                },
-                            }
-                        )
-                else:
-                    try:
-                        await rest_patch_async(
-                            nb,
-                            "/api/virtualization/virtual-machines/",
-                            vm_id,
-                            {"primary_ip4": first_ip_id},
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to set primary_ip4 for VM %s (id=%s): %s",
-                            virtual_machine.get("name"),
-                            vm_id,
-                            exc,
-                        )
-                        if websocket:
-                            await websocket.send_json(
-                                {
-                                    "object": "virtual_machine",
-                                    "data": {
-                                        "error": f"Could not set primary IP: {exc}",
-                                        "rowid": virtual_machine.get("name"),
-                                    },
-                                }
-                            )
             else:
                 logger.info(
-                    "No IP available for VM %s (vmid=%s), skipping primary_ip4 assignment.",
+                    "No IP available for VM %s (vmid=%s), skipping primary IP assignment.",
                     resource.get("name"),
                     resource.get("vmid"),
                 )
@@ -2018,6 +1984,7 @@ async def create_only_vm_interfaces(  # noqa: C901
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
 ) -> list[dict]:
     """Sync VM interfaces only (no VM creation) with per-interface progress events.
 
@@ -2454,6 +2421,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
 ) -> list[dict]:
     """Sync VM IP addresses and primary IP assignment.
 
@@ -2630,12 +2598,19 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     all_ips_for_iface: list[str] = []
                     if guest_iface:
                         all_ips_for_iface = all_guest_agent_ips(
-                            guest_iface, ignore_ipv6_link_local_addresses
+                            guest_iface,
+                            ignore_ipv6_link_local_addresses,
+                            primary_ip_preference=primary_ip_preference,
                         )
                     if not all_ips_for_iface:
                         config_ip = config_dict.get("ip")
                         if config_ip and str(config_ip) != "dhcp":
                             all_ips_for_iface = [str(config_ip)]
+
+                    all_ips_for_iface = preferred_primary_ip_order(
+                        all_ips_for_iface,
+                        primary_ip_preference=primary_ip_preference,
+                    )
 
                     if all_ips_for_iface:
                         for interface_ip in all_ips_for_iface:
@@ -2829,6 +2804,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 nb=nb,
                                 virtual_machine=netbox_vm,
                                 primary_ip_id=ip_id,
+                                primary_ip_preference=primary_ip_preference,
                             )
         except Exception as e:
             logger.warning("Error setting primary IPs: %s", e)
@@ -2864,6 +2840,11 @@ async def create_virtual_machine_by_netbox_id(
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
 ):
     return await _create_virtual_machine_by_netbox_id(
         netbox_vm_id=netbox_vm_id,
@@ -2875,6 +2856,7 @@ async def create_virtual_machine_by_netbox_id(
         tag=tag,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
 
 
@@ -2907,6 +2889,11 @@ async def create_virtual_machines_stream(
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
 ):
     filtered_cluster_resources = cluster_resources
     vm_ids: list[int] = []
@@ -2936,6 +2923,7 @@ async def create_virtual_machines_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
                 )
             finally:
                 await bridge.close()
@@ -3064,6 +3052,11 @@ async def create_virtual_machine_by_netbox_id_stream(
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -3082,6 +3075,7 @@ async def create_virtual_machine_by_netbox_id_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
                 )
             finally:
                 await bridge.close()

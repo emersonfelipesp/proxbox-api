@@ -843,24 +843,20 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
     interface_calls: list[dict[str, object]] = []
     disk_calls: list[dict[str, object]] = []
     task_history_calls: list[dict[str, object]] = []
-    patch_calls: list[tuple[object, ...]] = []
+    primary_ip_calls: list[dict[str, object]] = []
     netbox_session = object()
 
     async def _fake_reconcile(*args, **kwargs):
         lookup = kwargs.get("lookup") or {}
         if lookup.get("cf_proxmox_vm_id") == 101:
             return {"id": 101, "name": "vm-101", "primary_ip4": None}
-        return {"id": len(patch_calls) + 1, "name": kwargs.get("payload", {}).get("name")}
+        return {"id": 1, "name": kwargs.get("payload", {}).get("name")}
 
     async def _fake_ensure(*args, **kwargs):
         return SimpleNamespace(id=1)
 
     async def _fake_rest_list(*args, **kwargs):
         return []
-
-    async def _fake_patch(*args, **kwargs):
-        patch_calls.append(args)
-        return None
 
     async def _fake_create_vm_interface_parallel(**kwargs):
         interface_calls.append(kwargs)
@@ -874,6 +870,10 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
         task_history_calls.append(kwargs)
         return 3
 
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_reconcile_async",
         _fake_reconcile,
@@ -881,10 +881,6 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
         _fake_rest_list,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_patch_async",
-        _fake_patch,
     )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -945,12 +941,9 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
         _fake_task_history,
     )
-    async def _fake_ensure_ip_assigned(*args, **kwargs):
-        return True, "already_assigned"
-
     monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_network.ensure_ip_assigned_to_vm",
-        _fake_ensure_ip_assigned,
+        "proxbox_api.services.sync.vm_network.set_primary_ip",
+        _fake_set_primary_ip,
     )
 
     result = asyncio.run(
@@ -979,14 +972,9 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
     assert len(interface_calls) == 1
     assert len(disk_calls) == 1
     assert len(task_history_calls) == 1
-    assert patch_calls == [
-        (
-            netbox_session,
-            "/api/virtualization/virtual-machines/",
-            101,
-            {"primary_ip4": 77},
-        )
-    ]
+    assert len(primary_ip_calls) == 1
+    assert primary_ip_calls[0]["virtual_machine"]["id"] == 101
+    assert primary_ip_calls[0]["primary_ip_id"] == 77
 
 
 def test_create_virtual_machine_by_netbox_id_raises_404_when_missing():

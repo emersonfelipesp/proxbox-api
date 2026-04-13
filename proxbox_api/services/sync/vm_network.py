@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timezone
+from ipaddress import ip_address, ip_interface
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
@@ -22,7 +24,10 @@ from proxbox_api.proxmox_to_netbox.models import (
 from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
 from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
-from proxbox_api.services.sync.vm_helpers import normalized_mac
+from proxbox_api.services.sync.vm_helpers import (
+    normalize_primary_ip_preference,
+    normalized_mac,
+)
 
 _VM_DISK_AGGREGATE_ERROR_RE = re.compile(
     r"aggregate size of assigned virtual disks \((\d+)\)",
@@ -43,6 +48,24 @@ def _extract_vm_disk_aggregate_size(error: Exception) -> int | None:
         return None
 
 
+def _primary_field_from_ip_address(address: object) -> str | None:
+    """Map an IP address value to the appropriate NetBox VM primary field."""
+    text = str(address or "").strip()
+    if not text:
+        return None
+
+    try:
+        parsed_ip = ip_interface(text).ip
+    except ValueError:
+        host = text.split("/", 1)[0]
+        try:
+            parsed_ip = ip_address(host)
+        except ValueError:
+            return None
+
+    return "primary_ip4" if parsed_ip.version == 4 else "primary_ip6"
+
+
 async def sync_vm_interfaces(  # noqa: C901
     nb: NetBoxSessionDep,
     virtual_machine: dict[str, object],
@@ -51,6 +74,7 @@ async def sync_vm_interfaces(  # noqa: C901
     network_configs: list[dict[str, object]],
     tag_refs: list[dict[str, object]],
     use_guest_agent_interface_name: bool = True,
+    primary_ip_preference: str = "ipv4",
     now: datetime | None = None,
     device: dict | None = None,
 ) -> tuple[list[dict[str, object]], int | None]:
@@ -72,6 +96,8 @@ async def sync_vm_interfaces(  # noqa: C901
     """
     if now is None:
         now = datetime.now(timezone.utc)
+
+    primary_ip_preference = normalize_primary_ip_preference(primary_ip_preference)
 
     vm_id = virtual_machine.get("id")
     if not vm_id:
@@ -216,6 +242,7 @@ async def sync_vm_interfaces(  # noqa: C901
                 interface_name=resolved_interface_name,
                 now=now,
                 create_ip=True,
+                primary_ip_preference=primary_ip_preference,
             )
             if ip_results and first_ip_id is None:
                 first_ip_id = ip_results[0][0]
@@ -395,46 +422,80 @@ async def ensure_ip_assigned_to_vm(
         return False, f"exception: {exc}"
 
 
-async def set_primary_ip(
+async def set_primary_ip(  # noqa: C901
     nb: NetBoxSessionDep,
     virtual_machine: dict[str, object],
     primary_ip_id: int | None,
+    primary_ip_preference: str = "ipv4",
 ) -> bool:
-    """Set the primary IPv4 address for a VM if not already set.
+    """Set the primary IP address for a VM if not already set.
 
-    Args:
-        nb: NetBox session
-        virtual_machine: NetBox VM record dict
-        primary_ip_id: ID of IP address to set as primary
-
-    Returns:
-        True if successful or no-op, False if skipped
+    Chooses ``primary_ip4`` or ``primary_ip6`` based on the IP family.
     """
     vm_id = virtual_machine.get("id")
     if not vm_id or not primary_ip_id:
         return False
 
-    # Skip if primary IP already set
-    if virtual_machine.get("primary_ip4") is not None:
+    primary_ip_preference = normalize_primary_ip_preference(primary_ip_preference)
+
+    # Preserve existing explicit primary choice.
+    if virtual_machine.get("primary_ip4") is not None or virtual_machine.get("primary_ip6") is not None:
         return False
 
-    # Verify (and fix if needed) that the IP is assigned to this VM before setting primary
+    # Verify (and fix if needed) that the IP is assigned to this VM before setting primary.
     assigned, reason = await ensure_ip_assigned_to_vm(nb, primary_ip_id, vm_id)
     if not assigned:
+        logger.info(
+            "Primary IP check failed (reason=%s) for VM id=%s; retrying once",
+            reason,
+            vm_id,
+        )
+        await asyncio.sleep(1.0)
+        assigned, reason = await ensure_ip_assigned_to_vm(nb, primary_ip_id, vm_id)
+
+    if not assigned:
         logger.warning(
-            "IP id=%s is not assigned to VM id=%s (reason=%s); skipping primary_ip4 assignment",
+            "IP id=%s is not assigned to VM id=%s (reason=%s); skipping primary IP assignment",
             primary_ip_id,
             vm_id,
             reason,
         )
         return False
 
+    ip_record = await rest_first_async(nb, "/api/ipam/ip-addresses/", query={"id": primary_ip_id})
+    if not ip_record:
+        logger.warning("Primary IP record id=%s not found for VM id=%s", primary_ip_id, vm_id)
+        return False
+
+    primary_field = _primary_field_from_ip_address(ip_record.get("address"))
+    if primary_field is None:
+        logger.warning(
+            "Could not determine primary IP family for VM id=%s from IP record id=%s (%s)",
+            vm_id,
+            primary_ip_id,
+            ip_record.get("address"),
+        )
+        return False
+
+    patch_payload: dict[str, object] = {primary_field: primary_ip_id}
+
+    if (
+        (primary_ip_preference == "ipv4" and primary_field == "primary_ip6")
+        or (primary_ip_preference == "ipv6" and primary_field == "primary_ip4")
+    ):
+        logger.debug(
+            "Primary IP family mismatch for VM id=%s: preferred=%s, selected_field=%s",
+            vm_id,
+            primary_ip_preference,
+            primary_field,
+        )
+
     try:
         await rest_patch_async(
             nb,
             "/api/virtualization/virtual-machines/",
             vm_id,
-            {"primary_ip4": primary_ip_id},
+            patch_payload,
         )
         return True
     except Exception as exc:
@@ -445,23 +506,26 @@ async def set_primary_ip(
                     nb,
                     "/api/virtualization/virtual-machines/",
                     vm_id,
-                    {"disk": aggregate_disk, "primary_ip4": primary_ip_id},
+                    {"disk": aggregate_disk, **patch_payload},
                 )
                 logger.info(
-                    "Set primary_ip4 for VM id=%s after reconciling disk=%s to match virtual disks",
+                    "Set %s for VM id=%s after reconciling disk=%s to match virtual disks",
+                    primary_field,
                     vm_id,
                     aggregate_disk,
                 )
                 return True
             except Exception as retry_exc:
                 logger.warning(
-                    "Failed to set primary_ip4 for VM id=%s after disk reconciliation retry: %s",
+                    "Failed to set %s for VM id=%s after disk reconciliation retry: %s",
+                    primary_field,
                     vm_id,
                     retry_exc,
                 )
                 return False
         logger.warning(
-            "Failed to set primary_ip4 for VM id=%s: %s",
+            "Failed to set %s for VM id=%s: %s",
+            primary_field,
             vm_id,
             exc,
         )

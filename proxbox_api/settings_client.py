@@ -51,6 +51,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "use_guest_agent_interface_name": True,
         "proxbox_fetch_max_concurrency": 8,
         "ignore_ipv6_link_local_addresses": True,
+        "primary_ip_preference": "ipv4",
         "netbox_max_concurrent": 1,
         "netbox_max_retries": 5,
         "netbox_retry_delay": 2.0,
@@ -134,6 +135,11 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "proxbox_fetch_max_concurrency": int(settings.get("proxbox_fetch_max_concurrency", 8)),
             "ignore_ipv6_link_local_addresses": settings.get(
                 "ignore_ipv6_link_local_addresses", True
+            ),
+            "primary_ip_preference": (
+                "ipv6"
+                if str(settings.get("primary_ip_preference", "ipv4")).strip().lower() == "ipv6"
+                else "ipv4"
             ),
             "netbox_max_concurrent": int(settings.get("netbox_max_concurrent", 1)),
             "netbox_max_retries": int(settings.get("netbox_max_retries", 5)),

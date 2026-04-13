@@ -715,3 +715,120 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     assert len(primary_ip_calls) == 1
     assert primary_ip_calls[0]["virtual_machine"]["id"] == 55
     assert primary_ip_calls[0]["primary_ip_id"] == 77
+
+
+
+def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 1,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    primary_ip_calls: list[dict[str, object]] = []
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return data["vm_config"]
+
+    async def _fake_guest_ifaces(*args, **kwargs):
+        return [
+            {
+                "name": "ens18",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "ip_addresses": [
+                    {
+                        "ip_address": "2804:2cac:1030:0:428f:a69c:d3b5:c794",
+                        "prefix": 64,
+                        "ip_address_type": "ipv6",
+                    },
+                    {
+                        "ip_address": "10.0.0.20",
+                        "prefix": 24,
+                        "ip_address_type": "ipv4",
+                    },
+                ],
+            }
+        ]
+
+    async def _fake_bulk_reconcile_ips(nb, payloads):
+        return [
+            {
+                "id": 99,
+                "address": "2804:2cac:1030:0:428f:a69c:d3b5:c794/64",
+            },
+            {"id": 77, "address": "10.0.0.20/24"},
+        ]
+
+    async def _fake_rest_list(*args, **kwargs):
+        return [{"id": 66, "name": "ens18", "virtual_machine": 55}]
+
+    async def _fake_rest_first(*args, **kwargs):
+        query = kwargs.get("query") or {}
+        address = str(query.get("address") or "")
+        if address == "10.0.0.20/24":
+            return {"id": 77, "address": address}
+        if address == "2804:2cac:1030:0:428f:a69c:d3b5:c794/64":
+            return {"id": 99, "address": address}
+        return None
+
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        _fake_get_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_ifaces,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_first_async",
+        _fake_rest_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile_ips,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_network.set_primary_ip",
+        _fake_set_primary_ip,
+    )
+
+    asyncio.run(
+        create_only_vm_ip_addresses(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert len(primary_ip_calls) == 1
+    assert primary_ip_calls[0]["primary_ip_id"] == 77
+    assert primary_ip_calls[0]["primary_ip_preference"] == "ipv4"

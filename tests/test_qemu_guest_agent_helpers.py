@@ -148,6 +148,20 @@ def test_all_guest_agent_ips_filters_link_local_by_default():
     assert len(result_all) == 3
 
 
+
+def test_all_guest_agent_ips_prioritizes_ipv4_before_ipv6():
+    iface = _make_guest_iface(
+        [
+            {"ip_address": "2804:2cac::168:0:96:30", "prefix": 64, "ip_address_type": "ipv6"},
+            {"ip_address": "168.0.96.30", "prefix": 27, "ip_address_type": "ipv4"},
+        ]
+    )
+
+    result = all_guest_agent_ips(iface, ignore_ipv6_link_local=False)
+
+    assert result == ["168.0.96.30/27", "2804:2cac::168:0:96:30/64"]
+
+
 def test_all_guest_agent_ips_returns_empty_for_none():
     assert all_guest_agent_ips(None) == []
 

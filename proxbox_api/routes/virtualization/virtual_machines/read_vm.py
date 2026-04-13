@@ -1,6 +1,7 @@
 """Virtual machine read/query routes."""
 
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -170,6 +171,11 @@ async def create_virtual_machines_interfaces(
             "VM interface IP address selection."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
@@ -186,6 +192,7 @@ async def create_virtual_machines_interfaces(
         use_websocket=False,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
     return results
 
@@ -214,6 +221,11 @@ async def create_virtual_machines_interfaces_stream(
             "VM interface IP address selection."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
@@ -236,6 +248,7 @@ async def create_virtual_machines_interfaces_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
                 )
             finally:
                 await bridge.close()
@@ -275,6 +288,11 @@ async def create_virtual_machines_interfaces_ip_address(
         title="Ignore IPv6 Link-Local Addresses",
         description=("When true, IPv6 link-local addresses (fe80::/64) are ignored."),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_ip_addresses,
@@ -291,6 +309,7 @@ async def create_virtual_machines_interfaces_ip_address(
         use_websocket=False,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
     return results
 
@@ -316,6 +335,11 @@ async def create_virtual_machines_ip_address_stream(
         title="Ignore IPv6 Link-Local Addresses",
         description=("When true, IPv6 link-local addresses (fe80::/64) are ignored."),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_ip_addresses,
@@ -338,6 +362,7 @@ async def create_virtual_machines_ip_address_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
                 )
             finally:
                 await bridge.close()

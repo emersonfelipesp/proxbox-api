@@ -8,6 +8,7 @@ from proxbox_api import settings_client
 def test_get_default_settings_exposes_backend_log_file_path():
     settings = settings_client.get_default_settings()
     assert settings["backend_log_file_path"] == "/var/log/proxbox.log"
+    assert settings["primary_ip_preference"] == "ipv4"
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -28,6 +29,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
 
     response_data = {
         "backend_log_file_path": "/srv/log/proxbox-api.log",
+        "primary_ip_preference": "ipv6",
         "ssrf_protection_enabled": True,
         "allow_private_ips": True,
         "additional_allowed_ip_ranges": "",
@@ -45,6 +47,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
     assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
+    assert settings["primary_ip_preference"] == "ipv6"
 
 
 def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path(monkeypatch):
@@ -65,6 +68,7 @@ def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path
 
     response_data = {
         "backend_log_file_path": "relative/path.log",
+        "primary_ip_preference": "not-valid",
         "ssrf_protection_enabled": True,
         "allow_private_ips": True,
         "additional_allowed_ip_ranges": "",
@@ -82,6 +86,7 @@ def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
     assert settings["backend_log_file_path"] == "/var/log/proxbox.log"
+    assert settings["primary_ip_preference"] == "ipv4"
 
 
 def test_get_settings_uses_raw_netbox_session_when_no_session(monkeypatch):

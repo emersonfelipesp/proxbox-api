@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_interface
+from typing import Literal
 
 from proxbox_api.logger import logger
+
+PrimaryIPPreference = Literal["ipv4", "ipv6"]
 
 
 def to_mapping(value: object) -> dict[str, object]:
@@ -140,6 +143,7 @@ def best_guest_agent_ip(
 def all_guest_agent_ips(
     guest_iface: dict[str, object] | None,
     ignore_ipv6_link_local: bool = True,
+    primary_ip_preference: PrimaryIPPreference = "ipv4",
 ) -> list[str]:
     """Return ALL valid IP addresses from guest agent interface data.
 
@@ -156,7 +160,42 @@ def all_guest_agent_ips(
         candidate = guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
         if candidate:
             results.append(candidate)
-    return results
+    return preferred_primary_ip_order(results, primary_ip_preference=primary_ip_preference)
+
+
+def normalize_primary_ip_preference(value: object) -> PrimaryIPPreference:
+    """Return normalized primary IP family preference."""
+    normalized = str(value or "").strip().lower()
+    return "ipv6" if normalized == "ipv6" else "ipv4"
+
+
+def preferred_primary_ip_order(
+    addresses: list[str],
+    primary_ip_preference: PrimaryIPPreference = "ipv4",
+) -> list[str]:
+    """Sort addresses for primary selection preference by IP family."""
+    preference = normalize_primary_ip_preference(primary_ip_preference)
+
+    def _rank(address: str) -> tuple[int, int]:
+        host = str(address or "").strip().split("/", 1)[0]
+        try:
+            parsed = ip_interface(str(address)).ip
+        except ValueError:
+            try:
+                parsed = ip_address(host)
+            except ValueError:
+                return (2, 0)
+        is_preferred = (
+            (parsed.version == 4 and preference == "ipv4")
+            or (parsed.version == 6 and preference == "ipv6")
+        )
+        return (0 if is_preferred else 1, 0)
+
+    # Keep input stability within each family bucket.
+    return [
+        addr
+        for _, addr in sorted(enumerate(addresses), key=lambda item: (_rank(item[1]), item[0]))
+    ]
 
 
 def _matches_vm_criteria(

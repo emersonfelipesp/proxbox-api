@@ -20,7 +20,11 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
-from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips, normalized_mac
+from proxbox_api.services.sync.vm_helpers import (
+    all_guest_agent_ips,
+    normalized_mac,
+    preferred_primary_ip_order,
+)
 
 
 async def sync_node_interface_and_ip(
@@ -607,6 +611,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
     now: datetime,
     create_ip: bool,
     ignore_ipv6_link_local: bool = True,
+    primary_ip_preference: str = "ipv4",
     tag_slug: str = "proxbox",
 ) -> list[tuple[int | None, str]]:
     """Create or update ALL IPs attached to a VM interface, then clean up stale ones.
@@ -618,11 +623,20 @@ async def _resolve_vm_interface_ips(  # noqa: C901
 
     all_ips: list[str] = []
     if guest_iface:
-        all_ips = all_guest_agent_ips(guest_iface, ignore_ipv6_link_local)
+        all_ips = all_guest_agent_ips(
+            guest_iface,
+            ignore_ipv6_link_local,
+            primary_ip_preference=primary_ip_preference,
+        )
     if not all_ips:
         config_ip = interface_config.get("ip")
         if config_ip and config_ip != "dhcp":
             all_ips = [str(config_ip)]
+
+    all_ips = preferred_primary_ip_order(
+        all_ips,
+        primary_ip_preference=primary_ip_preference,
+    )
 
     if not all_ips:
         return []
@@ -694,6 +708,7 @@ async def sync_vm_interface_and_ip(
     create_interface: bool = True,
     create_ip: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: str = "ipv4",
     now: datetime | None = None,
     device: dict | None = None,
 ) -> dict:
@@ -758,6 +773,7 @@ async def sync_vm_interface_and_ip(
         now=now,
         create_ip=create_ip,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
     if ip_results:
         first_ip_id, first_ip = ip_results[0]

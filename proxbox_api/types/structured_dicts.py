@@ -18,6 +18,7 @@ class ProxboxSettingsDict(TypedDict):
     use_guest_agent_interface_name: bool
     proxbox_fetch_max_concurrency: int
     ignore_ipv6_link_local_addresses: bool
+    primary_ip_preference: str
     netbox_max_concurrent: int
     netbox_max_retries: int
     netbox_retry_delay: float
