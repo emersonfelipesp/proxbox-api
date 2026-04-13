@@ -955,6 +955,17 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             fields["proxmox_last_updated"] = self.last_updated.isoformat()
         return fields
 
+    @computed_field(return_type=int)
+    @property
+    def disk_mb(self) -> int:
+        """VM disk in MiB, preferring aggregate parsed VM config disks when available."""
+        disks = self.config.disks
+        if disks:
+            aggregate = sum(max(int(getattr(disk, "size", 0) or 0), 0) for disk in disks)
+            if aggregate > 0:
+                return aggregate
+        return self.resource.disk_mb
+
     def as_netbox_create_body(self) -> NetBoxVirtualMachineCreateBody:
         """Return validated NetBox virtual machine create body."""
 
@@ -966,7 +977,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             role=self.role_id,
             vcpus=int(self.resource.maxcpu or 0),
             memory=self.resource.memory_mb,
-            disk=self.resource.disk_mb,
+            disk=self.disk_mb,
             tags=[tag for tag in self.tag_ids if int(tag) > 0],
             custom_fields=self.vm_custom_fields,
             description=f"Synced from Proxmox node {self.resource.node}",

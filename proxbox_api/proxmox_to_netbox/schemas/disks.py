@@ -8,7 +8,7 @@ from pydantic import ConfigDict, computed_field, field_validator
 
 from proxbox_api.schemas._base import ProxboxBaseModel
 
-DISK_KEY_PATTERN = re.compile(r"^(scsi|ide|sata|virto|mp)\d+$")
+DISK_KEY_PATTERN = re.compile(r"^(scsi|ide|sata|virtio|mp)\d+$")
 UNUSED_DISK_PATTERN = re.compile(r"^unused\d+$")
 
 

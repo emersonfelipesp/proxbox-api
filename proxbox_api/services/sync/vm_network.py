@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from proxbox_api.dependencies import NetBoxSessionDep
@@ -22,6 +23,24 @@ from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
 from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
 from proxbox_api.services.sync.vm_helpers import normalized_mac
+
+_VM_DISK_AGGREGATE_ERROR_RE = re.compile(
+    r"aggregate size of assigned virtual disks \((\d+)\)",
+    flags=re.IGNORECASE,
+)
+
+
+def _extract_vm_disk_aggregate_size(error: Exception) -> int | None:
+    """Extract the expected VM disk size from NetBox disk aggregate validation errors."""
+    detail = getattr(error, "detail", None)
+    text = str(detail) if detail else str(error)
+    match = _VM_DISK_AGGREGATE_ERROR_RE.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
 
 
 async def sync_vm_interfaces(  # noqa: C901
@@ -419,6 +438,28 @@ async def set_primary_ip(
         )
         return True
     except Exception as exc:
+        aggregate_disk = _extract_vm_disk_aggregate_size(exc)
+        if aggregate_disk and aggregate_disk > 0:
+            try:
+                await rest_patch_async(
+                    nb,
+                    "/api/virtualization/virtual-machines/",
+                    vm_id,
+                    {"disk": aggregate_disk, "primary_ip4": primary_ip_id},
+                )
+                logger.info(
+                    "Set primary_ip4 for VM id=%s after reconciling disk=%s to match virtual disks",
+                    vm_id,
+                    aggregate_disk,
+                )
+                return True
+            except Exception as retry_exc:
+                logger.warning(
+                    "Failed to set primary_ip4 for VM id=%s after disk reconciliation retry: %s",
+                    vm_id,
+                    retry_exc,
+                )
+                return False
         logger.warning(
             "Failed to set primary_ip4 for VM id=%s: %s",
             vm_id,
