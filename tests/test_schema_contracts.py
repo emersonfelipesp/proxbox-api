@@ -20,7 +20,7 @@ def test_custom_openapi_contains_embedded_generated_proxmox_schema():
     assert schema["info"]["x-proxmox-generated-openapi"]["source"].endswith(
         "proxbox_api/generated/proxmox/latest/openapi.json"
     )
-    assert "x-proxmox-generated-openapi" in schema
+    assert "x-proxmox-generated-openapi" in schema["info"]
 
 
 def test_generated_proxmox_sdk_snapshot_is_available():
