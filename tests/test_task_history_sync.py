@@ -105,6 +105,7 @@ def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeyp
                 )
             ],
             virtual_machine_id=144,
+            proxmox_vmid=144,
             vm_type="lxc",
             cluster_name="lab",
             tag_refs=[{"name": "Proxbox", "slug": "proxbox"}],
@@ -218,6 +219,7 @@ def test_sync_virtual_machine_task_history_falls_back_to_per_item_on_bulk_failur
                 )
             ],
             virtual_machine_id=144,
+            proxmox_vmid=144,
             vm_type="lxc",
             cluster_name="lab",
             tag_refs=[{"name": "Proxbox", "slug": "proxbox"}],

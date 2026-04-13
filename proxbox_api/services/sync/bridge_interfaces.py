@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_create_async, rest_first_async, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    clear_rest_get_cache_for_path,
+    rest_create_async,
+    rest_first_async,
+    rest_reconcile_async,
+)
 from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState
 
 
@@ -101,7 +106,9 @@ async def ensure_node_bridge_interface(
             try:
                 record = await rest_create_async(nb, "/api/dcim/interfaces/", payload)
             except ProxboxException:
-                # Another worker may have created it; re-fetch with strict device scoping.
+                # Another worker may have created it; invalidate the GET cache so the
+                # retry actually hits NetBox instead of returning the stale miss.
+                clear_rest_get_cache_for_path(nb, "/api/dcim/interfaces/")
                 existing = await rest_first_async(nb, "/api/dcim/interfaces/", query=strict_query)
                 if existing is None:
                     raise

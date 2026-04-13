@@ -294,6 +294,7 @@ async def _sync_single_vm_task_history(
             pxs=pxs,
             cluster_status=cluster_status,
             virtual_machine_id=int(vm_id),
+            proxmox_vmid=int(proxmox_vmid),
             vm_type=proxmox_type,
             cluster_name=cluster_name,
             tag_refs=normalized_tags,
@@ -416,6 +417,7 @@ async def sync_virtual_machine_task_history(  # noqa: C901
     pxs: list[object] | None,
     cluster_status: list[object] | None,
     virtual_machine_id: int,
+    proxmox_vmid: int,
     vm_type: str,
     cluster_name: str | None,
     tag_refs: list[dict[str, object]] | None = None,
@@ -454,7 +456,7 @@ async def sync_virtual_machine_task_history(  # noqa: C901
                 raw_tasks = get_node_tasks(
                     proxmox_session,
                     node=node_name,
-                    vmid=virtual_machine_id,
+                    vmid=proxmox_vmid,
                 )
                 if inspect.isawaitable(raw_tasks):
                     raw_tasks = await raw_tasks
@@ -462,7 +464,7 @@ async def sync_virtual_machine_task_history(  # noqa: C901
         except Exception as error:
             logger.warning(
                 "Error fetching task history for VM %s on node %s: %s",
-                virtual_machine_id,
+                proxmox_vmid,
                 node_name,
                 error,
             )

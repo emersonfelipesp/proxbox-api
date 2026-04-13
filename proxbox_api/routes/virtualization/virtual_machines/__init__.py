@@ -23,15 +23,15 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
 )
 
 router = APIRouter()
-# Include read_vm first so its static routes (e.g., /interfaces/create) are matched
-# before sync_vm's dynamic routes (e.g., /{netbox_vm_id}/create)
+# Static-prefix routers must come before sync_vm which has dynamic /{netbox_vm_id}/create
+# and /{netbox_vm_id}/create/stream routes that would otherwise shadow them.
 router.include_router(read_vm.router)
 router.include_router(storages_vm.router)
 router.include_router(disks_vm.router)
-router.include_router(sync_vm.router)
 router.include_router(backups_vm.router)
 router.include_router(snapshots_vm.router)
 router.include_router(task_history_vm.router)
+router.include_router(sync_vm.router)
 
 __all__ = (
     "create_netbox_backups",
