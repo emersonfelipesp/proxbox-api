@@ -34,6 +34,10 @@ _VM_DISK_AGGREGATE_ERROR_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+_PRIMARY_IP_REASSIGN_ERROR = (
+    "Cannot reassign IP address while it is designated as the primary IP for the parent object"
+)
+
 
 def _extract_vm_disk_aggregate_size(error: Exception) -> int | None:
     """Extract the expected VM disk size from NetBox disk aggregate validation errors."""
@@ -324,6 +328,49 @@ async def sync_vm_disks(
     return disk_count
 
 
+async def _clear_primary_ip_on_parent(nb: NetBoxSessionDep, ip_id: int) -> bool:
+    """Remove the primary IP designation from any VM that claims ip_id as its primary.
+
+    NetBox rejects reassigning an IP while it is set as the primary IP of its parent object.
+    This helper finds the owning VM and clears the ``primary_ip4`` or ``primary_ip6`` field
+    so the IP can subsequently be reassigned.
+
+    Returns True if a parent was found and successfully patched, False otherwise.
+    """
+    for field in ("primary_ip4", "primary_ip6"):
+        vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={field: ip_id, "limit": 5},
+        )
+        for vm in vms:
+            parent_vm_id = vm.get("id") if isinstance(vm, dict) else getattr(vm, "id", None)
+            if not parent_vm_id:
+                continue
+            try:
+                await rest_patch_async(
+                    nb,
+                    "/api/virtualization/virtual-machines/",
+                    parent_vm_id,
+                    {field: None},
+                )
+                logger.info(
+                    "_clear_primary_ip_on_parent: cleared %s (IP id=%s) from VM id=%s",
+                    field,
+                    ip_id,
+                    parent_vm_id,
+                )
+                return True
+            except Exception as clear_exc:
+                logger.warning(
+                    "_clear_primary_ip_on_parent: failed to clear %s from VM id=%s: %s",
+                    field,
+                    parent_vm_id,
+                    clear_exc,
+                )
+    return False
+
+
 async def ensure_ip_assigned_to_vm(
     nb: NetBoxSessionDep,
     ip_id: int,
@@ -381,15 +428,38 @@ async def ensure_ip_assigned_to_vm(
         first_iface_id = (
             first_iface.get("id") if isinstance(first_iface, dict) else getattr(first_iface, "id", None)
         )
-        patched = await rest_patch_async(
-            nb,
-            "/api/ipam/ip-addresses/",
-            ip_id,
-            {
-                "assigned_object_type": "virtualization.vminterface",
-                "assigned_object_id": first_iface_id,
-            },
-        )
+        assign_payload: dict[str, object] = {
+            "assigned_object_type": "virtualization.vminterface",
+            "assigned_object_id": first_iface_id,
+        }
+        try:
+            patched = await rest_patch_async(
+                nb,
+                "/api/ipam/ip-addresses/",
+                ip_id,
+                assign_payload,
+            )
+        except Exception as patch_exc:
+            if _PRIMARY_IP_REASSIGN_ERROR not in str(patch_exc):
+                raise
+            logger.info(
+                "ensure_ip_assigned_to_vm: IP id=%s is designated as primary on its parent; "
+                "clearing primary designation and retrying",
+                ip_id,
+            )
+            cleared = await _clear_primary_ip_on_parent(nb, ip_id)
+            if not cleared:
+                logger.warning(
+                    "ensure_ip_assigned_to_vm: could not clear primary IP for id=%s; giving up",
+                    ip_id,
+                )
+                return False, "primary_ip_clear_failed"
+            patched = await rest_patch_async(
+                nb,
+                "/api/ipam/ip-addresses/",
+                ip_id,
+                assign_payload,
+            )
         # Verify the PATCH took effect by inspecting the returned record
         patched_obj_id = patched.get("assigned_object_id") if isinstance(patched, dict) else None
         if isinstance(patched_obj_id, dict):
