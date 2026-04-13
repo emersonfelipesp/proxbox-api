@@ -176,7 +176,7 @@ Both services:
 
 ## Targeted endpoint tests
 
-The file `proxbox_api/test_endpoint_crud.py` includes dedicated coverage for:
+The file `tests/test_endpoint_crud.py` includes dedicated coverage for:
 
 - Proxmox endpoint CRUD lifecycle.
 - Proxmox endpoint auth validation rules.
@@ -185,7 +185,7 @@ The file `proxbox_api/test_endpoint_crud.py` includes dedicated coverage for:
 Run only this test file:
 
 ```bash
-pytest proxbox_api/test_endpoint_crud.py
+pytest tests/test_endpoint_crud.py
 ```
 
 ## Compile check

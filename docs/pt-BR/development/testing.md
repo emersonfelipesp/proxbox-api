@@ -176,7 +176,7 @@ Ambos os servicos:
 
 ## Testes direcionados de endpoints
 
-O arquivo `proxbox_api/test_endpoint_crud.py` cobre:
+O arquivo `tests/test_endpoint_crud.py` cobre:
 
 - Ciclo completo de CRUD de endpoint Proxmox.
 - Regras de validacao de autenticacao de endpoint Proxmox.
@@ -185,7 +185,7 @@ O arquivo `proxbox_api/test_endpoint_crud.py` cobre:
 Executar apenas este arquivo:
 
 ```bash
-pytest proxbox_api/test_endpoint_crud.py
+pytest tests/test_endpoint_crud.py
 ```
 
 ## Verificacao de compilacao

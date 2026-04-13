@@ -58,9 +58,8 @@ proxbox-schema list
 
 Output:
 
-```
+```text
 Available Proxmox OpenAPI schema versions (4):
-
          8.1   6.4 MB   /opt/proxbox_api/generated/proxmox/8.1/openapi.json
          8.2   6.4 MB   /opt/proxbox_api/generated/proxmox/8.2/openapi.json
          8.3   6.4 MB   /opt/proxbox_api/generated/proxmox/8.3/openapi.json
