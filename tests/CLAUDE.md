@@ -13,12 +13,15 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_api_routes.py` | API route integration tests (request/response contracts) |
 | `test_admin_logs.py` | In-memory log buffer routes (`/admin/logs`) |
 | `test_backups_vm_sync.py` | VM backup discovery and sync workflow |
+| `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
 | `test_error_handling.py` | Exception hierarchy and HTTP error response shaping |
 | `test_generated_proxmox_routes.py` | Runtime registration of generated Proxmox proxy routes |
 | `test_health.py` | Health check and root metadata endpoints |
 | `test_individual_sync.py` | Individual per-object sync service and dry-run workflows |
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
+| `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
+| `test_proxmox_to_netbox_contracts.py` | VM mapper behavior and generated schema availability checks |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
 | `test_pydantic_generator_models.py` | Pydantic model generation from OpenAPI specs |

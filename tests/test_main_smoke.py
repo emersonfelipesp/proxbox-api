@@ -18,11 +18,10 @@ from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
 
-client = TestClient(app)
-
 
 def test_read_root():
-    response = client.get("/")
+    with TestClient(app) as client:
+        response = client.get("/")
     assert response.status_code == 200
     assert response.json() == {
         "message": "Proxbox Backend made in FastAPI framework",
@@ -38,8 +37,15 @@ def test_read_root():
     }
 
 
-def test_read_backend_version():
-    response = client.get("/version")
+def test_read_backend_version_requires_auth():
+    with TestClient(app) as client:
+        response = client.get("/version")
+    assert response.status_code == 401
+
+
+def test_read_backend_version(auth_headers):
+    with TestClient(app) as client:
+        response = client.get("/version", headers=auth_headers)
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload, dict)
@@ -50,7 +56,7 @@ def test_read_backend_version():
 def test_custom_openapi_contains_embedded_proxmox_extension():
     schema = app.openapi()
     assert isinstance(schema, dict)
-    assert "x-proxmox-generated-openapi" in schema
+    assert "x-proxmox-generated-openapi" in schema["info"]
 
 
 def test_create_app_skips_static_mount_when_directory_is_missing(monkeypatch):
@@ -59,7 +65,7 @@ def test_create_app_skips_static_mount_when_directory_is_missing(monkeypatch):
     real_isdir = os.path.isdir
 
     def _fake_isdir(path):
-        if path.endswith("/proxbox_api/static"):
+        if str(path).endswith("/proxbox_api/static"):
             return False
         return real_isdir(path)
 

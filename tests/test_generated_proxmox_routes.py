@@ -637,12 +637,15 @@ def test_generated_routes_appear_in_openapi():
 
     schema = app.openapi()
     assert "/proxmox/api2/latest/cluster/resources" in schema["paths"]
-    assert "/proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config" in schema["paths"]
-    assert "/proxmox/api2/access/acl" in schema["paths"]
-
-    assert list(schema["paths"]).index("/proxmox/api2/latest/cluster/resources") < list(
-        schema["paths"]
-    ).index("/proxmox/api2/8.3.0/cluster/resources")
+    # Non-latest generated versions stay routable but are hidden from OpenAPI output
+    # to keep the schema size manageable.
+    assert "/proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config" not in schema["paths"]
+    assert any(
+        route.path == "/proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config" for route in app.routes
+    )
+    assert "/proxmox/api2/latest/access/acl" in schema["paths"]
+    assert "/proxmox/api2/access/acl" not in schema["paths"]
+    assert any(route.path == "/proxmox/api2/access/acl" for route in app.routes)
 
     post_acl = schema["paths"]["/proxmox/api2/latest/access/acl"]["post"]
     parameter_names = {parameter["name"] for parameter in post_acl["parameters"]}

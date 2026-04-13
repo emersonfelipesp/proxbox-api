@@ -65,5 +65,5 @@ def test_netbox_schema_contract_resolves_source():
 
 
 def test_generated_netbox_cache_package_exists():
-    package_path = Path(__file__).resolve().parent / "generated" / "netbox"
+    package_path = Path(__file__).resolve().parents[1] / "proxbox_api" / "generated" / "netbox"
     assert package_path.exists()
