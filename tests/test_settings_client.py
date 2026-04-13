@@ -9,6 +9,7 @@ def test_get_default_settings_exposes_backend_log_file_path():
     settings = settings_client.get_default_settings()
     assert settings["backend_log_file_path"] == "/var/log/proxbox.log"
     assert settings["primary_ip_preference"] == "ipv4"
+    assert settings["encryption_key"] == ""
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -34,6 +35,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "allow_private_ips": True,
         "additional_allowed_ip_ranges": "",
         "explicitly_blocked_ip_ranges": "",
+        "encryption_key": "my-plugin-key",
     }
 
     mock_response = MagicMock()
@@ -48,6 +50,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings is not None
     assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
     assert settings["primary_ip_preference"] == "ipv6"
+    assert settings["encryption_key"] == "my-plugin-key"
 
 
 def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path(monkeypatch):

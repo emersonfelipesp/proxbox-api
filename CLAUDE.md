@@ -114,7 +114,7 @@ Open the nearest scoped guide for the code you are changing.
 - ASGI app: `proxbox_api.main:app`
 - Typical server command: `uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000`
 - Docker entrypoint: the `Dockerfile` uses the same app module path.
-- Smoke tests: `proxbox_api/test_main.py` and the repository test suite under `tests/`
+- Smoke tests live under `tests/` (for example `tests/test_main_smoke.py` and `tests/test_endpoint_crud.py`)
 
 ## Dependencies
 
@@ -134,6 +134,7 @@ Open the nearest scoped guide for the code you are changing.
 - `PROXBOX_EXPOSE_INTERNAL_ERRORS`: returns raw exception details in 500 responses when enabled.
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
+- `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. The raw value is hashed with SHA-256 to derive a Fernet key. If unset, proxbox-api falls back to the `encryption_key` field in `ProxboxPluginSettings` (configurable from the NetBox plugin settings page). If neither is set, credentials are stored in plaintext and a CRITICAL warning is logged. Priority: env var > plugin settings > none (plaintext).
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 60).
 - `PROXBOX_NETBOX_WRITE_CONCURRENCY`: max concurrent NetBox write operations (default: 8 in VM sync path, 4 in task-history/snapshot paths).
 - `PROXBOX_PROXMOX_FETCH_CONCURRENCY`: max concurrent Proxmox read operations (default: 8 in most paths, 4 in task-history path).
