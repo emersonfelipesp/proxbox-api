@@ -187,9 +187,7 @@ class TestStreamEndpoints:
             "/proxmox/cluster/backup/stream",
         ],
     )
-    async def test_additional_plugin_stream_paths_exist(
-        self, client_with_fake_netbox, path
-    ):
+    async def test_additional_plugin_stream_paths_exist(self, client_with_fake_netbox, path):
         """Every sync stream path consumed by plugin jobs must remain routable."""
         async with AsyncClient(
             transport=ASGITransport(app=app),

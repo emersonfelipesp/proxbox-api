@@ -185,16 +185,14 @@ def preferred_primary_ip_order(
                 parsed = ip_address(host)
             except ValueError:
                 return (2, 0)
-        is_preferred = (
-            (parsed.version == 4 and preference == "ipv4")
-            or (parsed.version == 6 and preference == "ipv6")
+        is_preferred = (parsed.version == 4 and preference == "ipv4") or (
+            parsed.version == 6 and preference == "ipv6"
         )
         return (0 if is_preferred else 1, 0)
 
     # Keep input stability within each family bucket.
     return [
-        addr
-        for _, addr in sorted(enumerate(addresses), key=lambda item: (_rank(item[1]), item[0]))
+        addr for _, addr in sorted(enumerate(addresses), key=lambda item: (_rank(item[1]), item[0]))
     ]
 
 

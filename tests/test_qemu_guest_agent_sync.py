@@ -168,6 +168,7 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
     )
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+
     async def _fake_guest_ifaces_with_ip(*args, **kwargs):
         return [
             {
@@ -213,6 +214,7 @@ def test_vm_sync_uses_guest_agent_interface_name_by_default(monkeypatch):
         ip_payloads=ip_payloads,
         interface_payloads=interface_payloads,
     )
+
     async def _fake_guest_ifaces_no_ip(*args, **kwargs):
         return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
 
@@ -285,6 +287,7 @@ def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
         ip_payloads=ip_payloads,
         interface_payloads=interface_payloads,
     )
+
     async def _fake_guest_ifaces_no_ip_2(*args, **kwargs):
         return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
 
@@ -357,6 +360,7 @@ def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
     )
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+
     async def _should_not_be_called(*args, **kwargs):
         raise AssertionError("should not be called")
 
@@ -429,6 +433,7 @@ def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
         }
     )
     ip_payloads: list[dict] = []
+
     async def _fake_guest_fe80(*args, **kwargs):
         return [
             {
@@ -715,7 +720,6 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     assert len(primary_ip_calls) == 1
     assert primary_ip_calls[0]["virtual_machine"]["id"] == 55
     assert primary_ip_calls[0]["primary_ip_id"] == 77
-
 
 
 def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monkeypatch):

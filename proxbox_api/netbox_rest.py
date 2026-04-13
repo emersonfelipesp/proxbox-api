@@ -951,7 +951,9 @@ async def rest_reconcile_async(  # noqa: C901
         desired_payload = {key: value for key, value in payload.items() if value is not None}
 
     async def _find_existing() -> RestRecord | None:
-        candidates = [lookup] if strict_lookup else _candidate_reuse_lookups(lookup, desired_payload)
+        candidates = (
+            [lookup] if strict_lookup else _candidate_reuse_lookups(lookup, desired_payload)
+        )
         for candidate in candidates:
             existing_record = await rest_first_async(nb, path, query={**candidate, "limit": 2})
             if existing_record:
@@ -960,7 +962,9 @@ async def rest_reconcile_async(  # noqa: C901
 
     async def _scan_existing() -> RestRecord | None:
         """Walk paginated list results — demo NetBox can have >>200 rows so the first page may miss a match."""
-        candidates = [lookup] if strict_lookup else _candidate_reuse_lookups(lookup, desired_payload)
+        candidates = (
+            [lookup] if strict_lookup else _candidate_reuse_lookups(lookup, desired_payload)
+        )
         page_size = 200
         max_offset = 10_000
         offset = 0

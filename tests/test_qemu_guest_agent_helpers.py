@@ -116,12 +116,18 @@ def _make_guest_iface(ips: list[dict]) -> dict:
 
 
 def test_all_guest_agent_ips_returns_all_non_loopback():
-    iface = _make_guest_iface([
-        {"ip_address": "168.0.96.30", "prefix": 27, "ip_address_type": "ipv4"},
-        {"ip_address": "2804:2cac::168:0:96:30", "prefix": 64, "ip_address_type": "ipv6"},
-        {"ip_address": "127.0.0.1", "prefix": 8, "ip_address_type": "ipv4"},  # loopback — excluded
-        {"ip_address": "::1", "prefix": 128, "ip_address_type": "ipv6"},       # loopback — excluded
-    ])
+    iface = _make_guest_iface(
+        [
+            {"ip_address": "168.0.96.30", "prefix": 27, "ip_address_type": "ipv4"},
+            {"ip_address": "2804:2cac::168:0:96:30", "prefix": 64, "ip_address_type": "ipv6"},
+            {
+                "ip_address": "127.0.0.1",
+                "prefix": 8,
+                "ip_address_type": "ipv4",
+            },  # loopback — excluded
+            {"ip_address": "::1", "prefix": 128, "ip_address_type": "ipv6"},  # loopback — excluded
+        ]
+    )
     result = all_guest_agent_ips(iface, ignore_ipv6_link_local=False)
     assert "168.0.96.30/27" in result
     assert "2804:2cac::168:0:96:30/64" in result
@@ -131,11 +137,13 @@ def test_all_guest_agent_ips_returns_all_non_loopback():
 
 
 def test_all_guest_agent_ips_filters_link_local_by_default():
-    iface = _make_guest_iface([
-        {"ip_address": "168.0.96.30", "prefix": 27, "ip_address_type": "ipv4"},
-        {"ip_address": "2804:2cac::168:0:96:30", "prefix": 64, "ip_address_type": "ipv6"},
-        {"ip_address": "fe80::dc2f:eeff:fe0e:9a4b", "prefix": 64, "ip_address_type": "ipv6"},
-    ])
+    iface = _make_guest_iface(
+        [
+            {"ip_address": "168.0.96.30", "prefix": 27, "ip_address_type": "ipv4"},
+            {"ip_address": "2804:2cac::168:0:96:30", "prefix": 64, "ip_address_type": "ipv6"},
+            {"ip_address": "fe80::dc2f:eeff:fe0e:9a4b", "prefix": 64, "ip_address_type": "ipv6"},
+        ]
+    )
     result_filtered = all_guest_agent_ips(iface, ignore_ipv6_link_local=True)
     result_all = all_guest_agent_ips(iface, ignore_ipv6_link_local=False)
 
@@ -146,7 +154,6 @@ def test_all_guest_agent_ips_filters_link_local_by_default():
 
     assert "fe80::dc2f:eeff:fe0e:9a4b/64" in result_all
     assert len(result_all) == 3
-
 
 
 def test_all_guest_agent_ips_prioritizes_ipv4_before_ipv6():
@@ -172,10 +179,12 @@ def test_all_guest_agent_ips_returns_empty_for_no_ips():
 
 
 def test_all_guest_agent_ips_returns_empty_for_loopback_only():
-    iface = _make_guest_iface([
-        {"ip_address": "127.0.0.1", "prefix": 8, "ip_address_type": "ipv4"},
-        {"ip_address": "::1", "prefix": 128, "ip_address_type": "ipv6"},
-    ])
+    iface = _make_guest_iface(
+        [
+            {"ip_address": "127.0.0.1", "prefix": 8, "ip_address_type": "ipv4"},
+            {"ip_address": "::1", "prefix": 128, "ip_address_type": "ipv6"},
+        ]
+    )
     assert all_guest_agent_ips(iface) == []
 
 
@@ -217,9 +226,9 @@ def test_cleanup_stale_ips_deletes_only_stale():
 
     async def _run():
         existing = [
-            {"id": 1, "address": "168.0.96.30/27"},   # current — keep
-            {"id": 99, "address": "10.0.0.1/24"},       # stale — delete
-            {"id": 100, "address": "192.168.1.1/32"},   # stale — delete
+            {"id": 1, "address": "168.0.96.30/27"},  # current — keep
+            {"id": 99, "address": "10.0.0.1/24"},  # stale — delete
+            {"id": 100, "address": "192.168.1.1/32"},  # stale — delete
         ]
         with patch(
             "proxbox_api.services.sync.network.rest_list_async",

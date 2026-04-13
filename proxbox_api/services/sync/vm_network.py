@@ -386,9 +386,7 @@ async def ensure_ip_assigned_to_vm(
     (False, reason) otherwise. The reason string describes the outcome for diagnostics.
     """
     try:
-        ip_record = await rest_first_async(
-            nb, "/api/ipam/ip-addresses/", query={"id": ip_id}
-        )
+        ip_record = await rest_first_async(nb, "/api/ipam/ip-addresses/", query={"id": ip_id})
         if not ip_record:
             logger.warning("ensure_ip_assigned_to_vm: IP id=%s not found in NetBox", ip_id)
             return False, "ip_not_found"
@@ -426,7 +424,9 @@ async def ensure_ip_assigned_to_vm(
         # IP is not assigned to this VM — reassign to the first available interface
         first_iface = ifaces[0]
         first_iface_id = (
-            first_iface.get("id") if isinstance(first_iface, dict) else getattr(first_iface, "id", None)
+            first_iface.get("id")
+            if isinstance(first_iface, dict)
+            else getattr(first_iface, "id", None)
         )
         assign_payload: dict[str, object] = {
             "assigned_object_type": "virtualization.vminterface",
@@ -464,7 +464,9 @@ async def ensure_ip_assigned_to_vm(
         patched_obj_id = patched.get("assigned_object_id") if isinstance(patched, dict) else None
         if isinstance(patched_obj_id, dict):
             patched_obj_id = patched_obj_id.get("id")
-        patched_obj_type = patched.get("assigned_object_type") if isinstance(patched, dict) else None
+        patched_obj_type = (
+            patched.get("assigned_object_type") if isinstance(patched, dict) else None
+        )
         if patched_obj_type == "virtualization.vminterface" and patched_obj_id == first_iface_id:
             logger.info(
                 "ensure_ip_assigned_to_vm: reassigned IP id=%s to interface id=%s on VM id=%s",
@@ -509,7 +511,10 @@ async def set_primary_ip(  # noqa: C901
     primary_ip_preference = normalize_primary_ip_preference(primary_ip_preference)
 
     # Preserve existing explicit primary choice.
-    if virtual_machine.get("primary_ip4") is not None or virtual_machine.get("primary_ip6") is not None:
+    if (
+        virtual_machine.get("primary_ip4") is not None
+        or virtual_machine.get("primary_ip6") is not None
+    ):
         return False
 
     # Verify (and fix if needed) that the IP is assigned to this VM before setting primary.
@@ -549,9 +554,8 @@ async def set_primary_ip(  # noqa: C901
 
     patch_payload: dict[str, object] = {primary_field: primary_ip_id}
 
-    if (
-        (primary_ip_preference == "ipv4" and primary_field == "primary_ip6")
-        or (primary_ip_preference == "ipv6" and primary_field == "primary_ip4")
+    if (primary_ip_preference == "ipv4" and primary_field == "primary_ip6") or (
+        primary_ip_preference == "ipv6" and primary_field == "primary_ip4"
     ):
         logger.debug(
             "Primary IP family mismatch for VM id=%s: preferred=%s, selected_field=%s",

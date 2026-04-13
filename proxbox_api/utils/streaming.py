@@ -380,6 +380,7 @@ async def sse_stream_generator(  # noqa: C901
             the SSE result payload.  Defaults to ``{"count": len(result)}``.
         keepalive_interval: Seconds between keepalive comments when the bridge queue is idle.
     """
+
     def _default_extract(result: object) -> dict[str, object]:
         if isinstance(result, list):
             return {"count": len(result)}

@@ -297,4 +297,3 @@ def test_sync_all_backup_routines_reports_reconcile_and_stale_counts(monkeypatch
         }
     ]
     assert captured["stale_payloads"] == captured["payloads"]
-

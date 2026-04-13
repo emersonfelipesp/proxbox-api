@@ -53,7 +53,9 @@ def test_ensure_node_bridge_interface_uses_strict_lookup_on_create(monkeypatch):
         raise AssertionError("unexpected fallback reconcile")
 
     monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_first_async", _fake_first)
-    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_create_async", _fake_create)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.bridge_interfaces.rest_create_async", _fake_create
+    )
     monkeypatch.setattr(
         "proxbox_api.services.sync.bridge_interfaces.rest_reconcile_async",
         _unexpected_reconcile,
@@ -148,7 +150,9 @@ def test_ensure_node_bridge_interface_refetches_strict_after_create_error(monkey
         )
 
     monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_first_async", _fake_first)
-    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_create_async", _fake_create)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.bridge_interfaces.rest_create_async", _fake_create
+    )
 
     result = asyncio.run(
         ensure_node_bridge_interface(
@@ -174,7 +178,9 @@ def test_ensure_bridge_interfaces_returns_node_dcim_interface_id(monkeypatch):
         return {"id": 77, **payload}
 
     monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_first_async", _fake_first)
-    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_create_async", _fake_create)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.bridge_interfaces.rest_create_async", _fake_create
+    )
 
     result_id = asyncio.run(
         ensure_bridge_interfaces(
@@ -197,7 +203,9 @@ def test_ensure_bridge_interfaces_returns_none_when_device_id_missing(monkeypatc
         raise AssertionError("should not call NetBox when device_id is None")
 
     monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_first_async", _unexpected)
-    monkeypatch.setattr("proxbox_api.services.sync.bridge_interfaces.rest_create_async", _unexpected)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.bridge_interfaces.rest_create_async", _unexpected
+    )
 
     result_id = asyncio.run(
         ensure_bridge_interfaces(

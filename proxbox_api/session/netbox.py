@@ -89,7 +89,6 @@ def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     )
 
 
-
 def get_netbox_session(
     database_session: DatabaseSessionDep,
     netbox_id: int | None = None,
