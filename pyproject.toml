@@ -28,14 +28,14 @@ dependencies = [
 test = [
     "httpx>=0.28.1",
     "playwright>=1.58.0",
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.6.1",
 ]
 e2e = [
     "httpx>=0.28.1",
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.6.1",
 ]
@@ -84,7 +84,7 @@ show_missing = true
 [tool.uv]
 default-groups = ["dev"]
 # Raise transitive Pygments (pytest / MkDocs stack) above Dependabot-patched floor.
-constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4"]
+constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4", "pytest>=9.0.3"]
 
 [tool.ruff]
 target-version = "py311"
