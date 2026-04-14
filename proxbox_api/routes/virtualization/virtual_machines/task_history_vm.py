@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.netbox_rest import nested_tag_payload
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.services.sync.task_history import sync_all_virtual_machine_task_histories
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -21,7 +22,7 @@ async def create_all_virtual_machine_task_histories_stream(
     cluster_status: ClusterStatusDep,
     tag: ProxboxTagDep,
 ):
-    tag_refs = [tag] if tag else []
+    tag_refs = nested_tag_payload(tag) if tag else []
 
     async def event_stream():
         bridge = WebSocketSSEBridge()

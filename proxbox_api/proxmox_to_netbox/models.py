@@ -99,6 +99,8 @@ def _normalized_tag_list(value: object) -> list[dict[str, object]]:
     for item in value:
         if isinstance(item, dict):
             normalized.append(item)
+        elif hasattr(item, "serialize"):
+            normalized.append(item.serialize())
         else:
             text = str(item or "").strip()
             if text:
