@@ -186,6 +186,40 @@ class BaseIndividualSyncService:
             },
         )
 
+    async def _get_or_create_vm_type(self, vm_type: str) -> object | None:
+        """Get or create the NetBox VirtualMachineType for a Proxmox VM type (NetBox v4.6+).
+
+        Args:
+            vm_type: 'qemu' or 'lxc'.
+
+        Returns:
+            NetBox VirtualMachineType object, or None if vm_type is not recognised.
+        """
+        from proxbox_api.constants import VM_TYPE_MAPPINGS
+        from proxbox_api.netbox_rest import rest_reconcile_async
+        from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineTypeSyncState
+
+        type_data = VM_TYPE_MAPPINGS.get(vm_type)
+        if not type_data:
+            return None
+
+        return await rest_reconcile_async(
+            self.nb,
+            "/api/virtualization/virtual-machine-types/",
+            lookup={"slug": type_data["slug"]},
+            payload={
+                **type_data,
+                "tags": self.tag_refs,
+            },
+            schema=NetBoxVirtualMachineTypeSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "slug": record.get("slug"),
+                "description": record.get("description"),
+                "tags": record.get("tags"),
+            },
+        )
+
     async def _get_or_create_site(self, cluster_name: str) -> object:
         """Get or create the site for a cluster.
 
@@ -240,7 +274,7 @@ class BaseIndividualSyncService:
         cluster_name: str,
         node_name: str,
         vm_type: str,
-    ) -> tuple[object, object, object, object, object, object, object, object]:
+    ) -> tuple[object, object, object, object, object, object, object, object, object | None]:
         """Get or create all VM dependencies.
 
         Args:
@@ -249,7 +283,7 @@ class BaseIndividualSyncService:
             vm_type: 'qemu' or 'lxc'.
 
         Returns:
-            Tuple of (cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role).
+            Tuple of (cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role, vm_type_obj).
         """
         from proxbox_api.services.sync.device_ensure import (
             _ensure_cluster_type,
@@ -274,8 +308,9 @@ class BaseIndividualSyncService:
             site_id=getattr(site, "id", None),
         )
         vm_role = await self._get_or_create_vm_role(vm_type)
+        vm_type_obj = await self._get_or_create_vm_type(vm_type)
 
-        return cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role
+        return cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role, vm_type_obj
 
     def _build_response(
         self,

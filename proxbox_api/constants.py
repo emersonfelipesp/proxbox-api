@@ -8,6 +8,20 @@ NETBOX_MAX_OFFSET = 10_000
 DEFAULT_VM_STATUS = "active"
 DEFAULT_VM_ROLE = "undefined"
 
+# VM type mappings for NetBox VirtualMachineType objects (NetBox v4.6+)
+VM_TYPE_MAPPINGS = {
+    "qemu": {
+        "name": "QEMU Virtual Machine",
+        "slug": "qemu-virtual-machine",
+        "description": "Proxmox QEMU/KVM Virtual Machine",
+    },
+    "lxc": {
+        "name": "LXC Container",
+        "slug": "lxc-container",
+        "description": "Proxmox LXC Container",
+    },
+}
+
 # VM role mappings for different VM types
 VM_ROLE_MAPPINGS = {
     "qemu": {

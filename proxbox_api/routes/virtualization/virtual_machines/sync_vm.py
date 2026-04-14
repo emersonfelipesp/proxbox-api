@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
+from proxbox_api.constants import VM_TYPE_MAPPINGS
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -27,6 +28,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineCreateBody,
     NetBoxVirtualMachineInterfaceSyncState,
+    NetBoxVirtualMachineTypeSyncState,
     NetBoxVlanSyncState,
     ProxmoxVmConfigInput,
 )
@@ -1049,6 +1051,7 @@ async def create_virtual_machines(  # noqa: C901
     cluster_dependency_cache: dict[str, dict[str, object]] = {}
     node_device_cache: dict[tuple[str, str], object] = {}
     vm_role_cache: dict[str, object] = {}
+    vm_type_cache: dict[str, object] = {}
     vm_role_mapping: dict[str, dict[str, object]] = {
         "qemu": {
             "name": "Virtual Machine (QEMU)",
@@ -1112,7 +1115,7 @@ async def create_virtual_machines(  # noqa: C901
         """Ensure shared dependencies in strict parent-to-child order.
 
         Dependency chain enforced here:
-        manufacturer -> device type -> cluster type -> cluster/site -> node device -> VM role.
+        manufacturer -> device type -> cluster type -> cluster/site -> node device -> VM role -> VM type.
         """
 
         resources_by_cluster: dict[str, list[dict]] = {}
@@ -1217,6 +1220,26 @@ async def create_virtual_machines(  # noqa: C901
                 },
             )
 
+        for vm_type in sorted(vm_types):
+            type_data = VM_TYPE_MAPPINGS.get(vm_type)
+            if type_data:
+                vm_type_cache[vm_type] = await rest_reconcile_async(
+                    nb,
+                    "/api/virtualization/virtual-machine-types/",
+                    lookup={"slug": type_data["slug"]},
+                    payload={
+                        **type_data,
+                        "tags": tag_refs,
+                    },
+                    schema=NetBoxVirtualMachineTypeSyncState,
+                    current_normalizer=lambda record: {
+                        "name": record.get("name"),
+                        "slug": record.get("slug"),
+                        "description": record.get("description"),
+                        "tags": record.get("tags"),
+                    },
+                )
+
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
         storage_index = build_storage_index(storage_records)
@@ -1298,6 +1321,29 @@ async def create_virtual_machines(  # noqa: C901
             )
             vm_role_cache[vm_type_key] = role
 
+        vm_type_obj = vm_type_cache.get(vm_type_key)
+        if vm_type_obj is None and vm_type_key in VM_TYPE_MAPPINGS:
+            type_data = VM_TYPE_MAPPINGS[vm_type_key]
+            vm_type_obj = await rest_reconcile_async(
+                nb,
+                "/api/virtualization/virtual-machine-types/",
+                lookup={"slug": type_data["slug"]},
+                payload={
+                    **type_data,
+                    "tags": tag_refs,
+                },
+                schema=NetBoxVirtualMachineTypeSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "description": record.get("description"),
+                    "tags": record.get("tags"),
+                },
+            )
+            vm_type_cache[vm_type_key] = vm_type_obj
+
+        vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
+
         now = datetime.now(timezone.utc)
         desired_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
@@ -1306,6 +1352,7 @@ async def create_virtual_machines(  # noqa: C901
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            virtual_machine_type_id=vm_type_id,
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
@@ -1575,6 +1622,33 @@ async def create_virtual_machines(  # noqa: C901
                 )
                 vm_role_cache[vm_type_key] = role
 
+            vm_type_obj_dispatch = vm_type_cache.get(vm_type_key)
+            if vm_type_obj_dispatch is None and vm_type_key in VM_TYPE_MAPPINGS:
+                type_data = VM_TYPE_MAPPINGS[vm_type_key]
+                vm_type_obj_dispatch = await rest_reconcile_async(
+                    nb,
+                    "/api/virtualization/virtual-machine-types/",
+                    lookup={"slug": type_data["slug"]},
+                    payload={
+                        **type_data,
+                        "tags": tag_refs,
+                    },
+                    schema=NetBoxVirtualMachineTypeSyncState,
+                    current_normalizer=lambda record: {
+                        "name": record.get("name"),
+                        "slug": record.get("slug"),
+                        "description": record.get("description"),
+                        "tags": record.get("tags"),
+                    },
+                )
+                vm_type_cache[vm_type_key] = vm_type_obj_dispatch
+
+            vm_type_id_dispatch = (
+                int(getattr(vm_type_obj_dispatch, "id", 0) or 0)
+                if vm_type_obj_dispatch
+                else None
+            )
+
             logger.debug("VM deps cluster=%s device=%s role=%s", cluster, device, role)
             if bridge:
                 await bridge.emit_substep(
@@ -1610,6 +1684,7 @@ async def create_virtual_machines(  # noqa: C901
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            virtual_machine_type_id=vm_type_id_dispatch,
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
@@ -1638,6 +1713,7 @@ async def create_virtual_machines(  # noqa: C901
                 "status": record.get("status"),
                 "cluster": record.get("cluster"),
                 "device": record.get("device"),
+                "virtual_machine_type": record.get("virtual_machine_type"),
                 "role": record.get("role"),
                 "vcpus": record.get("vcpus"),
                 "memory": record.get("memory"),

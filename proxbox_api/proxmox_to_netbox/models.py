@@ -824,8 +824,9 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
 
     name: str
     status: str
-    cluster: int
+    cluster: int | None = None
     device: int | None = None
+    virtual_machine_type: int | None = None
     role: int | None = None
     vcpus: int = 0
     memory: int = 0
@@ -849,17 +850,19 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     def normalize_status(cls, value: object) -> str:
         return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
 
-    @field_validator("cluster", "device", "role", mode="before")
+    @field_validator("cluster", "device", "virtual_machine_type", "role", mode="before")
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
 
     @model_validator(mode="after")
     def validate_required_relations(self):
-        if self.cluster <= 0:
+        if self.cluster is not None and self.cluster <= 0:
             raise ValueError("cluster must be a positive NetBox object id")
         if self.device is not None and self.device <= 0:
             raise ValueError("device must be positive when provided")
+        if self.virtual_machine_type is not None and self.virtual_machine_type <= 0:
+            raise ValueError("virtual_machine_type must be positive when provided")
         if self.role is not None and self.role <= 0:
             raise ValueError("role must be positive when provided")
         return self
@@ -920,6 +923,17 @@ class NetBoxDeviceSyncState(BaseModel):
         return self
 
 
+class NetBoxVirtualMachineTypeSyncState(BaseModel):
+    """Validated NetBox sync body for virtualization virtual-machine-types endpoint (NetBox v4.6+)."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str
+    slug: str
+    description: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+
 class ProxmoxToNetBoxVirtualMachine(BaseModel):
     """Schema-driven transform object for Proxmox input to NetBox VM create payload."""
 
@@ -930,6 +944,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     cluster_id: int
     device_id: int | None = None
     role_id: int | None = None
+    virtual_machine_type_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
     last_updated: datetime | None = None
     cluster_name: str | None = None
@@ -976,6 +991,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             status=self.resource.status,
             cluster=self.cluster_id,
             device=self.device_id,
+            virtual_machine_type=self.virtual_machine_type_id,
             role=self.role_id,
             vcpus=int(self.resource.maxcpu or 0),
             memory=self.resource.memory_mb,
