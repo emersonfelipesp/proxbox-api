@@ -341,7 +341,7 @@ async def _clear_primary_ip_on_parent(nb: NetBoxSessionDep, ip_id: int) -> bool:
         vms = await rest_list_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            query={field: ip_id, "limit": 5},
+            query={f"{field}_id": ip_id, "limit": 5},
         )
         for vm in vms:
             parent_vm_id = vm.get("id") if isinstance(vm, dict) else getattr(vm, "id", None)
