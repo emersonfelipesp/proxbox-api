@@ -1744,7 +1744,7 @@ requires-dist = [
     { name = "netbox-sdk", specifier = "==0.0.7.post4" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "proxmox-sdk", specifier = "==0.0.2.post2" },
+    { name = "proxmox-sdk", specifier = "==0.0.2.post3" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", marker = "extra == 'e2e'", specifier = ">=0.24.0" },
@@ -1764,7 +1764,7 @@ dev = [
 
 [[package]]
 name = "proxmox-sdk"
-version = "0.0.2.post2"
+version = "0.0.2.post3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1772,9 +1772,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "slowapi" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/82/69/66e6c82e9d1783526e3512c3b355e5a78d41293d3e60bbb17b658ca2ad0c/proxmox_sdk-0.0.2.post2.tar.gz", hash = "sha256:12b674a6cf2a1571884c1a6a27c676f416b2ff1265ef2b316010e5b86909362d", size = 175252, upload-time = "2026-04-13T19:22:24.254Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/a5/0cc397cfb9ed6066ed1d17eeb56bea9940eb6a3bc93199efddb0bba217a2/proxmox_sdk-0.0.2.post3.tar.gz", hash = "sha256:f06f9a68b0e4c214ae1cb67b6c3d4fd1436b0f8c21137a5305e0cdbd6e82386e", size = 175230, upload-time = "2026-04-14T01:33:49.933Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/9d/9857255ed62548e54a4ffc57ff99156ffaaf095d7ca9b24cd435eeb4bfae/proxmox_sdk-0.0.2.post2-py3-none-any.whl", hash = "sha256:0f337b533621717744f8da52ed61dcedb0cee6e364eaf0c9f11f379d72db4788", size = 209587, upload-time = "2026-04-13T19:22:23.052Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/0d/f5d9b3dbede0385091a5886fc9efd0e210bd3c5872f44ecf5888bdc76499/proxmox_sdk-0.0.2.post3-py3-none-any.whl", hash = "sha256:45c72392db9c37ef338037a477bf01f84432d143ed186345f72276f04a5d6c17", size = 209588, upload-time = "2026-04-14T01:33:48.379Z" },
 ]
 
 [[package]]
