@@ -43,7 +43,7 @@ async def _mark_stale_replications(
         active_records = await rest_list_paginated_async(
             nb,
             "/api/plugins/proxbox/replications/",
-            query=query,
+            base_query=query,
         )
     except Exception as e:
         logger.warning("Error fetching active replication records for stale check: %s", e)
