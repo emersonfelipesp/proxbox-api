@@ -197,7 +197,7 @@ def compute_backup_payload(
     storage_name = storage_name_from_volume_id(volume_id)
 
     proxmox_storage_id = None
-    if storage_index and storage_name and cluster_name:
+    if storage_index and storage_name:
         storage_record = find_storage_record(
             storage_index, cluster_name=cluster_name, storage_name=storage_name
         )
