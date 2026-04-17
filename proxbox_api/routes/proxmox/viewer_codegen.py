@@ -14,7 +14,10 @@ from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle
 from proxbox_api.proxmox_to_netbox.netbox_schema import netbox_openapi_schema_source
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
+    get_bundled_generated_dir,
+    get_user_generated_dir,
     load_proxmox_generated_openapi,
+    proxmox_generated_openapi_path,
 )
 from proxbox_api.routes.proxmox.runtime_generated import (
     generated_proxmox_route_state,
@@ -68,7 +71,8 @@ async def generate_viewer_codegen_artifacts(
     try:
         output_dir = None
         if persist:
-            output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
+            output_dir = get_user_generated_dir()
+            output_dir.mkdir(parents=True, exist_ok=True)
         bundle = await generate_proxmox_codegen_bundle_async(
             output_dir=output_dir,
             source_url=source_url,
@@ -155,8 +159,9 @@ async def proxmox_viewer_openapi(
     """Return generated OpenAPI schema for Proxmox API viewer endpoints."""
 
     try:
-        output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
-        openapi_path = output_dir / version_tag / "openapi.json"
+        output_dir = get_user_generated_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        openapi_path = proxmox_generated_openapi_path(version_tag=version_tag)
         if regenerate or not openapi_path.exists():
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,
@@ -301,8 +306,13 @@ async def proxmox_viewer_pydantic_models(
     """Return generated Pydantic v2 models source code for Proxmox API endpoints."""
 
     try:
-        output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
+        output_dir = get_user_generated_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
         models_path = output_dir / version_tag / "pydantic_models.py"
+        if not models_path.exists():
+            bundled = get_bundled_generated_dir() / version_tag / "pydantic_models.py"
+            if bundled.exists():
+                models_path = bundled
         if regenerate or not models_path.exists():
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,

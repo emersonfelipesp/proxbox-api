@@ -982,8 +982,12 @@ def test_available_proxmox_sdk_versions_ignores_non_version_entries(tmp_path, mo
     (ignored_dir / "openapi.json").write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(
-        "proxbox_api.proxmox_to_netbox.proxmox_schema.proxmox_generated_openapi_root",
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.get_bundled_generated_dir",
         lambda: Path(generated_root),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.get_user_generated_dir",
+        lambda: tmp_path / "nonexistent",
     )
 
     assert available_proxmox_sdk_versions() == ["8.3.0", "latest"]
