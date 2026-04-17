@@ -18,8 +18,8 @@ from proxbox_api.services.sync.replications import (
 def test_mark_stale_replications_marks_only_missing_endpoint_records(monkeypatch):
     captured: dict[str, object] = {}
 
-    async def _fake_list_paginated(_nb, _path, query=None, **_kwargs):
-        captured["query"] = query
+    async def _fake_list_paginated(_nb, _path, base_query=None, **_kwargs):
+        captured["query"] = base_query
         return [
             {"id": 1, "replication_id": "rep-1"},
             {"id": 2, "replication_id": "rep-2"},

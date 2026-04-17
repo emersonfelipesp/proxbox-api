@@ -10,6 +10,8 @@ import urllib.request
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
+from netbox_sdk.config import authorization_header_value
+
 from proxbox_api.constants import DEFAULT_LOG_PATH
 from proxbox_api.logger import logger
 from proxbox_api.types import ProxboxSettingsDict
@@ -85,18 +87,15 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
     try:
         config = netbox_session.client.config
         base_url = (config.base_url or "").rstrip("/")
-        token_secret = config.token_secret or ""
-        token_version = config.token_version or "v1"
 
         if not base_url:
             logger.warning("NetBox base_url not configured")
             return None
 
-        # Build auth header (v1: "Token <secret>", v2: "nbt <key>:<secret>")
-        if token_version == "v2" and config.token_key:
-            auth = f"nbt {config.token_key}:{token_secret}"
-        else:
-            auth = f"Token {token_secret}"
+        auth = authorization_header_value(config)
+        if not auth:
+            logger.warning("NetBox auth header could not be built — token not configured")
+            return None
 
         url = f"{base_url}/api/plugins/proxbox/settings/"
         req = urllib.request.Request(
