@@ -128,8 +128,6 @@ def _start_background_generation(app: FastAPI, version_tag: str) -> None:
 
 async def _generate_and_register(app: FastAPI, version_tag: str) -> None:
     """Background coroutine: generate schema then register routes without app restart."""
-    from pathlib import Path
-
     from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle_async
     from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 
@@ -142,7 +140,10 @@ async def _generate_and_register(app: FastAPI, version_tag: str) -> None:
     )
 
     try:
-        output_dir = Path(__file__).resolve().parent / "generated" / "proxmox"
+        from proxbox_api.proxmox_to_netbox.proxmox_schema import get_user_generated_dir
+
+        output_dir = get_user_generated_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
         await generate_proxmox_codegen_bundle_async(
             output_dir=output_dir,
             version_tag=version_tag,

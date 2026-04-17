@@ -63,6 +63,7 @@ def _status() -> int:
 def _generate(args: argparse.Namespace) -> int:
     """Generate OpenAPI schema for a specific Proxmox version tag."""
     from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import get_user_generated_dir
     from proxbox_api.schema_version_manager import has_schema_for_release
 
     version_tag = args.version_tag
@@ -72,7 +73,8 @@ def _generate(args: argparse.Namespace) -> int:
         print("Use --force to regenerate it.")
         return 0
 
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output_dir) if args.output_dir else get_user_generated_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Generating Proxmox OpenAPI schema for version '{version_tag}'...")
     print(f"Output directory: {output_dir / version_tag}")
     print(f"Source URL: {args.source_url}")
@@ -154,8 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gen_parser.add_argument(
         "--output-dir",
-        default=str(Path(__file__).resolve().parent / "generated" / "proxmox"),
-        help="Base output directory (default: proxbox_api/generated/proxmox).",
+        default=None,
+        help="Base output directory (default: ~/.local/share/proxbox/generated/proxmox or PROXBOX_GENERATED_DIR).",
     )
     gen_parser.add_argument(
         "--source-url",
