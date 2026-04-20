@@ -525,6 +525,13 @@ class NetBoxTaskHistorySyncState(BaseModel):
         text = str(value).strip()
         return text or None
 
+    @field_validator("status", "exitstatus", mode="before")
+    @classmethod
+    def truncate_long_text(cls, value: object) -> object:
+        if isinstance(value, str) and len(value) > 2048:
+            return value[:2048]
+        return value
+
     @field_validator("start_time", "end_time", mode="before")
     @classmethod
     def normalize_datetimes(cls, value: object) -> object:

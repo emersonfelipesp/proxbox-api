@@ -229,3 +229,49 @@ def test_sync_virtual_machine_task_history_falls_back_to_per_item_on_bulk_failur
     assert result == 2
     assert len(reconciled) == 2
     assert reconciled[0][0] == {"upid": "UPID:pve01:1"}
+
+
+def test_netbox_task_history_sync_state_accepts_long_exitstatus():
+    """Regression test for issue #330: exitstatus/status longer than 255 chars must not raise."""
+    from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
+
+    long_error = "ERROR: " + ("x" * 500)
+    model = NetBoxTaskHistorySyncState.model_validate(
+        {
+            "virtual_machine": 1,
+            "upid": "UPID:pve01:00001CB4:0001DA12:69AA4164:qmcreate:101:root@pam:",
+            "node": "pve01",
+            "task_type": "qmcreate",
+            "username": "root@pam",
+            "start_time": "2024-03-10T00:00:00",
+            "exitstatus": long_error,
+            "status": long_error,
+        }
+    )
+    # Both fields must be accepted without validation error
+    assert model.exitstatus is not None
+    assert model.status is not None
+    # Values longer than 255 chars are accepted; truncation kicks in at 2048
+    assert len(model.exitstatus) > 255
+    assert len(model.status) > 255
+
+
+def test_netbox_task_history_sync_state_truncates_at_2048():
+    """Values exceeding 2048 chars are truncated before reaching NetBox."""
+    from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
+
+    huge_value = "E" * 3000
+    model = NetBoxTaskHistorySyncState.model_validate(
+        {
+            "virtual_machine": 1,
+            "upid": "UPID:pve01:00001CB4:0001DA12:69AA4164:qmcreate:101:root@pam:",
+            "node": "pve01",
+            "task_type": "qmcreate",
+            "username": "root@pam",
+            "start_time": "2024-03-10T00:00:00",
+            "exitstatus": huge_value,
+            "status": huge_value,
+        }
+    )
+    assert len(model.exitstatus) == 2048
+    assert len(model.status) == 2048
