@@ -62,6 +62,9 @@ def get_default_settings() -> ProxboxSettingsDict:
         "bulk_batch_delay_ms": 500,
         "vm_sync_max_concurrency": 4,
         "custom_fields_request_delay": 0.0,
+        "proxmox_timeout": 5,
+        "proxmox_max_retries": 0,
+        "proxmox_retry_backoff": 0.5,
     }
 
 
@@ -148,6 +151,9 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "bulk_batch_delay_ms": int(settings.get("bulk_batch_delay_ms", 500)),
             "vm_sync_max_concurrency": int(settings.get("vm_sync_max_concurrency", 4)),
             "custom_fields_request_delay": float(settings.get("custom_fields_request_delay", 0.0)),
+            "proxmox_timeout": int(settings.get("proxmox_timeout", 5)),
+            "proxmox_max_retries": int(settings.get("proxmox_max_retries", 0)),
+            "proxmox_retry_backoff": float(settings.get("proxmox_retry_backoff", 0.5)),
         }
 
     except urllib.error.URLError as exc:

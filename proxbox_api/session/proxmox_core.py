@@ -70,6 +70,9 @@ class ProxmoxSession:
         self.token_name: str | None = None
         self.token_value: SensitiveString | None = None
         self.ssl: bool = True
+        self.timeout: int = 5
+        self.max_retries: int = 0
+        self.retry_backoff: float = 0.5
         self.proxmox: ProxmoxSDK | None = None
         self.session: ProxmoxSDK | None = None
         self.version: str | None = None
@@ -170,6 +173,9 @@ class ProxmoxSession:
             self.token_name = config["token"]["name"]
             self.token_value = SensitiveString(config["token"]["value"])
             self.ssl = config["ssl"]
+            self.timeout = int(config["timeout"]) if config.get("timeout") is not None else 5
+            self.max_retries = int(config["max_retries"]) if config.get("max_retries") is not None else 0
+            self.retry_backoff = float(config["retry_backoff"]) if config.get("retry_backoff") is not None else 0.5
             self._normalize_token_auth_fields()
         except KeyError:
             raise ProxboxException(
@@ -255,19 +261,25 @@ class ProxmoxSession:
 
     def _build_auth_kwargs(self, auth_method: str) -> dict[str, object]:
         """Build authentication kwargs for Proxmox API."""
+        connection_kwargs: dict[str, object] = {
+            "verify_ssl": self.ssl,
+            "timeout": self.timeout,
+            "max_retries": self.max_retries,
+            "retry_backoff": self.retry_backoff,
+        }
         if auth_method == "token":
             return {
                 "port": self.http_port,
                 "user": self.user,
                 "token_name": self.token_name,
                 "token_value": self._get_token_value(),
-                "verify_ssl": self.ssl,
+                **connection_kwargs,
             }
         return {
             "port": self.http_port,
             "user": self.user,
             "password": self._get_password(),
-            "verify_ssl": self.ssl,
+            **connection_kwargs,
         }
 
     def _get_token_value(self) -> str | None:

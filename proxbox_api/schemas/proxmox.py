@@ -33,6 +33,9 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
     password: str | None = None
     token: ProxmoxTokenSchema | None = None
     ssl: bool = False
+    timeout: int | None = None
+    max_retries: int | None = None
+    retry_backoff: float | None = None
 
     @field_validator("name", "ip_address", "domain", "user", "password", mode="before")
     @classmethod

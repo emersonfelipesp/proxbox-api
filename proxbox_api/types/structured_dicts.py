@@ -27,6 +27,9 @@ class ProxboxSettingsDict(TypedDict):
     bulk_batch_delay_ms: int
     vm_sync_max_concurrency: int
     custom_fields_request_delay: float
+    proxmox_timeout: NotRequired[int]
+    proxmox_max_retries: NotRequired[int]
+    proxmox_retry_backoff: NotRequired[float]
 
 
 class SyncResultDict(TypedDict):

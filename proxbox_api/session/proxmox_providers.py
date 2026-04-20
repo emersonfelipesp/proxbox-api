@@ -18,6 +18,7 @@ from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
 from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox_core import ProxmoxSession
+from proxbox_api.settings_client import get_settings
 
 
 async def proxmox_sessions(  # noqa: C901
@@ -198,10 +199,16 @@ def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
             name=endpoint.token_name,
             value=endpoint.get_decrypted_token_value(),
         ),
+        timeout=endpoint.timeout,
+        max_retries=endpoint.max_retries,
+        retry_backoff=float(endpoint.retry_backoff) if endpoint.retry_backoff is not None else None,
     )
 
 
-def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
+def _parse_netbox_endpoint(
+    endpoint: object,
+    plugin_settings: dict[str, object] | None = None,
+) -> ProxmoxSessionSchema:
     ip = None
     ip_address_object = _netbox_field(endpoint, "ip_address")
     if ip_address_object:
@@ -211,6 +218,11 @@ def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
             ip_address_with_mask = getattr(ip_address_object, "address", None)
         if ip_address_with_mask:
             ip = ip_address_with_mask.split("/")[0]
+
+    settings = plugin_settings or {}
+    raw_timeout = _netbox_field(endpoint, "timeout")
+    raw_max_retries = _netbox_field(endpoint, "max_retries")
+    raw_retry_backoff = _netbox_field(endpoint, "retry_backoff")
 
     return ProxmoxSessionSchema(
         name=_netbox_field(endpoint, "name"),
@@ -224,6 +236,9 @@ def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
             name=_netbox_field(endpoint, "token_name"),
             value=_netbox_field(endpoint, "token_value"),
         ),
+        timeout=int(raw_timeout) if raw_timeout is not None else settings.get("proxmox_timeout"),  # type: ignore[arg-type]
+        max_retries=int(raw_max_retries) if raw_max_retries is not None else settings.get("proxmox_max_retries"),  # type: ignore[arg-type]
+        retry_backoff=float(raw_retry_backoff) if raw_retry_backoff is not None else settings.get("proxmox_retry_backoff"),  # type: ignore[arg-type]
     )
 
 
@@ -239,6 +254,8 @@ async def load_proxmox_session_schemas(
         if inspect.isawaitable(netbox_session):
             netbox_session = await netbox_session
 
+        plugin_settings = get_settings(netbox_session=netbox_session)
+
         try:
             url = "/api/plugins/proxbox/endpoints/proxmox/"
             if endpoint_ids:
@@ -253,7 +270,7 @@ async def load_proxmox_session_schemas(
                 message="NetBox returned invalid JSON while fetching Proxmox endpoints",
                 python_exception=str(error),
             )
-        return [_parse_netbox_endpoint(endpoint) for endpoint in netbox_endpoints]
+        return [_parse_netbox_endpoint(endpoint, plugin_settings) for endpoint in netbox_endpoints]
 
     query = select(ProxmoxEndpoint)
     if endpoint_ids:
