@@ -218,6 +218,7 @@ async def test_sync_vm_with_related_gathers_interfaces_and_task_history(monkeypa
         "proxbox_api.services.sync.individual.vm_sync.sync_interface_individual",
         _fake_sync_interface_individual,
     )
+
     async def _fake_get_vm_config_individual(*args, **kwargs):
         return {
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
