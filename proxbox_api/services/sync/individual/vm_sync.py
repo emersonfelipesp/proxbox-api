@@ -147,7 +147,7 @@ async def sync_vm_individual(
     tag_ids = [tag_id] if tag_id > 0 else []
 
     try:
-        proxmox_config = get_vm_config_individual(px, node, vm_type, vmid)
+        proxmox_config = await get_vm_config_individual(px, node, vm_type, vmid)
     except Exception:
         proxmox_config = {}
 
@@ -342,7 +342,7 @@ async def sync_vm_with_related(
 
     if sync_interfaces:
         try:
-            vm_config = get_vm_config_individual(px, node, vm_type, vmid)
+            vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
         except Exception:
             vm_config = {}
         interface_names = sorted(

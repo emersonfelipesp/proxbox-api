@@ -80,7 +80,7 @@ async def sync_backup_individual(
     now = datetime.now(timezone.utc)
 
     try:
-        backups = get_vm_backups_individual(px, node, storage, vmid)
+        backups = await get_vm_backups_individual(px, node, storage, vmid)
     except Exception:
         backups = []
 
@@ -126,6 +126,7 @@ async def sync_backup_individual(
             error=None,
         )
 
+    vm_type_inferred = "lxc" if "vzdump-lxc-" in volid else "qemu"
     try:
         vm_record, vm_error = await ensure_vm_record(
             nb,
@@ -133,7 +134,7 @@ async def sync_backup_individual(
             tag,
             vmid=vmid,
             node=node,
-            vm_type="qemu",
+            vm_type=vm_type_inferred,
             auto_create_vm=auto_create_vm,
         )
         if vm_error:

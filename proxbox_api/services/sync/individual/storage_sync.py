@@ -118,6 +118,11 @@ async def sync_storage_individual(
             "tags": tag_refs,
         }
 
+        existing_storages = await rest_list_async(
+            nb,
+            "/api/plugins/proxbox/storage/",
+            query={"cluster": cluster_id, "name": storage_name},
+        )
         storage_record = await rest_reconcile_async(
             nb,
             "/api/plugins/proxbox/storage/",
@@ -157,7 +162,7 @@ async def sync_storage_individual(
         )
 
         netbox_object = storage_record.serialize() if hasattr(storage_record, "serialize") else None
-        action = "created" if getattr(storage_record, "id", None) else "updated"
+        action = "updated" if existing_storages else "created"
 
         return {
             "object_type": "storage",

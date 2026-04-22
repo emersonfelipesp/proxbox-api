@@ -72,7 +72,7 @@ class ProxmoxNodeInterfaceSchema(BaseModel):
     bridge_fd: str | None = None
     bridge_ports: str | None = None
     bridge_stp: str | None = None
-    brdige_vlan_aware: bool | None = None
+    bridge_vlan_aware: bool | None = None
     cidr: str | None = None
     comments: str | None = None
     exists: bool | None = None
@@ -85,7 +85,7 @@ class ProxmoxNodeInterfaceSchema(BaseModel):
     vlan_id: str | None = None
     vlan_raw_device: str | None = None
 
-    @field_validator("active", "autostart", "brdige_vlan_aware", "exists", mode="before")
+    @field_validator("active", "autostart", "bridge_vlan_aware", "exists", mode="before")
     @classmethod
     def _coerce_bool(cls, value: object) -> bool | None:
         return normalize_bool(value)

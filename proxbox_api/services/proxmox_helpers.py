@@ -458,8 +458,9 @@ async def get_node_status_individual(
     try:
         status_list = await get_cluster_status(session)
         for item in status_list:
-            if str(item.get("node", "")) == node or str(item.get("name", "")) == node:
-                return _model_dump(item)
+            item_dict = _model_dump(item)
+            if str(item_dict.get("node", "")) == node or str(item_dict.get("name", "")) == node:
+                return item_dict
     except Exception as error:
         logger.warning(
             "Error fetching node status for node=%s: %s",

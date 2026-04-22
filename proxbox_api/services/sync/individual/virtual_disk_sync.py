@@ -85,14 +85,14 @@ async def sync_virtual_disk_individual(
     now = datetime.now(timezone.utc)
 
     try:
-        vm_config = get_vm_config_individual(px, node, vm_type, vmid)
+        vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
     except Exception:
         vm_config = {}
 
     disk_config = parse_disk_config_entry(vm_config.get(disk_name))
     size = disk_config.get("size", "0")
     try:
-        size_mb = int(size) // 1_000_000 if size else 0
+        size_mb = int(size) // 1_048_576 if size else 0
     except (ValueError, TypeError):
         size_mb = 0
 
@@ -195,6 +195,11 @@ async def sync_virtual_disk_individual(
             "custom_fields": {"proxmox_last_updated": now.isoformat()},
         }
 
+        existing_disks = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-disks/",
+            query=build_disk_lookup_key(disk_name, vm_id),
+        )
         disk_record = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-disks/",
@@ -213,7 +218,7 @@ async def sync_virtual_disk_individual(
         )
 
         netbox_object = disk_record.serialize() if hasattr(disk_record, "serialize") else None
-        action = "created" if getattr(disk_record, "id", None) else "updated"
+        action = "updated" if existing_disks else "created"
 
         dependencies: list[dict] = [{"object_type": "vm", "vmid": vmid, "action": action}]
         if storage_name:

@@ -34,6 +34,7 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
     token: ProxmoxTokenSchema | None = None
     ssl: bool = False
     timeout: int | None = Field(default=None, ge=1, le=3600)
+    connect_timeout: int | None = Field(default=None, ge=1, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
 

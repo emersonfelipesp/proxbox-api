@@ -251,7 +251,6 @@ class ProxmoxStorageContent(BaseModel):
     content: str | None = None
     volid: str | None = None
     vmid: int | None = None
-    notes: str | None = None
     used: int | None = (
         None  # Used space. Please note that most storage plugins do not report anything useful here.
     )

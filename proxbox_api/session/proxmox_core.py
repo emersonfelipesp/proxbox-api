@@ -71,6 +71,7 @@ class ProxmoxSession:
         self.token_value: SensitiveString | None = None
         self.ssl: bool = True
         self.timeout: int = 5
+        self.connect_timeout: int | None = None
         self.max_retries: int = 0
         self.retry_backoff: float = 0.5
         self.proxmox: ProxmoxSDK | None = None
@@ -174,6 +175,11 @@ class ProxmoxSession:
             self.token_value = SensitiveString(config["token"]["value"])
             self.ssl = config["ssl"]
             self.timeout = int(config["timeout"]) if config.get("timeout") is not None else 5
+            self.connect_timeout = (
+                int(config["connect_timeout"])
+                if config.get("connect_timeout") is not None
+                else None
+            )
             self.max_retries = (
                 int(config["max_retries"]) if config.get("max_retries") is not None else 0
             )
@@ -268,6 +274,7 @@ class ProxmoxSession:
         connection_kwargs: dict[str, object] = {
             "verify_ssl": self.ssl,
             "timeout": self.timeout,
+            "connect_timeout": self.connect_timeout,
             "max_retries": self.max_retries,
             "retry_backoff": self.retry_backoff,
         }
