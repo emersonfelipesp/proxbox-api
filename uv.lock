@@ -1745,7 +1745,7 @@ requires-dist = [
     { name = "netbox-sdk", specifier = "==0.0.7.post4" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "proxmox-sdk", editable = "../proxmox-sdk" },
+    { name = "proxmox-sdk", git = "https://github.com/emersonfelipesp/proxmox-sdk.git?rev=b542e3e" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", marker = "extra == 'e2e'", specifier = ">=0.24.0" },
@@ -1766,52 +1766,12 @@ dev = [
 [[package]]
 name = "proxmox-sdk"
 version = "0.0.3"
-source = { editable = "../proxmox-sdk" }
+source = { git = "https://github.com/emersonfelipesp/proxmox-sdk.git?rev=b542e3e#b542e3e0209dd2cee4660755cb472dd9cac3d792" }
 dependencies = [
     { name = "aiohttp" },
     { name = "fastapi", extra = ["standard"] },
     { name = "pyyaml" },
     { name = "slowapi" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.9.0" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.135.2" },
-    { name = "granian", marker = "extra == 'granian'", specifier = ">=2.7.0" },
-    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
-    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7.6" },
-    { name = "openssh-wrapper", marker = "extra == 'all'", specifier = ">=0.4" },
-    { name = "openssh-wrapper", marker = "extra == 'ssh'", specifier = ">=0.4" },
-    { name = "paramiko", marker = "extra == 'all'", specifier = ">=3.0" },
-    { name = "paramiko", marker = "extra == 'ssh'", specifier = ">=3.0" },
-    { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
-    { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=7.1.0" },
-    { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.6.1" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'all'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0" },
-    { name = "rich", marker = "extra == 'all'", specifier = ">=13.0.0" },
-    { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0.0" },
-    { name = "slowapi", specifier = ">=0.1.9" },
-    { name = "textual", marker = "extra == 'all'", specifier = ">=0.79.1" },
-    { name = "textual", marker = "extra == 'cli'", specifier = ">=0.79.1" },
-    { name = "typer", extras = ["all"], marker = "extra == 'all'", specifier = ">=0.12.3" },
-    { name = "typer", extras = ["all"], marker = "extra == 'cli'", specifier = ">=0.12.3" },
-]
-provides-extras = ["ssh", "cli", "all", "test", "playwright", "docs", "granian"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.3.0" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.15.8" },
-    { name = "ty", specifier = ">=0.0.29" },
 ]
 
 [[package]]

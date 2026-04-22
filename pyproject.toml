@@ -87,7 +87,7 @@ default-groups = ["dev"]
 constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4", "pytest>=9.0.3", "python-multipart>=0.0.26"]
 
 [tool.uv.sources]
-proxmox-sdk = { path = "../proxmox-sdk", editable = true }
+proxmox-sdk = { git = "https://github.com/emersonfelipesp/proxmox-sdk.git", rev = "b542e3e" }
 
 [tool.ruff]
 target-version = "py311"
