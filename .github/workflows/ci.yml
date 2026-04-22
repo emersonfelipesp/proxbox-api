@@ -436,6 +436,14 @@ jobs:
               raise SystemExit(f"NetBox status check failed: {payload}")
           PY
 
+      - name: Create Proxbox custom fields in NetBox
+        run: |
+          set -eux
+          PROXBOX_API_KEY="proxbox-e2e-api-key-proxbox-e2e-api-key-1234567890"
+          curl ${{ matrix.proxbox_curl_flags }} -fsS \
+            "${{ matrix.proxbox_base_url }}/extras/custom-fields/create" \
+            -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}"
+
       - name: Run E2E tests (Docker proxmox mock)
         env:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
