@@ -174,8 +174,12 @@ class ProxmoxSession:
             self.token_value = SensitiveString(config["token"]["value"])
             self.ssl = config["ssl"]
             self.timeout = int(config["timeout"]) if config.get("timeout") is not None else 5
-            self.max_retries = int(config["max_retries"]) if config.get("max_retries") is not None else 0
-            self.retry_backoff = float(config["retry_backoff"]) if config.get("retry_backoff") is not None else 0.5
+            self.max_retries = (
+                int(config["max_retries"]) if config.get("max_retries") is not None else 0
+            )
+            self.retry_backoff = (
+                float(config["retry_backoff"]) if config.get("retry_backoff") is not None else 0.5
+            )
             self._normalize_token_auth_fields()
         except KeyError:
             raise ProxboxException(

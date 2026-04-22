@@ -1644,9 +1644,7 @@ async def create_virtual_machines(  # noqa: C901
                 vm_type_cache[vm_type_key] = vm_type_obj_dispatch
 
             vm_type_id_dispatch = (
-                int(getattr(vm_type_obj_dispatch, "id", 0) or 0)
-                if vm_type_obj_dispatch
-                else None
+                int(getattr(vm_type_obj_dispatch, "id", 0) or 0) if vm_type_obj_dispatch else None
             )
 
             logger.debug("VM deps cluster=%s device=%s role=%s", cluster, device, role)

@@ -237,8 +237,12 @@ def _parse_netbox_endpoint(
             value=_netbox_field(endpoint, "token_value"),
         ),
         timeout=int(raw_timeout) if raw_timeout is not None else settings.get("proxmox_timeout"),  # type: ignore[arg-type]
-        max_retries=int(raw_max_retries) if raw_max_retries is not None else settings.get("proxmox_max_retries"),  # type: ignore[arg-type]
-        retry_backoff=float(raw_retry_backoff) if raw_retry_backoff is not None else settings.get("proxmox_retry_backoff"),  # type: ignore[arg-type]
+        max_retries=int(raw_max_retries)
+        if raw_max_retries is not None
+        else settings.get("proxmox_max_retries"),  # type: ignore[arg-type]
+        retry_backoff=float(raw_retry_backoff)
+        if raw_retry_backoff is not None
+        else settings.get("proxmox_retry_backoff"),  # type: ignore[arg-type]
     )
 
 

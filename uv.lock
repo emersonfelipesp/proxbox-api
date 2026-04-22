@@ -1685,7 +1685,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.7.post1"
+version = "0.0.8"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1745,7 +1745,7 @@ requires-dist = [
     { name = "netbox-sdk", specifier = "==0.0.7.post4" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "proxmox-sdk", specifier = "==0.0.2.post3" },
+    { name = "proxmox-sdk", editable = "../proxmox-sdk" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", marker = "extra == 'e2e'", specifier = ">=0.24.0" },
@@ -1765,17 +1765,53 @@ dev = [
 
 [[package]]
 name = "proxmox-sdk"
-version = "0.0.2.post3"
-source = { registry = "https://pypi.org/simple" }
+version = "0.0.3"
+source = { editable = "../proxmox-sdk" }
 dependencies = [
     { name = "aiohttp" },
     { name = "fastapi", extra = ["standard"] },
     { name = "pyyaml" },
     { name = "slowapi" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/a5/0cc397cfb9ed6066ed1d17eeb56bea9940eb6a3bc93199efddb0bba217a2/proxmox_sdk-0.0.2.post3.tar.gz", hash = "sha256:f06f9a68b0e4c214ae1cb67b6c3d4fd1436b0f8c21137a5305e0cdbd6e82386e", size = 175230, upload-time = "2026-04-14T01:33:49.933Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/0d/f5d9b3dbede0385091a5886fc9efd0e210bd3c5872f44ecf5888bdc76499/proxmox_sdk-0.0.2.post3-py3-none-any.whl", hash = "sha256:45c72392db9c37ef338037a477bf01f84432d143ed186345f72276f04a5d6c17", size = 209588, upload-time = "2026-04-14T01:33:48.379Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.135.2" },
+    { name = "granian", marker = "extra == 'granian'", specifier = ">=2.7.0" },
+    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
+    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7.6" },
+    { name = "openssh-wrapper", marker = "extra == 'all'", specifier = ">=0.4" },
+    { name = "openssh-wrapper", marker = "extra == 'ssh'", specifier = ">=0.4" },
+    { name = "paramiko", marker = "extra == 'all'", specifier = ">=3.0" },
+    { name = "paramiko", marker = "extra == 'ssh'", specifier = ">=3.0" },
+    { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
+    { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
+    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=7.1.0" },
+    { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.6.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'all'", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0" },
+    { name = "rich", marker = "extra == 'all'", specifier = ">=13.0.0" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0.0" },
+    { name = "slowapi", specifier = ">=0.1.9" },
+    { name = "textual", marker = "extra == 'all'", specifier = ">=0.79.1" },
+    { name = "textual", marker = "extra == 'cli'", specifier = ">=0.79.1" },
+    { name = "typer", extras = ["all"], marker = "extra == 'all'", specifier = ">=0.12.3" },
+    { name = "typer", extras = ["all"], marker = "extra == 'cli'", specifier = ">=0.12.3" },
+]
+provides-extras = ["ssh", "cli", "all", "test", "playwright", "docs", "granian"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.3.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "ruff", specifier = ">=0.15.8" },
+    { name = "ty", specifier = ">=0.0.29" },
 ]
 
 [[package]]

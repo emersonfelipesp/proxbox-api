@@ -310,7 +310,17 @@ class BaseIndividualSyncService:
         vm_role = await self._get_or_create_vm_role(vm_type)
         vm_type_obj = await self._get_or_create_vm_type(vm_type)
 
-        return cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role, vm_type_obj
+        return (
+            cluster,
+            cluster_type,
+            manufacturer,
+            device_type,
+            node_role,
+            site,
+            device,
+            vm_role,
+            vm_type_obj,
+        )
 
     def _build_response(
         self,
