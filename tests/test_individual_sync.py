@@ -364,9 +364,12 @@ async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeyp
     async def _fake_rest_reconcile_async(*args, **kwargs):
         return FakeRecord(kwargs["payload"], record_id=55)
 
+    async def _fake_get_vm_backups_individual(*args, **kwargs):
+        return [{"volid": "local:backup/vm-101", "size": 10, "format": "vma"}]
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.backup_sync.get_vm_backups_individual",
-        lambda *args, **kwargs: [{"volid": "local:backup/vm-101", "size": 10, "format": "vma"}],
+        _fake_get_vm_backups_individual,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.backup_sync.rest_list_async",
@@ -604,9 +607,12 @@ async def test_sync_task_history_individual_accepts_cluster_name_and_reports_upd
     async def _fake_rest_reconcile_async(*args, **kwargs):
         return FakeRecord(kwargs["payload"], record_id=77)
 
+    async def _fake_get_vm_tasks_individual(*args, **kwargs):
+        return [{"upid": "UPID:1", "type": "qmstart", "user": "root"}]
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.task_history_sync.get_vm_tasks_individual",
-        lambda *args, **kwargs: [{"upid": "UPID:1", "type": "qmstart", "user": "root"}],
+        _fake_get_vm_tasks_individual,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.task_history_sync.rest_list_async",
