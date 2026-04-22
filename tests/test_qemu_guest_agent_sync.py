@@ -76,7 +76,9 @@ def _install_common_sync_patches(  # noqa: C901
             return {"id": 77, "address": payload.get("address")}
         if path == "/api/dcim/device-roles/":
             return SimpleNamespace(id=33, name=payload.get("name"))
-        return {"id": 99}
+        if path == "/api/virtualization/virtual-machine-types/":
+            return SimpleNamespace(id=99)
+        return SimpleNamespace(id=99)
 
     async def _fake_rest_list(_nb, path, **kwargs):
         query = kwargs.get("query", {})
@@ -131,6 +133,10 @@ def _install_common_sync_patches(  # noqa: C901
     )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm._ensure_device",
+        _fake_ensure_obj,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.ensure_vm_type",
         _fake_ensure_obj,
     )
     monkeypatch.setattr(

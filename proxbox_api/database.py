@@ -76,6 +76,9 @@ class ProxmoxEndpoint(SQLModel, table=True):
     verify_ssl: bool = Field(default=True)
     token_name: str | None = Field(default=None)
     token_value: str | None = Field(default=None)
+    timeout: int | None = Field(default=None)
+    max_retries: int | None = Field(default=None)
+    retry_backoff: float | None = Field(default=None)
 
     @property
     def has_token(self) -> bool:
@@ -236,6 +239,29 @@ class ApiKey(SQLModel, table=True):
         return False
 
 
+def _migrate_proxmox_endpoint_columns() -> None:
+    table = ProxmoxEndpoint.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    stmts: list[str] = []
+    if "timeout" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN timeout INTEGER")
+    if "max_retries" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN max_retries INTEGER")
+    if "retry_backoff" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN retry_backoff REAL")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 def _migrate_netbox_endpoint_columns() -> None:
     table = NetBoxEndpoint.__tablename__
     try:
@@ -265,6 +291,7 @@ def _migrate_netbox_endpoint_columns() -> None:
 
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
+    _migrate_proxmox_endpoint_columns()
     _migrate_netbox_endpoint_columns()
 
 

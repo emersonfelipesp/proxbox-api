@@ -107,7 +107,7 @@ async def sync_interface_individual(  # noqa: C901
     now = datetime.now(timezone.utc)
 
     try:
-        vm_config = get_vm_config_individual(px, node, vm_type, vmid)
+        vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
     except Exception:
         vm_config = {}
 

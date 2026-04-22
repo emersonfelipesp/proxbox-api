@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel, field_validator
 
+from proxbox_api.constants import NODE_PATTERN
 from proxbox_api.enum.proxmox import AddressingMethod
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_async import resolve_async
@@ -71,7 +72,7 @@ class ProxmoxNodeInterfaceSchema(BaseModel):
     bridge_fd: str | None = None
     bridge_ports: str | None = None
     bridge_stp: str | None = None
-    brdige_vlan_aware: bool | None = None
+    bridge_vlan_aware: bool | None = None
     cidr: str | None = None
     comments: str | None = None
     exists: bool | None = None
@@ -84,7 +85,7 @@ class ProxmoxNodeInterfaceSchema(BaseModel):
     vlan_id: str | None = None
     vlan_raw_device: str | None = None
 
-    @field_validator("active", "autostart", "brdige_vlan_aware", "exists", mode="before")
+    @field_validator("active", "autostart", "bridge_vlan_aware", "exists", mode="before")
     @classmethod
     def _coerce_bool(cls, value: object) -> bool | None:
         return normalize_bool(value)
@@ -102,7 +103,12 @@ ProxmoxNodeInterfaceSchemaList = list[ProxmoxNodeInterfaceSchema]
 async def get_node_network(
     pxs: ProxmoxSessionsDep,
     node: Annotated[
-        str, Path(title="Proxmox Node", description="Proxmox Node Name (ex. 'pve01').")
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node Name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
     ],
     cluster_name: Annotated[
         str | None,
@@ -152,11 +158,53 @@ async def get_node_network(
 ProxmoxNodeInterfacesDep = Annotated[ProxmoxNodeInterfaceSchemaList, Depends(get_node_network)]
 
 
+@router.get("/{node}/qemu/{vmid}/firewall")
+async def get_qemu_firewall(
+    pxs: ProxmoxSessionsDep,
+    node: Annotated[
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
+    ],
+    vmid: Annotated[int, Path(title="VM ID", description="Proxmox QEMU VM ID.")],
+    cluster_name: Annotated[
+        str | None,
+        Query(
+            title="Cluster Name",
+            description="Optional cluster name to disambiguate multi-session deployments.",
+        ),
+    ] = None,
+):
+    px = resolve_proxmox_session_for_request(
+        pxs,
+        cluster_name,
+        resource_name="qemu firewall",
+    )
+
+    try:
+        result = await resolve_async(px.session(f"/nodes/{node}/qemu/{vmid}/firewall").get())
+    except ResourceException as error:
+        raise ProxboxException(
+            message="Error fetching qemu firewall from Proxmox",
+            python_exception=str(error),
+        )
+
+    return result
+
+
 @router.get("/{node}/qemu")
 async def node_qemu(
     pxs: ProxmoxSessionsDep,
     node: Annotated[
-        str, Path(title="Proxmox Node", description="Proxmox Node name (ex. 'pve01').")
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
     ],
     cluster_name: Annotated[
         str | None,

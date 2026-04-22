@@ -191,7 +191,7 @@ async def sync_snapshot_individual(  # noqa: C901
             "node": node,
             "description": target_snapshot.get("description") if target_snapshot else None,
             "snaptime": (
-                datetime.fromtimestamp(target_snapshot["snaptime"]).isoformat()
+                datetime.fromtimestamp(target_snapshot["snaptime"], tz=timezone.utc).isoformat()
                 if target_snapshot and target_snapshot.get("snaptime")
                 else None
             ),

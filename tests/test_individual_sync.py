@@ -129,6 +129,7 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
             SimpleNamespace(id=15),
             SimpleNamespace(id=16),
             SimpleNamespace(id=17),
+            SimpleNamespace(id=18),
         )
 
     async def _fake_rest_list_async(*args, **kwargs):
@@ -217,12 +218,16 @@ async def test_sync_vm_with_related_gathers_interfaces_and_task_history(monkeypa
         "proxbox_api.services.sync.individual.vm_sync.sync_interface_individual",
         _fake_sync_interface_individual,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.vm_sync.get_vm_config_individual",
-        lambda *args, **kwargs: {
+
+    async def _fake_get_vm_config_individual(*args, **kwargs):
+        return {
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
             "net1": "virtio=AA:BB:CC:DD:EE:00,bridge=vmbr1",
-        },
+        }
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.vm_sync.get_vm_config_individual",
+        _fake_get_vm_config_individual,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.task_history_sync.sync_task_history_individual",
@@ -359,9 +364,12 @@ async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeyp
     async def _fake_rest_reconcile_async(*args, **kwargs):
         return FakeRecord(kwargs["payload"], record_id=55)
 
+    async def _fake_get_vm_backups_individual(*args, **kwargs):
+        return [{"volid": "local:backup/vm-101", "size": 10, "format": "vma"}]
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.backup_sync.get_vm_backups_individual",
-        lambda *args, **kwargs: [{"volid": "local:backup/vm-101", "size": 10, "format": "vma"}],
+        _fake_get_vm_backups_individual,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.backup_sync.rest_list_async",
@@ -599,9 +607,12 @@ async def test_sync_task_history_individual_accepts_cluster_name_and_reports_upd
     async def _fake_rest_reconcile_async(*args, **kwargs):
         return FakeRecord(kwargs["payload"], record_id=77)
 
+    async def _fake_get_vm_tasks_individual(*args, **kwargs):
+        return [{"upid": "UPID:1", "type": "qmstart", "user": "root"}]
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.task_history_sync.get_vm_tasks_individual",
-        lambda *args, **kwargs: [{"upid": "UPID:1", "type": "qmstart", "user": "root"}],
+        _fake_get_vm_tasks_individual,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.task_history_sync.rest_list_async",

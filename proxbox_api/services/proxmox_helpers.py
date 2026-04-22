@@ -7,9 +7,13 @@ import functools
 from collections.abc import Callable
 from typing import TypeVar
 
-from proxmox_sdk.sdk.exceptions import ResourceException
+from proxmox_sdk.sdk.exceptions import (
+    ProxmoxConnectionError,
+    ProxmoxTimeoutError,
+    ResourceException,
+)
 
-from proxbox_api.exception import ProxboxException
+from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
@@ -48,10 +52,18 @@ async def get_cluster_status(
         return validated.root
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox cluster status request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for cluster status", original_error=error
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message="Error fetching Proxmox cluster status",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -72,10 +84,18 @@ async def get_cluster_resources(
         return validated.root
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox cluster resources request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for cluster resources", original_error=error
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message="Error fetching Proxmox cluster resources",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -112,10 +132,16 @@ async def get_vm_config(
         raise ValueError(f"Unsupported VM type: {vm_type}")
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM config request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM config", original_error=error
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message="Error fetching Proxmox VM config",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -202,10 +228,18 @@ async def get_storage_list(
         return validated.root
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox storage list request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for storage list", original_error=error
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message="Error fetching Proxmox storage list",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -225,10 +259,20 @@ async def get_storage_config(
         return _model_dump(validated)
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message=f"Proxmox storage config request timed out for {storage_id}",
+            original_error=error,
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message=f"Unable to connect to Proxmox for storage config {storage_id}",
+            original_error=error,
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message=f"Error fetching Proxmox storage config for {storage_id}",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -251,10 +295,18 @@ async def get_node_storage_content(
         return validated.root
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox node storage content request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for node storage content", original_error=error
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message="Error fetching Proxmox node storage content",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -286,10 +338,16 @@ async def get_node_tasks(
         return validated.root
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox node tasks request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for node tasks", original_error=error
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message="Error fetching Proxmox node tasks",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -305,10 +363,16 @@ async def get_node_task_status(
         return generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(result)
     except ProxboxException:
         raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox task status request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for task status", original_error=error
+        )
     except Exception as error:
-        raise ProxboxException(
+        raise ProxmoxAPIError(
             message="Error fetching Proxmox task status",
-            python_exception=str(error),
+            original_error=error,
         )
 
 
@@ -394,8 +458,9 @@ async def get_node_status_individual(
     try:
         status_list = await get_cluster_status(session)
         for item in status_list:
-            if str(item.get("node", "")) == node or str(item.get("name", "")) == node:
-                return _model_dump(item)
+            item_dict = _model_dump(item)
+            if str(item_dict.get("node", "")) == node or str(item_dict.get("name", "")) == node:
+                return item_dict
     except Exception as error:
         logger.warning(
             "Error fetching node status for node=%s: %s",

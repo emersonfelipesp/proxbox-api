@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import RootModel, field_validator
+from pydantic import Field, RootModel, field_validator
 
 from proxbox_api.enum.proxmox import CgroupMode, NodeStatus, ProxmoxVMStatus, ResourceType
 from proxbox_api.schemas._base import ProxboxBaseModel, ProxboxLenientModel
@@ -33,6 +33,10 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
     password: str | None = None
     token: ProxmoxTokenSchema | None = None
     ssl: bool = False
+    timeout: int | None = Field(default=None, ge=1, le=3600)
+    connect_timeout: int | None = Field(default=None, ge=1, le=3600)
+    max_retries: int | None = Field(default=None, ge=0, le=100)
+    retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
 
     @field_validator("name", "ip_address", "domain", "user", "password", mode="before")
     @classmethod

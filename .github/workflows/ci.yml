@@ -42,7 +42,7 @@ jobs:
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Core tests
-        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --deselect=tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists --tb=short
+        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
 
   e2e-docker:
     name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }}
@@ -435,6 +435,14 @@ jobs:
           if not ok:
               raise SystemExit(f"NetBox status check failed: {payload}")
           PY
+
+      - name: Create Proxbox custom fields in NetBox
+        run: |
+          set -eux
+          PROXBOX_API_KEY="proxbox-e2e-api-key-proxbox-e2e-api-key-1234567890"
+          curl ${{ matrix.proxbox_curl_flags }} -fsS \
+            "${{ matrix.proxbox_base_url }}/extras/extras/custom-fields/create" \
+            -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}"
 
       - name: Run E2E tests (Docker proxmox mock)
         env:

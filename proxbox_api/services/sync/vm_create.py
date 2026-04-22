@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from proxbox_api.constants import VM_TYPE_MAPPINGS
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -11,6 +12,7 @@ from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualMachineCreateBody,
+    NetBoxVirtualMachineTypeSyncState,
     ProxmoxVmConfigInput,
     ProxmoxVmResourceInput,
 )
@@ -177,6 +179,43 @@ async def ensure_vm_role(
     )
 
 
+async def ensure_vm_type(
+    netbox_session: NetBoxSessionDep,
+    vm_type: str,
+    tag_refs: list[dict],
+) -> object | None:
+    """Ensure a NetBox VirtualMachineType object exists for the given Proxmox VM type (NetBox v4.6+).
+
+    Args:
+        netbox_session: NetBox session
+        vm_type: Proxmox VM type ("qemu" or "lxc")
+        tag_refs: Tag references
+
+    Returns:
+        NetBox VirtualMachineType object, or None if vm_type is not recognised.
+    """
+    type_data = VM_TYPE_MAPPINGS.get(vm_type)
+    if not type_data:
+        return None
+
+    return await rest_reconcile_async(
+        netbox_session,
+        "/api/virtualization/virtual-machine-types/",
+        lookup={"slug": type_data["slug"]},
+        payload={
+            **type_data,
+            "tags": tag_refs,
+        },
+        schema=NetBoxVirtualMachineTypeSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "description": record.get("description"),
+            "tags": record.get("tags"),
+        },
+    )
+
+
 async def create_or_update_virtual_machine(
     netbox_session: NetBoxSessionDep,
     proxmox_resource: ProxmoxVmResourceInput | dict[str, object],
@@ -187,6 +226,7 @@ async def create_or_update_virtual_machine(
     tag_id: int,
     tag_refs: list[dict[str, object]],
     cluster_name: str | None = None,
+    virtual_machine_type_id: int | None = None,
 ) -> dict:
     """Create or update a virtual machine in NetBox.
 
@@ -200,6 +240,7 @@ async def create_or_update_virtual_machine(
         tag_id: NetBox tag ID
         tag_refs: Tag references
         cluster_name: Proxmox cluster name for custom field population.
+        virtual_machine_type_id: Optional NetBox VirtualMachineType ID (NetBox v4.6+).
 
     Returns:
         NetBox virtual machine dict
@@ -216,6 +257,7 @@ async def create_or_update_virtual_machine(
         device_id=device_id,
         role_id=role_id,
         tag_ids=[tag_id],
+        virtual_machine_type_id=virtual_machine_type_id,
         last_updated=now,
         cluster_name=cluster_name,
     )
@@ -234,6 +276,7 @@ async def create_or_update_virtual_machine(
             "status": record.get("status"),
             "cluster": record.get("cluster"),
             "device": record.get("device"),
+            "virtual_machine_type": record.get("virtual_machine_type"),
             "role": record.get("role"),
             "vcpus": record.get("vcpus"),
             "memory": record.get("memory"),

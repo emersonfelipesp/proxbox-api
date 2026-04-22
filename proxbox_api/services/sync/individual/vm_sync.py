@@ -55,6 +55,7 @@ def _build_netbox_vm_payload(
     last_updated: datetime,
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
+    virtual_machine_type_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -94,7 +95,7 @@ def _build_netbox_vm_payload(
         vmid = int(resource.get("vmid") or 0)
         vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
-    return {
+    payload: dict[str, object] = {
         "name": str(resource.get("name", "")),
         "status": status,
         "cluster": cluster_id,
@@ -107,6 +108,9 @@ def _build_netbox_vm_payload(
         "custom_fields": vm_custom_fields,
         "description": f"Synced from Proxmox node {node}",
     }
+    if virtual_machine_type_id is not None:
+        payload["virtual_machine_type"] = virtual_machine_type_id
+    return payload
 
 
 async def sync_vm_individual(
@@ -143,7 +147,7 @@ async def sync_vm_individual(
     tag_ids = [tag_id] if tag_id > 0 else []
 
     try:
-        proxmox_config = get_vm_config_individual(px, node, vm_type, vmid)
+        proxmox_config = await get_vm_config_individual(px, node, vm_type, vmid)
     except Exception:
         proxmox_config = {}
 
@@ -201,11 +205,13 @@ async def sync_vm_individual(
             _site,
             device,
             vm_role,
+            vm_type_obj,
         ) = await service._get_or_create_vm_dependencies(cluster_name, node, vm_type)
 
         cluster_id = int(getattr(cluster, "id", 0) or 0)
         device_id = int(getattr(device, "id", 0) or 0) if device else None
         role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
+        vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
 
         px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
         px_port = getattr(px, "http_port", 8006)
@@ -221,6 +227,7 @@ async def sync_vm_individual(
             last_updated=now,
             cluster_name=cluster_name,
             proxmox_url=px_url,
+            virtual_machine_type_id=vm_type_id,
         )
         existing_vms = await rest_list_async(
             nb,
@@ -242,6 +249,7 @@ async def sync_vm_individual(
                 "status": record.get("status"),
                 "cluster": record.get("cluster"),
                 "device": record.get("device"),
+                "virtual_machine_type": record.get("virtual_machine_type"),
                 "role": record.get("role"),
                 "vcpus": record.get("vcpus"),
                 "memory": record.get("memory"),
@@ -334,7 +342,7 @@ async def sync_vm_with_related(
 
     if sync_interfaces:
         try:
-            vm_config = get_vm_config_individual(px, node, vm_type, vmid)
+            vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
         except Exception:
             vm_config = {}
         interface_names = sorted(

@@ -8,6 +8,20 @@ NETBOX_MAX_OFFSET = 10_000
 DEFAULT_VM_STATUS = "active"
 DEFAULT_VM_ROLE = "undefined"
 
+# VM type mappings for NetBox VirtualMachineType objects (NetBox v4.6+)
+VM_TYPE_MAPPINGS = {
+    "qemu": {
+        "name": "QEMU Virtual Machine",
+        "slug": "qemu-virtual-machine",
+        "description": "Proxmox QEMU/KVM Virtual Machine",
+    },
+    "lxc": {
+        "name": "LXC Container",
+        "slug": "lxc-container",
+        "description": "Proxmox LXC Container",
+    },
+}
+
 # VM role mappings for different VM types
 VM_ROLE_MAPPINGS = {
     "qemu": {
@@ -62,6 +76,10 @@ HTTP_INTERNAL_ERROR = 500
 # File paths
 DEFAULT_DB_PATH = "database.db"
 DEFAULT_LOG_PATH = "/var/log/proxbox.log"
+
+# Proxmox node name validation — must start with alphanumeric, then allow dots/hyphens/underscores.
+# Applied to all `node` path parameters to prevent path traversal and injection.
+NODE_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
 
 # Proxmox API versions
 SUPPORTED_PROXMOX_VERSIONS = ["8.1", "8.2", "8.3", "latest"]

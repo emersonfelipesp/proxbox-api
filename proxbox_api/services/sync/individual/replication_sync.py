@@ -42,6 +42,7 @@ async def _build_replication_dry_run_result(
     guest_vmid: int,
     replication_id: str,
     proxmox_resource: dict[str, object],
+    vm_type: str = "qemu",
 ) -> dict:
     vm_record, _ = await ensure_vm_record(
         nb,
@@ -49,7 +50,7 @@ async def _build_replication_dry_run_result(
         tag,
         vmid=guest_vmid,
         node=None,
-        vm_type="qemu",
+        vm_type=vm_type,
         auto_create_vm=False,
     )
     vm_id = getattr(vm_record, "id", None) if vm_record is not None else None
@@ -77,6 +78,7 @@ async def sync_replication_individual(
     px: object,
     tag: object,
     replication_id: str,
+    vm_type: str = "qemu",
     auto_create_vm: bool = True,
     dry_run: bool = False,
 ) -> dict:
@@ -98,7 +100,7 @@ async def sync_replication_individual(
     now = datetime.now(timezone.utc)
 
     try:
-        replications = get_cluster_replication(px)
+        replications = await get_cluster_replication(px)
     except Exception:
         replications = []
 
@@ -145,6 +147,7 @@ async def sync_replication_individual(
             guest_vmid=guest_vmid,
             replication_id=replication_id,
             proxmox_resource=proxmox_resource,
+            vm_type=vm_type,
         )
 
     try:
@@ -156,7 +159,7 @@ async def sync_replication_individual(
             tag,
             vmid=guest_vmid,
             node=None,
-            vm_type="qemu",
+            vm_type=vm_type,
             auto_create_vm=auto_create_vm,
         )
         if vm_error:

@@ -9,17 +9,16 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 # build-base ensures C extensions (httptools, uvloop, etc.) can compile if no
 # musllinux wheel is available for the target arch.
-RUN apk add --no-cache build-base
+# git is required for uv to fetch the proxmox-sdk git dependency from uv.lock.
+RUN apk add --no-cache build-base git
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Build from the local repository so the image always matches the checked-out commit.
-COPY README.md pyproject.toml ./
+COPY README.md pyproject.toml uv.lock ./
 COPY proxbox_api ./proxbox_api
 
-RUN uv venv --seed /app/.venv && \
-    /app/.venv/bin/python -m pip install --upgrade pip && \
-    /app/.venv/bin/pip install '.'
+RUN uv sync --frozen --no-dev --no-editable
 
 # Application tree + venv only (shared by all runtime images).
 FROM python:3.13-alpine AS runtime-base
@@ -80,12 +79,14 @@ FROM runtime-base AS granian
 ARG MKCERT_VERSION=1.4.4
 ARG TARGETARCH
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 RUN apk add --no-cache \
     ca-certificates \
     curl \
     nss-tools \
     openssl \
-  && /app/.venv/bin/pip install 'granian>=2.7.0' \
+  && uv pip install --python /app/.venv/bin/python 'granian>=2.7.0' \
   && curl -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
   && chmod +x /usr/local/bin/mkcert

@@ -87,7 +87,7 @@ async def sync_task_history_individual(  # noqa: C901
     now = datetime.now(timezone.utc)
 
     try:
-        tasks = get_vm_tasks_individual(px, node, vmid, source="archive")
+        tasks = await get_vm_tasks_individual(px, node, vmid, source="archive")
     except Exception:
         tasks = []
 
