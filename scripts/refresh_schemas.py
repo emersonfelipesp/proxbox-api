@@ -11,7 +11,7 @@ from proxbox_api.proxmox_codegen.apidoc_parser import PROXMOX_API_VIEWER_URL
 from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle
 
 DEFAULT_NETBOX_OPENAPI_URL = (
-    "https://raw.githubusercontent.com/netbox-community/netbox/develop/contrib/openapi.json"
+    "https://raw.githubusercontent.com/netbox-community/netbox/main/contrib/openapi.json"
 )
 
 
