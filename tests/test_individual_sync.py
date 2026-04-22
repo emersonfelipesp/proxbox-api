@@ -129,6 +129,7 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
             SimpleNamespace(id=15),
             SimpleNamespace(id=16),
             SimpleNamespace(id=17),
+            SimpleNamespace(id=18),
         )
 
     async def _fake_rest_list_async(*args, **kwargs):
