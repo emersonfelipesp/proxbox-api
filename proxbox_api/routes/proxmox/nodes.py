@@ -103,7 +103,12 @@ ProxmoxNodeInterfaceSchemaList = list[ProxmoxNodeInterfaceSchema]
 async def get_node_network(
     pxs: ProxmoxSessionsDep,
     node: Annotated[
-        str, Path(title="Proxmox Node", description="Proxmox Node Name (ex. 'pve01').", pattern=NODE_PATTERN)
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node Name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
     ],
     cluster_name: Annotated[
         str | None,
@@ -194,7 +199,12 @@ async def get_qemu_firewall(
 async def node_qemu(
     pxs: ProxmoxSessionsDep,
     node: Annotated[
-        str, Path(title="Proxmox Node", description="Proxmox Node name (ex. 'pve01').", pattern=NODE_PATTERN)
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
     ],
     cluster_name: Annotated[
         str | None,

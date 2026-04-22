@@ -1205,7 +1205,9 @@ async def create_virtual_machines(  # noqa: C901
                 rest_reconcile_async(
                     nb,
                     "/api/dcim/device-roles/",
-                    lookup={"slug": vm_role_mapping.get(vt, vm_role_mapping["undefined"]).get("slug")},
+                    lookup={
+                        "slug": vm_role_mapping.get(vt, vm_role_mapping["undefined"]).get("slug")
+                    },
                     payload={
                         **vm_role_mapping.get(vt, vm_role_mapping["undefined"]),
                         "tags": tag_refs,
