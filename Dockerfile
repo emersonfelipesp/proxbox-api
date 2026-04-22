@@ -79,12 +79,14 @@ FROM runtime-base AS granian
 ARG MKCERT_VERSION=1.4.4
 ARG TARGETARCH
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 RUN apk add --no-cache \
     ca-certificates \
     curl \
     nss-tools \
     openssl \
-  && /app/.venv/bin/pip install 'granian>=2.7.0' \
+  && uv pip install --python /app/.venv/bin/python 'granian>=2.7.0' \
   && curl -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
   && chmod +x /usr/local/bin/mkcert
