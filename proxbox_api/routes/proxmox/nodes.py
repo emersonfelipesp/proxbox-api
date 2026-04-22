@@ -152,6 +152,38 @@ async def get_node_network(
 ProxmoxNodeInterfacesDep = Annotated[ProxmoxNodeInterfaceSchemaList, Depends(get_node_network)]
 
 
+@router.get("/{node}/qemu/{vmid}/firewall")
+async def get_qemu_firewall(
+    pxs: ProxmoxSessionsDep,
+    node: Annotated[
+        str, Path(title="Proxmox Node", description="Proxmox Node name (ex. 'pve01').")
+    ],
+    vmid: Annotated[int, Path(title="VM ID", description="Proxmox QEMU VM ID.")],
+    cluster_name: Annotated[
+        str | None,
+        Query(
+            title="Cluster Name",
+            description="Optional cluster name to disambiguate multi-session deployments.",
+        ),
+    ] = None,
+):
+    px = resolve_proxmox_session_for_request(
+        pxs,
+        cluster_name,
+        resource_name="qemu firewall",
+    )
+
+    try:
+        result = await resolve_async(px.session(f"/nodes/{node}/qemu/{vmid}/firewall").get())
+    except ResourceException as error:
+        raise ProxboxException(
+            message="Error fetching qemu firewall from Proxmox",
+            python_exception=str(error),
+        )
+
+    return result
+
+
 @router.get("/{node}/qemu")
 async def node_qemu(
     pxs: ProxmoxSessionsDep,
