@@ -136,6 +136,10 @@ def _install_common_sync_patches(  # noqa: C901
         _fake_ensure_obj,
     )
     monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.ensure_vm_type",
+        _fake_ensure_obj,
+    )
+    monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_reconcile_async",
         _fake_reconcile,
     )

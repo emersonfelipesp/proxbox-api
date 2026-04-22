@@ -258,7 +258,7 @@ async def load_proxmox_session_schemas(
         if inspect.isawaitable(netbox_session):
             netbox_session = await netbox_session
 
-        plugin_settings = get_settings(netbox_session=netbox_session)
+        plugin_settings = await asyncio.to_thread(get_settings, netbox_session=netbox_session)
 
         try:
             url = "/api/plugins/proxbox/endpoints/proxmox/"

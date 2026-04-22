@@ -10,11 +10,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
 from netbox_sdk.client import ApiResponse
 
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.exception import ProxboxException
 from proxbox_api.main import (
+    app,
     full_update_sync,
     full_update_sync_stream,
     standalone_info,
@@ -926,6 +928,10 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
         _fake_ensure,
     )
     monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.ensure_vm_type",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.build_netbox_virtual_machine_payload",
         lambda **kwargs: {"name": "vm-101", "status": "active", "cluster": 1},
     )
@@ -1367,3 +1373,24 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
         "/api/plugins/proxbox/backups/",
     )
     assert fake_netbox.client.calls[4][0:2] == ("POST", "/api/extras/journal-entries/")
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        ".hidden",
+        "node;rm",
+        "node name",
+        "node!",
+        "node<script>",
+    ],
+)
+async def test_qemu_firewall_rejects_invalid_node_pattern(node, test_api_key):
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
+        response = await client.get(f"/proxmox/nodes/{node}/qemu/100/firewall")
+
+    assert response.status_code == 422

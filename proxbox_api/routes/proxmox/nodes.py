@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel, field_validator
 
+from proxbox_api.constants import NODE_PATTERN
 from proxbox_api.enum.proxmox import AddressingMethod
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_async import resolve_async
@@ -102,7 +103,7 @@ ProxmoxNodeInterfaceSchemaList = list[ProxmoxNodeInterfaceSchema]
 async def get_node_network(
     pxs: ProxmoxSessionsDep,
     node: Annotated[
-        str, Path(title="Proxmox Node", description="Proxmox Node Name (ex. 'pve01').")
+        str, Path(title="Proxmox Node", description="Proxmox Node Name (ex. 'pve01').", pattern=NODE_PATTERN)
     ],
     cluster_name: Annotated[
         str | None,
@@ -156,7 +157,12 @@ ProxmoxNodeInterfacesDep = Annotated[ProxmoxNodeInterfaceSchemaList, Depends(get
 async def get_qemu_firewall(
     pxs: ProxmoxSessionsDep,
     node: Annotated[
-        str, Path(title="Proxmox Node", description="Proxmox Node name (ex. 'pve01').")
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
     ],
     vmid: Annotated[int, Path(title="VM ID", description="Proxmox QEMU VM ID.")],
     cluster_name: Annotated[
@@ -188,7 +194,7 @@ async def get_qemu_firewall(
 async def node_qemu(
     pxs: ProxmoxSessionsDep,
     node: Annotated[
-        str, Path(title="Proxmox Node", description="Proxmox Node name (ex. 'pve01').")
+        str, Path(title="Proxmox Node", description="Proxmox Node name (ex. 'pve01').", pattern=NODE_PATTERN)
     ],
     cluster_name: Annotated[
         str | None,

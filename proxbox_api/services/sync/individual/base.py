@@ -195,30 +195,9 @@ class BaseIndividualSyncService:
         Returns:
             NetBox VirtualMachineType object, or None if vm_type is not recognised.
         """
-        from proxbox_api.constants import VM_TYPE_MAPPINGS
-        from proxbox_api.netbox_rest import rest_reconcile_async
-        from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineTypeSyncState
+        from proxbox_api.services.sync.vm_create import ensure_vm_type
 
-        type_data = VM_TYPE_MAPPINGS.get(vm_type)
-        if not type_data:
-            return None
-
-        return await rest_reconcile_async(
-            self.nb,
-            "/api/virtualization/virtual-machine-types/",
-            lookup={"slug": type_data["slug"]},
-            payload={
-                **type_data,
-                "tags": self.tag_refs,
-            },
-            schema=NetBoxVirtualMachineTypeSyncState,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "slug": record.get("slug"),
-                "description": record.get("description"),
-                "tags": record.get("tags"),
-            },
-        )
+        return await ensure_vm_type(self.nb, vm_type, self.tag_refs)
 
     async def _get_or_create_site(self, cluster_name: str) -> object:
         """Get or create the site for a cluster.

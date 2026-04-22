@@ -28,7 +28,6 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineCreateBody,
     NetBoxVirtualMachineInterfaceSyncState,
-    NetBoxVirtualMachineTypeSyncState,
     NetBoxVlanSyncState,
     ProxmoxVmConfigInput,
 )
@@ -66,6 +65,7 @@ from proxbox_api.services.sync.task_history import (
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
+from proxbox_api.services.sync.vm_create import ensure_vm_type
 from proxbox_api.services.sync.vm_helpers import (
     normalized_mac,
     parse_comma_separated_ints,
@@ -1199,46 +1199,42 @@ async def create_virtual_machines(  # noqa: C901
                     vm_type = "undefined"
                 vm_types.add(vm_type)
 
-        for vm_type in sorted(vm_types):
-            role_payload = vm_role_mapping.get(vm_type, vm_role_mapping["undefined"])
-            vm_role_cache[vm_type] = await rest_reconcile_async(
-                nb,
-                "/api/dcim/device-roles/",
-                lookup={"slug": role_payload.get("slug")},
-                payload={
-                    **role_payload,
-                    "tags": tag_refs,
-                },
-                schema=NetBoxDeviceRoleSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "slug": record.get("slug"),
-                    "color": record.get("color"),
-                    "description": record.get("description"),
-                    "vm_role": record.get("vm_role"),
-                    "tags": record.get("tags"),
-                },
-            )
-
-        for vm_type in sorted(vm_types):
-            type_data = VM_TYPE_MAPPINGS.get(vm_type)
-            if type_data:
-                vm_type_cache[vm_type] = await rest_reconcile_async(
+        sorted_vm_types = sorted(vm_types)
+        role_results = await asyncio.gather(
+            *[
+                rest_reconcile_async(
                     nb,
-                    "/api/virtualization/virtual-machine-types/",
-                    lookup={"slug": type_data["slug"]},
+                    "/api/dcim/device-roles/",
+                    lookup={"slug": vm_role_mapping.get(vt, vm_role_mapping["undefined"]).get("slug")},
                     payload={
-                        **type_data,
+                        **vm_role_mapping.get(vt, vm_role_mapping["undefined"]),
                         "tags": tag_refs,
                     },
-                    schema=NetBoxVirtualMachineTypeSyncState,
+                    schema=NetBoxDeviceRoleSyncState,
                     current_normalizer=lambda record: {
                         "name": record.get("name"),
                         "slug": record.get("slug"),
+                        "color": record.get("color"),
                         "description": record.get("description"),
+                        "vm_role": record.get("vm_role"),
                         "tags": record.get("tags"),
                     },
                 )
+                for vt in sorted_vm_types
+            ],
+            return_exceptions=True,
+        )
+        for vt, role in zip(sorted_vm_types, role_results):
+            if not isinstance(role, BaseException):
+                vm_role_cache[vt] = role
+
+        type_results = await asyncio.gather(
+            *[ensure_vm_type(nb, vt, tag_refs) for vt in sorted_vm_types],
+            return_exceptions=True,
+        )
+        for vt, result in zip(sorted_vm_types, type_results):
+            if result is not None and not isinstance(result, BaseException):
+                vm_type_cache[vt] = result
 
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
@@ -1255,6 +1251,13 @@ async def create_virtual_machines(  # noqa: C901
             message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
             python_exception=f"Error: {str(error)}",
         )
+
+    async def _get_vm_type(vm_type_key: str) -> object | None:
+        if vm_type_key not in vm_type_cache and vm_type_key in VM_TYPE_MAPPINGS:
+            result = await ensure_vm_type(nb, vm_type_key, tag_refs)
+            if result is not None:
+                vm_type_cache[vm_type_key] = result
+        return vm_type_cache.get(vm_type_key)
 
     async def _prepare_vm_state(cluster_name: str, resource: dict) -> _PreparedVMState:  # noqa: C901
         vm_type = str(resource.get("type") or "unknown")
@@ -1321,27 +1324,7 @@ async def create_virtual_machines(  # noqa: C901
             )
             vm_role_cache[vm_type_key] = role
 
-        vm_type_obj = vm_type_cache.get(vm_type_key)
-        if vm_type_obj is None and vm_type_key in VM_TYPE_MAPPINGS:
-            type_data = VM_TYPE_MAPPINGS[vm_type_key]
-            vm_type_obj = await rest_reconcile_async(
-                nb,
-                "/api/virtualization/virtual-machine-types/",
-                lookup={"slug": type_data["slug"]},
-                payload={
-                    **type_data,
-                    "tags": tag_refs,
-                },
-                schema=NetBoxVirtualMachineTypeSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "slug": record.get("slug"),
-                    "description": record.get("description"),
-                    "tags": record.get("tags"),
-                },
-            )
-            vm_type_cache[vm_type_key] = vm_type_obj
-
+        vm_type_obj = await _get_vm_type(vm_type_key)
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
 
         now = datetime.now(timezone.utc)
@@ -1622,30 +1605,8 @@ async def create_virtual_machines(  # noqa: C901
                 )
                 vm_role_cache[vm_type_key] = role
 
-            vm_type_obj_dispatch = vm_type_cache.get(vm_type_key)
-            if vm_type_obj_dispatch is None and vm_type_key in VM_TYPE_MAPPINGS:
-                type_data = VM_TYPE_MAPPINGS[vm_type_key]
-                vm_type_obj_dispatch = await rest_reconcile_async(
-                    nb,
-                    "/api/virtualization/virtual-machine-types/",
-                    lookup={"slug": type_data["slug"]},
-                    payload={
-                        **type_data,
-                        "tags": tag_refs,
-                    },
-                    schema=NetBoxVirtualMachineTypeSyncState,
-                    current_normalizer=lambda record: {
-                        "name": record.get("name"),
-                        "slug": record.get("slug"),
-                        "description": record.get("description"),
-                        "tags": record.get("tags"),
-                    },
-                )
-                vm_type_cache[vm_type_key] = vm_type_obj_dispatch
-
-            vm_type_id_dispatch = (
-                int(getattr(vm_type_obj_dispatch, "id", 0) or 0) if vm_type_obj_dispatch else None
-            )
+            vm_type_obj = await _get_vm_type(vm_type_key)
+            vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
 
             logger.debug("VM deps cluster=%s device=%s role=%s", cluster, device, role)
             if bridge:
@@ -1673,7 +1634,6 @@ async def create_virtual_machines(  # noqa: C901
                 python_exception=f"Error: {str(error)}",
             )
 
-        # try:
         now = datetime.now(timezone.utc)
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
@@ -1682,7 +1642,7 @@ async def create_virtual_machines(  # noqa: C901
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
-            virtual_machine_type_id=vm_type_id_dispatch,
+            virtual_machine_type_id=vm_type_id,
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
@@ -1732,16 +1692,6 @@ async def create_virtual_machines(  # noqa: C901
                 item={"name": vm_name},
                 timing_key=timing_key,
             )
-
-        """
-        except ProxboxException:
-            raise
-        except Exception as error:
-            raise ProxboxException(
-                message="Error creating Virtual Machine in Netbox",
-                python_exception=f"Error: {str(error)}"
-            )
-        """
 
         if not isinstance(virtual_machine, dict):
             virtual_machine = virtual_machine.dict()

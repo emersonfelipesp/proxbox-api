@@ -77,6 +77,10 @@ HTTP_INTERNAL_ERROR = 500
 DEFAULT_DB_PATH = "database.db"
 DEFAULT_LOG_PATH = "/var/log/proxbox.log"
 
+# Proxmox node name validation — must start with alphanumeric, then allow dots/hyphens/underscores.
+# Applied to all `node` path parameters to prevent path traversal and injection.
+NODE_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+
 # Proxmox API versions
 SUPPORTED_PROXMOX_VERSIONS = ["8.1", "8.2", "8.3", "latest"]
 DEFAULT_PROXMOX_VERSION = "latest"
