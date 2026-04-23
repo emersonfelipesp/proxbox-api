@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
@@ -194,6 +195,8 @@ def create_app() -> FastAPI:
         description="## Proxbox Backend made in FastAPI framework",
         version="0.0.1",
         lifespan=_lifespan,
+        docs_url=None,
+        redoc_url=None,
     )
 
     def custom_openapi():
@@ -208,6 +211,26 @@ def create_app() -> FastAPI:
     else:
         logger.info(
             "Static asset directory not found; skipping /static mount", extra={"path": static_dir}
+        )
+
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui() -> HTMLResponse:
+        return get_swagger_ui_html(
+            openapi_url="/openapi.json",
+            title=f"{app.title} - Swagger UI",
+            swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
+            swagger_css_url="/static/swagger-ui/swagger-ui.css",
+            swagger_favicon_url="/static/swagger-ui/favicon.png",
+        )
+
+    @app.get("/redoc", include_in_schema=False)
+    async def custom_redoc() -> HTMLResponse:
+        return get_redoc_html(
+            openapi_url="/openapi.json",
+            title=f"{app.title} - ReDoc",
+            redoc_js_url="/static/swagger-ui/redoc.standalone.js",
+            redoc_favicon_url="/static/swagger-ui/favicon.png",
+            with_google_fonts=False,
         )
 
     origins = build_cors_origins(bootstrap.netbox_endpoints)
