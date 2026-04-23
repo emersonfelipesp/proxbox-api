@@ -3,7 +3,7 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import ProxboxTagDep
@@ -47,6 +47,11 @@ async def create_devices_stream(
     netbox_session: NetBoxSessionDep,
     clusters_status: ClusterStatusDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: int | None = Query(
+        default=None,
+        title="Max Fetch Concurrency",
+        description="Accepted for API consistency; device sync does not use fetch concurrency.",
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()

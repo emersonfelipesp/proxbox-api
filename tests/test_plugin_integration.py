@@ -198,6 +198,35 @@ class TestStreamEndpoints:
                 assert resp.status_code != 405
 
 
+class TestVMInterfaceStreamRoutes:
+    """Targeted tests for the VM interface SSE stream routes added for v0.0.12 compatibility."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/virtualization/virtual-machines/interfaces/create/stream",
+            "/virtualization/virtual-machines/interfaces/ip-address/create/stream",
+        ],
+    )
+    async def test_vm_interface_stream_routes_return_sse_content_type(
+        self, client_with_fake_netbox, path
+    ):
+        """VM interface stream routes must respond with text/event-stream (not 404)."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            async with client.stream("GET", path) as resp:
+                assert resp.status_code != 404, f"{path} returned 404 — route is not registered"
+                assert resp.status_code != 405, f"{path} returned 405 — method not allowed"
+                if resp.status_code == 200:
+                    ct = resp.headers.get("content-type", "")
+                    assert "text/event-stream" in ct, (
+                        f"{path} returned 200 but content-type is {ct!r}, expected text/event-stream"
+                    )
+
+
 class TestNonStreamEndpoints:
     """Test non-stream endpoints return JSON."""
 

@@ -1469,6 +1469,60 @@ def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
     assert sessions[0].name == "lab-cluster"
 
 
+def test_proxmox_sessions_proxmox_endpoint_ids_alias_matches_endpoint_ids(monkeypatch, db_engine):
+    """proxmox_endpoint_ids is an alias for endpoint_ids and takes precedence when both are set."""
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
+
+    with Session(db_engine) as session:
+        ep1 = ProxmoxEndpoint(
+            name="pve01",
+            ip_address="10.0.0.10",
+            domain=None,
+            port=8006,
+            username="root@pam",
+            password="password",
+            verify_ssl=False,
+        )
+        ep2 = ProxmoxEndpoint(
+            name="pve02",
+            ip_address="10.0.0.11",
+            domain=None,
+            port=8006,
+            username="root@pam",
+            password="password",
+            verify_ssl=False,
+        )
+        session.add(ep1)
+        session.add(ep2)
+        session.commit()
+        ep1_id = ep1.id
+        ep2_id = ep2.id
+
+        # Baseline: both endpoints returned with no filter
+        all_sessions = asyncio.run(proxmox_sessions(session))
+        assert len(all_sessions) == 2
+
+        # endpoint_ids filters to one endpoint
+        by_endpoint_ids = asyncio.run(proxmox_sessions(session, endpoint_ids=str(ep1_id)))
+        assert len(by_endpoint_ids) == 1
+
+        # proxmox_endpoint_ids alias produces the same count
+        by_alias = asyncio.run(proxmox_sessions(session, proxmox_endpoint_ids=str(ep1_id)))
+        assert len(by_alias) == 1
+
+        # proxmox_endpoint_ids takes precedence: endpoint_ids selects both, alias selects only ep1
+        both_ids = f"{ep1_id},{ep2_id}"
+        by_precedence = asyncio.run(
+            proxmox_sessions(
+                session,
+                endpoint_ids=both_ids,
+                proxmox_endpoint_ids=str(ep1_id),
+            )
+        )
+        # proxmox_endpoint_ids wins: only ep1, not both
+        assert len(by_precedence) == 1
+
+
 def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
 

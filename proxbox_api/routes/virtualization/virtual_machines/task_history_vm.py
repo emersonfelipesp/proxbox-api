@@ -2,7 +2,7 @@
 
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
@@ -21,6 +21,11 @@ async def create_all_virtual_machine_task_histories_stream(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: int | None = Query(
+        default=None,
+        title="Max Fetch Concurrency",
+        description="Maximum number of concurrent Proxmox fetch operations.",
+    ),
 ):
     tag_refs = nested_tag_payload(tag) if tag else []
 
@@ -36,6 +41,7 @@ async def create_all_virtual_machine_task_histories_stream(
                     tag_refs=tag_refs,
                     websocket=bridge,
                     use_websocket=True,
+                    fetch_max_concurrency=fetch_max_concurrency,
                 )
             finally:
                 await bridge.close()

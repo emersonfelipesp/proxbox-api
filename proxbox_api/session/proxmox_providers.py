@@ -71,11 +71,22 @@ async def proxmox_sessions(  # noqa: C901
             max_length=255,
         ),
     ] = None,
+    proxmox_endpoint_ids: Annotated[
+        str | None,
+        Query(
+            title="Proxmox Endpoint IDs (plugin alias)",
+            description=(
+                "Alias for endpoint_ids used by the netbox-proxbox plugin. "
+                "Takes precedence over endpoint_ids when both are provided."
+            ),
+            max_length=255,
+        ),
+    ] = None,
 ):
     """
     Default Behavior: Instantiate Proxmox Sessions and return a list of Proxmox Sessions objects.
     If 'name' is provided, return only the Proxmox Session with that name.
-    If 'endpoint_ids' is provided, filter by those database IDs.
+    If 'endpoint_ids' or 'proxmox_endpoint_ids' is provided, filter by those database IDs.
     """
 
     if source not in ("database", "netbox"):
@@ -84,15 +95,17 @@ async def proxmox_sessions(  # noqa: C901
             detail="source must be 'database' or 'netbox'.",
         )
 
+    effective_endpoint_ids = proxmox_endpoint_ids or endpoint_ids
+
     endpoint_id_list = None
-    if endpoint_ids is not None and endpoint_ids.strip():
-        if len(endpoint_ids) > 255:
+    if effective_endpoint_ids is not None and effective_endpoint_ids.strip():
+        if len(effective_endpoint_ids) > 255:
             raise ProxboxException(
                 message="Invalid Proxmox endpoint_ids query parameter",
                 detail="endpoint_ids exceeds maximum length.",
             )
         try:
-            parts = [p.strip() for p in endpoint_ids.split(",") if p.strip()]
+            parts = [p.strip() for p in effective_endpoint_ids.split(",") if p.strip()]
             if len(parts) > 100:
                 raise ProxboxException(
                     message="Invalid Proxmox endpoint_ids query parameter",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
@@ -42,6 +42,11 @@ async def create_storages_stream(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: int | None = Query(
+        default=None,
+        title="Max Fetch Concurrency",
+        description="Maximum number of concurrent Proxmox fetch operations.",
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -54,6 +59,7 @@ async def create_storages_stream(
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
+                    fetch_concurrency=fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY,
                 )
             finally:
                 await bridge.close()
