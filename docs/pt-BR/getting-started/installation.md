@@ -15,7 +15,27 @@ docker pull emersonfelipesp/proxbox-api:latest
 docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest
 ```
 
-## Opcao 2: Codigo-fonte local
+## Opcao 2: PyPI
+
+O pacote esta publicado no [PyPI](https://pypi.org/project/proxbox-api/) como `proxbox-api`.
+
+```bash
+pip install proxbox-api
+```
+
+Ou com `uv`:
+
+```bash
+uv add proxbox-api
+```
+
+Inicie o servidor apos instalar:
+
+```bash
+python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+## Opcao 3: Codigo-fonte local
 
 ```bash
 git clone https://github.com/emersonfelipesp/proxbox-api.git

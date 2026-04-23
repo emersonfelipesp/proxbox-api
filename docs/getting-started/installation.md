@@ -89,7 +89,27 @@ docker build --target nginx -t proxbox-api:nginx .         # nginx
 docker build --target granian -t proxbox-api:granian .     # granian
 ```
 
-## Option 2: Local development from source
+## Option 2: PyPI
+
+The package is published to [PyPI](https://pypi.org/project/proxbox-api/) as `proxbox-api`.
+
+```bash
+pip install proxbox-api
+```
+
+Or with `uv`:
+
+```bash
+uv add proxbox-api
+```
+
+Start the server:
+
+```bash
+python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+## Option 3: Local development from source
 
 Clone repository:
 

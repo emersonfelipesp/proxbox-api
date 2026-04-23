@@ -122,18 +122,38 @@ To run a shell instead of starting the server, pass a command (the entrypoint de
 docker run --rm emersonfelipesp/proxbox-api:latest-nginx sh
 ```
 
+## Installing from PyPI
+
+The package is published to [PyPI](https://pypi.org/project/proxbox-api/) as `proxbox-api`.
+
+```bash
+pip install proxbox-api
+```
+
+Or with `uv`:
+
+```bash
+uv add proxbox-api
+```
+
+Start the server after installing:
+
+```bash
+python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
 ## Using git repository
 
 ### Clone the repository
 
 ```
-git clone https://github.com/netdevopsbr/netbox-proxbox.git
+git clone https://github.com/emersonfelipesp/proxbox-api.git
 ```
 
-### Change to 'proxbox_api' project root folder
+### Change to project root folder
 
 ```
-cd proxbox_api
+cd proxbox-api
 ```
 
 ### Install dependencies
