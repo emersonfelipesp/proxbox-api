@@ -417,10 +417,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#opcao-2-codigo-fonte-local" class="md-nav__link">
+  <a href="#opcao-2-pypi" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Opcao 2: Codigo-fonte local
+        Opcao 2: PyPI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#opcao-3-codigo-fonte-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opcao 3: Codigo-fonte local
       
     </span>
   </a>
@@ -1178,10 +1189,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#opcao-2-codigo-fonte-local" class="md-nav__link">
+  <a href="#opcao-2-pypi" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Opcao 2: Codigo-fonte local
+        Opcao 2: PyPI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#opcao-3-codigo-fonte-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opcao 3: Codigo-fonte local
       
     </span>
   </a>
@@ -1275,7 +1297,17 @@
 <p><code>bash
 docker pull emersonfelipesp/proxbox-api:latest
 docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest</code></p>
-<h2 id="opcao-2-codigo-fonte-local">Opcao 2: Codigo-fonte local<a class="headerlink" href="#opcao-2-codigo-fonte-local" title="Permanent link">&para;</a></h2>
+<h2 id="opcao-2-pypi">Opcao 2: PyPI<a class="headerlink" href="#opcao-2-pypi" title="Permanent link">&para;</a></h2>
+<p>O pacote esta publicado no <a href="https://pypi.org/project/proxbox-api/">PyPI</a> como <code>proxbox-api</code>.</p>
+<p><code>bash
+pip install proxbox-api</code></p>
+<p>Ou com <code>uv</code>:</p>
+<p><code>bash
+uv add proxbox-api</code></p>
+<p>Inicie o servidor apos instalar:</p>
+<p><code>bash
+python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
+<h2 id="opcao-3-codigo-fonte-local">Opcao 3: Codigo-fonte local<a class="headerlink" href="#opcao-3-codigo-fonte-local" title="Permanent link">&para;</a></h2>
 <p><code>bash
 git clone https://github.com/emersonfelipesp/proxbox-api.git
 cd proxbox-api

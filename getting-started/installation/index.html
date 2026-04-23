@@ -478,10 +478,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#option-2-local-development-from-source" class="md-nav__link">
+  <a href="#option-2-pypi" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Option 2: Local development from source
+        Option 2: PyPI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#option-3-local-development-from-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 3: Local development from source
       
     </span>
   </a>
@@ -1300,10 +1311,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#option-2-local-development-from-source" class="md-nav__link">
+  <a href="#option-2-pypi" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Option 2: Local development from source
+        Option 2: PyPI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#option-3-local-development-from-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 3: Local development from source
       
     </span>
   </a>
@@ -1496,7 +1518,17 @@ cd proxbox-api</p>
 docker build --target nginx -t proxbox-api:nginx .         # nginx
 docker build --target granian -t proxbox-api:granian .     # granian
 ```</p>
-<h2 id="option-2-local-development-from-source">Option 2: Local development from source<a class="headerlink" href="#option-2-local-development-from-source" title="Permanent link">&para;</a></h2>
+<h2 id="option-2-pypi">Option 2: PyPI<a class="headerlink" href="#option-2-pypi" title="Permanent link">&para;</a></h2>
+<p>The package is published to <a href="https://pypi.org/project/proxbox-api/">PyPI</a> as <code>proxbox-api</code>.</p>
+<p><code>bash
+pip install proxbox-api</code></p>
+<p>Or with <code>uv</code>:</p>
+<p><code>bash
+uv add proxbox-api</code></p>
+<p>Start the server:</p>
+<p><code>bash
+python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
+<h2 id="option-3-local-development-from-source">Option 3: Local development from source<a class="headerlink" href="#option-3-local-development-from-source" title="Permanent link">&para;</a></h2>
 <p>Clone repository:</p>
 <p><code>bash
 git clone https://github.com/emersonfelipesp/proxbox-api.git
