@@ -105,6 +105,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+_DOCS_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "frame-ancestors 'none'"
+)
+_DEFAULT_CSP = "default-src 'self'; frame-ancestors 'none'"
+_DOCS_PATHS = frozenset({"/docs", "/redoc"})
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security headers to all responses."""
 
@@ -116,7 +127,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        csp = _DOCS_CSP if request.url.path in _DOCS_PATHS else _DEFAULT_CSP
+        response.headers["Content-Security-Policy"] = csp
         return response
 
 
