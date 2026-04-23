@@ -6,11 +6,11 @@ build-backend = "setuptools.build_meta"
 include = ["proxbox_api*"]
 
 [tool.setuptools.package-data]
-proxbox_api = ["static/*", "generated/**/*.json", "generated/**/*.py"]
+proxbox_api = ["static/*", "static/**/*", "generated/**/*.json", "generated/**/*.py"]
 
 [project]
 name = "proxbox_api"
-version = "0.0.8"
+version = "0.0.8.post1"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
