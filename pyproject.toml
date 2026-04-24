@@ -18,7 +18,7 @@ dependencies = [
     "fastapi[standard]==0.136.1",
     "proxmox-sdk==0.0.3.post1",
     "netbox-sdk==0.0.7.post6",
-    "sqlmodel>=0.0.37,<1.0.0",
+    "sqlmodel==0.0.38",
     "pydantic==2.13.3",
     "aiosqlite>=0.20.0,<1.0.0",
     "cryptography>=43.0.0,<50.0.0",
