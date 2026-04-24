@@ -44,6 +44,34 @@ jobs:
       - name: Core tests
         run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
 
+  test-free-threaded:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.14t"
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra test --group dev
+
+      - name: Compile package
+        run: uv run python -m compileall proxbox_api scripts tests
+
+      - name: Import smoke checks
+        run: |
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "import proxmox_sdk.mock_main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+
+      - name: Core tests
+        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
+
   e2e-docker:
     name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }}
     runs-on: ubuntu-latest
