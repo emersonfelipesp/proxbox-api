@@ -7,6 +7,14 @@ on:
     branches: [main, testing, "v*"]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      netbox_proxbox_mode:
+        description: 'netbox-proxbox install mode (dev = GitHub develop branch, pypi = latest PyPI release)'
+        type: choice
+        options: [dev, pypi]
+        default: dev
+  release:
+    types: [published]
 
 jobs:
   test:
@@ -70,94 +78,59 @@ jobs:
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Core tests
-        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
+        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --ignore=tests/test_endpoint_crud.py --tb=short
+
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - name: Generate E2E matrix
+        id: gen
+        run: |
+          python3 - <<'PYEOF' > /tmp/e2e_matrix.json
+          import json, os
+
+          event = os.environ.get("GITHUB_EVENT_NAME", "push")
+          mode_input = os.environ.get("INPUT_NETBOX_PROXBOX_MODE", "dev")
+
+          if event == "release":
+              modes = ["dev", "pypi"]
+          elif event == "workflow_dispatch":
+              modes = [mode_input]
+          else:
+              modes = ["dev"]
+
+          base = [
+            {"netbox_transport":"https_nginx","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-nginx","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":""},
+            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":""},
+            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_nginx","proxbox_docker_target":"nginx","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k"},
+            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k"},
+            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k"},
+            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":""},
+          ]
+
+          includes = [dict(**entry, netbox_proxbox_mode=mode) for entry in base for mode in modes]
+          print(json.dumps({"include": includes}))
+          PYEOF
+          echo "matrix=$(cat /tmp/e2e_matrix.json)" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_NETBOX_PROXBOX_MODE: ${{ inputs.netbox_proxbox_mode || 'dev' }}
 
   e2e-docker:
-    name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }}
+    name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }} (${{ matrix.netbox_proxbox_mode }})
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, setup]
     if: |
       !cancelled() &&
-      needs.test.result == 'success'
+      needs.test.result == 'success' &&
+      needs.setup.result == 'success'
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - netbox_transport: https_nginx
-            netbox_public_url: https://127.0.0.1:18443
-            netbox_endpoint_host: netbox-e2e-nginx
-            netbox_endpoint_port: 8443
-            netbox_endpoint_verify_ssl: true
-            netbox_wait_url: https://127.0.0.1:18443/api/
-            netbox_app_container: netbox-e2e-http
-            proxbox_transport: http_raw
-            proxbox_docker_target: raw
-            proxbox_base_url: http://127.0.0.1:18081
-            proxbox_host_port: 18081
-            proxbox_curl_flags: ""
-          - netbox_transport: https_granian
-            netbox_public_url: https://127.0.0.1:18443
-            netbox_endpoint_host: netbox-e2e-granian
-            netbox_endpoint_port: 8443
-            netbox_endpoint_verify_ssl: true
-            netbox_wait_url: https://127.0.0.1:18443/api/
-            netbox_app_container: netbox-e2e-granian
-            proxbox_transport: http_raw
-            proxbox_docker_target: raw
-            proxbox_base_url: http://127.0.0.1:18081
-            proxbox_host_port: 18081
-            proxbox_curl_flags: ""
-          - netbox_transport: http_manage
-            netbox_public_url: http://127.0.0.1:18080
-            netbox_endpoint_host: netbox-e2e-http
-            netbox_endpoint_port: 8000
-            netbox_endpoint_verify_ssl: false
-            netbox_wait_url: http://127.0.0.1:18080/api/
-            netbox_app_container: netbox-e2e-http
-            proxbox_transport: https_nginx
-            proxbox_docker_target: nginx
-            proxbox_base_url: https://127.0.0.1:18481
-            proxbox_host_port: 18481
-            proxbox_curl_flags: -k
-          - netbox_transport: http_manage
-            netbox_public_url: http://127.0.0.1:18080
-            netbox_endpoint_host: netbox-e2e-http
-            netbox_endpoint_port: 8000
-            netbox_endpoint_verify_ssl: false
-            netbox_wait_url: http://127.0.0.1:18080/api/
-            netbox_app_container: netbox-e2e-http
-            proxbox_transport: https_granian
-            proxbox_docker_target: granian
-            proxbox_base_url: https://127.0.0.1:18481
-            proxbox_host_port: 18481
-            proxbox_curl_flags: -k
-          - netbox_transport: https_granian
-            netbox_public_url: https://127.0.0.1:18443
-            netbox_endpoint_host: netbox-e2e-granian
-            netbox_endpoint_port: 8443
-            netbox_endpoint_verify_ssl: true
-            netbox_wait_url: https://127.0.0.1:18443/api/
-            netbox_app_container: netbox-e2e-granian
-            proxbox_transport: https_granian
-            proxbox_docker_target: granian
-            proxbox_base_url: https://127.0.0.1:18481
-            proxbox_host_port: 18481
-            proxbox_curl_flags: -k
-          - netbox_transport: http_manage
-            netbox_public_url: http://127.0.0.1:18080
-            netbox_endpoint_host: netbox-e2e-http
-            netbox_endpoint_port: 8000
-            netbox_endpoint_verify_ssl: false
-            netbox_wait_url: http://127.0.0.1:18080/api/
-            netbox_app_container: netbox-e2e-http
-            proxbox_transport: http_raw
-            proxbox_docker_target: raw
-            proxbox_base_url: http://127.0.0.1:18081
-            proxbox_host_port: 18081
-            proxbox_curl_flags: ""
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     env:
-      NETBOX_IMAGE: netboxcommunity/netbox:v4.5
+      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta1
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
       UV_HTTP_TIMEOUT: "120"
@@ -173,6 +146,15 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync --frozen --extra e2e --group dev
+
+      - name: Resolve netbox-proxbox install target
+        id: proxbox_pkg
+        run: |
+          if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
+            echo "target=https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/heads/develop.tar.gz" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=netbox-proxbox" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Start E2E stack
         run: |
@@ -292,7 +274,7 @@ jobs:
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir --upgrade netbox-proxbox && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
           elif [ "${{ matrix.netbox_transport }}" = "https_nginx" ]; then
             docker run -d --name netbox-e2e-http --network proxbox-e2e \
               -e DB_HOST=netbox-e2e-postgres \
@@ -312,7 +294,7 @@ jobs:
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir --upgrade netbox-proxbox && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
 
             docker run -d --name netbox-e2e-nginx --network proxbox-e2e -p 18443:8443 \
               -v "$PWD/.ci-tls:/certs:ro" \
@@ -339,7 +321,7 @@ jobs:
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir --upgrade netbox-proxbox granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host 0.0.0.0 --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host 0.0.0.0 --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
           fi
 
       - name: Trust E2E NetBox CA on runner
