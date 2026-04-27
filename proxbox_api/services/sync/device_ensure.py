@@ -165,11 +165,14 @@ def _device_selector(records: list[object]) -> NetBoxRecord | None:
     return _prefer_existing_device(records)
 
 
-async def ensure_proxmox_devices_bulk(
+async def ensure_proxmox_devices_bulk(  # noqa: C901
     nb: object,
     *,
     clusters_status: list[object] | None,
     tag_refs: list[dict[str, object]],
+    overwrite_device_role: bool = True,
+    overwrite_device_type: bool = True,
+    overwrite_device_tags: bool = True,
 ) -> dict[str, NetBoxRecord]:
     """Create/update Proxmox prerequisite NetBox objects in dependency order."""
     if not clusters_status:
@@ -349,6 +352,17 @@ async def ensure_proxmox_devices_bulk(
                 )
             )
 
+    # Build patchable_fields dynamically: site is always excluded (moving a device
+    # between sites violates the unique-per-site name constraint). role, device_type,
+    # and tags are excluded when the caller opts out of overwriting those fields.
+    _device_patchable: set[str] = {"status", "cluster", "description", "custom_fields"}
+    if overwrite_device_role:
+        _device_patchable.add("role")
+    if overwrite_device_type:
+        _device_patchable.add("device_type")
+    if overwrite_device_tags:
+        _device_patchable.add("tags")
+
     device_results = await rest_bulk_reconcile_phases_async(
         nb,
         [
@@ -358,21 +372,7 @@ async def ensure_proxmox_devices_bulk(
                 payloads=device_payloads,
                 lookup_fields=["name"],
                 schema=NetBoxDeviceSyncState,
-                # Do not patch 'site' on existing devices: moving a device
-                # between sites violates the unique-per-site name constraint
-                # when two Proxmox endpoints share node names across clusters.
-                # The site is set at create time and left authoritative after.
-                patchable_fields=frozenset(
-                    {
-                        "status",
-                        "cluster",
-                        "device_type",
-                        "role",
-                        "description",
-                        "tags",
-                        "custom_fields",
-                    }
-                ),
+                patchable_fields=frozenset(_device_patchable),
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "status": record.get("status"),

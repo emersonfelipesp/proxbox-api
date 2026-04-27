@@ -186,6 +186,8 @@ def _build_vm_index_by_proxmox_id(
 def _build_vm_operation_queue(
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
+    overwrite_vm_role: bool = True,
+    overwrite_vm_tags: bool = True,
 ) -> list[_NetBoxVMOperation]:
     """Classify desired VM state into GET/CREATE/UPDATE operations using Pydantic."""
 
@@ -221,6 +223,13 @@ def _build_vm_operation_queue(
             for field_name, desired_value in desired_payload.items()
             if current_payload.get(field_name) != desired_value
         }
+
+        if not overwrite_vm_role and _relation_id(existing_record.get("role")) is not None:
+            patch_payload.pop("role", None)
+        if not overwrite_vm_tags:
+            existing_tags = existing_record.get("tags")
+            if isinstance(existing_tags, list) and existing_tags:
+                patch_payload.pop("tags", None)
 
         if patch_payload:
             operation_queue.append(
@@ -984,6 +993,22 @@ async def create_virtual_machines(  # noqa: C901
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_vm_role: bool = Query(
+        default=True,
+        title="Overwrite VM Role",
+        description=(
+            "When false, the VM role is not patched on existing VMs that already have a role. "
+            "The role is still set when a VM is first created."
+        ),
+    ),
+    overwrite_vm_tags: bool = Query(
+        default=True,
+        title="Overwrite VM Tags",
+        description=(
+            "When false, tags are not patched on existing VMs that already have tags. "
+            "Tags are still applied when a VM is first created."
+        ),
+    ),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -1398,7 +1423,12 @@ async def create_virtual_machines(  # noqa: C901
             return []
 
         netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
-        operation_queue = _build_vm_operation_queue(prepared_vms, netbox_snapshot)
+        operation_queue = _build_vm_operation_queue(
+            prepared_vms,
+            netbox_snapshot,
+            overwrite_vm_role=overwrite_vm_role,
+            overwrite_vm_tags=overwrite_vm_tags,
+        )
 
         operation_counts: dict[str, int] = {"GET": 0, "CREATE": 0, "UPDATE": 0}
         for operation in operation_queue:
@@ -2920,6 +2950,22 @@ async def create_virtual_machines_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_vm_role: bool = Query(
+        default=True,
+        title="Overwrite VM Role",
+        description=(
+            "When false, the VM role is not patched on existing VMs that already have a role. "
+            "The role is still set when a VM is first created."
+        ),
+    ),
+    overwrite_vm_tags: bool = Query(
+        default=True,
+        title="Overwrite VM Tags",
+        description=(
+            "When false, tags are not patched on existing VMs that already have tags. "
+            "Tags are still applied when a VM is first created."
+        ),
+    ),
 ):
     filtered_cluster_resources = cluster_resources
     vm_ids: list[int] = []
@@ -2950,6 +2996,8 @@ async def create_virtual_machines_stream(
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
+                    overwrite_vm_role=overwrite_vm_role,
+                    overwrite_vm_tags=overwrite_vm_tags,
                 )
             finally:
                 await bridge.close()
