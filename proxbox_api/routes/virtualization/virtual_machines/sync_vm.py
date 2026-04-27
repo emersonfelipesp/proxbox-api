@@ -834,6 +834,8 @@ async def _create_virtual_machine_by_netbox_id(
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
+    overwrite_vm_role: bool = True,
+    overwrite_vm_tags: bool = True,
 ):
     """Create a single virtual machine by its NetBox ID.
 
@@ -915,6 +917,8 @@ async def _create_virtual_machine_by_netbox_id(
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        overwrite_vm_role=overwrite_vm_role,
+        overwrite_vm_tags=overwrite_vm_tags,
     )
 
 
@@ -2967,6 +2971,14 @@ async def create_virtual_machines_stream(
             "Tags are still applied when a VM is first created."
         ),
     ),
+    sync_vm_network: bool = Query(
+        default=True,
+        title="Sync VM Network",
+        description=(
+            "When false, VM interface and IP address reconciliation is skipped in this pass. "
+            "Use when a dedicated network-sync stage follows immediately after."
+        ),
+    ),
 ):
     filtered_cluster_resources = cluster_resources
     vm_ids: list[int] = []
@@ -2999,6 +3011,7 @@ async def create_virtual_machines_stream(
                     primary_ip_preference=primary_ip_preference,
                     overwrite_vm_role=overwrite_vm_role,
                     overwrite_vm_tags=overwrite_vm_tags,
+                    sync_vm_network=sync_vm_network,
                 )
             finally:
                 await bridge.close()
@@ -3132,6 +3145,22 @@ async def create_virtual_machine_by_netbox_id_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_vm_role: bool = Query(
+        default=True,
+        title="Overwrite VM Role",
+        description=(
+            "When false, the VM role is not patched on existing VMs that already have a role. "
+            "The role is still set when a VM is first created."
+        ),
+    ),
+    overwrite_vm_tags: bool = Query(
+        default=True,
+        title="Overwrite VM Tags",
+        description=(
+            "When false, tags are not patched on existing VMs that already have tags. "
+            "Tags are still applied when a VM is first created."
+        ),
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -3151,6 +3180,8 @@ async def create_virtual_machine_by_netbox_id_stream(
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
+                    overwrite_vm_role=overwrite_vm_role,
+                    overwrite_vm_tags=overwrite_vm_tags,
                 )
             finally:
                 await bridge.close()
