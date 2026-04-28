@@ -198,7 +198,7 @@ jobs:
       - name: Resolve dev SDK overrides
         run: |
           if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
-            echo 'DEV_OVERRIDES=netbox-sdk @ git+https://github.com/emersonfelipesp/netbox-sdk.git@main proxmox-sdk @ git+https://github.com/emersonfelipesp/proxmox-sdk.git@main' >> "$GITHUB_ENV"
+            echo 'DEV_OVERRIDES=git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main' >> "$GITHUB_ENV"
           else
             echo "DEV_OVERRIDES=" >> "$GITHUB_ENV"
           fi

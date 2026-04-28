@@ -183,7 +183,7 @@ jobs:
           docker network create proxbox-e2e || true
           SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
           NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/heads/develop.tar.gz'
-          DEV_OVERRIDES='netbox-sdk @ git+https://github.com/emersonfelipesp/netbox-sdk.git@main proxmox-sdk @ git+https://github.com/emersonfelipesp/proxmox-sdk.git@main'
+          DEV_OVERRIDES='git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main'
 
           docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
 
