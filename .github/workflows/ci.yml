@@ -156,6 +156,14 @@ jobs:
             echo "target=netbox-proxbox" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve dev SDK overrides
+        run: |
+          if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
+            echo 'DEV_OVERRIDES=netbox-sdk @ git+https://github.com/emersonfelipesp/netbox-sdk.git@main proxmox-sdk @ git+https://github.com/emersonfelipesp/proxmox-sdk.git@main' >> "$GITHUB_ENV"
+          else
+            echo "DEV_OVERRIDES=" >> "$GITHUB_ENV"
+          fi
+
       - name: Start E2E stack
         run: |
           set -eux
@@ -387,7 +395,9 @@ jobs:
       - name: Build and start Proxbox API backend container
         run: |
           set -eux
-          docker build --target "${{ matrix.proxbox_docker_target }}" -t "proxbox-e2e:${{ matrix.proxbox_transport }}" .
+          docker build --target "${{ matrix.proxbox_docker_target }}" \
+            ${DEV_OVERRIDES:+--build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}"} \
+            -t "proxbox-e2e:${{ matrix.proxbox_transport }}" .
 
           docker run -d --name proxbox-e2e --network proxbox-e2e -p "${{ matrix.proxbox_host_port }}:8000" \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \

@@ -18,7 +18,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY README.md pyproject.toml uv.lock ./
 COPY proxbox_api ./proxbox_api
 
-RUN uv sync --frozen --no-dev --no-editable
+ARG DEV_OVERRIDES=""
+RUN uv sync --frozen --no-dev --no-editable && \
+    if [ -n "${DEV_OVERRIDES}" ]; then uv pip install --python /app/.venv/bin/python ${DEV_OVERRIDES}; fi
 
 # Application tree + venv only (shared by all runtime images).
 FROM python:3.13-alpine AS runtime-base
