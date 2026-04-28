@@ -217,22 +217,40 @@ async def sync_vm_individual(
         px_port = getattr(px, "http_port", 8006)
         px_url = f"https://{px_domain}:{px_port}" if px_domain else None
 
+        existing_vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
+        )
+
+        # Merge proxbox tag with any existing user tags so sync never erases them.
+        existing_tag_ids: list[int] = []
+        if existing_vms:
+            raw_record = existing_vms[0]
+            raw_tags = (
+                raw_record.get("tags")
+                if isinstance(raw_record, dict)
+                else getattr(raw_record, "tags", None)
+            ) or []
+            for t in raw_tags:
+                tid = t.get("id") if isinstance(t, dict) else t
+                try:
+                    existing_tag_ids.append(int(tid))
+                except (TypeError, ValueError):
+                    continue
+        merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids))
+
         netbox_vm_payload = _build_netbox_vm_payload(
             resource=proxmox_resource,
             config=proxmox_config,
             cluster_id=cluster_id,
             device_id=device_id,
             role_id=role_id,
-            tag_ids=tag_ids,
+            tag_ids=merged_tag_ids,
             last_updated=now,
             cluster_name=cluster_name,
             proxmox_url=px_url,
             virtual_machine_type_id=vm_type_id,
-        )
-        existing_vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
         )
 
         virtual_machine = await rest_reconcile_async(

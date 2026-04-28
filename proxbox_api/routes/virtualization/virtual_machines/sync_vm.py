@@ -231,6 +231,17 @@ def _build_vm_operation_queue(
             existing_tags = existing_record.get("tags")
             if isinstance(existing_tags, list) and existing_tags:
                 patch_payload.pop("tags", None)
+        elif "tags" in patch_payload:
+            # Merge: preserve existing user tags while ensuring the Proxbox tag is present.
+            # current_payload["tags"] is already a sorted list[int] — normalized by
+            # NetBoxVirtualMachineCreateBody.normalize_tags which handles dict-with-id format.
+            existing_normalized: list[int] = current_payload.get("tags") or []
+            desired_normalized: list[int] = desired_payload.get("tags") or []
+            merged = sorted(set(existing_normalized) | set(desired_normalized))
+            if merged == existing_normalized:
+                patch_payload.pop("tags", None)
+            else:
+                patch_payload["tags"] = merged
 
         if patch_payload:
             operation_queue.append(
