@@ -202,6 +202,18 @@ jobs:
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
             "${PROXMOX_OPENAPI_IMAGE}"
 
+          if ! docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
+            NETBOX_VERSION="${NETBOX_IMAGE##*:}"
+            git clone --depth 1 https://github.com/netbox-community/netbox-docker.git /tmp/netbox-docker
+            git clone --depth 1 --branch "${NETBOX_VERSION}" \
+              https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
+            docker build \
+              --build-arg "FROM=ubuntu:24.04" \
+              --build-arg "NETBOX_PATH=.netbox" \
+              -t "${NETBOX_IMAGE}" \
+              /tmp/netbox-docker
+          fi
+
           docker run -d --name netbox-e2e-http --network proxbox-e2e -p 18080:8000 \
             -e DB_HOST=netbox-e2e-postgres \
             -e DB_NAME=netbox \
@@ -388,6 +400,18 @@ jobs:
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
             "${PROXMOX_OPENAPI_IMAGE}"
+
+          if ! docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
+            NETBOX_VERSION="${NETBOX_IMAGE##*:}"
+            git clone --depth 1 https://github.com/netbox-community/netbox-docker.git /tmp/netbox-docker
+            git clone --depth 1 --branch "${NETBOX_VERSION}" \
+              https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
+            docker build \
+              --build-arg "FROM=ubuntu:24.04" \
+              --build-arg "NETBOX_PATH=.netbox" \
+              -t "${NETBOX_IMAGE}" \
+              /tmp/netbox-docker
+          fi
 
           docker run -d --name netbox-e2e-http --network proxbox-e2e -p 18080:8000 \
             -e DB_HOST=netbox-e2e-postgres \
