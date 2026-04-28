@@ -141,7 +141,7 @@ jobs:
           git clone --depth 1 --branch "${NETBOX_VERSION}" \
             https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
           docker build \
-            --build-arg "FROM=ubuntu:26.04" \
+            --build-arg "FROM=ubuntu:24.04" \
             --build-arg "NETBOX_PATH=.netbox" \
             -t "${NETBOX_IMAGE}" \
             /tmp/netbox-docker
