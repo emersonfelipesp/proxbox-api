@@ -47,6 +47,9 @@ async def create_proxmox_devices(  # noqa: C901
     node: str | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
+    overwrite_device_role: bool = True,
+    overwrite_device_type: bool = True,
+    overwrite_device_tags: bool = True,
 ) -> list[dict[str, object]]:
     """Create and synchronize devices from Proxmox nodes to NetBox."""
     tag_refs = nested_tag_payload(tag)
@@ -95,6 +98,9 @@ async def create_proxmox_devices(  # noqa: C901
             nb,
             clusters_status=clusters_status,
             tag_refs=tag_refs,
+            overwrite_device_role=overwrite_device_role,
+            overwrite_device_type=overwrite_device_type,
+            overwrite_device_tags=overwrite_device_tags,
         )
     except Exception as error:
         error_msg = f"Error during device sync dependency phases: {error}"

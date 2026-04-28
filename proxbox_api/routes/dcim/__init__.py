@@ -52,6 +52,30 @@ async def create_devices_stream(
         title="Max Fetch Concurrency",
         description="Accepted for API consistency; device sync does not use fetch concurrency.",
     ),
+    overwrite_device_role: bool = Query(
+        default=True,
+        title="Overwrite Device Role",
+        description=(
+            "When false, the device role is not patched on existing devices that already have a role. "
+            "The role is still set when a device is first created."
+        ),
+    ),
+    overwrite_device_type: bool = Query(
+        default=True,
+        title="Overwrite Device Type",
+        description=(
+            "When false, the device type is not patched on existing devices that already have a device type. "
+            "The device type is still set when a device is first created."
+        ),
+    ),
+    overwrite_device_tags: bool = Query(
+        default=True,
+        title="Overwrite Device Tags",
+        description=(
+            "When false, tags are not patched on existing devices that already have tags. "
+            "Tags are still applied when a device is first created."
+        ),
+    ),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -64,6 +88,9 @@ async def create_devices_stream(
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
+                    overwrite_device_role=overwrite_device_role,
+                    overwrite_device_type=overwrite_device_type,
+                    overwrite_device_tags=overwrite_device_tags,
                 )
             finally:
                 await bridge.close()

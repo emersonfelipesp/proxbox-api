@@ -117,20 +117,59 @@ jobs:
         env:
           INPUT_NETBOX_PROXBOX_MODE: ${{ inputs.netbox_proxbox_mode || 'dev' }}
 
+  build-netbox-image:
+    runs-on: ubuntu-latest
+    outputs:
+      image_built: ${{ steps.check.outputs.image_built }}
+    env:
+      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta2
+    steps:
+      - name: Check if NetBox image exists on registry
+        id: check
+        run: |
+          if docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
+            echo "image_built=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_built=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build NetBox image from source
+        if: steps.check.outputs.image_built == 'true'
+        run: |
+          NETBOX_VERSION="${NETBOX_IMAGE##*:}"
+          git clone --depth 1 https://github.com/netbox-community/netbox-docker.git /tmp/netbox-docker
+          git clone --depth 1 --branch "${NETBOX_VERSION}" \
+            https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
+          docker build \
+            --build-arg "FROM=ubuntu:24.04" \
+            --build-arg "NETBOX_PATH=.netbox" \
+            -t "${NETBOX_IMAGE}" \
+            /tmp/netbox-docker
+          docker save "${NETBOX_IMAGE}" | gzip > /tmp/netbox-image.tar.gz
+
+      - name: Upload NetBox image artifact
+        if: steps.check.outputs.image_built == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: netbox-image
+          path: /tmp/netbox-image.tar.gz
+          retention-days: 1
+
   e2e-docker:
     name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }} (${{ matrix.netbox_proxbox_mode }})
     runs-on: ubuntu-latest
-    needs: [test, setup]
+    needs: [test, setup, build-netbox-image]
     if: |
       !cancelled() &&
       needs.test.result == 'success' &&
-      needs.setup.result == 'success'
+      needs.setup.result == 'success' &&
+      needs.build-netbox-image.result == 'success'
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     env:
-      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta1
+      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta2
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
       UV_HTTP_TIMEOUT: "120"
@@ -155,6 +194,25 @@ jobs:
           else
             echo "target=netbox-proxbox" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Resolve dev SDK overrides
+        run: |
+          if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
+            echo 'DEV_OVERRIDES=git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main' >> "$GITHUB_ENV"
+          else
+            echo "DEV_OVERRIDES=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download NetBox image artifact
+        if: needs.build-netbox-image.outputs.image_built == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: netbox-image
+          path: /tmp/
+
+      - name: Load NetBox image from artifact
+        if: needs.build-netbox-image.outputs.image_built == 'true'
+        run: docker load < /tmp/netbox-image.tar.gz
 
       - name: Start E2E stack
         run: |
@@ -387,7 +445,9 @@ jobs:
       - name: Build and start Proxbox API backend container
         run: |
           set -eux
-          docker build --target "${{ matrix.proxbox_docker_target }}" -t "proxbox-e2e:${{ matrix.proxbox_transport }}" .
+          docker build --target "${{ matrix.proxbox_docker_target }}" \
+            ${DEV_OVERRIDES:+--build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}"} \
+            -t "proxbox-e2e:${{ matrix.proxbox_transport }}" .
 
           docker run -d --name proxbox-e2e --network proxbox-e2e -p "${{ matrix.proxbox_host_port }}:8000" \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
