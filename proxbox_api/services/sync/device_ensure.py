@@ -166,6 +166,36 @@ def _device_selector(records: list[object]) -> NetBoxRecord | None:
     return _prefer_existing_device(records)
 
 
+def _compute_device_patchable_fields(
+    overwrite_flags: SyncOverwriteFlags | None,
+    overwrite_device_role: bool,
+    overwrite_device_type: bool,
+    overwrite_device_tags: bool,
+) -> set[str]:
+    """Build the patchable_fields allowlist for Proxmox node devices.
+
+    site is intentionally excluded (moving a device between sites violates the
+    unique-per-site name constraint). cluster is always patchable so devices
+    follow node-to-cluster reassignment. Used by both ensure_proxmox_devices_bulk
+    (DCIM sync) and _ensure_device (per-VM parent-device materialization), so the
+    flag enforcement stays identical across both write paths.
+    """
+    fields: set[str] = {"cluster"}
+    if overwrite_flags is None or overwrite_flags.overwrite_device_status:
+        fields.add("status")
+    if overwrite_flags is None or overwrite_flags.overwrite_device_description:
+        fields.add("description")
+    if overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields:
+        fields.add("custom_fields")
+    if overwrite_device_role:
+        fields.add("role")
+    if overwrite_device_type:
+        fields.add("device_type")
+    if overwrite_device_tags:
+        fields.add("tags")
+    return fields
+
+
 async def ensure_proxmox_devices_bulk(  # noqa: C901
     nb: object,
     *,
@@ -368,24 +398,12 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                 )
             )
 
-    # Build patchable_fields dynamically: site is always excluded (moving a device
-    # between sites violates the unique-per-site name constraint). cluster is
-    # always patchable so devices follow node-to-cluster reassignment. The other
-    # scalar fields (status, description, custom_fields) follow per-field flags;
-    # role, device_type, and tags follow their own flags.
-    _device_patchable: set[str] = {"cluster"}
-    if overwrite_flags is None or overwrite_flags.overwrite_device_status:
-        _device_patchable.add("status")
-    if overwrite_flags is None or overwrite_flags.overwrite_device_description:
-        _device_patchable.add("description")
-    if overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields:
-        _device_patchable.add("custom_fields")
-    if overwrite_device_role:
-        _device_patchable.add("role")
-    if overwrite_device_type:
-        _device_patchable.add("device_type")
-    if overwrite_device_tags:
-        _device_patchable.add("tags")
+    _device_patchable = _compute_device_patchable_fields(
+        overwrite_flags,
+        overwrite_device_role,
+        overwrite_device_type,
+        overwrite_device_tags,
+    )
 
     device_results = await rest_bulk_reconcile_phases_async(
         nb,
@@ -583,6 +601,10 @@ async def _ensure_device(
     role_id: int | None,
     site_id: int | None,
     tag_refs: list[dict[str, object]],
+    overwrite_device_role: bool = True,
+    overwrite_device_type: bool = True,
+    overwrite_device_tags: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> NetBoxRecord:
     existing_devices = await rest_list_async(
         nb,
@@ -607,6 +629,13 @@ async def _ensure_device(
         "custom_fields": _last_updated_cf(),
     }
 
+    allowed = _compute_device_patchable_fields(
+        overwrite_flags,
+        overwrite_device_role,
+        overwrite_device_type,
+        overwrite_device_tags,
+    )
+
     if existing_device is not None:
         desired_model = NetBoxDeviceSyncState.model_validate(payload)
         desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
@@ -628,7 +657,7 @@ async def _ensure_device(
         patch_payload = {
             key: value
             for key, value in desired_payload.items()
-            if current_payload.get(key) != value
+            if current_payload.get(key) != value and key in allowed
         }
         if patch_payload:
             for field, value in patch_payload.items():
@@ -642,6 +671,7 @@ async def _ensure_device(
         lookup={"name": device_name, "site_id": site_id},
         payload=payload,
         schema=NetBoxDeviceSyncState,
+        patchable_fields=frozenset(allowed),
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "status": record.get("status"),

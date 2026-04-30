@@ -38,7 +38,11 @@ jobs:
           uv run ruff format --check .
 
       - name: Ty (type check)
-        run: uv run ty check proxbox_api/types proxbox_api/utils/retry.py
+        run: |
+          uv run ty check \
+            proxbox_api/types \
+            proxbox_api/utils/retry.py \
+            proxbox_api/schemas/sync.py
 
       - name: Compile package
         run: uv run python -m compileall proxbox_api scripts tests

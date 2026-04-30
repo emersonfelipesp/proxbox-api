@@ -185,6 +185,29 @@ def _build_vm_index_by_proxmox_id(
     return index
 
 
+def _resolve_vm_overwrites(
+    role: bool | None,
+    tags: bool | None,
+    description: bool | None,
+    custom_fields: bool | None,
+    overwrite_flags: SyncOverwriteFlags,
+) -> tuple[bool, bool, bool, bool]:
+    """Resolve VM-scalar overwrite gates from flat Query params + `overwrite_flags`.
+
+    Flat params (`overwrite_vm_role`, `overwrite_vm_tags`, `overwrite_vm_description`,
+    `overwrite_vm_custom_fields`) win when explicitly supplied (`True`/`False`);
+    `None` means "not provided" and the corresponding field on `overwrite_flags`
+    is used instead. Old clients that only set the flat params keep the original
+    semantics; new clients can drive everything through `overwrite_flags`.
+    """
+    return (
+        role if role is not None else overwrite_flags.overwrite_vm_role,
+        tags if tags is not None else overwrite_flags.overwrite_vm_tags,
+        description if description is not None else overwrite_flags.overwrite_vm_description,
+        custom_fields if custom_fields is not None else overwrite_flags.overwrite_vm_custom_fields,
+    )
+
+
 def _build_vm_operation_queue(
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
@@ -865,10 +888,10 @@ async def _create_virtual_machine_by_netbox_id(
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
-    overwrite_vm_role: bool = True,
-    overwrite_vm_tags: bool = True,
-    overwrite_vm_description: bool = True,
-    overwrite_vm_custom_fields: bool = True,
+    overwrite_vm_role: bool | None = None,
+    overwrite_vm_tags: bool | None = None,
+    overwrite_vm_description: bool | None = None,
+    overwrite_vm_custom_fields: bool | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
 ):
     """Create a single virtual machine by its NetBox ID.
@@ -955,7 +978,7 @@ async def _create_virtual_machine_by_netbox_id(
         overwrite_vm_tags=overwrite_vm_tags,
         overwrite_vm_description=overwrite_vm_description,
         overwrite_vm_custom_fields=overwrite_vm_custom_fields,
-        overwrite_flags=overwrite_flags,
+        overwrite_flags=overwrite_flags if overwrite_flags is not None else SyncOverwriteFlags(),
     )
 
 
@@ -1035,36 +1058,40 @@ async def create_virtual_machines(  # noqa: C901
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
-    overwrite_vm_role: bool = Query(
-        default=True,
+    overwrite_vm_role: bool | None = Query(
+        default=None,
         title="Overwrite VM Role",
         description=(
             "When false, the VM role is not patched on existing VMs that already have a role. "
-            "The role is still set when a VM is first created."
+            "The role is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_role."
         ),
     ),
-    overwrite_vm_tags: bool = Query(
-        default=True,
+    overwrite_vm_tags: bool | None = Query(
+        default=None,
         title="Overwrite VM Tags",
         description=(
             "When false, tags are not patched on existing VMs that already have tags. "
-            "Tags are still applied when a VM is first created."
+            "Tags are still applied when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_tags."
         ),
     ),
-    overwrite_vm_description: bool = Query(
-        default=True,
+    overwrite_vm_description: bool | None = Query(
+        default=None,
         title="Overwrite VM Description",
         description=(
             "When false, the VM description is not patched on existing VMs that already "
-            "have a non-empty description. The description is still set on first create."
+            "have a non-empty description. The description is still set on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_description."
         ),
     ),
-    overwrite_vm_custom_fields: bool = Query(
-        default=True,
+    overwrite_vm_custom_fields: bool | None = Query(
+        default=None,
         title="Overwrite VM Custom Fields",
         description=(
             "When false, custom_fields are not patched on existing VMs that already have "
-            "non-empty custom_fields. Custom fields are still applied on first create."
+            "non-empty custom_fields. Custom fields are still applied on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
         ),
     ),
     overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
@@ -1092,6 +1119,16 @@ async def create_virtual_machines(  # noqa: C901
     Returns:
         HTTP response with creation status, or streaming SSE response if using WebSocket.
     """
+
+    overwrite_vm_role, overwrite_vm_tags, overwrite_vm_description, overwrite_vm_custom_fields = (
+        _resolve_vm_overwrites(
+            overwrite_vm_role,
+            overwrite_vm_tags,
+            overwrite_vm_description,
+            overwrite_vm_custom_fields,
+            overwrite_flags,
+        )
+    )
 
     filtered_cluster_resources = cluster_resources
     bridge: WebSocketSSEBridge | None = (
@@ -1275,6 +1312,10 @@ async def create_virtual_machines(  # noqa: C901
                     role_id=getattr(device_role, "id", None),
                     site_id=getattr(site, "id", None),
                     tag_refs=tag_refs,
+                    overwrite_device_role=overwrite_flags.overwrite_device_role,
+                    overwrite_device_type=overwrite_flags.overwrite_device_type,
+                    overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                    overwrite_flags=overwrite_flags,
                 )
 
             for resource in vm_resources:
@@ -1384,6 +1425,10 @@ async def create_virtual_machines(  # noqa: C901
                 role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
                 site_id=getattr(cluster_dependencies.get("site"), "id", None),
                 tag_refs=tag_refs,
+                overwrite_device_role=overwrite_flags.overwrite_device_role,
+                overwrite_device_type=overwrite_flags.overwrite_device_type,
+                overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                overwrite_flags=overwrite_flags,
             )
             node_device_cache[(str(cluster_name), node_name)] = device
 
@@ -1672,6 +1717,10 @@ async def create_virtual_machines(  # noqa: C901
                     role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
                     site_id=getattr(cluster_dependencies.get("site"), "id", None),
                     tag_refs=tag_refs,
+                    overwrite_device_role=overwrite_flags.overwrite_device_role,
+                    overwrite_device_type=overwrite_flags.overwrite_device_type,
+                    overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                    overwrite_flags=overwrite_flags,
                 )
                 node_device_cache[(str(cluster_name), node_name)] = device
 
@@ -3024,36 +3073,40 @@ async def create_virtual_machines_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
-    overwrite_vm_role: bool = Query(
-        default=True,
+    overwrite_vm_role: bool | None = Query(
+        default=None,
         title="Overwrite VM Role",
         description=(
             "When false, the VM role is not patched on existing VMs that already have a role. "
-            "The role is still set when a VM is first created."
+            "The role is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_role."
         ),
     ),
-    overwrite_vm_tags: bool = Query(
-        default=True,
+    overwrite_vm_tags: bool | None = Query(
+        default=None,
         title="Overwrite VM Tags",
         description=(
             "When false, tags are not patched on existing VMs that already have tags. "
-            "Tags are still applied when a VM is first created."
+            "Tags are still applied when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_tags."
         ),
     ),
-    overwrite_vm_description: bool = Query(
-        default=True,
+    overwrite_vm_description: bool | None = Query(
+        default=None,
         title="Overwrite VM Description",
         description=(
             "When false, the VM description is not patched on existing VMs that already "
-            "have a non-empty description. The description is still set on first create."
+            "have a non-empty description. The description is still set on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_description."
         ),
     ),
-    overwrite_vm_custom_fields: bool = Query(
-        default=True,
+    overwrite_vm_custom_fields: bool | None = Query(
+        default=None,
         title="Overwrite VM Custom Fields",
         description=(
             "When false, custom_fields are not patched on existing VMs that already have "
-            "non-empty custom_fields. Custom fields are still applied on first create."
+            "non-empty custom_fields. Custom fields are still applied on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
         ),
     ),
     sync_vm_network: bool = Query(
@@ -3066,6 +3119,16 @@ async def create_virtual_machines_stream(
     ),
     overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
+    overwrite_vm_role, overwrite_vm_tags, overwrite_vm_description, overwrite_vm_custom_fields = (
+        _resolve_vm_overwrites(
+            overwrite_vm_role,
+            overwrite_vm_tags,
+            overwrite_vm_description,
+            overwrite_vm_custom_fields,
+            overwrite_flags,
+        )
+    )
+
     filtered_cluster_resources = cluster_resources
     vm_ids: list[int] = []
 
@@ -3234,40 +3297,54 @@ async def create_virtual_machine_by_netbox_id_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
-    overwrite_vm_role: bool = Query(
-        default=True,
+    overwrite_vm_role: bool | None = Query(
+        default=None,
         title="Overwrite VM Role",
         description=(
             "When false, the VM role is not patched on existing VMs that already have a role. "
-            "The role is still set when a VM is first created."
+            "The role is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_role."
         ),
     ),
-    overwrite_vm_tags: bool = Query(
-        default=True,
+    overwrite_vm_tags: bool | None = Query(
+        default=None,
         title="Overwrite VM Tags",
         description=(
             "When false, tags are not patched on existing VMs that already have tags. "
-            "Tags are still applied when a VM is first created."
+            "Tags are still applied when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_tags."
         ),
     ),
-    overwrite_vm_description: bool = Query(
-        default=True,
+    overwrite_vm_description: bool | None = Query(
+        default=None,
         title="Overwrite VM Description",
         description=(
             "When false, the VM description is not patched on existing VMs that already "
-            "have a non-empty description. The description is still set on first create."
+            "have a non-empty description. The description is still set on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_description."
         ),
     ),
-    overwrite_vm_custom_fields: bool = Query(
-        default=True,
+    overwrite_vm_custom_fields: bool | None = Query(
+        default=None,
         title="Overwrite VM Custom Fields",
         description=(
             "When false, custom_fields are not patched on existing VMs that already have "
-            "non-empty custom_fields. Custom fields are still applied on first create."
+            "non-empty custom_fields. Custom fields are still applied on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
         ),
     ),
     overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
+    overwrite_vm_role, overwrite_vm_tags, overwrite_vm_description, overwrite_vm_custom_fields = (
+        _resolve_vm_overwrites(
+            overwrite_vm_role,
+            overwrite_vm_tags,
+            overwrite_vm_description,
+            overwrite_vm_custom_fields,
+            overwrite_flags,
+        )
+    )
+
     async def event_stream():
         bridge = WebSocketSSEBridge()
 

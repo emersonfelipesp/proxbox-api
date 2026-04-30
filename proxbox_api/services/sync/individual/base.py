@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from proxbox_api.netbox_rest import nested_tag_payload
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 
 if TYPE_CHECKING:
     pass
@@ -23,6 +24,7 @@ class BaseIndividualSyncService:
         nb: object,
         px: object,
         tag: object,
+        overwrite_flags: SyncOverwriteFlags | None = None,
     ) -> None:
         """Initialize the sync service.
 
@@ -30,11 +32,15 @@ class BaseIndividualSyncService:
             nb: NetBox async session.
             px: Single Proxmox session (resolved by cluster_name).
             tag: ProxboxTagDep object.
+            overwrite_flags: Per-field overwrite gates forwarded to dependency
+                helpers. ``None`` means inherit historical always-overwrite
+                behavior at every helper boundary.
         """
         self.nb = nb
         self.px = px
         self.tag = tag
         self.tag_refs = self._build_tag_refs(tag)
+        self.overwrite_flags = overwrite_flags
 
     def _build_tag_refs(self, tag: object) -> list[dict[str, object]]:
         """Build tag refs list from tag object.
@@ -238,6 +244,7 @@ class BaseIndividualSyncService:
         """
         from proxbox_api.services.sync.device_ensure import _ensure_device
 
+        flags = self.overwrite_flags
         return await _ensure_device(
             self.nb,
             device_name=device_name,
@@ -246,6 +253,10 @@ class BaseIndividualSyncService:
             role_id=role_id,
             site_id=site_id,
             tag_refs=self.tag_refs,
+            overwrite_device_role=flags.overwrite_device_role if flags else True,
+            overwrite_device_type=flags.overwrite_device_type if flags else True,
+            overwrite_device_tags=flags.overwrite_device_tags if flags else True,
+            overwrite_flags=flags,
         )
 
     async def _get_or_create_vm_dependencies(

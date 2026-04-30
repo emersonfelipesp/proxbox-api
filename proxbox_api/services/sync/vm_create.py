@@ -17,6 +17,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     ProxmoxVmResourceInput,
 )
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -63,6 +64,8 @@ async def ensure_vm_dependencies(
     tag_id: int,
     tag_refs: list[dict],
     node_name: str | None = None,
+    *,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> tuple:
     """Ensure all VM dependencies exist in NetBox (cluster, device, roles, site).
 
@@ -128,6 +131,16 @@ async def ensure_vm_dependencies(
             role_id=getattr(device_role, "id", None),
             site_id=getattr(site, "id", None),
             tag_refs=tag_refs,
+            overwrite_device_role=(
+                overwrite_flags.overwrite_device_role if overwrite_flags else True
+            ),
+            overwrite_device_type=(
+                overwrite_flags.overwrite_device_type if overwrite_flags else True
+            ),
+            overwrite_device_tags=(
+                overwrite_flags.overwrite_device_tags if overwrite_flags else True
+            ),
+            overwrite_flags=overwrite_flags,
         )
 
         logger.debug("VM dependencies ready: cluster=%s, device=%s", cluster, device)

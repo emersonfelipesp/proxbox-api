@@ -55,6 +55,15 @@ async def create_devices_stream(
     ),
     overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
+    """Stream device synchronization progress as SSE events.
+
+    All `overwrite_device_*` controls are exposed via the `overwrite_flags` query
+    group (FastAPI flattens it into individual query parameters). Unlike the VM
+    sync routes, there are no top-level flat `overwrite_device_*` query params on
+    this route; consumers should set the desired flag through the group, e.g.
+    `?overwrite_device_role=false`.
+    """
+
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
