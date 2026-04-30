@@ -76,3 +76,5 @@ nav:
       - Deployment: development/deployment.md
       - Troubleshooting: development/troubleshooting.md
       - Contributing: development/contributing.md
+      - Refactoring Summary: development/refactoring-summary.md
+      - Sync Fix Summary: development/sync-fix-summary.md
