@@ -64,11 +64,25 @@
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/deployment/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/development/refactoring-summary/</loc>
+        <lastmod>2026-04-30</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/refactoring-summary/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/refactoring-summary/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/development/schema-management/</loc>
         <lastmod>2026-04-30</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/schema-management/"/>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/schema-management/"/>
+    </url>
+    <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/development/sync-fix-summary/</loc>
+        <lastmod>2026-04-30</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/sync-fix-summary/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/sync-fix-summary/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/development/testing/</loc>
@@ -190,11 +204,25 @@
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/deployment/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/refactoring-summary/</loc>
+        <lastmod>2026-04-30</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/refactoring-summary/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/refactoring-summary/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/schema-management/</loc>
         <lastmod>2026-04-30</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/schema-management/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/schema-management/"/>
+    </url>
+    <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/sync-fix-summary/</loc>
+        <lastmod>2026-04-30</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/sync-fix-summary/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/sync-fix-summary/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/testing/</loc>
