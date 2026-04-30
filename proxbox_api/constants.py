@@ -4,6 +4,10 @@
 NETBOX_PAGE_SIZE = 200
 NETBOX_MAX_OFFSET = 10_000
 
+# NetBox typed-schema version targeted by netbox-sdk's `build_schema_index`.
+# Bump alongside the netbox-sdk pin and the OpenAPI snapshots when targeting a new NetBox release.
+NETBOX_SCHEMA_VERSION = "4.6"
+
 # VM sync defaults
 DEFAULT_VM_STATUS = "active"
 DEFAULT_VM_ROLE = "undefined"

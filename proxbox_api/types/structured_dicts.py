@@ -96,7 +96,12 @@ class IPAddressPayloadDict(TypedDict, total=False):
 
 
 class CacheEntryDict(TypedDict, total=False):
-    """Structure for cache entries with TTL support."""
+    """Structure for cache entries with TTL support.
+
+    `value` is intentionally `Any`: the cache stores heterogeneous payloads
+    (NetBox records, dicts, bytes, primitives) and the consumer narrows the
+    type at the call site.
+    """
 
     value: Any
     ttl: NotRequired[float]

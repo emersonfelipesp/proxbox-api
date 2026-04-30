@@ -14,6 +14,7 @@ from netbox_sdk.schema import build_schema_index
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from proxbox_api.constants import NETBOX_SCHEMA_VERSION
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
@@ -73,7 +74,7 @@ def _cached_netbox_api(
         timeout=timeout,
         ssl_verify=ssl_verify,
     )
-    return Api(client=NetBoxApiClient(cfg), schema=build_schema_index(version="4.6"))
+    return Api(client=NetBoxApiClient(cfg), schema=build_schema_index(version=NETBOX_SCHEMA_VERSION))
 
 
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
