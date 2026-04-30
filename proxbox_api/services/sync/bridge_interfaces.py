@@ -19,6 +19,7 @@ from proxbox_api.netbox_rest import (
     rest_reconcile_async,
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 
 
 def _normalize_node_interface_record(record: dict[str, object]) -> dict[str, object]:
@@ -48,7 +49,11 @@ def _record_dict(record: object) -> dict[str, object]:
     return {}
 
 
-async def _reconcile_existing_node_bridge(record: object, payload: dict[str, object]) -> dict:
+async def _reconcile_existing_node_bridge(
+    record: object,
+    payload: dict[str, object],
+    overwrite_flags: SyncOverwriteFlags | None = None,
+) -> dict:
     desired_model = NetBoxInterfaceSyncState.model_validate(payload)
     desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
 
@@ -62,6 +67,11 @@ async def _reconcile_existing_node_bridge(record: object, payload: dict[str, obj
         for key, value in desired_payload.items()
         if key != "device" and current_payload.get(key) != value
     }
+    if overwrite_flags is not None:
+        if not overwrite_flags.overwrite_node_interface_tags:
+            patch_payload.pop("tags", None)
+        if not overwrite_flags.overwrite_node_interface_custom_fields:
+            patch_payload.pop("custom_fields", None)
     if patch_payload and hasattr(record, "save"):
         for field, value in patch_payload.items():
             setattr(record, field, value)
@@ -69,12 +79,13 @@ async def _reconcile_existing_node_bridge(record: object, payload: dict[str, obj
     return _record_dict(record)
 
 
-async def ensure_node_bridge_interface(
+async def ensure_node_bridge_interface(  # noqa: C901
     nb,
     device_id: int,
     bridge_name: str,
     tag_refs: list[dict],
     now: datetime | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Find-or-create a dcim.Interface (type=bridge) on the Proxmox node device.
 
@@ -112,16 +123,25 @@ async def ensure_node_bridge_interface(
                 existing = await rest_first_async(nb, "/api/dcim/interfaces/", query=strict_query)
                 if existing is None:
                     raise
-                record = await _reconcile_existing_node_bridge(existing, payload)
+                record = await _reconcile_existing_node_bridge(
+                    existing, payload, overwrite_flags=overwrite_flags
+                )
             else:
                 record = _record_dict(record)
         else:
-            record = await _reconcile_existing_node_bridge(existing, payload)
+            record = await _reconcile_existing_node_bridge(
+                existing, payload, overwrite_flags=overwrite_flags
+            )
 
         if not isinstance(record, dict):
             record = _record_dict(record)
         if not record:
             # Fallback: keep previous behavior and try generic reconcile if record payload was malformed.
+            fallback_patchable: set[str] = {"name", "type", "status"}
+            if overwrite_flags is None or overwrite_flags.overwrite_node_interface_tags:
+                fallback_patchable.add("tags")
+            if overwrite_flags is None or overwrite_flags.overwrite_node_interface_custom_fields:
+                fallback_patchable.add("custom_fields")
             record = await rest_reconcile_async(
                 nb,
                 "/api/dcim/interfaces/",
@@ -129,7 +149,7 @@ async def ensure_node_bridge_interface(
                 payload=payload,
                 schema=NetBoxInterfaceSyncState,
                 current_normalizer=_normalize_node_interface_record,
-                patchable_fields={"name", "type", "status", "tags", "custom_fields"},
+                patchable_fields=fallback_patchable,
             )
             record = _record_dict(record)
         return record or {}
@@ -150,6 +170,7 @@ async def ensure_bridge_interfaces(
     bridge_name: str,
     tag_refs: list[dict],
     now: datetime | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> int | None:
     """Ensure the node-level dcim bridge exists and return its ID.
 
@@ -178,5 +199,12 @@ async def ensure_bridge_interfaces(
     if device_id is None:
         return None
 
-    node_bridge = await ensure_node_bridge_interface(nb, device_id, bridge_name, tag_refs, now)
+    node_bridge = await ensure_node_bridge_interface(
+        nb,
+        device_id,
+        bridge_name,
+        tag_refs,
+        now,
+        overwrite_flags=overwrite_flags,
+    )
     return node_bridge.get("id") if node_bridge else None

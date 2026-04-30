@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
@@ -15,6 +15,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
@@ -50,6 +51,7 @@ async def create_vm_interfaces_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     """Stream VM interface sync progress as SSE events."""
 
@@ -70,6 +72,7 @@ async def create_vm_interfaces_stream(
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
@@ -117,6 +120,7 @@ async def create_vm_ip_addresses_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     """Stream VM IP address sync progress as SSE events."""
 
@@ -137,6 +141,7 @@ async def create_vm_ip_addresses_stream(
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()

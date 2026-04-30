@@ -12,6 +12,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.device_ensure import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -50,6 +51,7 @@ async def create_proxmox_devices(  # noqa: C901
     overwrite_device_role: bool = True,
     overwrite_device_type: bool = True,
     overwrite_device_tags: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict[str, object]]:
     """Create and synchronize devices from Proxmox nodes to NetBox."""
     tag_refs = nested_tag_payload(tag)
@@ -101,6 +103,7 @@ async def create_proxmox_devices(  # noqa: C901
             overwrite_device_role=overwrite_device_role,
             overwrite_device_type=overwrite_device_type,
             overwrite_device_tags=overwrite_device_tags,
+            overwrite_flags=overwrite_flags,
         )
     except Exception as error:
         error_msg = f"Error during device sync dependency phases: {error}"

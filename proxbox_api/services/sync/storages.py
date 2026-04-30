@@ -8,6 +8,7 @@ import inspect
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxStorageSyncState
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import dump_models, get_storage_config, get_storage_list
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 
@@ -20,6 +21,7 @@ async def create_storages(  # noqa: C901
     websocket: object | None = None,
     use_websocket: bool = False,
     fetch_concurrency: int = 8,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict[str, object]]:
     """Create or update plugin storage rows for each Proxmox endpoint storage."""
     nb = netbox_session
@@ -173,6 +175,40 @@ async def create_storages(  # noqa: C901
     updated_count = 0
     failed_count = 0
 
+    # Storage scalar fields are always patchable; only "tags" is gated by the
+    # per-resource overwrite_storage_tags flag. When overwrite_flags is None
+    # (legacy callers), all normalizer keys remain patchable, preserving the
+    # historical always-overwrite behavior.
+    _storage_patchable: set[str] = {
+        "cluster",
+        "name",
+        "storage_type",
+        "content",
+        "path",
+        "nodes",
+        "shared",
+        "enabled",
+        "server",
+        "port",
+        "username",
+        "export",
+        "share",
+        "pool",
+        "monhost",
+        "namespace",
+        "datastore",
+        "subdir",
+        "mountpoint",
+        "is_mountpoint",
+        "preallocation",
+        "format",
+        "prune_backups",
+        "max_protected_backups",
+        "raw_config",
+    }
+    if overwrite_flags is None or overwrite_flags.overwrite_storage_tags:
+        _storage_patchable.add("tags")
+
     if storage_payloads:
         try:
             reconcile_result = await rest_bulk_reconcile_async(
@@ -181,6 +217,7 @@ async def create_storages(  # noqa: C901
                 payloads=storage_payloads,
                 lookup_fields=["cluster", "name"],
                 schema=NetBoxStorageSyncState,
+                patchable_fields=frozenset(_storage_patchable),
                 current_normalizer=lambda item: {
                     "cluster": item.get("cluster", {}).get("id")
                     if isinstance(item.get("cluster"), dict)

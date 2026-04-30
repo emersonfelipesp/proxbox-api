@@ -20,6 +20,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.vm_helpers import (
     all_guest_agent_ips,
     normalized_mac,
@@ -442,6 +443,7 @@ async def bulk_reconcile_vlans(
 async def bulk_reconcile_vm_interfaces(
     nb,
     interface_payloads: list[dict],
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> tuple[list, dict[tuple, int]]:
     """Perform bulk reconciliation of VM interface payloads.
 
@@ -450,6 +452,25 @@ async def bulk_reconcile_vm_interfaces(
     """
     if not interface_payloads:
         return [], {}
+
+    # VM interface scalar identity/state fields are always patchable; tags and
+    # custom_fields follow per-resource overwrite_vm_interface_* flags. When
+    # overwrite_flags is None, all normalizer keys are patchable, preserving
+    # the historical always-overwrite behavior.
+    _vm_interface_patchable: set[str] = {
+        "name",
+        "virtual_machine",
+        "enabled",
+        "mac_address",
+        "type",
+        "description",
+        "untagged_vlan",
+        "mode",
+    }
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_tags:
+        _vm_interface_patchable.add("tags")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields:
+        _vm_interface_patchable.add("custom_fields")
 
     interface_name_vm_to_id = {}
     result = None
@@ -460,6 +481,7 @@ async def bulk_reconcile_vm_interfaces(
             payloads=interface_payloads,
             lookup_fields=["name", "virtual_machine"],
             schema=NetBoxVirtualMachineInterfaceSyncState,
+            patchable_fields=frozenset(_vm_interface_patchable),
             current_normalizer=lambda record: {
                 "name": record.get("name"),
                 "virtual_machine": record.get("virtual_machine"),
@@ -489,6 +511,7 @@ async def bulk_reconcile_vm_interfaces(
 async def bulk_reconcile_vm_interface_ips(
     nb,
     ip_payloads: list[dict],
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list:
     """Perform bulk reconciliation of VM interface IP payloads.
 
@@ -497,6 +520,24 @@ async def bulk_reconcile_vm_interface_ips(
     """
     if not ip_payloads:
         return []
+
+    # Never patch assignment fields on existing IPs.  NetBox rejects
+    # reassignment when the IP is the primary IP of the parent object
+    # ("Cannot reassign IP address while it is designated as the primary
+    # IP for the parent object"). Assignment is established at create
+    # time; status/tags/custom_fields are safe to update, gated by the
+    # per-field overwrite_ip_* flags.
+    if overwrite_flags is None:
+        patchable_fields: frozenset[str] = frozenset({"status", "tags", "custom_fields"})
+    else:
+        gated: set[str] = set()
+        if overwrite_flags.overwrite_ip_status:
+            gated.add("status")
+        if overwrite_flags.overwrite_ip_tags:
+            gated.add("tags")
+        if overwrite_flags.overwrite_ip_custom_fields:
+            gated.add("custom_fields")
+        patchable_fields = frozenset(gated)
 
     result = None
     try:
@@ -513,12 +554,7 @@ async def bulk_reconcile_vm_interface_ips(
                 "status": record.get("status"),
                 "tags": record.get("tags"),
             },
-            # Never patch assignment fields on existing IPs.  NetBox rejects
-            # reassignment when the IP is the primary IP of the parent object
-            # ("Cannot reassign IP address while it is designated as the
-            # primary IP for the parent object").  Assignment is established
-            # at create time; status/tags/custom_fields are safe to update.
-            patchable_fields=frozenset({"status", "tags", "custom_fields"}),
+            patchable_fields=patchable_fields,
         )
         return result.records if result and hasattr(result, "records") else []
     except Exception as e:

@@ -1,7 +1,7 @@
 """Virtual machine read/query routes."""
 
 import asyncio
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -11,6 +11,7 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.schemas.virtualization import (  # Schemas
     CPU,
     Backup,
@@ -176,6 +177,7 @@ async def create_virtual_machines_interfaces(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
@@ -193,6 +195,7 @@ async def create_virtual_machines_interfaces(
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        overwrite_flags=overwrite_flags,
     )
     return results
 
@@ -226,6 +229,7 @@ async def create_virtual_machines_interfaces_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
@@ -249,6 +253,7 @@ async def create_virtual_machines_interfaces_stream(
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
@@ -293,6 +298,7 @@ async def create_virtual_machines_interfaces_ip_address(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_ip_addresses,
@@ -310,6 +316,7 @@ async def create_virtual_machines_interfaces_ip_address(
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        overwrite_flags=overwrite_flags,
     )
     return results
 
@@ -340,6 +347,7 @@ async def create_virtual_machines_ip_address_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_ip_addresses,
@@ -363,6 +371,7 @@ async def create_virtual_machines_ip_address_stream(
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()

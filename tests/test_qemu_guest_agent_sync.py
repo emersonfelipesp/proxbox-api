@@ -524,7 +524,7 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
     def _fake_get_vm_config(*args, **kwargs):
         return data["vm_config"]
 
-    async def _fake_bulk_reconcile(nb, payloads):
+    async def _fake_bulk_reconcile(nb, payloads, **_kwargs):
         # Capture payloads to verify VM ID is included
         captured_payloads.extend(payloads)
         # Return mock interface records with the expected ID and VM mapping
@@ -591,7 +591,7 @@ def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
     def _fake_get_vm_config(*args, **kwargs):
         return data["vm_config"]
 
-    async def _fake_bulk_reconcile(nb, payloads):
+    async def _fake_bulk_reconcile(nb, payloads, **_kwargs):
         # Mock should return interface records with correct IDs
         return (
             [{"id": 66, "name": "net0", "virtual_machine": 55, "mac_address": "AA:BB:CC:DD:EE:FF"}],
@@ -651,7 +651,7 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     def _fake_get_vm_config(*args, **kwargs):
         return data["vm_config"]
 
-    async def _fake_bulk_reconcile_ips(nb, payloads):
+    async def _fake_bulk_reconcile_ips(nb, payloads, **_kwargs):
         # Return mock IP records with correct IDs
         return [{"id": 77, "address": "10.0.0.20/24"}]
 
@@ -760,7 +760,7 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
             }
         ]
 
-    async def _fake_bulk_reconcile_ips(nb, payloads):
+    async def _fake_bulk_reconcile_ips(nb, payloads, **_kwargs):
         return [
             {
                 "id": 99,

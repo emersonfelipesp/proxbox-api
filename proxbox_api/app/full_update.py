@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
@@ -35,6 +36,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_ip_addresses,
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.replications import sync_all_replications
@@ -69,6 +71,7 @@ async def full_update_sync(  # noqa: C901
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
 ) -> dict:
     sync_nodes: list = []
@@ -102,6 +105,10 @@ async def full_update_sync(  # noqa: C901
             node=None,
             tag=tag,
             use_websocket=False,
+            overwrite_device_role=overwrite_flags.overwrite_device_role,
+            overwrite_device_type=overwrite_flags.overwrite_device_type,
+            overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -117,7 +124,8 @@ async def full_update_sync(  # noqa: C901
             pxs=pxs,
             tag=tag,
             use_websocket=False,
-            fetch_max_concurrency=fetch_max_concurrency,
+            fetch_concurrency=fetch_max_concurrency if fetch_max_concurrency is not None else 8,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -138,6 +146,11 @@ async def full_update_sync(  # noqa: C901
             tag=tag,
             use_websocket=False,
             sync_vm_network=False,
+            overwrite_vm_role=overwrite_flags.overwrite_vm_role,
+            overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,
+            overwrite_vm_description=overwrite_flags.overwrite_vm_description,
+            overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -244,6 +257,7 @@ async def full_update_sync(  # noqa: C901
             custom_fields=custom_fields,
             tag=tag,
             use_websocket=False,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -263,6 +277,7 @@ async def full_update_sync(  # noqa: C901
             custom_fields=custom_fields,
             tag=tag,
             use_websocket=False,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -340,6 +355,7 @@ async def full_update_sync_stream(  # noqa: C901
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
 ) -> StreamingResponse:
     async def event_stream():  # noqa: C901
@@ -435,6 +451,10 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=devices_bridge,
                         use_websocket=True,
+                        overwrite_device_role=overwrite_flags.overwrite_device_role,
+                        overwrite_device_type=overwrite_flags.overwrite_device_type,
+                        overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await devices_bridge.close()
@@ -473,7 +493,8 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=storage_bridge,
                         use_websocket=True,
-                        fetch_max_concurrency=fetch_max_concurrency,
+                        fetch_concurrency=fetch_max_concurrency if fetch_max_concurrency is not None else 8,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await storage_bridge.close()
@@ -516,6 +537,11 @@ async def full_update_sync_stream(  # noqa: C901
                         websocket=vm_bridge,
                         use_websocket=True,
                         sync_vm_network=False,
+                        overwrite_vm_role=overwrite_flags.overwrite_vm_role,
+                        overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,
+                        overwrite_vm_description=overwrite_flags.overwrite_vm_description,
+                        overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await vm_bridge.close()
@@ -758,6 +784,7 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=vm_interfaces_bridge,
                         use_websocket=True,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await vm_interfaces_bridge.close()
@@ -799,6 +826,7 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=vm_ip_addresses_bridge,
                         use_websocket=True,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await vm_ip_addresses_bridge.close()

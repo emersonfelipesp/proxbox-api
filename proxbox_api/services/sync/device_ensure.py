@@ -21,6 +21,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxManufacturerSyncState,
     NetBoxSiteSyncState,
 )
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.types import NetBoxRecord
 
 
@@ -173,6 +174,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
     overwrite_device_role: bool = True,
     overwrite_device_type: bool = True,
     overwrite_device_tags: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict[str, NetBoxRecord]:
     """Create/update Proxmox prerequisite NetBox objects in dependency order."""
     if not clusters_status:
@@ -272,6 +274,19 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
     )
     site_by_slug = {str(record.get("slug")): record for record in phase_results["sites"].records}
 
+    # Cluster reconcile honors per-field cluster overwrite flags. name/type are
+    # always patchable (they identify the cluster and its mode); description,
+    # tags, and custom_fields are gated by the corresponding flags. When no
+    # flags are supplied (None), all five keys are patchable, preserving the
+    # historical always-overwrite behavior.
+    _cluster_patchable: set[str] = {"name", "type"}
+    if overwrite_flags is None or overwrite_flags.overwrite_cluster_description:
+        _cluster_patchable.add("description")
+    if overwrite_flags is None or overwrite_flags.overwrite_cluster_tags:
+        _cluster_patchable.add("tags")
+    if overwrite_flags is None or overwrite_flags.overwrite_cluster_custom_fields:
+        _cluster_patchable.add("custom_fields")
+
     dependency_phase_results = await rest_bulk_reconcile_phases_async(
         nb,
         [
@@ -293,6 +308,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                 ],
                 lookup_fields=["name"],
                 schema=NetBoxClusterSyncState,
+                patchable_fields=frozenset(_cluster_patchable),
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "type": _relation_id_or_none(record.get("type")),
@@ -353,9 +369,17 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
             )
 
     # Build patchable_fields dynamically: site is always excluded (moving a device
-    # between sites violates the unique-per-site name constraint). role, device_type,
-    # and tags are excluded when the caller opts out of overwriting those fields.
-    _device_patchable: set[str] = {"status", "cluster", "description", "custom_fields"}
+    # between sites violates the unique-per-site name constraint). cluster is
+    # always patchable so devices follow node-to-cluster reassignment. The other
+    # scalar fields (status, description, custom_fields) follow per-field flags;
+    # role, device_type, and tags follow their own flags.
+    _device_patchable: set[str] = {"cluster"}
+    if overwrite_flags is None or overwrite_flags.overwrite_device_status:
+        _device_patchable.add("status")
+    if overwrite_flags is None or overwrite_flags.overwrite_device_description:
+        _device_patchable.add("description")
+    if overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields:
+        _device_patchable.add("custom_fields")
     if overwrite_device_role:
         _device_patchable.add("role")
     if overwrite_device_type:

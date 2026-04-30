@@ -5,7 +5,7 @@ import asyncio
 import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -39,6 +39,7 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
     resolve_vm_sync_concurrency,
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
@@ -189,6 +190,8 @@ def _build_vm_operation_queue(
     netbox_snapshot: list[dict[str, object]],
     overwrite_vm_role: bool = True,
     overwrite_vm_tags: bool = True,
+    overwrite_vm_description: bool = True,
+    overwrite_vm_custom_fields: bool = True,
 ) -> list[_NetBoxVMOperation]:
     """Classify desired VM state into GET/CREATE/UPDATE operations using Pydantic."""
 
@@ -227,6 +230,14 @@ def _build_vm_operation_queue(
 
         if not overwrite_vm_role and _relation_id(existing_record.get("role")) is not None:
             patch_payload.pop("role", None)
+        if not overwrite_vm_description:
+            existing_description = existing_record.get("description")
+            if isinstance(existing_description, str) and existing_description:
+                patch_payload.pop("description", None)
+        if not overwrite_vm_custom_fields:
+            existing_custom_fields = existing_record.get("custom_fields")
+            if isinstance(existing_custom_fields, dict) and existing_custom_fields:
+                patch_payload.pop("custom_fields", None)
         if not overwrite_vm_tags:
             existing_tags = existing_record.get("tags")
             if isinstance(existing_tags, list) and existing_tags:
@@ -635,6 +646,7 @@ async def _create_vm_interface_parallel(
     now: datetime,
     primary_ip_preference: str = "ipv4",
     device: dict | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
 
@@ -650,7 +662,15 @@ async def _create_vm_interface_parallel(
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id:
         device_id = device.get("id") if isinstance(device, dict) else getattr(device, "id", None)
-        bridge_id = await ensure_bridge_interfaces(nb, device_id, vm_id, bridge_name, tag_refs, now)
+        bridge_id = await ensure_bridge_interfaces(
+            nb,
+            device_id,
+            vm_id,
+            bridge_name,
+            tag_refs,
+            now,
+            overwrite_flags=overwrite_flags,
+        )
 
     vlan_nb_id: int | None = None
     vlan_tag_raw = interface_config.get("tag")
@@ -847,6 +867,9 @@ async def _create_virtual_machine_by_netbox_id(
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
     overwrite_vm_role: bool = True,
     overwrite_vm_tags: bool = True,
+    overwrite_vm_description: bool = True,
+    overwrite_vm_custom_fields: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ):
     """Create a single virtual machine by its NetBox ID.
 
@@ -930,6 +953,9 @@ async def _create_virtual_machine_by_netbox_id(
         primary_ip_preference=primary_ip_preference,
         overwrite_vm_role=overwrite_vm_role,
         overwrite_vm_tags=overwrite_vm_tags,
+        overwrite_vm_description=overwrite_vm_description,
+        overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+        overwrite_flags=overwrite_flags,
     )
 
 
@@ -1025,6 +1051,23 @@ async def create_virtual_machines(  # noqa: C901
             "Tags are still applied when a VM is first created."
         ),
     ),
+    overwrite_vm_description: bool = Query(
+        default=True,
+        title="Overwrite VM Description",
+        description=(
+            "When false, the VM description is not patched on existing VMs that already "
+            "have a non-empty description. The description is still set on first create."
+        ),
+    ),
+    overwrite_vm_custom_fields: bool = Query(
+        default=True,
+        title="Overwrite VM Custom Fields",
+        description=(
+            "When false, custom_fields are not patched on existing VMs that already have "
+            "non-empty custom_fields. Custom fields are still applied on first create."
+        ),
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -1444,6 +1487,8 @@ async def create_virtual_machines(  # noqa: C901
             netbox_snapshot,
             overwrite_vm_role=overwrite_vm_role,
             overwrite_vm_tags=overwrite_vm_tags,
+            overwrite_vm_description=overwrite_vm_description,
+            overwrite_vm_custom_fields=overwrite_vm_custom_fields,
         )
 
         operation_counts: dict[str, int] = {"GET": 0, "CREATE": 0, "UPDATE": 0}
@@ -1815,6 +1860,7 @@ async def create_virtual_machines(  # noqa: C901
                                 primary_ip_preference=primary_ip_preference,
                                 now=now,
                                 device=device,
+                                overwrite_flags=overwrite_flags,
                             )
                         )
 
@@ -2057,6 +2103,7 @@ async def create_only_vm_interfaces(  # noqa: C901
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Sync VM interfaces only (no VM creation) with per-interface progress events.
 
@@ -2344,7 +2391,7 @@ async def create_only_vm_interfaces(  # noqa: C901
             from proxbox_api.services.sync.network import bulk_reconcile_vm_interfaces
 
             created_interfaces, interface_name_vm_to_id = await bulk_reconcile_vm_interfaces(
-                nb, all_interface_payloads
+                nb, all_interface_payloads, overwrite_flags=overwrite_flags
             )
             logger.info(
                 "Bulk interface reconciliation completed: %d interfaces processed",
@@ -2432,7 +2479,13 @@ async def create_only_vm_interfaces(  # noqa: C901
                     await _resolve_device_id(resource_node_val) if resource_node_val else None
                 )
                 vm_bridge_id = await ensure_bridge_interfaces(
-                    nb, device_id_val, int(vm_id_val), bridge_name, tag_refs, now
+                    nb,
+                    device_id_val,
+                    int(vm_id_val),
+                    bridge_name,
+                    tag_refs,
+                    now,
+                    overwrite_flags=overwrite_flags,
                 )
                 # Update the NIC interface in NetBox to set the bridge FK.
                 if vm_bridge_id:
@@ -2494,6 +2547,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Sync VM IP addresses and primary IP assignment.
 
@@ -2790,7 +2844,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         try:
             from proxbox_api.services.sync.network import bulk_reconcile_vm_interface_ips
 
-            created_ips = await bulk_reconcile_vm_interface_ips(nb, all_ip_payloads)
+            created_ips = await bulk_reconcile_vm_interface_ips(
+                nb, all_ip_payloads, overwrite_flags=overwrite_flags
+            )
             logger.info(
                 "Bulk IP address reconciliation completed: %d IPs processed",
                 len(all_ip_payloads),
@@ -2917,6 +2973,7 @@ async def create_virtual_machine_by_netbox_id(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     return await _create_virtual_machine_by_netbox_id(
         netbox_vm_id=netbox_vm_id,
@@ -2929,6 +2986,7 @@ async def create_virtual_machine_by_netbox_id(
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        overwrite_flags=overwrite_flags,
     )
 
 
@@ -2982,6 +3040,22 @@ async def create_virtual_machines_stream(
             "Tags are still applied when a VM is first created."
         ),
     ),
+    overwrite_vm_description: bool = Query(
+        default=True,
+        title="Overwrite VM Description",
+        description=(
+            "When false, the VM description is not patched on existing VMs that already "
+            "have a non-empty description. The description is still set on first create."
+        ),
+    ),
+    overwrite_vm_custom_fields: bool = Query(
+        default=True,
+        title="Overwrite VM Custom Fields",
+        description=(
+            "When false, custom_fields are not patched on existing VMs that already have "
+            "non-empty custom_fields. Custom fields are still applied on first create."
+        ),
+    ),
     sync_vm_network: bool = Query(
         default=True,
         title="Sync VM Network",
@@ -2990,6 +3064,7 @@ async def create_virtual_machines_stream(
             "Use when a dedicated network-sync stage follows immediately after."
         ),
     ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     filtered_cluster_resources = cluster_resources
     vm_ids: list[int] = []
@@ -3022,7 +3097,10 @@ async def create_virtual_machines_stream(
                     primary_ip_preference=primary_ip_preference,
                     overwrite_vm_role=overwrite_vm_role,
                     overwrite_vm_tags=overwrite_vm_tags,
+                    overwrite_vm_description=overwrite_vm_description,
+                    overwrite_vm_custom_fields=overwrite_vm_custom_fields,
                     sync_vm_network=sync_vm_network,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
@@ -3172,6 +3250,23 @@ async def create_virtual_machine_by_netbox_id_stream(
             "Tags are still applied when a VM is first created."
         ),
     ),
+    overwrite_vm_description: bool = Query(
+        default=True,
+        title="Overwrite VM Description",
+        description=(
+            "When false, the VM description is not patched on existing VMs that already "
+            "have a non-empty description. The description is still set on first create."
+        ),
+    ),
+    overwrite_vm_custom_fields: bool = Query(
+        default=True,
+        title="Overwrite VM Custom Fields",
+        description=(
+            "When false, custom_fields are not patched on existing VMs that already have "
+            "non-empty custom_fields. Custom fields are still applied on first create."
+        ),
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -3193,6 +3288,9 @@ async def create_virtual_machine_by_netbox_id_stream(
                     primary_ip_preference=primary_ip_preference,
                     overwrite_vm_role=overwrite_vm_role,
                     overwrite_vm_tags=overwrite_vm_tags,
+                    overwrite_vm_description=overwrite_vm_description,
+                    overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
