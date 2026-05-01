@@ -74,7 +74,9 @@ def _cached_netbox_api(
         timeout=timeout,
         ssl_verify=ssl_verify,
     )
-    return Api(client=NetBoxApiClient(cfg), schema=build_schema_index(version=NETBOX_SCHEMA_VERSION))
+    return Api(
+        client=NetBoxApiClient(cfg), schema=build_schema_index(version=NETBOX_SCHEMA_VERSION)
+    )
 
 
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:

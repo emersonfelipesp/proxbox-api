@@ -493,7 +493,9 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=storage_bridge,
                         use_websocket=True,
-                        fetch_concurrency=fetch_max_concurrency if fetch_max_concurrency is not None else 8,
+                        fetch_concurrency=fetch_max_concurrency
+                        if fetch_max_concurrency is not None
+                        else 8,
                         overwrite_flags=overwrite_flags,
                     )
                 finally:
