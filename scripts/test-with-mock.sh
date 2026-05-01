@@ -90,7 +90,7 @@ echo ""
 echo "=========================================="
 echo "Running E2E Tests (all modes)"
 echo "=========================================="
-uv run pytest tests/e2e -v --tb=short -m "not image_http" \
+uv run pytest tests/e2e -v --tb=short \
     --proxbox-mock-url-published="$PROXMOX_MOCK_PUBLISHED_URL" \
     --proxbox-mock-url-local="$PROXMOX_MOCK_LOCAL_URL" || TEST_RESULT=1
 

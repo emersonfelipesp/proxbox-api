@@ -69,7 +69,6 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 addopts = "--dist loadgroup"
 markers = [
-    "image_http: smoke tests against PROXBOX_IMAGE_E2E_BASE_URL (published Docker images)",
     "mock_backend: tests using in-process MockBackend (fast, no HTTP)",
     "mock_http: tests using HTTP mock container (realistic, validates HTTP layer)",
 ]

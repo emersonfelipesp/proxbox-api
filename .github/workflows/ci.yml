@@ -56,6 +56,27 @@ jobs:
       - name: Core tests
         run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
 
+  test-py311-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra test --group dev
+
+      - name: Compile package
+        run: uv run python -m compileall proxbox_api scripts tests
+
+      - name: Core tests (3.11 floor)
+        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
+
   test-free-threaded:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -522,18 +543,16 @@ jobs:
         env:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
           PROXBOX_E2E_NETBOX_TOKEN: ${{ env.NETBOX_API_TOKEN }}
-          PROXBOX_E2E_NETBOX_TOKEN_VERSION: v1
           PROXMOX_API_MODE: mock
           PROXMOX_MOCK_PUBLISHED_URL: http://localhost:18006
         run: |
-          uv run pytest tests/e2e/ -m "not image_http and mock_backend" --tb=short -v
+          uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v
 
       - name: Run E2E tests with in-process MockBackend
         if: github.ref == 'refs/heads/main'
         env:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
           PROXBOX_E2E_NETBOX_TOKEN: ${{ env.NETBOX_API_TOKEN }}
-          PROXBOX_E2E_NETBOX_TOKEN_VERSION: v1
           PROXMOX_API_MODE: mock
         run: |
           uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v

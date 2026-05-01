@@ -10,6 +10,8 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 - `GET /version` - Backend service version for external cache invalidation.
 - `GET /cache` - Inspect the in-memory cache snapshot.
 - `GET /clear-cache` - Clear the in-memory cache.
+- `GET /cache/metrics` - JSON snapshot of NetBox GET cache metrics (hit ratio, entries, byte usage).
+- `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same metrics for scrape jobs.
 
 ## Authentication (`/auth`)
 
@@ -213,6 +215,16 @@ Test coverage:
 - `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
+
+### VM stream overwrite query parameters
+
+Every VM stream endpoint listed above (`/virtualization/virtual-machines/...create/stream`) accepts the `SyncOverwriteFlags` query parameters defined in `proxbox_api/schemas/sync.py`. They control which user-managed NetBox fields the sync may overwrite:
+
+- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
+- `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, `overwrite_ip_tags`
+- `sync_vm_network` - when `false`, skips the VM-network sub-step.
+
+See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaults.
 
 ## Full Update
 

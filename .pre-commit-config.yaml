@@ -19,6 +19,6 @@ repos:
     hooks:
       - id: ty
         name: ty
-        entry: uv run ty check proxbox_api/types proxbox_api/utils/retry.py
+        entry: uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
         language: system
         pass_filenames: false

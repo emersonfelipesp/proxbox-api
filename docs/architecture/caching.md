@@ -177,13 +177,11 @@ A high cache hit rate (>70%) indicates effective caching. To improve hit rate:
 
 The byte limit prevents unbounded memory growth. Monitor `current_bytes` metric to ensure adequate headroom.
 
-### Benchmarking
+### Cache Metrics Endpoints
 
-Run performance benchmarks in CI to detect regressions:
+The runtime exposes two endpoints for live cache observation:
 
-```bash
-# Example benchmark command
-uv run pytest tests/ --benchmark-only
-```
+- `GET /cache/metrics` - JSON snapshot (`hits`, `misses`, `evictions`, `entries`, `current_bytes`, derived hit ratio).
+- `GET /cache/metrics/prometheus` - Prometheus exposition format suitable for scrape jobs.
 
-See the GitHub Actions workflow for automated benchmarking.
+Use these instead of patching custom counters; they reflect the live `NetBoxGetCache` state.

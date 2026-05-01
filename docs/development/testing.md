@@ -172,7 +172,8 @@ Both services:
 |--------|-------------|
 | `mock_backend` | Tests using in-process MockBackend (fast) |
 | `mock_http` | Tests using HTTP mock container |
-| `image_http` | Smoke tests against published Docker images |
+
+`unit` and `integration` are directory conventions, not pytest markers, so do not pass `-m unit` / `-m integration`.
 
 ## Targeted endpoint tests
 

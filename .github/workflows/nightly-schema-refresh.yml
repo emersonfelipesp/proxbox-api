@@ -19,10 +19,10 @@ jobs:
           python-version: "3.12"
 
       - name: Sync dependencies
-        run: uv sync --frozen --extra test --group dev
+        run: uv sync --frozen --extra test --extra playwright --group dev
 
       - name: Ty (type check)
-        run: uv run ty check proxbox_api/types proxbox_api/utils/retry.py
+        run: uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
 
       - name: Install Playwright browser
         run: uv run playwright install chromium

@@ -114,6 +114,8 @@ Open the nearest scoped guide for the code you are changing.
 - ASGI app: `proxbox_api.main:app`
 - Typical server command: `uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000`
 - Docker entrypoint: the `Dockerfile` uses the same app module path.
+- CLI: `proxbox-proxmox-codegen` (`proxbox_api.proxmox_codegen.cli:main`) — Proxmox crawler/generator pipeline.
+- CLI: `proxbox-schema` (`proxbox_api.schema_cli:main`) — list, status, and generate NetBox-versioned schema artifacts.
 - Smoke tests live under `tests/` (for example `tests/test_main_smoke.py` and `tests/test_endpoint_crud.py`)
 
 ## Dependencies
@@ -140,6 +142,9 @@ Open the nearest scoped guide for the code you are changing.
 - `PROXBOX_PROXMOX_FETCH_CONCURRENCY`: max concurrent Proxmox read operations (default: 8 in most paths, 4 in task-history path).
 - `PROXBOX_BACKUP_BATCH_SIZE`: backup sync batch size (default: 5).
 - `PROXBOX_BACKUP_BATCH_DELAY_MS`: delay in milliseconds between backup batches (default: 200).
+- `PROXBOX_BULK_BATCH_SIZE`: per-batch size for bulk VM-related sync requests (default: 50).
+- `PROXBOX_BULK_BATCH_DELAY_MS`: delay in milliseconds between bulk batches (default: 500).
+- `PROXBOX_GENERATED_DIR`: override output directory for the schema generator CLI (`proxbox-schema`); default is `$XDG_DATA_HOME/proxbox/generated/proxmox` (typically `~/.local/share/proxbox/generated/proxmox`).
 
 ### Cache Configuration
 
@@ -150,16 +155,16 @@ Open the nearest scoped guide for the code you are changing.
 
 ## Validation
 
-Run these checks before pushing changes:
+Run these checks before pushing changes (the `rtk` prefix is a local token-saving alias around the underlying `uv run` commands; `uv run ruff check .` etc. are the canonical forms):
 
 ```bash
-rtk ruff check .
-rtk ruff format --check .
+uv run ruff check .
+uv run ruff format --check .
 uv run python -m compileall proxbox_api tests
 uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-rtk mypy proxbox_api  # Check type annotations (non-strict mode)
-rtk pytest tests
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+uv run pytest tests
 ```
 
 If you touch `nextjs-ui/`, also run:

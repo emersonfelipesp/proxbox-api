@@ -172,7 +172,6 @@ Ambos os servicos:
 |----------|-----------|
 | `mock_backend` | Testes usando MockBackend in-process (rapido) |
 | `mock_http` | Testes usando container HTTP mock |
-| `image_http` | Smoke tests contra imagens Docker publicadas |
 
 ## Testes direcionados de endpoints
 

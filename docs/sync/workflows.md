@@ -85,6 +85,10 @@ Not allowed in parallel:
 - Reconciling NetBox VM state before Proxmox VM data is fetched.
 - Creating a device before manufacturer/device type/site/cluster prerequisites exist.
 
+### Tag Preservation
+
+When `overwrite_vm_tags=False` (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The `Proxbox` tag is always retained so the plugin can identify objects it owns. Setting `overwrite_vm_tags=True` switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, and `overwrite_ip_tags`. See [Overwrite Flags](./overwrite-flags.md).
+
 ## Backup Sync Flow
 
 Endpoints:
