@@ -9,6 +9,7 @@ jobs:
   verify-image:
     name: verify Docker images on release
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -17,12 +18,29 @@ jobs:
         run: |
           REL="${{ github.event.release.tag_name }}"
           TAG="${REL#v}"
-          docker pull emersonfelipesp/proxbox-api:"$TAG"
-          docker pull emersonfelipesp/proxbox-api:latest
-          docker pull emersonfelipesp/proxbox-api:"${TAG}-nginx"
-          docker pull emersonfelipesp/proxbox-api:latest-nginx
-          docker pull emersonfelipesp/proxbox-api:"${TAG}-granian"
-          docker pull emersonfelipesp/proxbox-api:latest-granian
+          # Verify runs in parallel with publish-testpypi.yml's docker publish
+          # step, so retry until images appear (publish chain typically lands
+          # within ~30min: TestPyPI → validate → PyPI → docker push).
+          pull_with_retry() {
+            local image="$1"
+            local attempt=0
+            local max_attempts=60   # 60 * 60s = 60 minutes
+            until docker pull "$image"; do
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "::error::Image $image not available after $max_attempts attempts"
+                return 1
+              fi
+              echo "Image $image not available yet (attempt $attempt/$max_attempts), retrying in 60s..."
+              sleep 60
+            done
+          }
+          pull_with_retry emersonfelipesp/proxbox-api:"$TAG"
+          pull_with_retry emersonfelipesp/proxbox-api:latest
+          pull_with_retry emersonfelipesp/proxbox-api:"${TAG}-nginx"
+          pull_with_retry emersonfelipesp/proxbox-api:latest-nginx
+          pull_with_retry emersonfelipesp/proxbox-api:"${TAG}-granian"
+          pull_with_retry emersonfelipesp/proxbox-api:latest-granian
 
       - name: Smoke-test published startup
         run: |
