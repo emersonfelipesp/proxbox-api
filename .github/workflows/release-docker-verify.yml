@@ -4,6 +4,12 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to verify (e.g. v0.0.9.post1)"
+        required: true
+        type: string
 
 jobs:
   verify-image:
@@ -16,7 +22,7 @@ jobs:
 
       - name: Pull release and latest images
         run: |
-          REL="${{ github.event.release.tag_name }}"
+          REL="${{ github.event.release.tag_name || inputs.tag }}"
           TAG="${REL#v}"
           # Verify runs in parallel with publish-testpypi.yml's docker publish
           # step, so retry until images appear (publish chain typically lands
@@ -45,7 +51,7 @@ jobs:
       - name: Smoke-test published startup
         run: |
           set -eux
-          REL="${{ github.event.release.tag_name }}"
+          REL="${{ github.event.release.tag_name || inputs.tag }}"
           TAG="${REL#v}"
 
           # raw (HTTP)
