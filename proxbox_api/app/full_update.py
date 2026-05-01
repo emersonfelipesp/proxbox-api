@@ -28,9 +28,6 @@ from proxbox_api.routes.virtualization.virtual_machines.snapshots_vm import (
     _create_all_virtual_machine_snapshots,
     create_all_virtual_machine_snapshots,
 )
-from proxbox_api.routes.virtualization.virtual_machines.storages_vm import (
-    create_storages,
-)
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
@@ -40,6 +37,7 @@ from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.replications import sync_all_replications
+from proxbox_api.services.sync.storages import create_storages
 from proxbox_api.services.sync.task_history import (
     sync_all_virtual_machine_task_histories,
 )
