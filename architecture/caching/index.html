@@ -813,10 +813,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#benchmarking" class="md-nav__link">
+  <a href="#cache-metrics-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Benchmarking
+        Cache Metrics Endpoints
       
     </span>
   </a>
@@ -1663,10 +1663,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#benchmarking" class="md-nav__link">
+  <a href="#cache-metrics-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Benchmarking
+        Cache Metrics Endpoints
       
     </span>
   </a>
@@ -1922,13 +1922,13 @@ export PROXBOX_DEBUG_CACHE=1</code></p>
 </ol>
 <h3 id="memory-usage">Memory Usage<a class="headerlink" href="#memory-usage" title="Permanent link">&para;</a></h3>
 <p>The byte limit prevents unbounded memory growth. Monitor <code>current_bytes</code> metric to ensure adequate headroom.</p>
-<h3 id="benchmarking">Benchmarking<a class="headerlink" href="#benchmarking" title="Permanent link">&para;</a></h3>
-<p>Run performance benchmarks in CI to detect regressions:</p>
-<p>```bash</p>
-<h1 id="example-benchmark-command">Example benchmark command<a class="headerlink" href="#example-benchmark-command" title="Permanent link">&para;</a></h1>
-<p>uv run pytest tests/ --benchmark-only
-```</p>
-<p>See the GitHub Actions workflow for automated benchmarking.</p>
+<h3 id="cache-metrics-endpoints">Cache Metrics Endpoints<a class="headerlink" href="#cache-metrics-endpoints" title="Permanent link">&para;</a></h3>
+<p>The runtime exposes two endpoints for live cache observation:</p>
+<ul>
+<li><code>GET /cache/metrics</code> - JSON snapshot (<code>hits</code>, <code>misses</code>, <code>evictions</code>, <code>entries</code>, <code>current_bytes</code>, derived hit ratio).</li>
+<li><code>GET /cache/metrics/prometheus</code> - Prometheus exposition format suitable for scrape jobs.</li>
+</ul>
+<p>Use these instead of patching custom counters; they reflect the live <code>NetBoxGetCache</code> state.</p>
 
 
 

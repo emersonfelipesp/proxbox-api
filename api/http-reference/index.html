@@ -809,6 +809,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Virtualization Routes (/virtualization)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vm-stream-overwrite-query-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VM stream overwrite query parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1530,6 +1547,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Virtualization Routes (/virtualization)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vm-stream-overwrite-query-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VM stream overwrite query parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1632,6 +1666,8 @@
 <li><code>GET /version</code> - Backend service version for external cache invalidation.</li>
 <li><code>GET /cache</code> - Inspect the in-memory cache snapshot.</li>
 <li><code>GET /clear-cache</code> - Clear the in-memory cache.</li>
+<li><code>GET /cache/metrics</code> - JSON snapshot of NetBox GET cache metrics (hit ratio, entries, byte usage).</li>
+<li><code>GET /cache/metrics/prometheus</code> - Prometheus text-format exposition of the same metrics for scrape jobs.</li>
 </ul>
 <h2 id="authentication-auth">Authentication (<code>/auth</code>)<a class="headerlink" href="#authentication-auth" title="Permanent link">&para;</a></h2>
 <p>All requests except bootstrap endpoints require the <code>X-Proxbox-API-Key</code> header. See <a href="../../getting-started/authentication/">Authentication</a> for the full bootstrap flow and key management guide.</p>
@@ -1828,6 +1864,14 @@
 <li><code>GET /virtualization/virtual-machines/storage/create</code></li>
 <li><code>GET /virtualization/virtual-machines/storage/create/stream</code></li>
 </ul>
+<h3 id="vm-stream-overwrite-query-parameters">VM stream overwrite query parameters<a class="headerlink" href="#vm-stream-overwrite-query-parameters" title="Permanent link">&para;</a></h3>
+<p>Every VM stream endpoint listed above (<code>/virtualization/virtual-machines/...create/stream</code>) accepts the <code>SyncOverwriteFlags</code> query parameters defined in <code>proxbox_api/schemas/sync.py</code>. They control which user-managed NetBox fields the sync may overwrite:</p>
+<ul>
+<li><code>overwrite_vm_tags</code>, <code>overwrite_vm_role</code>, <code>overwrite_vm_platform</code>, <code>overwrite_vm_description</code>, <code>overwrite_vm_custom_fields</code></li>
+<li><code>overwrite_cluster_tags</code>, <code>overwrite_storage_tags</code>, <code>overwrite_node_interface_tags</code>, <code>overwrite_ip_tags</code></li>
+<li><code>sync_vm_network</code> - when <code>false</code>, skips the VM-network sub-step.</li>
+</ul>
+<p>See <a href="../../sync/overwrite-flags/">Overwrite Flags</a> for the full matrix and defaults.</p>
 <h2 id="full-update">Full Update<a class="headerlink" href="#full-update" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /full-update</code> - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.</li>

@@ -846,6 +846,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#tag-preservation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tag Preservation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1389,6 +1400,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#tag-preservation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tag Preservation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1640,6 +1662,8 @@
 <li>Reconciling NetBox VM state before Proxmox VM data is fetched.</li>
 <li>Creating a device before manufacturer/device type/site/cluster prerequisites exist.</li>
 </ul>
+<h3 id="tag-preservation">Tag Preservation<a class="headerlink" href="#tag-preservation" title="Permanent link">&para;</a></h3>
+<p>When <code>overwrite_vm_tags=False</code> (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The <code>Proxbox</code> tag is always retained so the plugin can identify objects it owns. Setting <code>overwrite_vm_tags=True</code> switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via <code>overwrite_cluster_tags</code>, <code>overwrite_storage_tags</code>, <code>overwrite_node_interface_tags</code>, and <code>overwrite_ip_tags</code>. See <a href="../overwrite-flags/">Overwrite Flags</a>.</p>
 <h2 id="backup-sync-flow">Backup Sync Flow<a class="headerlink" href="#backup-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>
 <ul>

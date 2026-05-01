@@ -1556,12 +1556,9 @@ services:
 <td><code>mock_http</code></td>
 <td>Tests using HTTP mock container</td>
 </tr>
-<tr>
-<td><code>image_http</code></td>
-<td>Smoke tests against published Docker images</td>
-</tr>
 </tbody>
 </table>
+<p><code>unit</code> and <code>integration</code> are directory conventions, not pytest markers, so do not pass <code>-m unit</code> / <code>-m integration</code>.</p>
 <h2 id="targeted-endpoint-tests">Targeted endpoint tests<a class="headerlink" href="#targeted-endpoint-tests" title="Permanent link">&para;</a></h2>
 <p>The file <code>tests/test_endpoint_crud.py</code> includes dedicated coverage for:</p>
 <ul>
