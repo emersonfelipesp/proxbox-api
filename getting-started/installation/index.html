@@ -451,13 +451,41 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#mkcert-environment-variables" class="md-nav__link">
+  <a href="#docker-runtime-environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
-        mkcert environment variables
+        Docker runtime environment variables
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#binding-to-ipv6-dual-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binding to IPv6 / dual-stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Binding to IPv6 / dual-stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#docker-compose-quoting-caveat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker Compose quoting caveat
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1368,13 +1396,41 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#mkcert-environment-variables" class="md-nav__link">
+  <a href="#docker-runtime-environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
-        mkcert environment variables
+        Docker runtime environment variables
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#binding-to-ipv6-dual-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binding to IPv6 / dual-stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Binding to IPv6 / dual-stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#docker-compose-quoting-caveat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker Compose quoting caveat
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1556,8 +1612,8 @@ docker run -d -p 8443:8000 --name proxbox-api-granian \
 <ul>
 <li><a href="https://127.0.0.1:8443">https://127.0.0.1:8443</a></li>
 </ul>
-<h3 id="mkcert-environment-variables">mkcert environment variables<a class="headerlink" href="#mkcert-environment-variables" title="Permanent link">&para;</a></h3>
-<p>Available for the <code>nginx</code> and <code>granian</code> images:</p>
+<h3 id="docker-runtime-environment-variables">Docker runtime environment variables<a class="headerlink" href="#docker-runtime-environment-variables" title="Permanent link">&para;</a></h3>
+<p>Common to all images (<code>raw</code>, <code>nginx</code>, <code>granian</code>):</p>
 <table>
 <thead>
 <tr>
@@ -1572,6 +1628,23 @@ docker run -d -p 8443:8000 --name proxbox-api-granian \
 <td><code>8000</code></td>
 <td>Port the server listens on</td>
 </tr>
+<tr>
+<td><code>PROXBOX_BIND_HOST</code></td>
+<td><code>0.0.0.0</code></td>
+<td>Address the server binds to. Set to <code>::</code> for IPv4 + IPv6 dual-stack. Honored by the <code>raw</code> and <code>granian</code> images; the <code>nginx</code> image listens on both stacks unconditionally.</td>
+</tr>
+</tbody>
+</table>
+<p>mkcert-specific (only for the <code>nginx</code> and <code>granian</code> images):</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
 <tr>
 <td><code>MKCERT_CERT_DIR</code></td>
 <td><code>/certs</code></td>
@@ -1594,6 +1667,19 @@ docker run -d -p 8443:8000 --name proxbox-api-granian \
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
   emersonfelipesp/proxbox-api:latest-nginx</code></p>
+<h3 id="binding-to-ipv6-dual-stack">Binding to IPv6 / dual-stack<a class="headerlink" href="#binding-to-ipv6-dual-stack" title="Permanent link">&para;</a></h3>
+<p>To listen on both IPv4 and IPv6, set <code>PROXBOX_BIND_HOST=::</code>:</p>
+<p><code>bash
+docker run -d -p 8000:8000 -e PROXBOX_BIND_HOST=:: \
+  emersonfelipesp/proxbox-api:latest</code></p>
+<h4 id="docker-compose-quoting-caveat">Docker Compose quoting caveat<a class="headerlink" href="#docker-compose-quoting-caveat" title="Permanent link">&para;</a></h4>
+<p>In Compose <code>environment:</code> <strong>list-form</strong>, values are taken verbatim — the quotes are NOT stripped — so <code>- PROXBOX_BIND_HOST="::"</code> ends up as the literal 4-character string <code>"::"</code> inside the container, which used to crash binding with <code>[Errno -2] Name does not resolve</code>. The container now sanitizes surrounding quotes defensively, but the recommended forms are:</p>
+<p><code>yaml
+environment:
+  - PROXBOX_BIND_HOST=::          # list-form: NO quotes</code></p>
+<p><code>yaml
+environment:
+  PROXBOX_BIND_HOST: "::"         # map-form: YAML strips the quotes</code></p>
 <h3 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">&para;</a></h3>
 <p>```bash
 git clone https://github.com/emersonfelipesp/proxbox-api.git

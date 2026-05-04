@@ -414,6 +414,40 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Opcao 1: Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bind-em-ipv6-dual-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bind em IPv6 / dual-stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bind em IPv6 / dual-stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cuidado-com-aspas-no-docker-compose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cuidado com aspas no Docker Compose
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1270,6 +1304,40 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Opcao 1: Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bind-em-ipv6-dual-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bind em IPv6 / dual-stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bind em IPv6 / dual-stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cuidado-com-aspas-no-docker-compose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cuidado com aspas no Docker Compose
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1381,6 +1449,19 @@
 <p><code>bash
 docker pull emersonfelipesp/proxbox-api:latest
 docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest</code></p>
+<h3 id="bind-em-ipv6-dual-stack">Bind em IPv6 / dual-stack<a class="headerlink" href="#bind-em-ipv6-dual-stack" title="Permanent link">&para;</a></h3>
+<p>Para escutar simultaneamente em IPv4 e IPv6, defina <code>PROXBOX_BIND_HOST=::</code>:</p>
+<p><code>bash
+docker run -d -p 8000:8000 -e PROXBOX_BIND_HOST=:: \
+  emersonfelipesp/proxbox-api:latest</code></p>
+<h4 id="cuidado-com-aspas-no-docker-compose">Cuidado com aspas no Docker Compose<a class="headerlink" href="#cuidado-com-aspas-no-docker-compose" title="Permanent link">&para;</a></h4>
+<p>No formato <strong>lista</strong> de <code>environment:</code> do Compose, o valor e usado literalmente — as aspas <strong>nao</strong> sao removidas. Ou seja, <code>- PROXBOX_BIND_HOST="::"</code> chega ao container como a string de 4 caracteres <code>"::"</code>, o que ja causou o erro <code>[Errno -2] Name does not resolve</code>. O container hoje normaliza aspas defensivamente, mas as formas recomendadas sao:</p>
+<p><code>yaml
+environment:
+  - PROXBOX_BIND_HOST=::          # formato lista: SEM aspas</code></p>
+<p><code>yaml
+environment:
+  PROXBOX_BIND_HOST: "::"         # formato mapa: o YAML remove as aspas</code></p>
 <h2 id="opcao-2-pypi">Opcao 2: PyPI<a class="headerlink" href="#opcao-2-pypi" title="Permanent link">&para;</a></h2>
 <p>O pacote esta publicado no <a href="https://pypi.org/project/proxbox-api/">PyPI</a> como <code>proxbox-api</code>.</p>
 <p><code>bash
