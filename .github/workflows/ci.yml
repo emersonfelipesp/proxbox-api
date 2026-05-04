@@ -188,8 +188,11 @@ jobs:
               *'Name does not resolve'*|*'getaddrinfo'*)
                 echo "FAIL: granian sanitizer regressed (issue #52):"; echo "$log"; exit 1 ;;
             esac
+            # granian formats the IPv6 bind as `Listening at: https://:::PORT`
+            # (three literal colons, no brackets) — distinct from uvicorn's
+            # `http://[::]:PORT`.
             case "$log" in
-              *'[::]:'*)
+              *'Listening at: '*':::'*)
                 # Cross-check: container must still be running (granian did not crash post-bind).
                 if [ "$(docker inspect -f '{{.State.Running}}' pb-v6q-granian)" = "true" ]; then
                   echo "OK: granian bound IPv6 dual-stack ($i s)"; exit 0
