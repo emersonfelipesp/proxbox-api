@@ -353,6 +353,12 @@ jobs:
           fi
           echo "HOST_BIND=${HOST_BIND}" >> "$GITHUB_ENV"
           SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
+          NETBOX_GRANIAN_HOST="0.0.0.0"
+          PROXMOX_MOCK_BIND_HOST="0.0.0.0"
+          if [ "${{ matrix.network_stack }}" = "ipv6" ]; then
+            NETBOX_GRANIAN_HOST="::"
+            PROXMOX_MOCK_BIND_HOST="::"
+          fi
 
           docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian netbox-e2e-rqworker proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
 
@@ -370,7 +376,9 @@ jobs:
           docker run -d --name proxmox-e2e-mock --network proxbox-e2e -p "${HOST_BIND}18006:8000" \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
-            "${PROXMOX_OPENAPI_IMAGE}"
+            -e PROXMOX_MOCK_BIND_HOST="${PROXMOX_MOCK_BIND_HOST}" \
+            "${PROXMOX_OPENAPI_IMAGE}" \
+            sh -c 'exec uvicorn ${APP_MODULE} --host "${PROXMOX_MOCK_BIND_HOST}" --port "${PORT:-8000}"'
 
           mkdir -p .ci-tls
           cat > .ci-tls/netbox-openssl.cnf <<'EOF'
@@ -514,7 +522,7 @@ jobs:
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host 0.0.0.0 --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host '${NETBOX_GRANIAN_HOST}' --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
           fi
 
       - name: Trust E2E NetBox CA on runner
