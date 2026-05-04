@@ -59,13 +59,19 @@ Service URL:
 
 - <https://127.0.0.1:8443>
 
-### mkcert environment variables
+### Docker runtime environment variables
 
-Available for the `nginx` and `granian` images:
+Common to all images (`raw`, `nginx`, `granian`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8000` | Port the server listens on |
+| `PROXBOX_BIND_HOST` | `0.0.0.0` | Address the server binds to. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
+
+mkcert-specific (only for the `nginx` and `granian` images):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `MKCERT_CERT_DIR` | `/certs` | Directory where certificates are stored |
 | `MKCERT_EXTRA_NAMES` | — | Extra SANs (comma or space separated), e.g. `proxbox.lan,10.0.0.5` |
 | `CAROOT` | — | Mount a volume here to persist the local CA across restarts |
@@ -76,6 +82,29 @@ Example with extra SANs:
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
   emersonfelipesp/proxbox-api:latest-nginx
+```
+
+### Binding to IPv6 / dual-stack
+
+To listen on both IPv4 and IPv6, set `PROXBOX_BIND_HOST=::`:
+
+```bash
+docker run -d -p 8000:8000 -e PROXBOX_BIND_HOST=:: \
+  emersonfelipesp/proxbox-api:latest
+```
+
+#### Docker Compose quoting caveat
+
+In Compose `environment:` **list-form**, values are taken verbatim — the quotes are NOT stripped — so `- PROXBOX_BIND_HOST="::"` ends up as the literal 4-character string `"::"` inside the container, which used to crash binding with `[Errno -2] Name does not resolve`. The container now sanitizes surrounding quotes defensively, but the recommended forms are:
+
+```yaml
+environment:
+  - PROXBOX_BIND_HOST=::          # list-form: NO quotes
+```
+
+```yaml
+environment:
+  PROXBOX_BIND_HOST: "::"         # map-form: YAML strips the quotes
 ```
 
 ### Build from source

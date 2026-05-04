@@ -126,6 +126,7 @@ Open the nearest scoped guide for the code you are changing.
 
 ## Environment Variables
 
+- `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
 - `PROXBOX_NETBOX_TIMEOUT`: NetBox client timeout in seconds (default: 120).
 - `PROXBOX_NETBOX_MAX_CONCURRENT`: max concurrent NetBox API requests (default: 1, keep low to avoid PostgreSQL pool exhaustion).
 - `PROXBOX_NETBOX_MAX_RETRIES`: retry attempts for transient failures (default: 5).

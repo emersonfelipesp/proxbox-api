@@ -31,9 +31,18 @@ chmod 600 "$CERT_DIR/key-pkcs8.pem"
 
 PORT="${PORT:-8000}"
 
+# Sanitize PROXBOX_BIND_HOST: strip surrounding ASCII quotes and whitespace.
+# Compose list-form `- KEY="::"` does NOT strip the quotes, so the literal
+# value reaches the container as `"::"` and crashes binding.
+HOST=$(printf '%s' "${PROXBOX_BIND_HOST:-0.0.0.0}" \
+  | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+        -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+        -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+[ -z "$HOST" ] && HOST=0.0.0.0
+
 exec /app/.venv/bin/granian \
   --interface asgi \
-  --host 0.0.0.0 \
+  --host "$HOST" \
   --port "${PORT}" \
   --ws \
   --ssl-certificate "$CERT_DIR/cert.pem" \
