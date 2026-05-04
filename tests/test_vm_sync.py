@@ -44,7 +44,12 @@ def test_map_proxmox_vm_to_netbox_vm_body_uses_schema_driven_normalization(monke
     assert body["role"] == 33
     assert body["vcpus"] == 4
     assert body["memory"] > 0
-    assert body["disk"] > 0
+    # Without parseable disk entries in PROXMOX_VM_CONFIG, body["disk"] == 0:
+    # the maxdisk fallback was removed (issue #349) so VM.disk equals the
+    # aggregate of parsed virtual-disks. See
+    # test_map_proxmox_vm_to_netbox_vm_body_uses_config_disk_aggregate for the
+    # >0 path.
+    assert body["disk"] == 0
     assert body["tags"] == [7]
     assert body["custom_fields"]["proxmox_vm_id"] == 101
     assert body["custom_fields"]["proxmox_vm_type"] == "qemu"

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_rest import rest_first_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxCustomFieldSyncState
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep
 from proxbox_api.utils.retry import is_netbox_overwhelmed_error
@@ -16,6 +16,76 @@ from proxbox_api.utils.retry import is_netbox_overwhelmed_error
 router = APIRouter()
 _CUSTOM_FIELDS_CACHE: tuple[dict[str, object], ...] | None = None
 _CUSTOM_FIELDS_LOCK = asyncio.Lock()
+
+
+def _coerce_object_type_entry(item: object) -> str | None:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        if "app_label" in item and "model" in item:
+            return f"{item['app_label']}.{item['model']}"
+        name = item.get("name")
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def _normalize_current_object_types(raw_current: object) -> list[str]:
+    if not isinstance(raw_current, list):
+        return []
+    normalized: list[str] = []
+    for item in raw_current:
+        coerced = _coerce_object_type_entry(item)
+        if coerced is not None:
+            normalized.append(coerced)
+    return normalized
+
+
+async def _fetch_existing_custom_field(netbox_session: object, name: str) -> object | None:
+    try:
+        return await rest_first_async(
+            netbox_session,
+            "/api/extras/custom-fields/",
+            query={"name": name, "limit": 2},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not pre-fetch custom field '%s' for object_types union: %s",
+            name,
+            exc,
+        )
+        return None
+
+
+async def _union_object_types_with_current(
+    netbox_session: object,
+    custom_field: dict[str, object],
+) -> None:
+    """Mutate ``custom_field['object_types']`` to be (current ∪ desired).
+
+    NetBox custom fields have an ``object_types`` list that operators sometimes
+    expand manually. Without this merge, ``rest_reconcile_async`` would PATCH
+    the field back to the hardcoded list on every restart, wiping operator
+    additions. Pre-merging makes desired a superset of current so the diff
+    only adds entries — never removes them.
+    """
+    desired = custom_field.get("object_types")
+    name = custom_field.get("name")
+    if not isinstance(desired, list) or not name:
+        return
+    existing = await _fetch_existing_custom_field(netbox_session, name)
+    if existing is None:
+        return
+    current = _normalize_current_object_types(existing.serialize().get("object_types"))
+    union = list(dict.fromkeys([*desired, *current]))
+    operator_added = [item for item in union if item not in desired]
+    if operator_added:
+        logger.info(
+            "Preserving operator-added object_types for custom field '%s': %s",
+            name,
+            ", ".join(operator_added),
+        )
+    custom_field["object_types"] = union
 
 
 def _resolve_custom_field_delay() -> float:
@@ -585,6 +655,7 @@ async def create_custom_fields(  # noqa: C901
 
         for custom_field in custom_fields:
             try:
+                await _union_object_types_with_current(netbox_session, custom_field)
                 record = await rest_reconcile_async(
                     netbox_session,
                     "/api/extras/custom-fields/",

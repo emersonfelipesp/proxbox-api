@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState
+from proxbox_api.proxmox_to_netbox.schemas.disks import size_str_to_mb
 from proxbox_api.services.proxmox_helpers import get_vm_config_individual
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.helpers import (
@@ -91,10 +92,12 @@ async def sync_virtual_disk_individual(
 
     disk_config = parse_disk_config_entry(vm_config.get(disk_name))
     size = disk_config.get("size", "0")
-    try:
-        size_mb = int(size) // 1_048_576 if size else 0
-    except (ValueError, TypeError):
-        size_mb = 0
+    # Proxmox emits sizes as suffixed strings ("32G", "512M", "1T"). The previous
+    # implementation did ``int(size) // 1_048_576`` which raises on any suffix
+    # and silently fell back to 0 — making the individual sync path produce
+    # virtual-disks with size 0 that then mismatched the VM-level disk total
+    # under NetBox 4.5+ aggregate validation.
+    size_mb = size_str_to_mb(size) if size else 0
 
     volume_id = disk_config.get("volume", disk_config.get("file", None))
     storage_name = storage_name_from_volume_id(volume_id)
