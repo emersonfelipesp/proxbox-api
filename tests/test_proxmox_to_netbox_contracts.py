@@ -25,6 +25,11 @@ def test_map_proxmox_vm_to_netbox_vm_body():
         "agent": 1,
         "unprivileged": 0,
         "searchdomain": "lab.local",
+        # disk_mb must equal the aggregate of parsed VM-config disks so the
+        # NetBox `disk == sum(virtualdisks.size)` aggregate validator passes
+        # on update (issue #349). 100 GiB + 50 GiB = 153600 MiB.
+        "scsi0": "local-lvm:vm-101-disk-0,size=100G",
+        "scsi1": "local-lvm:vm-101-disk-1,size=50G",
     }
 
     body = map_proxmox_vm_to_netbox_vm_body(
@@ -43,9 +48,39 @@ def test_map_proxmox_vm_to_netbox_vm_body():
     assert body["role"] == 33
     assert body["vcpus"] == 4
     assert body["memory"] == 8192
-    assert body["disk"] == 102400
+    assert body["disk"] == 153600
     assert body["custom_fields"]["proxmox_vm_id"] == 101
     assert body["custom_fields"]["proxmox_start_at_boot"] is True
+
+
+def test_map_proxmox_vm_to_netbox_vm_body_no_parseable_disks():
+    """When VM config has no parseable disks, disk must be 0 (not maxdisk).
+
+    Regression: issue #349 — the previous fallback to ``resource.maxdisk``
+    caused the VM-level ``disk`` to disagree with the sum of created
+    ``virtual-disks`` whenever passthrough/raw entries were silently dropped,
+    failing NetBox 4.5+ aggregate validation on update.
+    """
+    resource = {
+        "vmid": 102,
+        "name": "raw-vm",
+        "node": "pve01",
+        "status": "running",
+        "type": "qemu",
+        "maxcpu": 2,
+        "maxmem": 4_294_967_296,
+        "maxdisk": 53_687_091_200,
+    }
+    config = {"onboot": 1}
+    body = map_proxmox_vm_to_netbox_vm_body(
+        resource=resource,
+        config=config,
+        cluster_id=11,
+        device_id=22,
+        role_id=33,
+        tag_ids=[7],
+    )
+    assert body["disk"] == 0
 
 
 def test_load_proxmox_generated_openapi_present():

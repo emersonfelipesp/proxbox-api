@@ -6,9 +6,16 @@ import re
 
 from pydantic import ConfigDict, computed_field, field_validator
 
+from proxbox_api.logger import logger
 from proxbox_api.schemas._base import ProxboxBaseModel
 
-DISK_KEY_PATTERN = re.compile(r"^(scsi|ide|sata|virtio|mp)\d+$|^rootfs$")
+# Match every Proxmox disk key whose size we want to push to NetBox.
+# - ``scsi/ide/sata/virtio/mp`` cover regular and LXC mountpoint disks.
+# - ``rootfs`` is the LXC root mountpoint.
+# - ``efidisk0`` / ``tpmstate0`` are tiny VM firmware/TPM state disks; they
+#   carry a real ``size=`` value, so include them so the VM-level ``disk``
+#   total matches the aggregate of POSTed virtual-disk children.
+DISK_KEY_PATTERN = re.compile(r"^(scsi|ide|sata|virtio|mp)\d+$|^rootfs$|^efidisk\d+$|^tpmstate\d+$")
 UNUSED_DISK_PATTERN = re.compile(r"^unused\d+$")
 
 
@@ -67,6 +74,17 @@ def parse_disk_entry(key: str, raw_value: str) -> ProxmoxDiskEntry | None:
 
     size_mb = size_str_to_mb(disk_info.get("size", "0"))
     if size_mb <= 0:
+        # Common cause: passthrough/raw disks like ``scsi2: /dev/sdb`` carry
+        # no ``size=`` field. Surface this so operators can see why the disk
+        # was excluded from both the VM-level ``disk`` total and the POSTed
+        # virtual-disk children (NetBox 4.5+ enforces those two values match
+        # on update; silently dropping a passthrough breaks reconciliation).
+        logger.warning(
+            "Skipping disk '%s' with no parseable size (raw=%r); "
+            "passthrough/raw disks are not represented in NetBox virtual-disks",
+            key,
+            raw_value,
+        )
         return None
 
     storage_value = str(disk_info.get("storage") or "")

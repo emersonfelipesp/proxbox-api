@@ -982,16 +982,46 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     @computed_field(return_type=int)
     @property
     def disk_mb(self) -> int:
-        """VM disk in MiB, preferring aggregate parsed VM config disks when available."""
+        """VM disk in MiB; always equals the aggregate of parsed VM config disks.
+
+        We deliberately do NOT fall back to ``self.resource.disk_mb`` (the
+        cluster ``maxdisk``) when no disks parsed: NetBox 4.5+ enforces that
+        ``virtualmachine.disk`` matches the sum of its attached
+        ``virtual-disks`` on update, and virtual-disks are POSTed from the
+        same parsed list. Falling back to ``maxdisk`` while POSTing zero
+        virtual-disks (the all-passthrough case) makes the next sync fail
+        with::
+
+            {"disk":["The specified disk size must match the aggregate size
+              of assigned virtual disks."]}
+
+        Returning ``0`` instead is safe because NetBox's aggregate validator
+        short-circuits when ``total_disk`` is falsy.
+        """
         disks = self.config.disks
-        if disks:
-            aggregate = sum(max(int(getattr(disk, "size", 0) or 0), 0) for disk in disks)
-            if aggregate > 0:
-                return aggregate
-        return self.resource.disk_mb
+        if not disks:
+            return 0
+        return sum(max(int(getattr(disk, "size", 0) or 0), 0) for disk in disks)
 
     def as_netbox_create_body(self) -> NetBoxVirtualMachineCreateBody:
         """Return validated NetBox virtual machine create body."""
+
+        # NetBox stores ``virtualmachine.disk`` in a 32-bit ``PositiveIntegerField``
+        # (max 2_147_483_647). Clamp defensively so a future bytes-vs-MiB
+        # regression cannot produce ``Ensure this value is less than or equal
+        # to the allowed maximum`` errors mid-sync.
+        _NETBOX_DISK_MAX = 2_147_483_647
+        disk_value = self.disk_mb
+        if disk_value > _NETBOX_DISK_MAX:
+            from proxbox_api.logger import logger
+
+            logger.warning(
+                "VM %s disk_mb=%d exceeds NetBox max %d; clamping",
+                self.resource.name,
+                disk_value,
+                _NETBOX_DISK_MAX,
+            )
+            disk_value = _NETBOX_DISK_MAX
 
         return NetBoxVirtualMachineCreateBody(
             name=self.resource.name,
@@ -1002,7 +1032,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             role=self.role_id,
             vcpus=int(self.resource.maxcpu or 0),
             memory=self.resource.memory_mb,
-            disk=self.disk_mb,
+            disk=disk_value,
             tags=[tag for tag in self.tag_ids if int(tag) > 0],
             custom_fields=self.vm_custom_fields,
             description=f"Synced from Proxmox node {self.resource.node}",
