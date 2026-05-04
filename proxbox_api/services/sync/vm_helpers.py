@@ -6,8 +6,25 @@ from ipaddress import ip_address, ip_interface
 from typing import Literal
 
 from proxbox_api.logger import logger
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 
 PrimaryIPPreference = Literal["ipv4", "ipv6"]
+
+
+def _compute_vm_patchable_fields(overwrite_flags: SyncOverwriteFlags | None) -> set[str]:
+    """Build the patchable_fields allowlist for virtual machine reconciliation."""
+    fields: set[str] = {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_type:
+        fields.add("virtual_machine_type")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_role:
+        fields.add("role")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_tags:
+        fields.add("tags")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_description:
+        fields.add("description")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields:
+        fields.add("custom_fields")
+    return fields
 
 
 def to_mapping(value: object) -> dict[str, object]:

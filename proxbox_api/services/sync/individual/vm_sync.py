@@ -10,12 +10,14 @@ from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import (
     get_vm_config_individual,
     get_vm_resource_individual,
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
 
 
 def _mb_from_bytes(value: object) -> int:
@@ -122,6 +124,7 @@ async def sync_vm_individual(
     vm_type: str,
     vmid: int,
     dry_run: bool = False,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Sync a single Virtual Machine from Proxmox to NetBox.
 
@@ -136,11 +139,12 @@ async def sync_vm_individual(
         vm_type: 'qemu' or 'lxc'.
         vmid: Proxmox VM ID.
         dry_run: If True, return what would be synced without making changes.
+        overwrite_flags: Per-field overwrite gates for existing VM updates.
 
     Returns:
         IndividualSyncResponse dict.
     """
-    service = BaseIndividualSyncService(nb, px, tag)
+    service = BaseIndividualSyncService(nb, px, tag, overwrite_flags=overwrite_flags)
     now = datetime.now(timezone.utc)
 
     tag_id = int(getattr(tag, "id", 0) or 0)
@@ -262,6 +266,7 @@ async def sync_vm_individual(
             },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
+            patchable_fields=frozenset(_compute_vm_patchable_fields(overwrite_flags)),
             current_normalizer=lambda record: {
                 "name": record.get("name"),
                 "status": record.get("status"),
@@ -331,6 +336,7 @@ async def sync_vm_with_related(
     dry_run: bool = False,
     sync_interfaces: bool = True,
     sync_task_history: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Sync a VM with its related objects (interfaces, task history) in parallel.
 
@@ -351,7 +357,17 @@ async def sync_vm_with_related(
     """
     from proxbox_api.services.sync.individual.task_history_sync import sync_task_history_individual
 
-    vm_result = await sync_vm_individual(nb, px, tag, cluster_name, node, vm_type, vmid, dry_run)
+    vm_result = await sync_vm_individual(
+        nb,
+        px,
+        tag,
+        cluster_name,
+        node,
+        vm_type,
+        vmid,
+        dry_run,
+        overwrite_flags=overwrite_flags,
+    )
 
     related_results: list[dict] = []
     related_dependencies: list[dict] = []

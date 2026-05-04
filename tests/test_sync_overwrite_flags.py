@@ -1,6 +1,6 @@
 """Tests for the SyncOverwriteFlags Pydantic schema.
 
-Locks in the canonical 21-flag set, the all-True default, and the OpenAPI
+Locks in the canonical 22-flag set, the all-True default, and the OpenAPI
 metadata (title/description) added so Swagger UI renders the flattened query
 parameters correctly. The flag list must stay in lock-step with
 `netbox_proxbox.constants.OVERWRITE_FIELDS` on the plugin side.
@@ -20,6 +20,7 @@ EXPECTED_FLAGS: tuple[str, ...] = (
     "overwrite_device_description",
     "overwrite_device_custom_fields",
     "overwrite_vm_role",
+    "overwrite_vm_type",
     "overwrite_vm_tags",
     "overwrite_vm_description",
     "overwrite_vm_custom_fields",
@@ -38,8 +39,8 @@ EXPECTED_FLAGS: tuple[str, ...] = (
 
 
 def test_overwrite_flags_field_count() -> None:
-    """Schema exposes exactly 21 fields, mirroring OVERWRITE_FIELDS in the plugin."""
-    assert len(SyncOverwriteFlags.model_fields) == 21
+    """Schema exposes exactly 22 fields, mirroring OVERWRITE_FIELDS in the plugin."""
+    assert len(SyncOverwriteFlags.model_fields) == 22
 
 
 def test_overwrite_flags_field_names_and_order() -> None:

@@ -68,6 +68,7 @@ from proxbox_api.services.sync.virtual_machines import (
 )
 from proxbox_api.services.sync.vm_create import ensure_vm_type
 from proxbox_api.services.sync.vm_helpers import (
+    _compute_vm_patchable_fields,
     normalized_mac,
     parse_comma_separated_ints,
     parse_key_value_string,
@@ -187,21 +188,23 @@ def _build_vm_index_by_proxmox_id(
 
 def _resolve_vm_overwrites(
     role: bool | None,
+    vm_type: bool | None,
     tags: bool | None,
     description: bool | None,
     custom_fields: bool | None,
     overwrite_flags: SyncOverwriteFlags,
-) -> tuple[bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool]:
     """Resolve VM-scalar overwrite gates from flat Query params + `overwrite_flags`.
 
-    Flat params (`overwrite_vm_role`, `overwrite_vm_tags`, `overwrite_vm_description`,
-    `overwrite_vm_custom_fields`) win when explicitly supplied (`True`/`False`);
+    Flat params (`overwrite_vm_role`, `overwrite_vm_type`, `overwrite_vm_tags`,
+    `overwrite_vm_description`, `overwrite_vm_custom_fields`) win when explicitly supplied (`True`/`False`);
     `None` means "not provided" and the corresponding field on `overwrite_flags`
     is used instead. Old clients that only set the flat params keep the original
     semantics; new clients can drive everything through `overwrite_flags`.
     """
     return (
         role if role is not None else overwrite_flags.overwrite_vm_role,
+        vm_type if vm_type is not None else overwrite_flags.overwrite_vm_type,
         tags if tags is not None else overwrite_flags.overwrite_vm_tags,
         description if description is not None else overwrite_flags.overwrite_vm_description,
         custom_fields if custom_fields is not None else overwrite_flags.overwrite_vm_custom_fields,
@@ -212,6 +215,7 @@ def _build_vm_operation_queue(
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
     overwrite_vm_role: bool = True,
+    overwrite_vm_type: bool = True,
     overwrite_vm_tags: bool = True,
     overwrite_vm_description: bool = True,
     overwrite_vm_custom_fields: bool = True,
@@ -253,6 +257,11 @@ def _build_vm_operation_queue(
 
         if not overwrite_vm_role and _relation_id(existing_record.get("role")) is not None:
             patch_payload.pop("role", None)
+        if (
+            not overwrite_vm_type
+            and _relation_id(existing_record.get("virtual_machine_type")) is not None
+        ):
+            patch_payload.pop("virtual_machine_type", None)
         if not overwrite_vm_description:
             existing_description = existing_record.get("description")
             if isinstance(existing_description, str) and existing_description:
@@ -889,6 +898,7 @@ async def _create_virtual_machine_by_netbox_id(
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
     overwrite_vm_role: bool | None = None,
+    overwrite_vm_type: bool | None = None,
     overwrite_vm_tags: bool | None = None,
     overwrite_vm_description: bool | None = None,
     overwrite_vm_custom_fields: bool | None = None,
@@ -975,6 +985,7 @@ async def _create_virtual_machine_by_netbox_id(
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         overwrite_vm_role=overwrite_vm_role,
+        overwrite_vm_type=overwrite_vm_type,
         overwrite_vm_tags=overwrite_vm_tags,
         overwrite_vm_description=overwrite_vm_description,
         overwrite_vm_custom_fields=overwrite_vm_custom_fields,
@@ -1067,6 +1078,15 @@ async def create_virtual_machines(  # noqa: C901
             "When unset, falls back to overwrite_flags.overwrite_vm_role."
         ),
     ),
+    overwrite_vm_type: bool | None = Query(
+        default=None,
+        title="Overwrite VM Type",
+        description=(
+            "When false, the VM type is not patched on existing VMs that already have a type. "
+            "The type is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_type."
+        ),
+    ),
     overwrite_vm_tags: bool | None = Query(
         default=None,
         title="Overwrite VM Tags",
@@ -1120,15 +1140,30 @@ async def create_virtual_machines(  # noqa: C901
         HTTP response with creation status, or streaming SSE response if using WebSocket.
     """
 
-    overwrite_vm_role, overwrite_vm_tags, overwrite_vm_description, overwrite_vm_custom_fields = (
-        _resolve_vm_overwrites(
-            overwrite_vm_role,
-            overwrite_vm_tags,
-            overwrite_vm_description,
-            overwrite_vm_custom_fields,
-            overwrite_flags,
-        )
+    (
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+    ) = _resolve_vm_overwrites(
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+        overwrite_flags,
     )
+    effective_vm_overwrite_flags = overwrite_flags.model_copy(
+        update={
+            "overwrite_vm_role": overwrite_vm_role,
+            "overwrite_vm_type": overwrite_vm_type,
+            "overwrite_vm_tags": overwrite_vm_tags,
+            "overwrite_vm_description": overwrite_vm_description,
+            "overwrite_vm_custom_fields": overwrite_vm_custom_fields,
+        }
+    )
+    vm_patchable_fields = frozenset(_compute_vm_patchable_fields(effective_vm_overwrite_flags))
 
     filtered_cluster_resources = cluster_resources
     bridge: WebSocketSSEBridge | None = (
@@ -1531,6 +1566,7 @@ async def create_virtual_machines(  # noqa: C901
             prepared_vms,
             netbox_snapshot,
             overwrite_vm_role=overwrite_vm_role,
+            overwrite_vm_type=overwrite_vm_type,
             overwrite_vm_tags=overwrite_vm_tags,
             overwrite_vm_description=overwrite_vm_description,
             overwrite_vm_custom_fields=overwrite_vm_custom_fields,
@@ -1808,6 +1844,7 @@ async def create_virtual_machines(  # noqa: C901
             },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
+            patchable_fields=vm_patchable_fields,
             current_normalizer=lambda record: {
                 "name": record.get("name"),
                 "status": record.get("status"),
@@ -3082,6 +3119,15 @@ async def create_virtual_machines_stream(
             "When unset, falls back to overwrite_flags.overwrite_vm_role."
         ),
     ),
+    overwrite_vm_type: bool | None = Query(
+        default=None,
+        title="Overwrite VM Type",
+        description=(
+            "When false, the VM type is not patched on existing VMs that already have a type. "
+            "The type is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_type."
+        ),
+    ),
     overwrite_vm_tags: bool | None = Query(
         default=None,
         title="Overwrite VM Tags",
@@ -3119,14 +3165,19 @@ async def create_virtual_machines_stream(
     ),
     overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
-    overwrite_vm_role, overwrite_vm_tags, overwrite_vm_description, overwrite_vm_custom_fields = (
-        _resolve_vm_overwrites(
-            overwrite_vm_role,
-            overwrite_vm_tags,
-            overwrite_vm_description,
-            overwrite_vm_custom_fields,
-            overwrite_flags,
-        )
+    (
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+    ) = _resolve_vm_overwrites(
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+        overwrite_flags,
     )
 
     filtered_cluster_resources = cluster_resources
@@ -3159,6 +3210,7 @@ async def create_virtual_machines_stream(
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
                     overwrite_vm_role=overwrite_vm_role,
+                    overwrite_vm_type=overwrite_vm_type,
                     overwrite_vm_tags=overwrite_vm_tags,
                     overwrite_vm_description=overwrite_vm_description,
                     overwrite_vm_custom_fields=overwrite_vm_custom_fields,
@@ -3306,6 +3358,15 @@ async def create_virtual_machine_by_netbox_id_stream(
             "When unset, falls back to overwrite_flags.overwrite_vm_role."
         ),
     ),
+    overwrite_vm_type: bool | None = Query(
+        default=None,
+        title="Overwrite VM Type",
+        description=(
+            "When false, the VM type is not patched on existing VMs that already have a type. "
+            "The type is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_type."
+        ),
+    ),
     overwrite_vm_tags: bool | None = Query(
         default=None,
         title="Overwrite VM Tags",
@@ -3335,14 +3396,19 @@ async def create_virtual_machine_by_netbox_id_stream(
     ),
     overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
-    overwrite_vm_role, overwrite_vm_tags, overwrite_vm_description, overwrite_vm_custom_fields = (
-        _resolve_vm_overwrites(
-            overwrite_vm_role,
-            overwrite_vm_tags,
-            overwrite_vm_description,
-            overwrite_vm_custom_fields,
-            overwrite_flags,
-        )
+    (
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+    ) = _resolve_vm_overwrites(
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+        overwrite_flags,
     )
 
     async def event_stream():
@@ -3364,6 +3430,7 @@ async def create_virtual_machine_by_netbox_id_stream(
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
                     overwrite_vm_role=overwrite_vm_role,
+                    overwrite_vm_type=overwrite_vm_type,
                     overwrite_vm_tags=overwrite_vm_tags,
                     overwrite_vm_description=overwrite_vm_description,
                     overwrite_vm_custom_fields=overwrite_vm_custom_fields,
