@@ -225,12 +225,13 @@ jobs:
               modes = ["dev"]
 
           base = [
-            {"netbox_transport":"https_nginx","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-nginx","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":""},
-            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":""},
-            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_nginx","proxbox_docker_target":"nginx","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k"},
-            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k"},
-            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k"},
-            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":""},
+            {"netbox_transport":"https_nginx","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-nginx","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
+            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
+            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_nginx","proxbox_docker_target":"nginx","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k","network_stack":"ipv4"},
+            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k","network_stack":"ipv4"},
+            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k","network_stack":"ipv4"},
+            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
+            {"netbox_transport":"https_granian","netbox_public_url":"https://[::1]:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://[::1]:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://[::1]:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv6"},
           ]
 
           includes = [dict(**entry, netbox_proxbox_mode=mode) for entry in base for mode in modes]
@@ -279,7 +280,7 @@ jobs:
           retention-days: 1
 
   e2e-docker:
-    name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }} (${{ matrix.netbox_proxbox_mode }})
+    name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }} [${{ matrix.network_stack }}] (${{ matrix.netbox_proxbox_mode }})
     runs-on: ubuntu-latest
     needs: [test, setup, build-netbox-image]
     if: |
@@ -340,7 +341,14 @@ jobs:
       - name: Start E2E stack
         run: |
           set -eux
-          docker network create proxbox-e2e || true
+          if [ "${{ matrix.network_stack }}" = "ipv6" ]; then
+            docker network create --ipv6 --subnet fd00:e2e::/64 proxbox-e2e || true
+            HOST_BIND="[::]:"
+          else
+            docker network create proxbox-e2e || true
+            HOST_BIND=""
+          fi
+          echo "HOST_BIND=${HOST_BIND}" >> "$GITHUB_ENV"
           SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
 
           docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian netbox-e2e-rqworker proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
@@ -356,7 +364,7 @@ jobs:
 
           docker pull "${PROXMOX_OPENAPI_IMAGE}"
 
-          docker run -d --name proxmox-e2e-mock --network proxbox-e2e -p 18006:8000 \
+          docker run -d --name proxmox-e2e-mock --network proxbox-e2e -p "${HOST_BIND}18006:8000" \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
             "${PROXMOX_OPENAPI_IMAGE}"
@@ -396,6 +404,7 @@ jobs:
           DNS.3 = netbox-e2e-nginx
           DNS.4 = netbox-e2e-granian
           IP.1 = 127.0.0.1
+          IP.2 = ::1
           EOF
 
           openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
@@ -437,7 +446,7 @@ jobs:
           EOF
 
           if [ "${{ matrix.netbox_transport }}" = "http_manage" ]; then
-            docker run -d --name netbox-e2e-http --network proxbox-e2e -p 18080:8000 \
+            docker run -d --name netbox-e2e-http --network proxbox-e2e -p "${HOST_BIND}18080:8000" \
               -e DB_HOST=netbox-e2e-postgres \
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
@@ -477,12 +486,12 @@ jobs:
               --entrypoint /bin/bash \
               "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
 
-            docker run -d --name netbox-e2e-nginx --network proxbox-e2e -p 18443:8443 \
+            docker run -d --name netbox-e2e-nginx --network proxbox-e2e -p "${HOST_BIND}18443:8443" \
               -v "$PWD/.ci-tls:/certs:ro" \
               -v "$PWD/.ci-tls/netbox-nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
               nginx:1.27-alpine
           else
-            docker run -d --name netbox-e2e-granian --network proxbox-e2e -p 18443:8443 \
+            docker run -d --name netbox-e2e-granian --network proxbox-e2e -p "${HOST_BIND}18443:8443" \
               -v "$PWD/.ci-tls:/certs:ro" \
               -e DB_HOST=netbox-e2e-postgres \
               -e DB_NAME=netbox \
@@ -546,8 +555,13 @@ jobs:
             fi
           done
 
+          if [ "${{ matrix.network_stack }}" = "ipv6" ]; then
+            PROXMOX_MOCK_HOST_URL="http://[::1]:18006"
+          else
+            PROXMOX_MOCK_HOST_URL="http://127.0.0.1:18006"
+          fi
           for i in $(seq 1 60); do
-            if curl -fsS --max-time 5 http://127.0.0.1:18006/openapi.json >/dev/null 2>&1; then
+            if curl -fsS --max-time 5 "${PROXMOX_MOCK_HOST_URL}/openapi.json" >/dev/null 2>&1; then
               break
             fi
             sleep 2
@@ -557,6 +571,7 @@ jobs:
               exit 1
             fi
           done
+          echo "PROXMOX_MOCK_HOST_URL=${PROXMOX_MOCK_HOST_URL}" >> "$GITHUB_ENV"
 
           TOKEN_OUTPUT=$(docker exec ${{ matrix.netbox_app_container }} /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "from users.models import Token, User; u=User.objects.get(username='admin'); t=Token.objects.create(user=u, version=1, token='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'); print(f'{t.id}:{t.plaintext}')")
           TOKEN_ID=$(printf '%s' "$TOKEN_OUTPUT" | tail -n 1 | cut -d: -f1)
@@ -572,9 +587,15 @@ jobs:
             ${DEV_OVERRIDES:+--build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}"} \
             -t "proxbox-e2e:${{ matrix.proxbox_transport }}" .
 
-          docker run -d --name proxbox-e2e --network proxbox-e2e -p "${{ matrix.proxbox_host_port }}:8000" \
+          if [ "${{ matrix.network_stack }}" = "ipv6" ]; then
+            PROXBOX_BIND_HOST_VALUE="::"
+          else
+            PROXBOX_BIND_HOST_VALUE="0.0.0.0"
+          fi
+
+          docker run -d --name proxbox-e2e --network proxbox-e2e -p "${HOST_BIND}${{ matrix.proxbox_host_port }}:8000" \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
-            -e PROXBOX_BIND_HOST=0.0.0.0 \
+            -e PROXBOX_BIND_HOST="${PROXBOX_BIND_HOST_VALUE}" \
             -e SSL_CERT_FILE=/ci-tls/ca.crt \
             -v "$GITHUB_WORKSPACE/.ci-tls:/ci-tls:ro" \
             "proxbox-e2e:${{ matrix.proxbox_transport }}"
@@ -642,7 +663,7 @@ jobs:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
           PROXBOX_E2E_NETBOX_TOKEN: ${{ env.NETBOX_API_TOKEN }}
           PROXMOX_API_MODE: mock
-          PROXMOX_MOCK_PUBLISHED_URL: http://localhost:18006
+          PROXMOX_MOCK_PUBLISHED_URL: ${{ env.PROXMOX_MOCK_HOST_URL }}
         run: |
           uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v
 
