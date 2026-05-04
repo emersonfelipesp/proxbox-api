@@ -30,6 +30,7 @@ from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
+from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
 
 # VM role mappings for different VM types
 VM_ROLE_MAPPINGS = {
@@ -240,6 +241,7 @@ async def create_or_update_virtual_machine(
     tag_refs: list[dict[str, object]],
     cluster_name: str | None = None,
     virtual_machine_type_id: int | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Create or update a virtual machine in NetBox.
 
@@ -254,6 +256,7 @@ async def create_or_update_virtual_machine(
         tag_refs: Tag references
         cluster_name: Proxmox cluster name for custom field population.
         virtual_machine_type_id: Optional NetBox VirtualMachineType ID (NetBox v4.6+).
+        overwrite_flags: Per-field overwrite gates for existing VM updates.
 
     Returns:
         NetBox virtual machine dict
@@ -284,6 +287,7 @@ async def create_or_update_virtual_machine(
         },
         payload=payload,
         schema=NetBoxVirtualMachineCreateBody,
+        patchable_fields=frozenset(_compute_vm_patchable_fields(overwrite_flags)),
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "status": record.get("status"),

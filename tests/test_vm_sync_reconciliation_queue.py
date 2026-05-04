@@ -80,6 +80,38 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
     assert queue[2].patch_payload["memory"] == 8192
 
 
+def test_build_vm_operation_queue_omits_vm_type_when_overwrite_disabled():
+    prepared = [_prepared_vm(cluster_name="cluster-a", vmid=104, memory=8192)]
+    prepared[0].desired_payload["virtual_machine_type"] = 99
+
+    snapshot = [
+        {
+            "id": 2004,
+            "name": "vm-104",
+            "status": "active",
+            "cluster": {"id": 1, "name": "cluster-a"},
+            "device": {"id": 10},
+            "virtual_machine_type": {"id": 88},
+            "role": {"id": 20},
+            "vcpus": 2,
+            "memory": 4096,
+            "disk": 30,
+            "tags": [{"id": 99}],
+            "custom_fields": {"proxmox_vm_id": 104},
+            "description": "Synced from Proxmox node pve01",
+        }
+    ]
+
+    queue = sync_vm._build_vm_operation_queue(
+        prepared,
+        snapshot,
+        overwrite_vm_type=False,
+    )
+
+    assert [op.method for op in queue] == ["UPDATE"]
+    assert queue[0].patch_payload == {"memory": 8192}
+
+
 @pytest.mark.asyncio
 async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch):
     calls: list[str] = []

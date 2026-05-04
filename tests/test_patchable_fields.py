@@ -323,3 +323,70 @@ def test_device_patchable_helper_is_used_by_ensure_device() -> None:
 
     source = inspect.getsource(device_ensure._ensure_device)
     assert "_compute_device_patchable_fields" in source
+
+
+# ---------------------------------------------------------------------------
+# _compute_vm_patchable_fields — single source of truth for VM reconciliation
+# allowlists across route, service, and individual-sync paths.
+# ---------------------------------------------------------------------------
+
+
+def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    fields = _compute_vm_patchable_fields(SyncOverwriteFlags())
+
+    assert fields == {
+        "name",
+        "cluster",
+        "device",
+        "vcpus",
+        "memory",
+        "disk",
+        "status",
+        "virtual_machine_type",
+        "role",
+        "tags",
+        "description",
+        "custom_fields",
+    }
+
+
+def test_vm_patchable_legacy_none_flags_keeps_all_keys() -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    fields = _compute_vm_patchable_fields(None)
+
+    assert {
+        "name",
+        "cluster",
+        "device",
+        "vcpus",
+        "memory",
+        "disk",
+        "status",
+        "virtual_machine_type",
+        "role",
+        "tags",
+        "description",
+        "custom_fields",
+    }.issubset(fields)
+
+
+@pytest.mark.parametrize(
+    ("flag_name", "missing_key"),
+    [
+        ("overwrite_vm_type", "virtual_machine_type"),
+        ("overwrite_vm_role", "role"),
+        ("overwrite_vm_tags", "tags"),
+        ("overwrite_vm_description", "description"),
+        ("overwrite_vm_custom_fields", "custom_fields"),
+    ],
+)
+def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_key: str) -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    fields = _compute_vm_patchable_fields(SyncOverwriteFlags(**{flag_name: False}))
+
+    assert missing_key not in fields
+    assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)

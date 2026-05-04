@@ -79,6 +79,14 @@ class SyncOverwriteFlags(ProxboxBaseModel):
             "The role is still set when a VM is first created."
         ),
     )
+    overwrite_vm_type: bool = Field(
+        default=True,
+        title="Overwrite VM Type",
+        description=(
+            "When false, the VM type is not patched on existing VMs that already have a type. "
+            "The type is still set when a VM is first created."
+        ),
+    )
     overwrite_vm_tags: bool = Field(
         default=True,
         title="Overwrite VM Tags",
