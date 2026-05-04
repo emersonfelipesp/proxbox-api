@@ -59,14 +59,19 @@ Service URL:
 
 - <https://127.0.0.1:8443>
 
-### mkcert environment variables
+### Docker runtime environment variables
 
-Available for the `nginx` and `granian` images:
+Common to all images (`raw`, `nginx`, `granian`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8000` | Port the server listens on |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Address the server binds to. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
+
+mkcert-specific (only for the `nginx` and `granian` images):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `MKCERT_CERT_DIR` | `/certs` | Directory where certificates are stored |
 | `MKCERT_EXTRA_NAMES` | — | Extra SANs (comma or space separated), e.g. `proxbox.lan,10.0.0.5` |
 | `CAROOT` | — | Mount a volume here to persist the local CA across restarts |

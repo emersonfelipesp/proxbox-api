@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
+
 # Sanitize PROXBOX_BIND_HOST: strip surrounding ASCII single/double quotes
 # and whitespace. Compose list-form `- KEY="::"` does NOT strip the quotes,
 # so the literal value reaches the container as `"::"` and crashes uvicorn

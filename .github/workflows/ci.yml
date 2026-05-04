@@ -172,9 +172,36 @@ jobs:
           done
           echo "TIMEOUT"; docker logs pb-default; exit 1
 
+      - name: Build granian image
+        run: docker build --target granian -t proxbox-api:bind-smoke-granian .
+
+      - name: Granian image tolerates Compose list-form quoted value (regression for #52)
+        run: |
+          set -eu
+          docker run -d --name pb-v6q-granian \
+            -e 'PROXBOX_BIND_HOST="::"' \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            proxbox-api:bind-smoke-granian
+          for i in $(seq 1 120); do
+            log=$(docker logs pb-v6q-granian 2>&1 || true)
+            case "$log" in
+              *'Name does not resolve'*|*'getaddrinfo'*)
+                echo "FAIL: granian sanitizer regressed (issue #52):"; echo "$log"; exit 1 ;;
+            esac
+            case "$log" in
+              *'[::]:'*)
+                # Cross-check: container must still be running (granian did not crash post-bind).
+                if [ "$(docker inspect -f '{{.State.Running}}' pb-v6q-granian)" = "true" ]; then
+                  echo "OK: granian bound IPv6 dual-stack ($i s)"; exit 0
+                fi ;;
+            esac
+            sleep 1
+          done
+          echo "TIMEOUT waiting for granian to bind"; docker logs pb-v6q-granian; exit 1
+
       - name: Cleanup
         if: always()
-        run: docker rm -f pb-v6 pb-v6q pb-default 2>/dev/null || true
+        run: docker rm -f pb-v6 pb-v6q pb-default pb-v6q-granian 2>/dev/null || true
 
   setup:
     runs-on: ubuntu-latest
