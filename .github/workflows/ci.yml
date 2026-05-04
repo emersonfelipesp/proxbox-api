@@ -16,6 +16,9 @@ on:
   release:
     types: [published]
 
+env:
+  PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -127,7 +130,7 @@ jobs:
       - name: Bind to IPv6 dual-stack (PROXBOX_BIND_HOST=::)
         run: |
           set -eu
-          docker run -d --name pb-v6 -e PROXBOX_BIND_HOST=:: -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 proxbox-api:bind-smoke
+          docker run -d --name pb-v6 -e PROXBOX_BIND_HOST=:: -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -e PROXBOX_ENCRYPTION_KEY proxbox-api:bind-smoke
           for i in $(seq 1 90); do
             log=$(docker logs pb-v6 2>&1 || true)
             case "$log" in
@@ -143,7 +146,7 @@ jobs:
       - name: Bind tolerates Compose list-form quoted value (regression for #52)
         run: |
           set -eu
-          docker run -d --name pb-v6q -e 'PROXBOX_BIND_HOST="::"' -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 proxbox-api:bind-smoke
+          docker run -d --name pb-v6q -e 'PROXBOX_BIND_HOST="::"' -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -e PROXBOX_ENCRYPTION_KEY proxbox-api:bind-smoke
           for i in $(seq 1 90); do
             log=$(docker logs pb-v6q 2>&1 || true)
             case "$log" in
@@ -159,7 +162,7 @@ jobs:
       - name: Default bind (no PROXBOX_BIND_HOST set) still works
         run: |
           set -eu
-          docker run -d --name pb-default -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 proxbox-api:bind-smoke
+          docker run -d --name pb-default -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -e PROXBOX_ENCRYPTION_KEY proxbox-api:bind-smoke
           for i in $(seq 1 90); do
             log=$(docker logs pb-default 2>&1 || true)
             case "$log" in
@@ -181,6 +184,7 @@ jobs:
           docker run -d --name pb-v6q-granian \
             -e 'PROXBOX_BIND_HOST="::"' \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             proxbox-api:bind-smoke-granian
           for i in $(seq 1 120); do
             log=$(docker logs pb-v6q-granian 2>&1 || true)
@@ -607,6 +611,7 @@ jobs:
           docker run -d --name proxbox-e2e --network proxbox-e2e -p "${HOST_BIND}${{ matrix.proxbox_host_port }}:8000" \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
             -e PROXBOX_BIND_HOST="${PROXBOX_BIND_HOST_VALUE}" \
+            -e PROXBOX_ENCRYPTION_KEY \
             -e SSL_CERT_FILE=/ci-tls/ca.crt \
             -v "$GITHUB_WORKSPACE/.ci-tls:/ci-tls:ro" \
             "proxbox-e2e:${{ matrix.proxbox_transport }}"
