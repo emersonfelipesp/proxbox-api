@@ -118,47 +118,59 @@ jobs:
       - name: Build raw image
         run: docker build --target raw -t proxbox-api:bind-smoke .
 
+      # We verify success by reading uvicorn's startup log instead of curling
+      # the published port. Docker's userland port proxy cannot forward an
+      # IPv4 host-side connection to an IPv6-only container listener, so a
+      # `[::]:PORT` listener is unreachable via `-p 127.0.0.1:HOST:CONTAINER`
+      # mapping even when the bind itself is correct. Reading the container
+      # log directly checks what issue #52 actually broke: container startup.
       - name: Bind to IPv6 dual-stack (PROXBOX_BIND_HOST=::)
         run: |
-          set -eux
-          docker run -d --name pb-v6 -e PROXBOX_BIND_HOST=:: -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -p 18000:8000 proxbox-api:bind-smoke
+          set -eu
+          docker run -d --name pb-v6 -e PROXBOX_BIND_HOST=:: -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 proxbox-api:bind-smoke
           for i in $(seq 1 90); do
-            if curl -fsS --max-time 3 http://127.0.0.1:18000/health >/dev/null 2>&1; then
-              echo "ready ($i s)"; break
-            fi
+            log=$(docker logs pb-v6 2>&1 || true)
+            case "$log" in
+              *'Name does not resolve'*|*'getaddrinfo'*)
+                echo "FAIL: bind crashed (issue #52 regression):"; echo "$log"; exit 1 ;;
+              *'Uvicorn running on http://[::]:'*)
+                echo "OK: uvicorn bound IPv6 dual-stack ($i s)"; exit 0 ;;
+            esac
             sleep 1
-            if [ "$i" -eq 90 ]; then
-              echo "timed out waiting for /health"; docker logs pb-v6 || true; exit 1
-            fi
           done
+          echo "TIMEOUT waiting for uvicorn to bind"; docker logs pb-v6; exit 1
 
       - name: Bind tolerates Compose list-form quoted value (regression for #52)
         run: |
-          set -eux
-          docker run -d --name pb-v6q -e 'PROXBOX_BIND_HOST="::"' -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -p 18001:8000 proxbox-api:bind-smoke
+          set -eu
+          docker run -d --name pb-v6q -e 'PROXBOX_BIND_HOST="::"' -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 proxbox-api:bind-smoke
           for i in $(seq 1 90); do
-            if curl -fsS --max-time 3 http://127.0.0.1:18001/health >/dev/null 2>&1; then
-              echo "ready ($i s)"; break
-            fi
+            log=$(docker logs pb-v6q 2>&1 || true)
+            case "$log" in
+              *'Name does not resolve'*|*'getaddrinfo'*)
+                echo "FAIL: sanitizer regressed (issue #52):"; echo "$log"; exit 1 ;;
+              *'Uvicorn running on http://[::]:'*)
+                echo "OK: sanitizer stripped quotes, bound IPv6 ($i s)"; exit 0 ;;
+            esac
             sleep 1
-            if [ "$i" -eq 90 ]; then
-              echo "timed out — sanitizer regressed"; docker logs pb-v6q || true; exit 1
-            fi
           done
+          echo "TIMEOUT"; docker logs pb-v6q; exit 1
 
       - name: Default bind (no PROXBOX_BIND_HOST set) still works
         run: |
-          set -eux
-          docker run -d --name pb-default -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -p 18002:8000 proxbox-api:bind-smoke
+          set -eu
+          docker run -d --name pb-default -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 proxbox-api:bind-smoke
           for i in $(seq 1 90); do
-            if curl -fsS --max-time 3 http://127.0.0.1:18002/health >/dev/null 2>&1; then
-              echo "ready ($i s)"; break
-            fi
+            log=$(docker logs pb-default 2>&1 || true)
+            case "$log" in
+              *'Name does not resolve'*|*'getaddrinfo'*)
+                echo "FAIL: default bind broken:"; echo "$log"; exit 1 ;;
+              *'Uvicorn running on http://0.0.0.0:'*)
+                echo "OK: default bind 0.0.0.0 ($i s)"; exit 0 ;;
+            esac
             sleep 1
-            if [ "$i" -eq 90 ]; then
-              echo "default bind regressed"; docker logs pb-default || true; exit 1
-            fi
           done
+          echo "TIMEOUT"; docker logs pb-default; exit 1
 
       - name: Cleanup
         if: always()
