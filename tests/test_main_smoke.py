@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from proxbox_api import __version__
 from proxbox_api.app import factory
 from proxbox_api.main import app
 from proxbox_api.proxmox_codegen.normalize import normalize_captured_endpoints
@@ -57,6 +58,7 @@ def test_custom_openapi_contains_embedded_proxmox_extension():
     schema = app.openapi()
     assert isinstance(schema, dict)
     assert "x-proxmox-generated-openapi" in schema["info"]
+    assert schema["info"]["version"] == __version__
 
 
 def test_create_app_skips_static_mount_when_directory_is_missing(monkeypatch):

@@ -5,6 +5,9 @@ on:
   release:
     types: [published]
 
+env:
+  PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
+
 jobs:
   prepare-release:
     name: prepare artifacts + metadata
@@ -12,6 +15,7 @@ jobs:
     outputs:
       package_name: ${{ steps.meta.outputs.package_name }}
       version: ${{ steps.meta.outputs.version }}
+      netbox_versions: ${{ steps.meta.outputs.netbox_versions }}
 
     steps:
       - name: Checkout repository
@@ -34,11 +38,15 @@ jobs:
           RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           python - <<'PY'
+          import json
           import os
           import pathlib
           import tomllib
 
           data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
+          netbox_versions = json.loads(
+              pathlib.Path('.github/netbox-versions.json').read_text(encoding='utf-8')
+          )
           project_name = data['project']['name']
           version = data['project']['version']
           event = os.getenv('GITHUB_EVENT_NAME', '')
@@ -51,6 +59,7 @@ jobs:
               )
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               fh.write(f'package_name={project_name}\nversion={version}\n')
+              fh.write(f'netbox_versions={json.dumps(netbox_versions)}\n')
           PY
 
       - name: Build distribution
@@ -151,12 +160,16 @@ jobs:
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80
 
   e2e-pre-publish:
-    name: E2E pre-publish (dev deps)
+    name: E2E pre-publish (dev deps) [${{ matrix.netbox-version }}]
     runs-on: ubuntu-latest
     needs: [prepare-release]
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        netbox-version: ${{ fromJSON(needs.prepare-release.outputs.netbox_versions) }}
     env:
-      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta2
+      NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
     steps:
       - name: Checkout repository
@@ -240,6 +253,7 @@ jobs:
 
           docker run -d --name proxbox-e2e --network proxbox-e2e -p 18081:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             -e PROXBOX_BIND_HOST=0.0.0.0 \
             proxbox-e2e:raw
 
@@ -348,13 +362,17 @@ jobs:
       mode: publish
 
   e2e-post-publish:
-    name: E2E post-publish (published artifacts)
+    name: E2E post-publish (published artifacts) [${{ matrix.netbox-version }}]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     needs: [publish-docker, prepare-release]
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        netbox-version: ${{ fromJSON(needs.prepare-release.outputs.netbox_versions) }}
     env:
-      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta2
+      NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
       PROXBOX_API_IMAGE: emersonfelipesp/proxbox-api
     steps:
@@ -436,6 +454,7 @@ jobs:
           docker pull "${PROXBOX_API_IMAGE}:${RELEASE_VERSION}"
           docker run -d --name proxbox-e2e --network proxbox-e2e -p 18081:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             -e PROXBOX_BIND_HOST=0.0.0.0 \
             "${PROXBOX_API_IMAGE}:${RELEASE_VERSION}"
 
