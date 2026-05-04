@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from proxbox_api import __version__
 from proxbox_api.app import bootstrap
 from proxbox_api.app.cache_routes import register_cache_routes
 from proxbox_api.app.cors import build_cors_origins
@@ -250,7 +251,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Proxbox Backend",
         description="## Proxbox Backend made in FastAPI framework",
-        version="0.0.10",
+        version=__version__,
         lifespan=_lifespan,
         docs_url=None,
         redoc_url=None,

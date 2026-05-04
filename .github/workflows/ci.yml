@@ -214,15 +214,23 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
+      netbox_versions: ${{ steps.gen.outputs.netbox_versions }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Generate E2E matrix
         id: gen
         run: |
-          python3 - <<'PYEOF' > /tmp/e2e_matrix.json
+          python3 - <<'PYEOF'
           import json, os
+          from pathlib import Path
 
           event = os.environ.get("GITHUB_EVENT_NAME", "push")
           mode_input = os.environ.get("INPUT_NETBOX_PROXBOX_MODE", "dev")
+          netbox_versions = json.loads(
+              Path(".github/netbox-versions.json").read_text(encoding="utf-8")
+          )
 
           if event == "release":
               modes = ["dev", "pypi"]
@@ -241,26 +249,27 @@ jobs:
             {"netbox_transport":"https_granian","netbox_public_url":"https://[::1]:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://[::1]:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://[::1]:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv6"},
           ]
 
-          netbox_versions = ["v4.5.8", "v4.5.9", "v4.6.0-beta2"]
           includes = [
               dict(**entry, netbox_proxbox_mode=mode, netbox_version=ver)
               for entry in base
               for mode in modes
               for ver in netbox_versions
           ]
-          print(json.dumps({"include": includes}))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"matrix={json.dumps({'include': includes})}\n")
+              fh.write(f"netbox_versions={json.dumps(netbox_versions)}\n")
           PYEOF
-          echo "matrix=$(cat /tmp/e2e_matrix.json)" >> "$GITHUB_OUTPUT"
         env:
           INPUT_NETBOX_PROXBOX_MODE: ${{ inputs.netbox_proxbox_mode || 'dev' }}
 
   build-netbox-image:
     name: Build NetBox image [${{ matrix.netbox-version }}]
     runs-on: ubuntu-latest
+    needs: setup
     strategy:
       fail-fast: false
       matrix:
-        netbox-version: [v4.5.8, v4.5.9, v4.6.0-beta2]
+        netbox-version: ${{ fromJSON(needs.setup.outputs.netbox_versions) }}
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
     steps:
@@ -300,10 +309,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test, setup, build-netbox-image]
     if: |
+      always() &&
       !cancelled() &&
       needs.test.result == 'success' &&
-      needs.setup.result == 'success' &&
-      needs.build-netbox-image.result == 'success'
+      needs.setup.result == 'success'
     timeout-minutes: 30
     strategy:
       fail-fast: false

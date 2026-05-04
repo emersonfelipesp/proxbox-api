@@ -15,6 +15,7 @@ jobs:
     outputs:
       package_name: ${{ steps.meta.outputs.package_name }}
       version: ${{ steps.meta.outputs.version }}
+      netbox_versions: ${{ steps.meta.outputs.netbox_versions }}
 
     steps:
       - name: Checkout repository
@@ -37,11 +38,15 @@ jobs:
           RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           python - <<'PY'
+          import json
           import os
           import pathlib
           import tomllib
 
           data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
+          netbox_versions = json.loads(
+              pathlib.Path('.github/netbox-versions.json').read_text(encoding='utf-8')
+          )
           project_name = data['project']['name']
           version = data['project']['version']
           event = os.getenv('GITHUB_EVENT_NAME', '')
@@ -54,6 +59,7 @@ jobs:
               )
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               fh.write(f'package_name={project_name}\nversion={version}\n')
+              fh.write(f'netbox_versions={json.dumps(netbox_versions)}\n')
           PY
 
       - name: Build distribution
@@ -161,7 +167,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        netbox-version: [v4.5.8, v4.5.9, v4.6.0-beta2]
+        netbox-version: ${{ fromJSON(needs.prepare-release.outputs.netbox_versions) }}
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
@@ -364,7 +370,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        netbox-version: [v4.5.8, v4.5.9, v4.6.0-beta2]
+        netbox-version: ${{ fromJSON(needs.prepare-release.outputs.netbox_versions) }}
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
