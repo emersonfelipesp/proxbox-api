@@ -14,7 +14,10 @@ from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle
 from proxbox_api.proxmox_to_netbox.netbox_schema import netbox_openapi_schema_source
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
+    get_bundled_generated_dir,
+    get_user_generated_dir,
     load_proxmox_generated_openapi,
+    proxmox_generated_openapi_path,
 )
 from proxbox_api.routes.proxmox.runtime_generated import (
     generated_proxmox_route_state,
@@ -68,7 +71,8 @@ async def generate_viewer_codegen_artifacts(
     try:
         output_dir = None
         if persist:
-            output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
+            output_dir = get_user_generated_dir()
+            output_dir.mkdir(parents=True, exist_ok=True)
         bundle = await generate_proxmox_codegen_bundle_async(
             output_dir=output_dir,
             source_url=source_url,
@@ -155,8 +159,9 @@ async def proxmox_viewer_openapi(
     """Return generated OpenAPI schema for Proxmox API viewer endpoints."""
 
     try:
-        output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
-        openapi_path = output_dir / version_tag / "openapi.json"
+        output_dir = get_user_generated_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        openapi_path = proxmox_generated_openapi_path(version_tag=version_tag)
         if regenerate or not openapi_path.exists():
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,
@@ -224,6 +229,41 @@ async def refresh_generated_proxmox_routes(
     return result
 
 
+@router.get("/schema-status")
+async def schema_generation_status(
+    version_tag: str | None = Query(
+        default=None,
+        description="Specific version tag to check. Omit to see all available versions.",
+    ),
+):
+    """Report schema availability and any active background generation status.
+
+    Returns which bundled Proxmox OpenAPI schemas are available and whether
+    any background generation tasks are in progress.
+    """
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
+    from proxbox_api.schema_version_manager import (
+        get_all_generation_statuses,
+        get_generation_status,
+        has_schema_for_release,
+    )
+
+    available = available_proxmox_sdk_versions()
+
+    if version_tag is not None:
+        gen_status = get_generation_status(version_tag)
+        return {
+            "version_tag": version_tag,
+            "schema_available": has_schema_for_release(version_tag),
+            "generation": gen_status,
+        }
+
+    return {
+        "available_versions": available,
+        "generation_tasks": get_all_generation_statuses(),
+    }
+
+
 @router.get("/pydantic", response_class=PlainTextResponse)
 async def proxmox_viewer_pydantic_models(
     regenerate: bool = Query(
@@ -266,8 +306,13 @@ async def proxmox_viewer_pydantic_models(
     """Return generated Pydantic v2 models source code for Proxmox API endpoints."""
 
     try:
-        output_dir = Path(__file__).resolve().parents[2] / "generated" / "proxmox"
+        output_dir = get_user_generated_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
         models_path = output_dir / version_tag / "pydantic_models.py"
+        if not models_path.exists():
+            bundled = get_bundled_generated_dir() / version_tag / "pydantic_models.py"
+            if bundled.exists():
+                models_path = bundled
         if regenerate or not models_path.exists():
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,

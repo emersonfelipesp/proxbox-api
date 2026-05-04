@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
 from proxbox_api.routes.proxmox import get_vm_config
 from proxbox_api.services.sync.storage_links import (
@@ -262,6 +262,7 @@ async def create_virtual_disks(  # noqa: C901
             disks_created = 0
             disks_updated = 0
 
+            disk_payloads: list[dict[str, object]] = []
             for disk_entry in disk_entries:
                 storage_name = disk_entry.storage_name or storage_name_from_volume_id(
                     disk_entry.storage
@@ -271,36 +272,40 @@ async def create_virtual_disks(  # noqa: C901
                     cluster_name=cluster_name,
                     storage_name=storage_name,
                 )
-                result = await rest_reconcile_async(
+                storage_id = storage_record.get("id") if storage_record else None
+                custom_fields: dict[str, object] = {}
+                if storage_id is not None:
+                    custom_fields["proxbox_storage_id"] = storage_id
+                disk_payload: dict[str, object] = {
+                    "virtual_machine": vm_id,
+                    "name": disk_entry.name,
+                    "size": disk_entry.size,
+                    "description": disk_entry.description,
+                    "tags": tag_refs,
+                }
+                if custom_fields:
+                    disk_payload["custom_fields"] = custom_fields
+                disk_payloads.append(disk_payload)
+
+            if disk_payloads:
+                bulk_result = await rest_bulk_reconcile_async(
                     nb,
                     "/api/virtualization/virtual-disks/",
-                    lookup={
-                        "virtual_machine_id": vm_id,
-                        "name": disk_entry.name,
-                    },
-                    payload={
-                        "virtual_machine": vm_id,
-                        "name": disk_entry.name,
-                        "size": disk_entry.size,
-                        "storage": storage_record.get("id") if storage_record else None,
-                        "description": disk_entry.description,
-                        "tags": tag_refs,
-                    },
+                    payloads=disk_payloads,
+                    lookup_fields=["virtual_machine", "name"],
                     schema=NetBoxVirtualDiskSyncState,
                     current_normalizer=lambda record: {
                         "virtual_machine": record.get("virtual_machine"),
                         "name": record.get("name"),
                         "size": record.get("size"),
-                        "storage": record.get("storage"),
                         "description": record.get("description"),
                         "tags": record.get("tags"),
+                        "custom_fields": record.get("custom_fields"),
                     },
+                    base_query={"virtual_machine_id": vm_id},
                 )
-
-                if result.get("created", False):
-                    disks_created += 1
-                else:
-                    disks_updated += 1
+                disks_created = bulk_result.created
+                disks_updated = bulk_result.updated
 
             if disks_created > 0:
                 created += 1

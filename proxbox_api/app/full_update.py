@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
@@ -26,16 +28,16 @@ from proxbox_api.routes.virtualization.virtual_machines.snapshots_vm import (
     _create_all_virtual_machine_snapshots,
     create_all_virtual_machine_snapshots,
 )
-from proxbox_api.routes.virtualization.virtual_machines.storages_vm import (
-    create_storages,
-)
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
+from proxbox_api.schemas.stream_messages import ErrorCategory
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.replications import sync_all_replications
+from proxbox_api.services.sync.storages import create_storages
 from proxbox_api.services.sync.task_history import (
     sync_all_virtual_machine_task_histories,
 )
@@ -67,6 +69,7 @@ async def full_update_sync(  # noqa: C901
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
 ) -> dict:
     sync_nodes: list = []
@@ -100,6 +103,10 @@ async def full_update_sync(  # noqa: C901
             node=None,
             tag=tag,
             use_websocket=False,
+            overwrite_device_role=overwrite_flags.overwrite_device_role,
+            overwrite_device_type=overwrite_flags.overwrite_device_type,
+            overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -115,7 +122,8 @@ async def full_update_sync(  # noqa: C901
             pxs=pxs,
             tag=tag,
             use_websocket=False,
-            fetch_max_concurrency=fetch_max_concurrency,
+            fetch_concurrency=fetch_max_concurrency if fetch_max_concurrency is not None else 8,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -136,6 +144,12 @@ async def full_update_sync(  # noqa: C901
             tag=tag,
             use_websocket=False,
             sync_vm_network=False,
+            overwrite_vm_role=overwrite_flags.overwrite_vm_role,
+            overwrite_vm_type=overwrite_flags.overwrite_vm_type,
+            overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,
+            overwrite_vm_description=overwrite_flags.overwrite_vm_description,
+            overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -242,6 +256,7 @@ async def full_update_sync(  # noqa: C901
             custom_fields=custom_fields,
             tag=tag,
             use_websocket=False,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -261,6 +276,7 @@ async def full_update_sync(  # noqa: C901
             custom_fields=custom_fields,
             tag=tag,
             use_websocket=False,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -338,6 +354,7 @@ async def full_update_sync_stream(  # noqa: C901
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
 ) -> StreamingResponse:
     async def event_stream():  # noqa: C901
@@ -388,6 +405,33 @@ async def full_update_sync_stream(  # noqa: C901
                     "message": f"Full update stream connected (operation_id={operation_id})",
                 },
             )
+            stage_items = [
+                {"name": "devices", "type": "stage"},
+                {"name": "storage", "type": "stage"},
+                {"name": "virtual-machines", "type": "stage"},
+                {"name": "virtual-disks", "type": "stage"},
+                {"name": "task-history", "type": "stage"},
+                {"name": "backups", "type": "stage"},
+                {"name": "snapshots", "type": "stage"},
+                {"name": "replications", "type": "stage"},
+                {"name": "backup-routines", "type": "stage"},
+                {"name": "node-interfaces", "type": "stage"},
+                {"name": "vm-interfaces", "type": "stage"},
+                {"name": "vm-ip-addresses", "type": "stage"},
+            ]
+            yield sse_event(
+                "discovery",
+                {
+                    "event": "discovery",
+                    "phase": "full-update",
+                    "status": "discovered",
+                    "message": f"Discovered {len(stage_items)} sync stage(s) for full update",
+                    "count": len(stage_items),
+                    "items": stage_items,
+                    "progress": {"current": 0, "total": len(stage_items), "percent": 0},
+                    "metadata": {"operation_id": operation_id},
+                },
+            )
             yield sse_event(
                 "step",
                 {
@@ -406,10 +450,15 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=devices_bridge,
                         use_websocket=True,
+                        overwrite_device_role=overwrite_flags.overwrite_device_role,
+                        overwrite_device_type=overwrite_flags.overwrite_device_type,
+                        overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await devices_bridge.close()
 
+            _devices_start = time.monotonic()
             devices_task = asyncio.create_task(_run_devices_sync())
             async for frame in devices_bridge.iter_sse():
                 yield frame
@@ -422,6 +471,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Devices synchronization finished.",
                     "result": {"count": len(sync_nodes)},
+                    "duration_seconds": round(time.monotonic() - _devices_start, 3),
                 },
             )
 
@@ -442,11 +492,15 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=storage_bridge,
                         use_websocket=True,
-                        fetch_max_concurrency=fetch_max_concurrency,
+                        fetch_concurrency=fetch_max_concurrency
+                        if fetch_max_concurrency is not None
+                        else 8,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await storage_bridge.close()
 
+            _storage_start = time.monotonic()
             storage_task = asyncio.create_task(_run_storage_sync())
             async for frame in storage_bridge.iter_sse():
                 yield frame
@@ -459,6 +513,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Storage synchronization finished.",
                     "result": {"count": len(sync_storage)},
+                    "duration_seconds": round(time.monotonic() - _storage_start, 3),
                 },
             )
 
@@ -483,10 +538,17 @@ async def full_update_sync_stream(  # noqa: C901
                         websocket=vm_bridge,
                         use_websocket=True,
                         sync_vm_network=False,
+                        overwrite_vm_role=overwrite_flags.overwrite_vm_role,
+                        overwrite_vm_type=overwrite_flags.overwrite_vm_type,
+                        overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,
+                        overwrite_vm_description=overwrite_flags.overwrite_vm_description,
+                        overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await vm_bridge.close()
 
+            _vms_start = time.monotonic()
             vms_task = asyncio.create_task(_run_vms_sync())
             async for frame in vm_bridge.iter_sse():
                 yield frame
@@ -499,6 +561,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Virtual machines synchronization finished.",
                     "result": {"count": len(sync_vms)},
+                    "duration_seconds": round(time.monotonic() - _vms_start, 3),
                 },
             )
 
@@ -526,6 +589,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await disks_bridge.close()
 
+            _disks_start = time.monotonic()
             disks_task = asyncio.create_task(_run_disks_sync())
             async for frame in disks_bridge.iter_sse():
                 yield frame
@@ -538,6 +602,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Virtual disks synchronization finished.",
                     "result": {"count": _result_count(sync_disks)},
+                    "duration_seconds": round(time.monotonic() - _disks_start, 3),
                 },
             )
 
@@ -564,6 +629,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await task_history_bridge.close()
 
+            _task_history_start = time.monotonic()
             task_history_task = asyncio.create_task(_run_task_history_sync())
             async for frame in task_history_bridge.iter_sse():
                 yield frame
@@ -576,6 +642,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Task history synchronization finished.",
                     "result": {"count": _result_count(sync_task_history)},
+                    "duration_seconds": round(time.monotonic() - _task_history_start, 3),
                 },
             )
 
@@ -603,6 +670,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await backups_bridge.close()
 
+            _backups_start = time.monotonic()
             backups_task = asyncio.create_task(_run_backups_sync())
             async for frame in backups_bridge.iter_sse():
                 yield frame
@@ -615,6 +683,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Backup synchronization finished.",
                     "result": {"count": len(sync_backups)},
+                    "duration_seconds": round(time.monotonic() - _backups_start, 3),
                 },
             )
 
@@ -642,6 +711,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await snapshots_bridge.close()
 
+            _snapshots_start = time.monotonic()
             snapshots_task = asyncio.create_task(_run_snapshots_sync())
             async for frame in snapshots_bridge.iter_sse():
                 yield frame
@@ -654,6 +724,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Snapshot synchronization finished.",
                     "result": {"count": _result_count(sync_snapshots)},
+                    "duration_seconds": round(time.monotonic() - _snapshots_start, 3),
                 },
             )
 
@@ -678,6 +749,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await node_interfaces_bridge.close()
 
+            _node_interfaces_start = time.monotonic()
             node_interfaces_task = asyncio.create_task(_run_node_interfaces_sync())
             async for frame in node_interfaces_bridge.iter_sse():
                 yield frame
@@ -690,6 +762,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "Node interfaces synchronization finished.",
                     "result": {"count": len(sync_node_interfaces)},
+                    "duration_seconds": round(time.monotonic() - _node_interfaces_start, 3),
                 },
             )
 
@@ -713,10 +786,12 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=vm_interfaces_bridge,
                         use_websocket=True,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await vm_interfaces_bridge.close()
 
+            _vm_interfaces_start = time.monotonic()
             vm_interfaces_task = asyncio.create_task(_run_vm_interfaces_sync())
             async for frame in vm_interfaces_bridge.iter_sse():
                 yield frame
@@ -729,6 +804,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "VM interfaces synchronization finished.",
                     "result": {"count": len(sync_vm_interfaces)},
+                    "duration_seconds": round(time.monotonic() - _vm_interfaces_start, 3),
                 },
             )
 
@@ -752,10 +828,12 @@ async def full_update_sync_stream(  # noqa: C901
                         tag=tag,
                         websocket=vm_ip_addresses_bridge,
                         use_websocket=True,
+                        overwrite_flags=overwrite_flags,
                     )
                 finally:
                     await vm_ip_addresses_bridge.close()
 
+            _vm_ip_addresses_start = time.monotonic()
             vm_ip_addresses_task = asyncio.create_task(_run_vm_ip_addresses_sync())
             async for frame in vm_ip_addresses_bridge.iter_sse():
                 yield frame
@@ -768,6 +846,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "status": "completed",
                     "message": "VM IP address synchronization finished.",
                     "result": {"count": len(sync_vm_ip_addresses)},
+                    "duration_seconds": round(time.monotonic() - _vm_ip_addresses_start, 3),
                 },
             )
 
@@ -789,6 +868,7 @@ async def full_update_sync_stream(  # noqa: C901
                 finally:
                     await replications_bridge.close()
 
+            _replications_start = time.monotonic()
             replications_task = asyncio.create_task(_run_replications_sync())
             async for frame in replications_bridge.iter_sse():
                 yield frame
@@ -804,6 +884,7 @@ async def full_update_sync_stream(  # noqa: C901
                         "created": sync_replications.get("created", 0),
                         "updated": sync_replications.get("updated", 0),
                     },
+                    "duration_seconds": round(time.monotonic() - _replications_start, 3),
                 },
             )
 
@@ -821,10 +902,12 @@ async def full_update_sync_stream(  # noqa: C901
                     return await sync_all_backup_routines(
                         netbox_session=netbox_session,
                         pxs=pxs,
+                        bridge=backup_routines_bridge,
                     )
                 finally:
                     await backup_routines_bridge.close()
 
+            _backup_routines_start = time.monotonic()
             backup_routines_task = asyncio.create_task(_run_backup_routines_sync())
             async for frame in backup_routines_bridge.iter_sse():
                 yield frame
@@ -840,6 +923,7 @@ async def full_update_sync_stream(  # noqa: C901
                         "created": sync_backup_routines.get("created", 0),
                         "updated": sync_backup_routines.get("updated", 0),
                     },
+                    "duration_seconds": round(time.monotonic() - _backup_routines_start, 3),
                 },
             )
 
@@ -878,7 +962,36 @@ async def full_update_sync_stream(  # noqa: C901
                     },
                 },
             )
+        except asyncio.CancelledError:
+            yield sse_event(
+                "error",
+                {
+                    "step": "full-update",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Full update sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
+                },
+            )
         except ProxboxException as error:
+            yield sse_event(
+                "error_detail",
+                {
+                    "event": "error_detail",
+                    "phase": "full-update",
+                    "category": ErrorCategory.INTERNAL.value,
+                    "message": "Full update synchronization failed",
+                    "detail": error.detail or error.message,
+                    "suggestion": "Review backend logs and retry the full update",
+                },
+            )
             yield sse_event(
                 "error",
                 {
@@ -898,6 +1011,17 @@ async def full_update_sync_stream(  # noqa: C901
             )
         except Exception as error:  # noqa: BLE001
             yield sse_event(
+                "error_detail",
+                {
+                    "event": "error_detail",
+                    "phase": "full-update",
+                    "category": ErrorCategory.INTERNAL.value,
+                    "message": "Unexpected error during full update",
+                    "detail": str(error),
+                    "suggestion": "Check backend logs for stack trace and retry",
+                },
+            )
+            yield sse_event(
                 "error",
                 {
                     "step": "full-update",
@@ -914,8 +1038,6 @@ async def full_update_sync_stream(  # noqa: C901
                     "errors": [{"detail": str(error)}],
                 },
             )
-        finally:
-            return
 
     return StreamingResponse(
         event_stream(),

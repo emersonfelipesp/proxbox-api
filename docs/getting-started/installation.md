@@ -10,15 +10,20 @@ This page documents supported ways to run `proxbox-api`.
 
 ## Option 1: Docker (recommended for quick start)
 
-Pull image:
+All Docker images are **Alpine-based** (smaller footprint). Three variants are available:
+
+| Variant | Tags | Description |
+|---------|------|-------------|
+| **Raw** (default) | `latest`, `<version>` | Pure uvicorn, HTTP only. Smallest image. |
+| **Nginx** | `latest-nginx`, `<version>-nginx` | nginx terminates HTTPS via mkcert; proxies to uvicorn. |
+| **Granian** | `latest-granian`, `<version>-granian` | Granian (Rust ASGI server) with native TLS via mkcert. |
+
+### Raw image — HTTP only (default)
+
+Simplest option. No proxy in front, plain HTTP. Ideal for local development or behind your own reverse proxy.
 
 ```bash
 docker pull emersonfelipesp/proxbox-api:latest
-```
-
-Run container:
-
-```bash
 docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest
 ```
 
@@ -26,7 +31,114 @@ Service URL:
 
 - <http://127.0.0.1:8000>
 
-## Option 2: Local development from source
+### Nginx image — HTTPS with mkcert
+
+nginx terminates HTTPS using auto-generated [mkcert](https://github.com/FiloSottile/mkcert) certificates and proxies to uvicorn inside the container.
+
+```bash
+docker pull emersonfelipesp/proxbox-api:latest-nginx
+docker run -d -p 8443:8000 --name proxbox-api-nginx \
+  emersonfelipesp/proxbox-api:latest-nginx
+```
+
+Service URL:
+
+- <https://127.0.0.1:8443> (self-signed, trusted on the container host)
+
+### Granian image — HTTPS with mkcert (no nginx)
+
+[Granian](https://github.com/emmett-framework/granian) is a Rust-based ASGI server with native TLS and HTTP/2. A single process handles everything — no nginx or supervisord required.
+
+```bash
+docker pull emersonfelipesp/proxbox-api:latest-granian
+docker run -d -p 8443:8000 --name proxbox-api-granian \
+  emersonfelipesp/proxbox-api:latest-granian
+```
+
+Service URL:
+
+- <https://127.0.0.1:8443>
+
+### Docker runtime environment variables
+
+Common to all images (`raw`, `nginx`, `granian`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | Port the server listens on |
+| `PROXBOX_BIND_HOST` | `0.0.0.0` | Address the server binds to. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
+
+mkcert-specific (only for the `nginx` and `granian` images):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MKCERT_CERT_DIR` | `/certs` | Directory where certificates are stored |
+| `MKCERT_EXTRA_NAMES` | — | Extra SANs (comma or space separated), e.g. `proxbox.lan,10.0.0.5` |
+| `CAROOT` | — | Mount a volume here to persist the local CA across restarts |
+
+Example with extra SANs:
+
+```bash
+docker run -d -p 8443:8000 --name proxbox-api-tls \
+  -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
+  emersonfelipesp/proxbox-api:latest-nginx
+```
+
+### Binding to IPv6 / dual-stack
+
+To listen on both IPv4 and IPv6, set `PROXBOX_BIND_HOST=::`:
+
+```bash
+docker run -d -p 8000:8000 -e PROXBOX_BIND_HOST=:: \
+  emersonfelipesp/proxbox-api:latest
+```
+
+#### Docker Compose quoting caveat
+
+In Compose `environment:` **list-form**, values are taken verbatim — the quotes are NOT stripped — so `- PROXBOX_BIND_HOST="::"` ends up as the literal 4-character string `"::"` inside the container, which used to crash binding with `[Errno -2] Name does not resolve`. The container now sanitizes surrounding quotes defensively, but the recommended forms are:
+
+```yaml
+environment:
+  - PROXBOX_BIND_HOST=::          # list-form: NO quotes
+```
+
+```yaml
+environment:
+  PROXBOX_BIND_HOST: "::"         # map-form: YAML strips the quotes
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/emersonfelipesp/proxbox-api.git
+cd proxbox-api
+
+docker build -t proxbox-api:raw .                          # raw (default)
+docker build --target nginx -t proxbox-api:nginx .         # nginx
+docker build --target granian -t proxbox-api:granian .     # granian
+```
+
+## Option 2: PyPI
+
+The package is published to [PyPI](https://pypi.org/project/proxbox-api/) as `proxbox-api`.
+
+```bash
+pip install proxbox-api
+```
+
+Or with `uv`:
+
+```bash
+uv add proxbox-api
+```
+
+Start the server:
+
+```bash
+python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+## Option 3: Local development from source
 
 Clone repository:
 
@@ -85,7 +197,7 @@ Adjust file names to match what `mkcert` created.
 uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000
 ```
 
-Point the proxy at `http://127.0.0.1:8000` and set `ssl_certificate` / `ssl_certificate_key` to your PEM paths (for Let’s Encrypt: `fullchain.pem` and `privkey.pem` under `/etc/letsencrypt/live/<domain>/`). Set `X-Forwarded-Proto` and related headers so the app sees the original scheme. See the repository **README** for a complete nginx `server` example.
+Point the proxy at `http://127.0.0.1:8000` and set `ssl_certificate` / `ssl_certificate_key` to your PEM paths (for Let's Encrypt: `fullchain.pem` and `privkey.pem` under `/etc/letsencrypt/live/<domain>/`). Set `X-Forwarded-Proto` and related headers so the app sees the original scheme. See the repository **README** for a complete nginx `server` example.
 
 **Direct uvicorn TLS** (small deployments): use the **full certificate chain** as `--ssl-certfile` and the private key as `--ssl-keyfile`:
 

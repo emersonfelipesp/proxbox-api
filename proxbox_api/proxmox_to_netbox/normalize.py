@@ -36,7 +36,10 @@ def build_virtual_machine_transform(
     device_id: int | None,
     role_id: int | None,
     tag_ids: list[int],
+    virtual_machine_type_id: int | None = None,
     last_updated: datetime | None = None,
+    cluster_name: str | None = None,
+    proxmox_url: str | None = None,
 ) -> NetBoxVirtualMachineCreateBody:
     """Build validated NetBox VM create payload from Proxmox raw payload and config."""
 
@@ -55,8 +58,11 @@ def build_virtual_machine_transform(
         cluster_id=cluster_id,
         device_id=device_id,
         role_id=role_id,
+        virtual_machine_type_id=virtual_machine_type_id,
         tag_ids=tag_ids,
         last_updated=last_updated,
+        cluster_name=cluster_name,
+        proxmox_url=proxmox_url,
     )
 
     body = transform.as_netbox_create_body()

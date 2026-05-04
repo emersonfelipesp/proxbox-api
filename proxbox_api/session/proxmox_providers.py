@@ -2,28 +2,40 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from json import JSONDecodeError
 from typing import Annotated
 
 from fastapi import Depends, Query
-from sqlmodel import select
+from sqlmodel import Session, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import DatabaseSessionDep, ProxmoxEndpoint
+from proxbox_api.database import ProxmoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
 from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox_core import ProxmoxSession
+from proxbox_api.settings_client import get_settings
 
 
 async def proxmox_sessions(  # noqa: C901
-    database_session: DatabaseSessionDep,
-    source: str = "database",
+    database_session: AsyncSession = Depends(get_async_session),
+    source: Annotated[
+        str,
+        Query(
+            title="Proxmox Endpoint Source",
+            description="Source of configured Proxmox endpoints (database or netbox).",
+        ),
+    ] = "database",
     name: Annotated[
         str | None,
         Query(
             title="Proxmox Name",
             description="Name of Proxmox Cluster or Proxmox Node (if standalone).",
+            max_length=255,
         ),
     ] = None,
     domain: Annotated[
@@ -31,6 +43,7 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox Domain",
             description="Domain of Proxmox Cluster or Proxmox Node (if standalone).",
+            max_length=255,
         ),
     ] = None,
     ip_address: Annotated[
@@ -38,6 +51,7 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox IP Address",
             description="IP Address of Proxmox Cluster or Proxmox Node (if standalone).",
+            max_length=45,
         ),
     ] = None,
     port: Annotated[
@@ -45,6 +59,8 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox HTTP Port",
             description="HTTP Port of Proxmox Cluster or Proxmox Node (if standalone).",
+            ge=1,
+            le=65535,
         ),
     ] = 8006,
     endpoint_ids: Annotated[
@@ -52,19 +68,50 @@ async def proxmox_sessions(  # noqa: C901
         Query(
             title="Proxmox Endpoint IDs",
             description="Comma-separated list of Proxmox endpoint database IDs to filter by.",
+            max_length=255,
+        ),
+    ] = None,
+    proxmox_endpoint_ids: Annotated[
+        str | None,
+        Query(
+            title="Proxmox Endpoint IDs (plugin alias)",
+            description=(
+                "Alias for endpoint_ids used by the netbox-proxbox plugin. "
+                "Takes precedence over endpoint_ids when both are provided."
+            ),
+            max_length=255,
         ),
     ] = None,
 ):
     """
     Default Behavior: Instantiate Proxmox Sessions and return a list of Proxmox Sessions objects.
     If 'name' is provided, return only the Proxmox Session with that name.
-    If 'endpoint_ids' is provided, filter by those database IDs.
+    If 'endpoint_ids' or 'proxmox_endpoint_ids' is provided, filter by those database IDs.
     """
 
+    if source not in ("database", "netbox"):
+        raise ProxboxException(
+            message="Invalid source parameter",
+            detail="source must be 'database' or 'netbox'.",
+        )
+
+    effective_endpoint_ids = proxmox_endpoint_ids or endpoint_ids
+
     endpoint_id_list = None
-    if endpoint_ids is not None and endpoint_ids.strip():
+    if effective_endpoint_ids is not None and effective_endpoint_ids.strip():
+        if len(effective_endpoint_ids) > 255:
+            raise ProxboxException(
+                message="Invalid Proxmox endpoint_ids query parameter",
+                detail="endpoint_ids exceeds maximum length.",
+            )
         try:
-            endpoint_id_list = [int(eid.strip()) for eid in endpoint_ids.split(",") if eid.strip()]
+            parts = [p.strip() for p in effective_endpoint_ids.split(",") if p.strip()]
+            if len(parts) > 100:
+                raise ProxboxException(
+                    message="Invalid Proxmox endpoint_ids query parameter",
+                    detail="Too many endpoint IDs specified.",
+                )
+            endpoint_id_list = [int(eid) for eid in parts]
         except ValueError as error:
             raise ProxboxException(
                 message="Invalid Proxmox endpoint_ids query parameter",
@@ -78,10 +125,11 @@ async def proxmox_sessions(  # noqa: C901
         endpoint_ids=endpoint_id_list,
     )
 
-    def return_single_session(field, value):
+    async def return_single_session(field: str, value: str) -> list[ProxmoxSession]:
         for proxmox_schema in proxmox_schemas:
             if value == getattr(proxmox_schema, field, None):
-                return [ProxmoxSession(proxmox_schema)]
+                session = await ProxmoxSession.create(proxmox_schema)
+                return [session]
 
         raise ProxboxException(
             message=f"No result found for Proxmox Sessions based on the provided {field}",
@@ -90,25 +138,59 @@ async def proxmox_sessions(  # noqa: C901
 
     try:
         if ip_address is not None:
-            return return_single_session("ip_address", ip_address)
+            return await return_single_session("ip_address", ip_address)
 
         if domain is not None:
-            return return_single_session("domain", domain)
+            return await return_single_session("domain", domain)
 
         if name is not None:
-            return return_single_session("name", name)
+            return await return_single_session("name", name)
     except ProxboxException as error:
         raise error
 
     try:
-        return [ProxmoxSession(px_schema) for px_schema in proxmox_schemas]
+        sessions = await asyncio.gather(
+            *[ProxmoxSession.create(px_schema) for px_schema in proxmox_schemas]
+        )
+        return list(sessions)
     except Exception as error:
         raise ProxboxException(
             message="Could not return Proxmox Sessions", python_exception=f"{error}"
         )
 
 
-ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions)]
+async def proxmox_sessions_dep(
+    sessions: Annotated[list[ProxmoxSession], Depends(proxmox_sessions)],
+):
+    try:
+        yield sessions
+    finally:
+        for session in sessions:
+            close_method = getattr(session, "aclose", None)
+            if callable(close_method):
+                try:
+                    await close_method()
+                except Exception as error:  # pragma: no cover
+                    logger.debug("Failed to clean up proxmox session: %s", error)
+
+
+async def close_proxmox_sessions(pxs: list[ProxmoxSession]) -> None:
+    """Best-effort cleanup for Proxmox sessions after endpoint use.
+
+    This helper is used by routes that receive ``pxs`` from dependency injection
+    and want explicit teardown at the end of execution. It is idempotent and
+    tolerates already-closed sessions.
+    """
+    for session in pxs:
+        close_method = getattr(session, "aclose", None)
+        if callable(close_method):
+            try:
+                await close_method()
+            except Exception as error:  # pragma: no cover
+                logger.debug("Failed to clean up proxmox session: %s", error)
+
+
+ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions_dep)]
 
 
 def _netbox_field(endpoint: object, field: str, default: object = None) -> object:
@@ -124,16 +206,22 @@ def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
         domain=endpoint.domain,
         http_port=endpoint.port,
         user=endpoint.username,
-        password=endpoint.password,
+        password=endpoint.get_decrypted_password(),
         ssl=endpoint.verify_ssl,
         token=ProxmoxTokenSchema(
             name=endpoint.token_name,
-            value=endpoint.token_value,
+            value=endpoint.get_decrypted_token_value(),
         ),
+        timeout=endpoint.timeout,
+        max_retries=endpoint.max_retries,
+        retry_backoff=float(endpoint.retry_backoff) if endpoint.retry_backoff is not None else None,
     )
 
 
-def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
+def _parse_netbox_endpoint(
+    endpoint: object,
+    plugin_settings: dict[str, object] | None = None,
+) -> ProxmoxSessionSchema:
     ip = None
     ip_address_object = _netbox_field(endpoint, "ip_address")
     if ip_address_object:
@@ -143,6 +231,11 @@ def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
             ip_address_with_mask = getattr(ip_address_object, "address", None)
         if ip_address_with_mask:
             ip = ip_address_with_mask.split("/")[0]
+
+    settings = plugin_settings or {}
+    raw_timeout = _netbox_field(endpoint, "timeout")
+    raw_max_retries = _netbox_field(endpoint, "max_retries")
+    raw_retry_backoff = _netbox_field(endpoint, "retry_backoff")
 
     return ProxmoxSessionSchema(
         name=_netbox_field(endpoint, "name"),
@@ -156,11 +249,18 @@ def _parse_netbox_endpoint(endpoint: object) -> ProxmoxSessionSchema:
             name=_netbox_field(endpoint, "token_name"),
             value=_netbox_field(endpoint, "token_value"),
         ),
+        timeout=int(raw_timeout) if raw_timeout is not None else settings.get("proxmox_timeout"),  # type: ignore[arg-type]
+        max_retries=int(raw_max_retries)
+        if raw_max_retries is not None
+        else settings.get("proxmox_max_retries"),  # type: ignore[arg-type]
+        retry_backoff=float(raw_retry_backoff)
+        if raw_retry_backoff is not None
+        else settings.get("proxmox_retry_backoff"),  # type: ignore[arg-type]
     )
 
 
 async def load_proxmox_session_schemas(
-    database_session: DatabaseSessionDep,
+    database_session: AsyncSession | Session,
     source: str = "database",
     endpoint_ids: list[int] | None = None,
 ) -> list[ProxmoxSessionSchema]:
@@ -168,6 +268,10 @@ async def load_proxmox_session_schemas(
 
     if source == "netbox":
         netbox_session = get_netbox_async_session(database_session=database_session)
+        if inspect.isawaitable(netbox_session):
+            netbox_session = await netbox_session
+
+        plugin_settings = await asyncio.to_thread(get_settings, netbox_session=netbox_session)
 
         try:
             url = "/api/plugins/proxbox/endpoints/proxmox/"
@@ -183,17 +287,20 @@ async def load_proxmox_session_schemas(
                 message="NetBox returned invalid JSON while fetching Proxmox endpoints",
                 python_exception=str(error),
             )
-        return [_parse_netbox_endpoint(endpoint) for endpoint in netbox_endpoints]
+        return [_parse_netbox_endpoint(endpoint, plugin_settings) for endpoint in netbox_endpoints]
 
     query = select(ProxmoxEndpoint)
     if endpoint_ids:
         query = query.where(ProxmoxEndpoint.id.in_(endpoint_ids))
-    db_endpoints = database_session.exec(query).all()
+    result = database_session.exec(query)
+    if inspect.isawaitable(result):
+        result = await result
+    db_endpoints = result.all()
     return [_parse_db_endpoint(endpoint) for endpoint in db_endpoints]
 
 
 async def resolve_proxmox_target_session(
-    database_session: DatabaseSessionDep,
+    database_session: AsyncSession | Session,
     *,
     source: str = "database",
     name: str | None = None,
@@ -217,7 +324,7 @@ async def resolve_proxmox_target_session(
             continue
         for proxmox_schema in proxmox_schemas:
             if value == getattr(proxmox_schema, field, None):
-                return ProxmoxSession(proxmox_schema)
+                return await ProxmoxSession.create(proxmox_schema)
         raise ProxboxException(
             message=f"No result found for Proxmox Sessions based on the provided {field}",
             detail="Check if the provided parameters are correct",
@@ -235,4 +342,4 @@ async def resolve_proxmox_target_session(
             detail="Generated Proxmox proxy routes require an explicit target when more than one endpoint is configured.",
         )
 
-    return ProxmoxSession(proxmox_schemas[0])
+    return await ProxmoxSession.create(proxmox_schemas[0])

@@ -1,5 +1,7 @@
 """Device synchronization service from Proxmox nodes to NetBox."""
 
+from __future__ import annotations
+
 from typing import Annotated
 
 from fastapi import Depends
@@ -9,6 +11,8 @@ from proxbox_api.dependencies import ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload
+from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.device_ensure import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -17,259 +21,213 @@ from proxbox_api.services.sync.device_ensure import (
     _ensure_device_type,
     _ensure_manufacturer,
     _ensure_site,
-    _wrap_device_phase_error,
+    ensure_proxmox_devices_bulk,
 )
 from proxbox_api.utils import return_status_html
+from proxbox_api.utils.streaming import WebSocketSSEBridge
 from proxbox_api.utils.structured_logging import SyncPhaseLogger
+
+__all__ = [
+    "_ensure_cluster",
+    "_ensure_cluster_type",
+    "_ensure_device",
+    "_ensure_device_role",
+    "_ensure_device_type",
+    "_ensure_manufacturer",
+    "_ensure_site",
+    "create_proxmox_devices",
+    "ProxmoxCreateDevicesDep",
+]
 
 
 async def create_proxmox_devices(  # noqa: C901
     netbox_session: object,
     clusters_status: list[object] | None,
     tag: ProxboxTagDep,
-    websocket: object | None = None,
+    websocket: Annotated[WebSocketSSEBridge | None, Depends(lambda: None)] = None,
     node: str | None = None,
     use_websocket: bool = False,
     use_css: bool = False,
+    overwrite_device_role: bool = True,
+    overwrite_device_type: bool = True,
+    overwrite_device_tags: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict[str, object]]:
-    """Create and synchronize devices from Proxmox cluster nodes to NetBox.
-
-    This function iterates through cluster status objects, extracts node information,
-    and creates corresponding NetBox device records with appropriate metadata.
-
-    Args:
-        netbox_session: NetBox API session for creating/updating devices.
-        clusters_status: List of cluster status objects containing node information.
-        tag: ProxBox tag reference for tagging created objects.
-        websocket: Optional WebSocket connection for streaming progress updates.
-        node: Optional specific node name to filter processing.
-        use_websocket: Whether to send progress updates via WebSocket/SSE.
-        use_css: Whether to include CSS styling in HTML status responses.
-
-    Returns:
-        List of created/synced device records from NetBox as dictionaries.
-
-    Raises:
-        ProxboxException: If device creation or synchronization fails.
-    """
+    """Create and synchronize devices from Proxmox nodes to NetBox."""
     tag_refs = nested_tag_payload(tag)
     nb = netbox_session
-
-    total_devices = 0  # Track total devices processed
-    successful_devices = 0  # Track successful device creations
-    failed_devices = 0  # Track failed device creations
-
-    # Initialize structured logger
     phase_logger = SyncPhaseLogger("device_sync", cluster_mode="proxmox")
-    phase_logger.log_phase("initialization", "Device sync process starting")
-
     device_list: list[dict[str, object]] = []
 
     if not clusters_status:
         phase_logger.log_phase("validation", "No cluster status data provided", level="warning")
         return device_list
 
-    try:
-        # Count total devices to process (just for journalling)
-        for cluster_status in clusters_status:
-            if cluster_status and cluster_status.node_list:
-                device_count = len(cluster_status.node_list)
-                total_devices += device_count
+    bridge: WebSocketSSEBridge | None = (
+        websocket if use_websocket and isinstance(websocket, WebSocketSSEBridge) else None
+    )
 
-        for cluster_status in clusters_status:
-            if not cluster_status or not cluster_status.node_list:
+    all_devices: list[dict[str, object]] = []
+    device_cluster_map: dict[str, str] = {}
+    for cluster_status in clusters_status:
+        cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
+        cluster_mode = str(getattr(cluster_status, "mode", "") or "").strip().capitalize()
+        for node_obj in getattr(cluster_status, "node_list", None) or []:
+            device_name = str(getattr(node_obj, "name", "") or "").strip()
+            if not device_name:
                 continue
+            all_devices.append(
+                {
+                    "name": device_name,
+                    "type": "node",
+                    "cluster": cluster_name,
+                    "cluster_mode": cluster_mode or "Proxmox",
+                }
+            )
+            device_cluster_map[device_name] = cluster_name
 
-            cluster_logger = SyncPhaseLogger("device_sync", cluster=cluster_status.name)
-            cluster_logger.log_phase("processing", f"Processing cluster: {cluster_status.name}")
+    if bridge:
+        await bridge.emit_discovery(
+            phase="devices",
+            items=all_devices,
+            message=f"Discovered {len(all_devices)} device(s) to synchronize",
+            metadata={"total_devices": len(all_devices)},
+        )
 
-            for node_obj in cluster_status.node_list:
-                device_name = node_obj.name
-                device_logger = SyncPhaseLogger(
-                    "device_sync",
-                    cluster=cluster_status.name,
-                    device=device_name,
-                )
-                device_logger.log_phase("processing", f"Processing device: {device_name}")
-
-                if use_websocket and websocket:
-                    await websocket.send_json(
-                        {
-                            "object": "device",
-                            "type": "create",
-                            "data": {
-                                "completed": False,
-                                "sync_status": return_status_html("syncing", use_css),
-                                "rowid": device_name,
-                                "name": device_name,
-                                "netbox_id": None,
-                                "manufacturer": None,
-                                "role": None,
-                                "cluster": cluster_status.mode.capitalize(),
-                                "device_type": None,
-                            },
-                        }
-                    )
-
-                try:
-                    try:
-                        cluster_type = await _ensure_cluster_type(
-                            nb,
-                            mode=cluster_status.mode,
-                            tag_refs=tag_refs,
-                        )
-                    except Exception as error:
-                        raise _wrap_device_phase_error("cluster type", error) from error
-
-                    try:
-                        cluster = await _ensure_cluster(
-                            nb,
-                            cluster_name=cluster_status.name,
-                            cluster_type_id=getattr(cluster_type, "id", None),
-                            mode=cluster_status.mode,
-                            tag_refs=tag_refs,
-                        )
-                    except Exception as error:
-                        raise _wrap_device_phase_error("cluster", error) from error
-
-                    try:
-                        manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
-                    except Exception as error:
-                        raise _wrap_device_phase_error("manufacturer", error) from error
-
-                    try:
-                        device_type = await _ensure_device_type(
-                            nb,
-                            manufacturer_id=getattr(manufacturer, "id", None),
-                            tag_refs=tag_refs,
-                        )
-                    except Exception as error:
-                        raise _wrap_device_phase_error("device type", error) from error
-
-                    try:
-                        role = await _ensure_device_role(nb, tag_refs=tag_refs)
-                    except Exception as error:
-                        raise _wrap_device_phase_error("device role", error) from error
-
-                    try:
-                        site = await _ensure_site(
-                            nb,
-                            cluster_name=cluster_status.name,
-                            tag_refs=tag_refs,
-                        )
-                    except Exception as error:
-                        raise _wrap_device_phase_error("site", error) from error
-
-                    netbox_device = None
-
-                    if cluster is not None:
-                        try:
-                            netbox_device = await _ensure_device(
-                                nb,
-                                device_name=device_name,
-                                cluster_id=getattr(cluster, "id", None),
-                                device_type_id=getattr(device_type, "id", None),
-                                role_id=getattr(role, "id", None),
-                                site_id=getattr(site, "id", None),
-                                tag_refs=tag_refs,
-                            )
-                        except Exception as error:
-                            raise _wrap_device_phase_error("device", error) from error
-
-                        device_logger.log_phase_complete(
-                            "creation",
-                            f"Device {device_name} created/synced successfully",
-                            device_id=getattr(netbox_device, "id", "unknown"),
-                        )
-
-                    if netbox_device:
-                        netbox_device_data = netbox_device.json
-
-                        # If node, return only the node requested.
-                        if node and node == device_name:
-                            return [netbox_device_data] if netbox_device_data else []
-
-                        device_list.append(netbox_device_data)
-                        successful_devices += 1
-
-                        if use_websocket and websocket:
-                            await websocket.send_json(
-                                {
-                                    "object": "device",
-                                    "type": "create",
-                                    "data": {
-                                        "completed": True,
-                                        "increment_count": "yes",
-                                        "sync_status": return_status_html("completed", use_css),
-                                        "rowid": device_name,
-                                        "name": f"<a href='{netbox_device_data.get('display_url')}'>{netbox_device_data.get('name')}</a>",
-                                        "netbox_id": netbox_device_data.get("id"),
-                                        #'manufacturer': f"<a href='{netbox_device.get('manufacturer').get('url')}'>{netbox_device.get('manufacturer').get('name')}</a>",
-                                        "role": f"<a href='{(netbox_device_data.get('role') or {}).get('url')}'>{(netbox_device_data.get('role') or {}).get('name')}</a>",
-                                        "cluster": f"<a href='{(netbox_device_data.get('cluster') or {}).get('url')}'>{(netbox_device_data.get('cluster') or {}).get('name')}</a>",
-                                        "device_type": f"<a href='{(netbox_device_data.get('device_type') or {}).get('url')}'>{(netbox_device_data.get('device_type') or {}).get('model')}</a>",
-                                    },
-                                }
-                            )
-                    else:
-                        failed_devices += 1
-                        error_msg = (
-                            f"Device creation failed for {device_name}. netbox_device is None."
-                        )
-                        device_logger.log_phase(
-                            "creation",
-                            error_msg,
-                            level="error",
-                        )
-
-                        if use_websocket and websocket:
-                            # Handle the case where netbox_device is None
-                            await websocket.send_json(
-                                {
-                                    "object": "device",
-                                    "type": "create",
-                                    "data": {
-                                        "completed": False,
-                                        "increment_count": "no",
-                                        "sync_status": return_status_html("failed", use_css),
-                                        "rowid": device_name,
-                                        "error": error_msg,
-                                    },
-                                }
-                            )
-
-                except Exception as error:
-                    failed_devices += 1
-                    error_msg = f"Error creating device {device_name}: {str(error)}"
-                    device_logger.log_error("creation", error_msg, error)
-                    if isinstance(error, ProxboxException):
-                        raise error
-                    raise ProxboxException(
-                        message="Error creating NetBox device",
-                        detail=str(error),
-                        python_exception=str(error),
-                    )
-
-        # Send end message to websocket to indicate that the creation of devices is finished.
-        if all([use_websocket, websocket]):
-            await websocket.send_json({"object": "device", "end": True})
-
-        # Clear cache after creating devices.
-        global_cache.clear_cache()
-
-    except ProxboxException as error:
-        error_msg = f"Error during device sync: {error.message}"
-        logger.error(error_msg)
-        raise ProxboxException(
-            message=error_msg,
-            detail=error.detail,
-            python_exception=error.python_exception,
+    try:
+        phase_logger.log_phase("bulk_prerequisites", "Reconciling device dependency phases")
+        devices_by_name = await ensure_proxmox_devices_bulk(
+            nb,
+            clusters_status=clusters_status,
+            tag_refs=tag_refs,
+            overwrite_device_role=overwrite_device_role,
+            overwrite_device_type=overwrite_device_type,
+            overwrite_device_tags=overwrite_device_tags,
+            overwrite_flags=overwrite_flags,
         )
     except Exception as error:
-        error_msg = f"Error during device sync: {str(error)}"
+        error_msg = f"Error during device sync dependency phases: {error}"
         logger.error(error_msg)
+        if bridge:
+            await bridge.emit_error_detail(
+                message=error_msg,
+                category=ErrorCategory.INTERNAL,
+                phase="devices",
+                detail=str(error),
+            )
+        if isinstance(error, ProxboxException):
+            raise
         raise ProxboxException(message=error_msg, detail=str(error), python_exception=str(error))
 
+    successful_devices = 0
+    failed_devices = 0
+    processed_count = 0
+
+    for device in all_devices:
+        device_name = str(device.get("name") or "")
+        cluster_name = str(device.get("cluster") or "")
+        processed_count += 1
+
+        if bridge:
+            await bridge.emit_item_progress(
+                phase="devices",
+                item={"name": device_name, "type": "node", "cluster": cluster_name},
+                operation=ItemOperation.CREATED,
+                status="processing",
+                message=f"Finalizing device '{device_name}'",
+                progress_current=processed_count,
+                progress_total=len(all_devices),
+            )
+
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "object": "device",
+                    "type": "create",
+                    "data": {
+                        "completed": False,
+                        "sync_status": return_status_html("syncing", use_css),
+                        "rowid": device_name,
+                        "name": device_name,
+                        "netbox_id": None,
+                    },
+                }
+            )
+
+        record = devices_by_name.get(device_name)
+        if record is None:
+            failed_devices += 1
+            if bridge:
+                await bridge.emit_item_progress(
+                    phase="devices",
+                    item={"name": device_name, "type": "node", "cluster": cluster_name},
+                    operation=ItemOperation.FAILED,
+                    status="failed",
+                    message=f"Failed to sync device '{device_name}'",
+                    progress_current=processed_count,
+                    progress_total=len(all_devices),
+                    error="Device missing from bulk reconcile result",
+                )
+            continue
+
+        data = record.serialize()
+        if node and node == device_name:
+            return [data]
+
+        device_list.append(data)
+        successful_devices += 1
+
+        if bridge:
+            await bridge.emit_item_progress(
+                phase="devices",
+                item={
+                    "name": device_name,
+                    "type": "node",
+                    "cluster": cluster_name,
+                    "netbox_id": data.get("id"),
+                    "netbox_url": data.get("display_url"),
+                },
+                operation=ItemOperation.CREATED,
+                status="completed",
+                message=f"Synced device '{device_name}'",
+                progress_current=processed_count,
+                progress_total=len(all_devices),
+            )
+
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "object": "device",
+                    "type": "create",
+                    "data": {
+                        "completed": True,
+                        "increment_count": "yes",
+                        "sync_status": return_status_html("completed", use_css),
+                        "rowid": device_name,
+                        "name": f"<a href='{data.get('display_url')}'>{data.get('name')}</a>",
+                        "netbox_id": data.get("id"),
+                        "role": f"<a href='{(data.get('role') or {}).get('url')}'>{(data.get('role') or {}).get('name')}</a>",
+                        "cluster": f"<a href='{(data.get('cluster') or {}).get('url')}'>{(data.get('cluster') or {}).get('name')}</a>",
+                        "device_type": f"<a href='{(data.get('device_type') or {}).get('url')}'>{(data.get('device_type') or {}).get('model')}</a>",
+                    },
+                }
+            )
+
+    if bridge:
+        await bridge.emit_phase_summary(
+            phase="devices",
+            created=successful_devices,
+            updated=0,
+            deleted=0,
+            failed=failed_devices,
+            skipped=0,
+            message=f"Device sync completed: {successful_devices} created, {failed_devices} failed",
+        )
+
+    if use_websocket and websocket:
+        await websocket.send_json({"object": "device", "end": True})
+
+    global_cache.clear_cache()
     return device_list
 
 

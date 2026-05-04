@@ -3,10 +3,11 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import ProxboxTagDep
+from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload, rest_patch_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
@@ -18,9 +19,10 @@ from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 
 # Proxmox Deps
 from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfacesDep
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep, create_proxmox_devices
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
@@ -32,7 +34,7 @@ async def get_devices():
 
 @router.get(
     "/devices/create",
-    response_model=list[dict],
+    response_model=list[dict[str, object]],
     response_model_exclude={"websocket"},
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
@@ -46,7 +48,22 @@ async def create_devices_stream(
     netbox_session: NetBoxSessionDep,
     clusters_status: ClusterStatusDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: int | None = Query(
+        default=None,
+        title="Max Fetch Concurrency",
+        description="Accepted for API consistency; device sync does not use fetch concurrency.",
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
+    """Stream device synchronization progress as SSE events.
+
+    All `overwrite_device_*` controls are exposed via the `overwrite_flags` query
+    group (FastAPI flattens it into individual query parameters). Unlike the VM
+    sync routes, there are no top-level flat `overwrite_device_*` query params on
+    this route; consumers should set the desired flag through the group, e.g.
+    `?overwrite_device_role=false`.
+    """
+
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
@@ -58,58 +75,17 @@ async def create_devices_stream(
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
+                    overwrite_device_role=overwrite_flags.overwrite_device_role,
+                    overwrite_device_type=overwrite_flags.overwrite_device_type,
+                    overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "devices",
-                    "status": "started",
-                    "message": "Starting devices synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "devices",
-                    "status": "completed",
-                    "message": "Devices synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Devices sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "devices",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Devices sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "devices"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -124,13 +100,6 @@ async def create_devices_stream(
 async def create_interface_and_ip(
     netbox_session: NetBoxAsyncSessionDep, tag: ProxboxTagDep, node_interface, node
 ):
-    interface_type_mapping = {
-        "lo": "loopback",
-        "bridge": "bridge",
-        "bond": "lag",
-        "vlan": "virtual",
-    }
-
     node_cidr = getattr(node_interface, "cidr", None)
     node_data = node if isinstance(node, dict) else {}
 
@@ -184,7 +153,7 @@ async def create_interface_and_ip(
             "device": node_data.get("id", 0),
             "name": str(node_interface.iface),
             "status": "active",
-            "type": interface_type_mapping.get(node_interface.type, "other"),
+            "type": NetBoxInterfaceType.from_proxmox(node_interface.type or ""),
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id is not None else None,
             "tags": nested_tag_payload(tag),
@@ -230,7 +199,7 @@ async def create_interface_and_ip(
 
 @router.get(
     "/devices/{node}/interfaces/create",
-    response_model=list[dict],
+    response_model=list[dict[str, object]],
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
@@ -507,53 +476,8 @@ async def create_all_devices_interfaces_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "node-interfaces",
-                    "status": "started",
-                    "message": "Starting node interfaces synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "node-interfaces",
-                    "status": "completed",
-                    "message": "Node interfaces synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Node interfaces sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "node-interfaces",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Node interfaces sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "node-interfaces"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

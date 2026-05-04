@@ -11,10 +11,23 @@ Para schemas completos de request e response, use o OpenAPI em tempo de execucao
 - `GET /cache` - Inspeciona o cache em memoria.
 - `GET /clear-cache` - Limpa o cache em memoria.
 
+## Autenticacao (`/auth`)
+
+Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Proxbox-API-Key`. Consulte [Autenticacao](../getting-started/authentication.md) para o fluxo completo de bootstrap e gerenciamento de chaves.
+
+- `GET /auth/bootstrap-status` - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao.
+- `POST /auth/register-key` - Registra a primeira chave de API. Isento de autenticacao; falha se ja existir uma chave.
+- `POST /auth/keys` - Cria uma nova chave de API. Retorna o valor da chave uma unica vez; armazene com seguranca.
+- `GET /auth/keys` - Lista todas as chaves de API. Os valores sao ocultados (apenas metadados sao retornados).
+- `DELETE /auth/keys/{key_id}` - Remove uma chave de API pelo ID.
+- `POST /auth/keys/{key_id}/activate` - Reativa uma chave previamente desativada.
+- `POST /auth/keys/{key_id}/deactivate` - Desativa uma chave ativa sem remove-la.
+
 ## Admin
 
 - `GET /admin/` - Dashboard HTML do admin para os registros configurados do NetBox. Esta rota fica fora do OpenAPI.
 - `GET /admin/logs` - Buffer de logs em memoria com filtros opcionais para `level`, `limit`, `offset`, `since` e `operation_id`.
+- `GET /admin/logs/stream` - Stream SSE de logs em tempo real. Suporta os parametros `level`, `errors_only`, `operation_id` e `newer_than_id`.
 
 ## Rotas NetBox (`/netbox`)
 
@@ -109,7 +122,7 @@ Normalizacao de path parameters:
 - Exemplo:
   - Caminho do contrato Proxmox: `/nodes/{node}/hardware/pci/{pci-id-or-mapping}`
   - Caminho montado no FastAPI: `/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}`
-- A chamada proxmoxer continua usando o nome original do parameter do contrato gerado.
+- A chamada via SDK proxmox-sdk continua usando o nome original do parameter do contrato gerado.
 
 Descoberta de versao:
 
@@ -127,7 +140,7 @@ Selecao de target:
 
 Integracao tipada do sync:
 
-- As rotas de sync ainda chamam proxmoxer diretamente, mas passam por `proxbox_api/services/proxmox_helpers.py`.
+- As rotas de sync ainda chamam o Proxmox diretamente, mas passam por `proxbox_api/services/proxmox_helpers.py` com backend proxmox-sdk.
 - Essa camada valida os payloads com os modelos gerados em `proxbox_api/generated/proxmox/latest/pydantic_models.py` antes de retornar para os handlers.
 - Isso evita round-trips HTTP internos e mantem VM config, cluster status, cluster resources, storage listing e node storage content alinhados ao contrato usado por `/proxmox/api2/*`.
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from proxbox_api.netbox_rest import nested_tag_payload
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 
 if TYPE_CHECKING:
     pass
@@ -23,6 +24,7 @@ class BaseIndividualSyncService:
         nb: object,
         px: object,
         tag: object,
+        overwrite_flags: SyncOverwriteFlags | None = None,
     ) -> None:
         """Initialize the sync service.
 
@@ -30,11 +32,15 @@ class BaseIndividualSyncService:
             nb: NetBox async session.
             px: Single Proxmox session (resolved by cluster_name).
             tag: ProxboxTagDep object.
+            overwrite_flags: Per-field overwrite gates forwarded to dependency
+                helpers. ``None`` means inherit historical always-overwrite
+                behavior at every helper boundary.
         """
         self.nb = nb
         self.px = px
         self.tag = tag
         self.tag_refs = self._build_tag_refs(tag)
+        self.overwrite_flags = overwrite_flags
 
     def _build_tag_refs(self, tag: object) -> list[dict[str, object]]:
         """Build tag refs list from tag object.
@@ -186,6 +192,19 @@ class BaseIndividualSyncService:
             },
         )
 
+    async def _get_or_create_vm_type(self, vm_type: str) -> object | None:
+        """Get or create the NetBox VirtualMachineType for a Proxmox VM type (NetBox v4.6+).
+
+        Args:
+            vm_type: 'qemu' or 'lxc'.
+
+        Returns:
+            NetBox VirtualMachineType object, or None if vm_type is not recognised.
+        """
+        from proxbox_api.services.sync.vm_create import ensure_vm_type
+
+        return await ensure_vm_type(self.nb, vm_type, self.tag_refs)
+
     async def _get_or_create_site(self, cluster_name: str) -> object:
         """Get or create the site for a cluster.
 
@@ -225,6 +244,7 @@ class BaseIndividualSyncService:
         """
         from proxbox_api.services.sync.device_ensure import _ensure_device
 
+        flags = self.overwrite_flags
         return await _ensure_device(
             self.nb,
             device_name=device_name,
@@ -233,6 +253,10 @@ class BaseIndividualSyncService:
             role_id=role_id,
             site_id=site_id,
             tag_refs=self.tag_refs,
+            overwrite_device_role=flags.overwrite_device_role if flags else True,
+            overwrite_device_type=flags.overwrite_device_type if flags else True,
+            overwrite_device_tags=flags.overwrite_device_tags if flags else True,
+            overwrite_flags=flags,
         )
 
     async def _get_or_create_vm_dependencies(
@@ -240,7 +264,7 @@ class BaseIndividualSyncService:
         cluster_name: str,
         node_name: str,
         vm_type: str,
-    ) -> tuple[object, object, object, object, object, object, object, object]:
+    ) -> tuple[object, object, object, object, object, object, object, object, object | None]:
         """Get or create all VM dependencies.
 
         Args:
@@ -249,7 +273,7 @@ class BaseIndividualSyncService:
             vm_type: 'qemu' or 'lxc'.
 
         Returns:
-            Tuple of (cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role).
+            Tuple of (cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role, vm_type_obj).
         """
         from proxbox_api.services.sync.device_ensure import (
             _ensure_cluster_type,
@@ -274,8 +298,19 @@ class BaseIndividualSyncService:
             site_id=getattr(site, "id", None),
         )
         vm_role = await self._get_or_create_vm_role(vm_type)
+        vm_type_obj = await self._get_or_create_vm_type(vm_type)
 
-        return cluster, cluster_type, manufacturer, device_type, node_role, site, device, vm_role
+        return (
+            cluster,
+            cluster_type,
+            manufacturer,
+            device_type,
+            node_role,
+            site,
+            device,
+            vm_role,
+            vm_type_obj,
+        )
 
     def _build_response(
         self,

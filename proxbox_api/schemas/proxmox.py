@@ -2,38 +2,16 @@
 
 from __future__ import annotations
 
-from pydantic import RootModel, field_validator
+from pydantic import Field, RootModel, field_validator
 
-from proxbox_api.enum.proxmox import NodeStatus, ResourceType
+from proxbox_api.enum.proxmox import CgroupMode, NodeStatus, ProxmoxVMStatus, ResourceType
 from proxbox_api.schemas._base import ProxboxBaseModel, ProxboxLenientModel
+from proxbox_api.schemas._coerce import normalize_bool, normalize_int, normalize_text
 
-
-def _normalize_text(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _normalize_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
-
-
-def _normalize_int(value: object) -> int | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, int):
-        return value
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
+# Keep module-level aliases so any existing imports of these helpers still work.
+_normalize_text = normalize_text
+_normalize_bool = normalize_bool  # type: ignore[assignment]
+_normalize_int = normalize_int
 
 
 class ProxmoxTokenSchema(ProxboxBaseModel):
@@ -55,6 +33,10 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
     password: str | None = None
     token: ProxmoxTokenSchema | None = None
     ssl: bool = False
+    timeout: int | None = Field(default=None, ge=1, le=3600)
+    connect_timeout: int | None = Field(default=None, ge=1, le=3600)
+    max_retries: int | None = Field(default=None, ge=0, le=100)
+    retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
 
     @field_validator("name", "ip_address", "domain", "user", "password", mode="before")
     @classmethod
@@ -79,7 +61,7 @@ ProxmoxMultiClusterConfig = RootModel[list[ProxmoxSessionSchema]]
 # /cluster
 #
 class Resources(ProxboxLenientModel):
-    cgroup_mode: int | None = None
+    cgroup_mode: CgroupMode | int | None = None
     content: str | None = None
     cpu: float | None = None
     disk: int | None = None
@@ -94,14 +76,13 @@ class Resources(ProxboxLenientModel):
     node: str | None = None
     plugintype: str | None = None
     pool: str | None = None
-    status: str | None = None
+    status: ProxmoxVMStatus | str | None = None
     storage: str | None = None
     type: ResourceType | str
     uptime: int | None = None
     vmid: int | None = None
 
     @field_validator(
-        "cgroup_mode",
         "disk",
         "maxdisk",
         "maxmem",
@@ -113,6 +94,17 @@ class Resources(ProxboxLenientModel):
     @classmethod
     def normalize_optional_int(cls, value: object) -> int | None:
         return _normalize_int(value)
+
+    @field_validator("cgroup_mode", mode="before")
+    @classmethod
+    def normalize_cgroup_mode(cls, value: object) -> CgroupMode | int | None:
+        if value in (None, ""):
+            return None
+        try:
+            return CgroupMode(int(value))
+        except (ValueError, TypeError):
+            raw = _normalize_int(value)
+            return raw
 
     @field_validator("cpu", "maxcpu", mode="before")
     @classmethod
@@ -134,13 +126,23 @@ class Resources(ProxboxLenientModel):
         "node",
         "plugintype",
         "pool",
-        "status",
         "storage",
         mode="before",
     )
     @classmethod
     def normalize_optional_text(cls, value: object) -> str | None:
         return _normalize_text(value)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: object) -> ProxmoxVMStatus | str | None:
+        text = _normalize_text(value)
+        if text is None:
+            return None
+        try:
+            return ProxmoxVMStatus(text)
+        except ValueError:
+            return text
 
     @field_validator("type", mode="before")
     @classmethod

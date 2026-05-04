@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from ipaddress import ip_interface as _ip_interface
 
+from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_first_async, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    rest_bulk_delete_async,
+    rest_bulk_reconcile_async,
+    rest_first_async,
+    rest_list_async,
+    rest_reconcile_async,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxInterfaceSyncState,
     NetBoxIpAddressSyncState,
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
+)
+from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.sync.vm_helpers import (
+    all_guest_agent_ips,
+    normalized_mac,
+    preferred_primary_ip_order,
 )
 
 
@@ -21,13 +35,6 @@ async def sync_node_interface_and_ip(
     interface_config: dict,
     tag_refs: list[dict],
 ) -> dict:
-    interface_type_mapping = {
-        "lo": "loopback",
-        "bridge": "bridge",
-        "bond": "lag",
-        "vlan": "virtual",
-    }
-
     node_cidr = interface_config.get("cidr") or interface_config.get("address")
     vlan_nb_id: int | None = None
 
@@ -79,7 +86,7 @@ async def sync_node_interface_and_ip(
             "device": device.get("id", 0),
             "name": interface_name,
             "status": "active",
-            "type": interface_type_mapping.get(iface_type, "other"),
+            "type": NetBoxInterfaceType.from_proxmox(iface_type),
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id is not None else None,
             "tags": tag_refs,
@@ -138,40 +145,6 @@ async def sync_node_interface_and_ip(
     return result
 
 
-def _normalized_mac(value: str | None) -> str:
-    return str(value or "").strip().lower()
-
-
-def _best_guest_agent_ip(
-    guest_iface: dict | None,
-    ignore_ipv6_link_local: bool = True,
-) -> str | None:
-    """Select the best IP address from guest agent interface data."""
-    from ipaddress import ip_address
-
-    if not isinstance(guest_iface, dict):
-        return None
-    for addr in guest_iface.get("ip_addresses") or []:
-        if not isinstance(addr, dict):
-            continue
-        ip_text = str(addr.get("ip_address") or "").strip()
-        if not ip_text:
-            continue
-        try:
-            parsed = ip_address(ip_text)
-        except ValueError:
-            continue
-        if parsed.is_loopback:
-            continue
-        if ignore_ipv6_link_local and parsed.is_link_local:
-            continue
-        prefix = addr.get("prefix")
-        if isinstance(prefix, int) and 0 <= prefix <= 128:
-            return f"{parsed.compressed}/{prefix}"
-        return parsed.compressed
-    return None
-
-
 def _resolve_vm_interface_identity(
     interface_name: str,
     interface_config: dict,
@@ -187,8 +160,99 @@ def _resolve_vm_interface_identity(
             resolved_name = guest_name
             guest_mac = guest_iface.get("mac_address")
             if guest_mac and not mac_address:
-                mac_address = _normalized_mac(guest_mac)
+                mac_address = normalized_mac(guest_mac)
     return resolved_name, mac_address
+
+
+def build_vlan_payload(
+    vlan_tag: int,
+    tag_refs: list[dict],
+    now: datetime,
+) -> dict:
+    """Build a VLAN payload dict for bulk operations (no NetBox writes).
+
+    Args:
+        vlan_tag: VLAN ID (vid)
+        tag_refs: List of tag references
+        now: Current datetime for custom fields
+
+    Returns:
+        Payload dict for bulk reconciliation
+    """
+    return {
+        "vid": vlan_tag,
+        "name": f"VLAN {vlan_tag}",
+        "status": "active",
+        "tags": tag_refs,
+        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+    }
+
+
+def build_vm_interface_payload(
+    resolved_name: str,
+    mac_address: str | None,
+    bridge_id: int | None,
+    vlan_id: int | None,
+    tag_refs: list[dict],
+    vm_id: int,
+    now: datetime,
+) -> dict:
+    """Build a VM interface payload dict for bulk operations (no NetBox writes).
+
+    Args:
+        resolved_name: Interface name
+        mac_address: MAC address
+        bridge_id: Node dcim.Interface ID for the bridge (stored as proxbox_bridge custom field)
+        vlan_id: VLAN ID (if applicable)
+        tag_refs: List of tag references
+        vm_id: Virtual machine ID
+        now: Current datetime for custom fields
+
+    Returns:
+        Payload dict for bulk reconciliation
+    """
+    payload: dict = {
+        "name": resolved_name,
+        "enabled": True,
+        "mac_address": mac_address,
+        "untagged_vlan": vlan_id,
+        "mode": "access" if vlan_id is not None else None,
+        "tags": tag_refs,
+        "custom_fields": {
+            "proxmox_last_updated": now.isoformat(),
+            **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+        },
+    }
+    if vm_id is not None:
+        payload["virtual_machine"] = vm_id
+    return payload
+
+
+def build_vm_interface_ip_payload(
+    address: str,
+    interface_id: int,
+    tag_refs: list[dict],
+    now: datetime,
+) -> dict:
+    """Build a VM interface IP payload dict for bulk operations (no NetBox writes).
+
+    Args:
+        address: IP address with CIDR (e.g., "192.168.1.10/24")
+        interface_id: Interface ID
+        tag_refs: List of tag references
+        now: Current datetime for custom fields
+
+    Returns:
+        Payload dict for bulk reconciliation
+    """
+    return {
+        "address": address,
+        "assigned_object_type": "virtualization.vminterface",
+        "assigned_object_id": interface_id,
+        "status": "active",
+        "tags": tag_refs,
+        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+    }
 
 
 async def _resolve_vm_interface_vlan(
@@ -249,25 +313,23 @@ async def _reconcile_vm_interface_record(
     tag_refs: list[dict],
     use_guest_agent_interface_name: bool,
     now: datetime,
+    device: dict | None = None,
 ) -> tuple[dict[str, object], int | None, str | None]:
     """Create or update the VM interface record."""
+    from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
     vm_id = virtual_machine.get("id")
-    bridge: dict = {}
+    bridge_id: int | None = None
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id is not None:
-        bridge = await rest_first_async(
-            nb,
-            "/api/virtualization/interfaces/",
-            query={
-                "name": bridge_name,
-                "virtual_machine_id": vm_id,
-                "limit": 1,
-            },
+        device_id = (
+            (device.get("id") if isinstance(device, dict) else getattr(device, "id", None))
+            if device
+            else None
         )
-        if bridge and isinstance(bridge, dict):
-            bridge = {"id": bridge.get("id")}
-        else:
-            bridge = {}
+        bridge_id = await ensure_bridge_interfaces(
+            nb, device_id, int(vm_id), bridge_name, tag_refs, now
+        )
 
     vlan_nb_id = await _resolve_vm_interface_vlan(
         nb,
@@ -287,12 +349,15 @@ async def _reconcile_vm_interface_record(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "bridge": bridge.get("id") if bridge else None,
         "mac_address": mac_address,
+        "bridge": None,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
         "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+        "custom_fields": {
+            "proxmox_last_updated": now.isoformat(),
+            **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+        },
     }
     if vm_id is not None:
         payload["virtual_machine"] = vm_id
@@ -311,15 +376,16 @@ async def _reconcile_vm_interface_record(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "bridge": record.get("bridge"),
             "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
+            "bridge": record.get("bridge"),
             "untagged_vlan": record.get("untagged_vlan"),
             "mode": record.get("mode"),
             "tags": record.get("tags"),
             "custom_fields": record.get("custom_fields"),
         },
+        nullable_fields={"bridge"},
     )
     if not isinstance(vm_interface, dict):
         vm_interface = getattr(vm_interface, "dict", lambda: {})()
@@ -332,7 +398,245 @@ async def _reconcile_vm_interface_record(
     return vm_interface, interface_id, resolved_name
 
 
-async def _resolve_vm_interface_ip(
+async def bulk_reconcile_vlans(
+    nb,
+    vlan_payloads: list[dict],
+) -> dict[int, int]:
+    """Perform bulk reconciliation of VLAN payloads. Returns mapping of vid → NetBox ID.
+
+    Args:
+        nb: NetBox session
+        vlan_payloads: List of VLAN payload dicts
+
+    Returns:
+        Dict mapping VLAN vid to NetBox ID
+    """
+    if not vlan_payloads:
+        return {}
+
+    vlan_vid_to_id = {}
+    try:
+        result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/ipam/vlans/",
+            payloads=vlan_payloads,
+            lookup_fields=["vid"],
+            schema=NetBoxVlanSyncState,
+            current_normalizer=lambda record: {
+                "vid": record.get("vid"),
+                "name": record.get("name"),
+                "status": record.get("status"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        # Build mapping of vid → ID from returned records
+        for record in result.records:
+            vid = record.get("vid")
+            if vid:
+                vlan_vid_to_id[vid] = record.get("id")
+    except Exception as e:
+        logger.error("Error during bulk VLAN reconciliation: %s", e)
+    return vlan_vid_to_id
+
+
+async def bulk_reconcile_vm_interfaces(
+    nb,
+    interface_payloads: list[dict],
+    overwrite_flags: SyncOverwriteFlags | None = None,
+) -> tuple[list, dict[tuple, int]]:
+    """Perform bulk reconciliation of VM interface payloads.
+
+    Returns:
+        (created_interfaces_list, name_vm_to_id_mapping)
+    """
+    if not interface_payloads:
+        return [], {}
+
+    # VM interface scalar identity/state fields are always patchable; tags and
+    # custom_fields follow per-resource overwrite_vm_interface_* flags. When
+    # overwrite_flags is None, all normalizer keys are patchable, preserving
+    # the historical always-overwrite behavior.
+    _vm_interface_patchable: set[str] = {
+        "name",
+        "virtual_machine",
+        "enabled",
+        "mac_address",
+        "type",
+        "description",
+        "untagged_vlan",
+        "mode",
+    }
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_tags:
+        _vm_interface_patchable.add("tags")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields:
+        _vm_interface_patchable.add("custom_fields")
+
+    interface_name_vm_to_id = {}
+    result = None
+    try:
+        result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            payloads=interface_payloads,
+            lookup_fields=["name", "virtual_machine"],
+            schema=NetBoxVirtualMachineInterfaceSyncState,
+            patchable_fields=frozenset(_vm_interface_patchable),
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "virtual_machine": record.get("virtual_machine"),
+                "enabled": record.get("enabled"),
+                "mac_address": record.get("mac_address"),
+                "type": record.get("type"),
+                "description": record.get("description"),
+                "untagged_vlan": record.get("untagged_vlan"),
+                "mode": record.get("mode"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+        )
+        # Build mapping (name, vm_id) → interface_id
+        for record in result.records:
+            name = record.get("name")
+            vm_obj = record.get("virtual_machine")
+            vm_id = vm_obj.get("id") if isinstance(vm_obj, dict) else vm_obj
+            iface_id = record.get("id")
+            if name and vm_id and iface_id:
+                interface_name_vm_to_id[(name, vm_id)] = iface_id
+    except Exception as e:
+        logger.error("Error during bulk VM interface reconciliation: %s", e)
+    return result.records if result and hasattr(result, "records") else [], interface_name_vm_to_id
+
+
+async def bulk_reconcile_vm_interface_ips(
+    nb,
+    ip_payloads: list[dict],
+    overwrite_flags: SyncOverwriteFlags | None = None,
+) -> list:
+    """Perform bulk reconciliation of VM interface IP payloads.
+
+    Returns:
+        List of created/updated IP records
+    """
+    if not ip_payloads:
+        return []
+
+    # Never patch assignment fields on existing IPs.  NetBox rejects
+    # reassignment when the IP is the primary IP of the parent object
+    # ("Cannot reassign IP address while it is designated as the primary
+    # IP for the parent object"). Assignment is established at create
+    # time; status/tags/custom_fields are safe to update, gated by the
+    # per-field overwrite_ip_* flags.
+    if overwrite_flags is None:
+        patchable_fields: frozenset[str] = frozenset({"status", "tags", "custom_fields"})
+    else:
+        gated: set[str] = set()
+        if overwrite_flags.overwrite_ip_status:
+            gated.add("status")
+        if overwrite_flags.overwrite_ip_tags:
+            gated.add("tags")
+        if overwrite_flags.overwrite_ip_custom_fields:
+            gated.add("custom_fields")
+        patchable_fields = frozenset(gated)
+
+    result = None
+    try:
+        result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/ipam/ip-addresses/",
+            payloads=ip_payloads,
+            lookup_fields=["address"],
+            schema=NetBoxIpAddressSyncState,
+            current_normalizer=lambda record: {
+                "address": record.get("address"),
+                "assigned_object_type": record.get("assigned_object_type"),
+                "assigned_object_id": record.get("assigned_object_id"),
+                "status": record.get("status"),
+                "tags": record.get("tags"),
+            },
+            patchable_fields=patchable_fields,
+        )
+        return result.records if result and hasattr(result, "records") else []
+    except Exception as e:
+        logger.error("Error during bulk VM interface IP reconciliation: %s", e)
+        return []
+
+
+async def cleanup_stale_ips_for_interface(
+    nb,
+    interface_id: int,
+    current_ips: set[str],
+    tag_slug: str = "proxbox",
+) -> int:
+    """Delete Proxbox-managed IPs assigned to an interface that are no longer current.
+
+    Args:
+        nb: NetBox session
+        interface_id: The VM interface ID in NetBox
+        current_ips: Set of IP addresses (CIDR notation) that SHOULD exist
+        tag_slug: Only delete IPs with this tag (safety guard against deleting manually-added IPs)
+
+    Returns:
+        Number of stale IPs deleted
+    """
+    existing_ips = await rest_list_async(
+        nb,
+        "/api/ipam/ip-addresses/",
+        query={
+            "vminterface_id": interface_id,
+            "tag": tag_slug,
+            "limit": 500,
+        },
+    )
+    if not existing_ips:
+        return 0
+
+    # Normalize current IPs for comparison (NetBox normalizes CIDR notation)
+    normalized_current: set[str] = set()
+    for ip in current_ips:
+        try:
+            normalized_current.add(str(_ip_interface(ip)))
+        except ValueError:
+            normalized_current.add(ip)
+
+    stale_ids: list[int] = []
+    for ip_record in existing_ips:
+        address = (
+            ip_record.get("address")
+            if isinstance(ip_record, dict)
+            else getattr(ip_record, "address", None)
+        )
+        record_id = (
+            ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
+        )
+        if record_id is None:
+            continue
+        # Normalize the stored address for comparison
+        try:
+            normalized_address = str(_ip_interface(str(address or "")))
+        except ValueError:
+            normalized_address = str(address or "")
+        if normalized_address not in normalized_current:
+            stale_ids.append(int(record_id))
+
+    if not stale_ids:
+        return 0
+
+    logger.info(
+        "Cleaning up %d stale IPs for interface id=%s (keeping %d current IPs)",
+        len(stale_ids),
+        interface_id,
+        len(normalized_current),
+    )
+    try:
+        deleted = await rest_bulk_delete_async(nb, "/api/ipam/ip-addresses/", stale_ids)
+        return deleted
+    except Exception as exc:
+        logger.warning("Failed to bulk-delete stale IPs for interface id=%s: %s", interface_id, exc)
+        return 0
+
+
+async def _resolve_vm_interface_ips(  # noqa: C901
     nb,
     interface_config: dict,
     guest_iface: dict | None,
@@ -343,54 +647,90 @@ async def _resolve_vm_interface_ip(
     now: datetime,
     create_ip: bool,
     ignore_ipv6_link_local: bool = True,
-) -> tuple[int | None, str | None]:
-    """Create or update the IP attached to a VM interface."""
-    if not create_ip:
-        return None, None
+    primary_ip_preference: str = "ipv4",
+    tag_slug: str = "proxbox",
+) -> list[tuple[int | None, str]]:
+    """Create or update ALL IPs attached to a VM interface, then clean up stale ones.
 
-    interface_ip: str | None = None
+    Returns list of (ip_id, ip_address) tuples for all synced IPs.
+    """
+    if not create_ip or interface_id is None:
+        return []
+
+    all_ips: list[str] = []
     if guest_iface:
-        interface_ip = _best_guest_agent_ip(guest_iface, ignore_ipv6_link_local)
-    if not interface_ip:
-        interface_ip = interface_config.get("ip")
+        all_ips = all_guest_agent_ips(
+            guest_iface,
+            ignore_ipv6_link_local,
+            primary_ip_preference=primary_ip_preference,
+        )
+    if not all_ips:
+        config_ip = interface_config.get("ip")
+        if config_ip and config_ip != "dhcp":
+            all_ips = [str(config_ip)]
 
-    if not interface_ip or interface_ip == "dhcp" or interface_id is None:
-        return None, interface_ip
+    all_ips = preferred_primary_ip_order(
+        all_ips,
+        primary_ip_preference=primary_ip_preference,
+    )
 
-    try:
-        ip_record = await rest_reconcile_async(
-            nb,
-            "/api/ipam/ip-addresses/",
-            lookup={"address": interface_ip},
-            payload={
-                "address": interface_ip,
-                "assigned_object_type": "virtualization.vminterface",
-                "assigned_object_id": interface_id,
-                "status": "active",
-                "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-            },
-            schema=NetBoxIpAddressSyncState,
-            current_normalizer=lambda record: {
-                "address": record.get("address"),
-                "assigned_object_type": record.get("assigned_object_type"),
-                "assigned_object_id": record.get("assigned_object_id"),
-                "status": record.get("status"),
-                "tags": record.get("tags"),
-            },
-        )
-        ip_id = (
-            ip_record.get("id") if isinstance(ip_record, dict) else getattr(ip_record, "id", None)
-        )
-        return ip_id, interface_ip
-    except Exception as ip_exc:
-        logger.warning(
-            "Failed to create IP %s for VM interface %s: %s",
-            interface_ip,
-            interface_name,
-            ip_exc,
-        )
-        return None, interface_ip
+    if not all_ips:
+        return []
+
+    results: list[tuple[int | None, str]] = []
+    for ip_addr in all_ips:
+        if ip_addr == "dhcp":
+            continue
+        try:
+            ip_record = await rest_reconcile_async(
+                nb,
+                "/api/ipam/ip-addresses/",
+                lookup={"address": ip_addr},
+                payload={
+                    "address": ip_addr,
+                    "assigned_object_type": "virtualization.vminterface",
+                    "assigned_object_id": interface_id,
+                    "status": "active",
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                schema=NetBoxIpAddressSyncState,
+                current_normalizer=lambda record: {
+                    "address": record.get("address"),
+                    "assigned_object_type": record.get("assigned_object_type"),
+                    "assigned_object_id": record.get("assigned_object_id"),
+                    "status": record.get("status"),
+                    "tags": record.get("tags"),
+                },
+            )
+            ip_id = (
+                ip_record.get("id")
+                if isinstance(ip_record, dict)
+                else getattr(ip_record, "id", None)
+            )
+            results.append((ip_id, ip_addr))
+        except Exception as ip_exc:
+            logger.warning(
+                "Failed to create IP %s for VM interface %s: %s",
+                ip_addr,
+                interface_name,
+                ip_exc,
+            )
+
+    if results:
+        current_ip_set = {ip_addr for _, ip_addr in results}
+        try:
+            await cleanup_stale_ips_for_interface(
+                nb, interface_id, current_ip_set, tag_slug=tag_slug
+            )
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Failed to cleanup stale IPs for interface %s: %s",
+                interface_name,
+                cleanup_exc,
+            )
+
+    return results
 
 
 async def sync_vm_interface_and_ip(
@@ -404,7 +744,9 @@ async def sync_vm_interface_and_ip(
     create_interface: bool = True,
     create_ip: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: str = "ipv4",
     now: datetime | None = None,
+    device: dict | None = None,
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -420,6 +762,7 @@ async def sync_vm_interface_and_ip(
             tag_refs,
             use_guest_agent_interface_name,
             now,
+            device=device,
         )
     else:
         vm_interface = await rest_first_async(
@@ -456,7 +799,7 @@ async def sync_vm_interface_and_ip(
         "interface": vm_interface,
     }
 
-    ip_id, interface_ip = await _resolve_vm_interface_ip(
+    ip_results = await _resolve_vm_interface_ips(
         nb,
         interface_config,
         guest_iface,
@@ -466,10 +809,13 @@ async def sync_vm_interface_and_ip(
         now=now,
         create_ip=create_ip,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
-    if ip_id is not None:
-        result["ip_id"] = ip_id
-    if interface_ip is not None:
-        result["ip_address"] = interface_ip
+    if ip_results:
+        first_ip_id, first_ip = ip_results[0]
+        if first_ip_id is not None:
+            result["ip_id"] = first_ip_id
+        result["ip_address"] = first_ip
+        result["all_ips"] = [{"id": iid, "address": addr} for iid, addr in ip_results]
 
     return result

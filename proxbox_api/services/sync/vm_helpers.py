@@ -2,9 +2,29 @@
 
 from __future__ import annotations
 
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_interface
+from typing import Literal
 
 from proxbox_api.logger import logger
+from proxbox_api.schemas.sync import SyncOverwriteFlags
+
+PrimaryIPPreference = Literal["ipv4", "ipv6"]
+
+
+def _compute_vm_patchable_fields(overwrite_flags: SyncOverwriteFlags | None) -> set[str]:
+    """Build the patchable_fields allowlist for virtual machine reconciliation."""
+    fields: set[str] = {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_type:
+        fields.add("virtual_machine_type")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_role:
+        fields.add("role")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_tags:
+        fields.add("tags")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_description:
+        fields.add("description")
+    if overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields:
+        fields.add("custom_fields")
+    return fields
 
 
 def to_mapping(value: object) -> dict[str, object]:
@@ -137,7 +157,84 @@ def best_guest_agent_ip(
     return None
 
 
-def filter_cluster_resources_for_vm(  # noqa: C901
+def all_guest_agent_ips(
+    guest_iface: dict[str, object] | None,
+    ignore_ipv6_link_local: bool = True,
+    primary_ip_preference: PrimaryIPPreference = "ipv4",
+) -> list[str]:
+    """Return ALL valid IP addresses from guest agent interface data.
+
+    Unlike best_guest_agent_ip() which returns only one, this returns every
+    non-loopback IP (optionally filtering link-local). Each IP is returned
+    in CIDR notation when prefix info is available.
+    """
+    if not isinstance(guest_iface, dict):
+        return []
+    results: list[str] = []
+    for addr in guest_iface.get("ip_addresses") or []:
+        if not isinstance(addr, dict):
+            continue
+        candidate = guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
+        if candidate:
+            results.append(candidate)
+    return preferred_primary_ip_order(results, primary_ip_preference=primary_ip_preference)
+
+
+def normalize_primary_ip_preference(value: object) -> PrimaryIPPreference:
+    """Return normalized primary IP family preference."""
+    normalized = str(value or "").strip().lower()
+    return "ipv6" if normalized == "ipv6" else "ipv4"
+
+
+def preferred_primary_ip_order(
+    addresses: list[str],
+    primary_ip_preference: PrimaryIPPreference = "ipv4",
+) -> list[str]:
+    """Sort addresses for primary selection preference by IP family."""
+    preference = normalize_primary_ip_preference(primary_ip_preference)
+
+    def _rank(address: str) -> tuple[int, int]:
+        host = str(address or "").strip().split("/", 1)[0]
+        try:
+            parsed = ip_interface(str(address)).ip
+        except ValueError:
+            try:
+                parsed = ip_address(host)
+            except ValueError:
+                return (2, 0)
+        is_preferred = (parsed.version == 4 and preference == "ipv4") or (
+            parsed.version == 6 and preference == "ipv6"
+        )
+        return (0 if is_preferred else 1, 0)
+
+    # Keep input stability within each family bucket.
+    return [
+        addr for _, addr in sorted(enumerate(addresses), key=lambda item: (_rank(item[1]), item[0]))
+    ]
+
+
+def _matches_vm_criteria(
+    resource: dict[str, object],
+    vm_name: str,
+    proxmox_vm_id: int | None,
+    cluster_id: int | None,
+) -> bool:
+    """Check if a resource matches VM filtering criteria."""
+    if resource.get("type") not in ("qemu", "lxc"):
+        return False
+    if str(resource.get("name", "")).strip() != vm_name:
+        if proxmox_vm_id is None:
+            return False
+        if str(resource.get("vmid", "")).strip() != str(proxmox_vm_id):
+            return False
+    if cluster_id is not None:
+        resource_cluster_id = relation_id(resource.get("cluster"))
+        if resource_cluster_id is not None and resource_cluster_id != cluster_id:
+            return False
+    return True
+
+
+def filter_cluster_resources_for_vm(
     cluster_resources: list[dict[str, object]],
     *,
     vm_name: str,
@@ -157,23 +254,12 @@ def filter_cluster_resources_for_vm(  # noqa: C901
             cluster_key_str = str(cluster_key)
             if cluster_hint and cluster_key_str.strip().lower() != cluster_hint:
                 continue
-            selected = []
-            for resource in resources:
-                if not isinstance(resource, dict):
-                    continue
-                if resource.get("type") not in ("qemu", "lxc"):
-                    continue
-                same_name = str(resource.get("name", "")).strip() == vm_name
-                same_vmid = proxmox_vm_id is not None and str(
-                    resource.get("vmid", "")
-                ).strip() == str(proxmox_vm_id)
-                if not (same_name or same_vmid):
-                    continue
-                if cluster_id is not None:
-                    resource_cluster_id = relation_id(resource.get("cluster"))
-                    if resource_cluster_id is not None and resource_cluster_id != cluster_id:
-                        continue
-                selected.append(resource)
+            selected = [
+                r
+                for r in resources
+                if isinstance(r, dict)
+                and _matches_vm_criteria(r, vm_name, proxmox_vm_id, cluster_id)
+            ]
             if selected:
                 filtered.append({cluster_key_str: selected})
     return filtered

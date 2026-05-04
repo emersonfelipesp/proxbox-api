@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from proxbox_api.constants import VM_TYPE_MAPPINGS
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -11,10 +12,12 @@ from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualMachineCreateBody,
+    NetBoxVirtualMachineTypeSyncState,
     ProxmoxVmConfigInput,
     ProxmoxVmResourceInput,
 )
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -27,6 +30,7 @@ from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
+from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
 
 # VM role mappings for different VM types
 VM_ROLE_MAPPINGS = {
@@ -61,6 +65,8 @@ async def ensure_vm_dependencies(
     tag_id: int,
     tag_refs: list[dict],
     node_name: str | None = None,
+    *,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> tuple:
     """Ensure all VM dependencies exist in NetBox (cluster, device, roles, site).
 
@@ -126,6 +132,16 @@ async def ensure_vm_dependencies(
             role_id=getattr(device_role, "id", None),
             site_id=getattr(site, "id", None),
             tag_refs=tag_refs,
+            overwrite_device_role=(
+                overwrite_flags.overwrite_device_role if overwrite_flags else True
+            ),
+            overwrite_device_type=(
+                overwrite_flags.overwrite_device_type if overwrite_flags else True
+            ),
+            overwrite_device_tags=(
+                overwrite_flags.overwrite_device_tags if overwrite_flags else True
+            ),
+            overwrite_flags=overwrite_flags,
         )
 
         logger.debug("VM dependencies ready: cluster=%s, device=%s", cluster, device)
@@ -177,15 +193,55 @@ async def ensure_vm_role(
     )
 
 
+async def ensure_vm_type(
+    netbox_session: NetBoxSessionDep,
+    vm_type: str,
+    tag_refs: list[dict],
+) -> object | None:
+    """Ensure a NetBox VirtualMachineType object exists for the given Proxmox VM type (NetBox v4.6+).
+
+    Args:
+        netbox_session: NetBox session
+        vm_type: Proxmox VM type ("qemu" or "lxc")
+        tag_refs: Tag references
+
+    Returns:
+        NetBox VirtualMachineType object, or None if vm_type is not recognised.
+    """
+    type_data = VM_TYPE_MAPPINGS.get(vm_type)
+    if not type_data:
+        return None
+
+    return await rest_reconcile_async(
+        netbox_session,
+        "/api/virtualization/virtual-machine-types/",
+        lookup={"slug": type_data["slug"]},
+        payload={
+            **type_data,
+            "tags": tag_refs,
+        },
+        schema=NetBoxVirtualMachineTypeSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "description": record.get("description"),
+            "tags": record.get("tags"),
+        },
+    )
+
+
 async def create_or_update_virtual_machine(
     netbox_session: NetBoxSessionDep,
     proxmox_resource: ProxmoxVmResourceInput | dict[str, object],
     proxmox_config: ProxmoxVmConfigInput | dict[str, object] | None,
     cluster_id: int,
     device_id: int,
-    role_id: int,
+    role_id: int | None,
     tag_id: int,
     tag_refs: list[dict[str, object]],
+    cluster_name: str | None = None,
+    virtual_machine_type_id: int | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Create or update a virtual machine in NetBox.
 
@@ -198,6 +254,9 @@ async def create_or_update_virtual_machine(
         role_id: NetBox role ID
         tag_id: NetBox tag ID
         tag_refs: Tag references
+        cluster_name: Proxmox cluster name for custom field population.
+        virtual_machine_type_id: Optional NetBox VirtualMachineType ID (NetBox v4.6+).
+        overwrite_flags: Per-field overwrite gates for existing VM updates.
 
     Returns:
         NetBox virtual machine dict
@@ -212,9 +271,11 @@ async def create_or_update_virtual_machine(
         proxmox_config=proxmox_config,
         cluster_id=cluster_id,
         device_id=device_id,
-        role_id=role_id,
+        role_id=None if virtual_machine_type_id is not None else role_id,
         tag_ids=[tag_id],
+        virtual_machine_type_id=virtual_machine_type_id,
         last_updated=now,
+        cluster_name=cluster_name,
     )
 
     virtual_machine = await rest_reconcile_async(
@@ -226,11 +287,13 @@ async def create_or_update_virtual_machine(
         },
         payload=payload,
         schema=NetBoxVirtualMachineCreateBody,
+        patchable_fields=frozenset(_compute_vm_patchable_fields(overwrite_flags)),
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "status": record.get("status"),
             "cluster": record.get("cluster"),
             "device": record.get("device"),
+            "virtual_machine_type": record.get("virtual_machine_type"),
             "role": record.get("role"),
             "vcpus": record.get("vcpus"),
             "memory": record.get("memory"),

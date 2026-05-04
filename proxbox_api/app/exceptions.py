@@ -12,8 +12,6 @@ from proxbox_api.logger import logger
 
 
 def _expose_internal_errors(app: FastAPI) -> bool:
-    if getattr(app, "debug", False):
-        return True
     flag = os.environ.get("PROXBOX_EXPOSE_INTERNAL_ERRORS", "").lower()
     return flag in ("1", "true", "yes")
 
@@ -24,7 +22,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProxboxException)
     async def proxbox_exception_handler(request: Request, exc: ProxboxException) -> JSONResponse:
         return JSONResponse(
-            status_code=400,
+            status_code=exc.http_status_code,
             content={
                 "message": exc.message,
                 "detail": exc.detail,

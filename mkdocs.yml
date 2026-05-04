@@ -44,7 +44,11 @@ markdown_extensions:
   - toc:
       permalink: true
   - tables
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.inlinehilite
   - pymdownx.highlight:
       anchor_linenums: true
@@ -54,15 +58,23 @@ nav:
   - Getting Started:
       - Installation: getting-started/installation.md
       - Configuration: getting-started/configuration.md
+      - Authentication: getting-started/authentication.md
   - Architecture:
       - Overview: architecture/overview.md
+      - Caching: architecture/caching.md
   - API:
       - HTTP Reference: api/http-reference.md
       - WebSocket Reference: api/websocket-reference.md
+      - Cache API: api/cache.md
   - Synchronization:
       - Workflows: sync/workflows.md
+      - VM Reconciliation Architecture: sync/reconciliation-architecture.md
+      - Overwrite Flags: sync/overwrite-flags.md
   - Development:
+      - Schema Management: development/schema-management.md
       - Testing: development/testing.md
       - Deployment: development/deployment.md
       - Troubleshooting: development/troubleshooting.md
       - Contributing: development/contributing.md
+      - Refactoring Summary: development/refactoring-summary.md
+      - Sync Fix Summary: development/sync-fix-summary.md

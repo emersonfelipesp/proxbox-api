@@ -3,18 +3,21 @@
 # FastAPI Imports
 import asyncio
 import inspect
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from ipaddress import ip_address
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
+from proxbox_api.constants import VM_TYPE_MAPPINGS
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import VirtualMachine
 from proxbox_api.netbox_rest import (
+    rest_create_async,
     rest_first_async,
     rest_list_async,
     rest_patch_async,
@@ -31,7 +34,12 @@ from proxbox_api.proxmox_to_netbox.models import (
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox import get_vm_config
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
-from proxbox_api.routes.virtualization.virtual_machines.helpers import resolve_vm_sync_concurrency
+from proxbox_api.routes.virtualization.virtual_machines.helpers import (
+    resolve_netbox_write_concurrency,
+    resolve_vm_sync_concurrency,
+)
+from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
@@ -46,7 +54,6 @@ from proxbox_api.services.sync.devices import (
 )
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
-    _resolve_vm_interface_ip,
 )
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -59,15 +66,317 @@ from proxbox_api.services.sync.task_history import (
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
+from proxbox_api.services.sync.vm_create import ensure_vm_type
 from proxbox_api.services.sync.vm_helpers import (
+    _compute_vm_patchable_fields,
+    normalized_mac,
     parse_comma_separated_ints,
     parse_key_value_string,
+    preferred_primary_ip_order,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
+
+
+@dataclass(slots=True)
+class _PreparedVMState:
+    """In-memory VM snapshot prepared from Proxmox + dependency cache."""
+
+    cluster_name: str
+    resource: dict[str, object]
+    vm_config: dict[str, object]
+    vm_config_obj: ProxmoxVmConfigInput
+    desired_payload: dict[str, object]
+    lookup: dict[str, object]
+    now: datetime
+    vm_type: str
+
+
+@dataclass(slots=True)
+class _NetBoxVMOperation:
+    """Queued NetBox VM operation determined by in-memory reconciliation."""
+
+    method: Literal["GET", "CREATE", "UPDATE"]
+    prepared: _PreparedVMState
+    existing_record: dict[str, object] | None = None
+    patch_payload: dict[str, object] = field(default_factory=dict)
+
+
+def _normalize_current_virtual_machine_payload(record: dict[str, object]) -> dict[str, object]:
+    """Normalize NetBox VM record for Pydantic diff comparison."""
+
+    return {
+        "name": record.get("name"),
+        "status": record.get("status"),
+        "cluster": record.get("cluster"),
+        "device": record.get("device"),
+        "role": record.get("role"),
+        "virtual_machine_type": record.get("virtual_machine_type"),
+        "vcpus": record.get("vcpus"),
+        "memory": record.get("memory"),
+        "disk": record.get("disk"),
+        "tags": record.get("tags"),
+        "custom_fields": record.get("custom_fields"),
+        "description": record.get("description"),
+    }
+
+
+def _extract_cluster_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, int] | None:
+    """Build the in-memory index key used to correlate NetBox VM records."""
+
+    cluster_id = _relation_id(record.get("cluster"))
+    if cluster_id is None:
+        return None
+    custom_fields = record.get("custom_fields")
+    if not isinstance(custom_fields, dict):
+        return None
+    raw_vmid = custom_fields.get("proxmox_vm_id")
+    try:
+        proxmox_vmid = int(str(raw_vmid).strip())
+    except (TypeError, ValueError):
+        return None
+    return (cluster_id, proxmox_vmid)
+
+
+async def _load_netbox_virtual_machine_snapshot(nb: object) -> list[dict[str, object]]:
+    """Fetch all NetBox virtual machines once and keep them in-memory for comparison."""
+
+    page_size = 200
+    offset = 0
+    snapshot: list[dict[str, object]] = []
+
+    while True:
+        records = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"limit": page_size, "offset": offset},
+        )
+        if not records:
+            break
+
+        serialized_page: list[dict[str, object]] = []
+        for record in records:
+            serialized = _to_mapping(record)
+            if serialized:
+                serialized_page.append(serialized)
+
+        snapshot.extend(serialized_page)
+        if len(records) < page_size:
+            break
+        offset += page_size
+
+    return snapshot
+
+
+def _build_vm_index_by_proxmox_id(
+    snapshot: list[dict[str, object]],
+) -> dict[int, dict[str, object]]:
+    """Index a VM snapshot by cf_proxmox_vm_id for O(1) lookup."""
+    index: dict[int, dict[str, object]] = {}
+    for vm in snapshot:
+        try:
+            vmid = int(vm.get("custom_fields", {}).get("proxmox_vm_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if vmid and vmid not in index:
+            index[vmid] = vm
+    return index
+
+
+def _resolve_vm_overwrites(
+    role: bool | None,
+    vm_type: bool | None,
+    tags: bool | None,
+    description: bool | None,
+    custom_fields: bool | None,
+    overwrite_flags: SyncOverwriteFlags,
+) -> tuple[bool, bool, bool, bool, bool]:
+    """Resolve VM-scalar overwrite gates from flat Query params + `overwrite_flags`.
+
+    Flat params (`overwrite_vm_role`, `overwrite_vm_type`, `overwrite_vm_tags`,
+    `overwrite_vm_description`, `overwrite_vm_custom_fields`) win when explicitly supplied (`True`/`False`);
+    `None` means "not provided" and the corresponding field on `overwrite_flags`
+    is used instead. Old clients that only set the flat params keep the original
+    semantics; new clients can drive everything through `overwrite_flags`.
+    """
+    return (
+        role if role is not None else overwrite_flags.overwrite_vm_role,
+        vm_type if vm_type is not None else overwrite_flags.overwrite_vm_type,
+        tags if tags is not None else overwrite_flags.overwrite_vm_tags,
+        description if description is not None else overwrite_flags.overwrite_vm_description,
+        custom_fields if custom_fields is not None else overwrite_flags.overwrite_vm_custom_fields,
+    )
+
+
+def _build_vm_operation_queue(
+    prepared_vms: list[_PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+    overwrite_vm_role: bool = True,
+    overwrite_vm_type: bool = True,
+    overwrite_vm_tags: bool = True,
+    overwrite_vm_description: bool = True,
+    overwrite_vm_custom_fields: bool = True,
+) -> list[_NetBoxVMOperation]:
+    """Classify desired VM state into GET/CREATE/UPDATE operations using Pydantic."""
+
+    snapshot_index: dict[tuple[int, int], dict[str, object]] = {}
+    for current in netbox_snapshot:
+        key = _extract_cluster_and_proxmox_vmid(current)
+        if key is not None and key not in snapshot_index:
+            snapshot_index[key] = current
+
+    operation_queue: list[_NetBoxVMOperation] = []
+
+    for prepared in prepared_vms:
+        cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
+        proxmox_vmid = _relation_id(prepared.resource.get("vmid"))
+        if cluster_id is None or proxmox_vmid is None:
+            operation_queue.append(_NetBoxVMOperation(method="CREATE", prepared=prepared))
+            continue
+
+        existing_record = snapshot_index.get((cluster_id, proxmox_vmid))
+        if existing_record is None:
+            operation_queue.append(_NetBoxVMOperation(method="CREATE", prepared=prepared))
+            continue
+
+        desired_state = NetBoxVirtualMachineCreateBody.model_validate(prepared.desired_payload)
+        desired_payload = desired_state.model_dump(exclude_none=True, by_alias=True)
+        current_state = NetBoxVirtualMachineCreateBody.model_validate(
+            _normalize_current_virtual_machine_payload(existing_record)
+        )
+        current_payload = current_state.model_dump(exclude_none=True, by_alias=True)
+
+        patch_payload = {
+            field_name: desired_value
+            for field_name, desired_value in desired_payload.items()
+            if current_payload.get(field_name) != desired_value
+        }
+
+        if not overwrite_vm_role and _relation_id(existing_record.get("role")) is not None:
+            patch_payload.pop("role", None)
+        if (
+            not overwrite_vm_type
+            and _relation_id(existing_record.get("virtual_machine_type")) is not None
+        ):
+            patch_payload.pop("virtual_machine_type", None)
+        if not overwrite_vm_description:
+            existing_description = existing_record.get("description")
+            if isinstance(existing_description, str) and existing_description:
+                patch_payload.pop("description", None)
+        if not overwrite_vm_custom_fields:
+            existing_custom_fields = existing_record.get("custom_fields")
+            if isinstance(existing_custom_fields, dict) and existing_custom_fields:
+                patch_payload.pop("custom_fields", None)
+        if not overwrite_vm_tags:
+            existing_tags = existing_record.get("tags")
+            if isinstance(existing_tags, list) and existing_tags:
+                patch_payload.pop("tags", None)
+        elif "tags" in patch_payload:
+            # Merge: preserve existing user tags while ensuring the Proxbox tag is present.
+            # current_payload["tags"] is already a sorted list[int] — normalized by
+            # NetBoxVirtualMachineCreateBody.normalize_tags which handles dict-with-id format.
+            existing_normalized: list[int] = current_payload.get("tags") or []
+            desired_normalized: list[int] = desired_payload.get("tags") or []
+            merged = sorted(set(existing_normalized) | set(desired_normalized))
+            if merged == existing_normalized:
+                patch_payload.pop("tags", None)
+            else:
+                patch_payload["tags"] = merged
+
+        if patch_payload:
+            operation_queue.append(
+                _NetBoxVMOperation(
+                    method="UPDATE",
+                    prepared=prepared,
+                    existing_record=existing_record,
+                    patch_payload=patch_payload,
+                )
+            )
+        else:
+            operation_queue.append(
+                _NetBoxVMOperation(
+                    method="GET",
+                    prepared=prepared,
+                    existing_record=existing_record,
+                )
+            )
+
+    return operation_queue
+
+
+async def _dispatch_vm_operation_queue(
+    nb: object,
+    operation_queue: list[_NetBoxVMOperation],
+) -> dict[tuple[str, int], dict[str, object]]:
+    """Dispatch queued VM operations sequentially in deterministic batches."""
+
+    if not operation_queue:
+        return {}
+
+    batch_size = max(1, resolve_netbox_write_concurrency())
+    resolved_records: dict[tuple[str, int], dict[str, object]] = {}
+
+    for start_index in range(0, len(operation_queue), batch_size):
+        batch = operation_queue[start_index : start_index + batch_size]
+        for operation in batch:
+            vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
+            key = (operation.prepared.cluster_name, vmid)
+
+            if operation.method == "GET":
+                if operation.existing_record is not None:
+                    resolved_records[key] = operation.existing_record
+                continue
+
+            if operation.method == "CREATE":
+                try:
+                    created = await rest_create_async(
+                        nb,
+                        "/api/virtualization/virtual-machines/",
+                        operation.prepared.desired_payload,
+                    )
+                    resolved_records[key] = _to_mapping(created)
+                except ProxboxException:
+                    existing = await rest_first_async(
+                        nb,
+                        "/api/virtualization/virtual-machines/",
+                        query={**operation.prepared.lookup, "limit": 2},
+                    )
+                    if existing is None:
+                        raise
+                    resolved_records[key] = _to_mapping(existing)
+                continue
+
+            if operation.existing_record is None:
+                raise ProxboxException(
+                    message="Cannot update VM without existing NetBox record",
+                    python_exception=(f"cluster={operation.prepared.cluster_name} vmid={vmid}"),
+                )
+
+            record_id = _relation_id(operation.existing_record.get("id"))
+            if record_id is None:
+                raise ProxboxException(
+                    message="Cannot update VM without NetBox id",
+                    python_exception=f"cluster={operation.prepared.cluster_name} vmid={vmid}",
+                )
+
+            patched = await rest_patch_async(
+                nb,
+                "/api/virtualization/virtual-machines/",
+                record_id,
+                operation.patch_payload,
+            )
+            if isinstance(patched, dict) and patched:
+                resolved_records[key] = patched
+            else:
+                merged = dict(operation.existing_record)
+                merged.update(operation.patch_payload)
+                merged["id"] = record_id
+                resolved_records[key] = merged
+
+    return resolved_records
 
 
 def _to_mapping(value: object) -> dict[str, object]:
@@ -357,82 +666,6 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
     return None
 
 
-def _normalized_mac(value: str | None) -> str:
-    """Normalize a MAC address to lowercase string.
-
-    Args:
-        value: MAC address string or None
-
-    Returns:
-        Normalized (lowercase, trimmed) MAC address string, or empty string
-    """
-    return str(value or "").strip().lower()
-
-
-def _guest_agent_ip_with_prefix(addr: dict, ignore_ipv6_link_local: bool = True) -> str | None:
-    """Extract IP address with CIDR prefix from guest agent address dict.
-
-    Filters out loopback and optionally link-local addresses. Returns the IP in CIDR
-    notation (e.g., "192.168.1.1/24") when prefix is available.
-
-    Args:
-        addr: Address dict from guest agent with 'ip_address', 'prefix' keys
-        ignore_ipv6_link_local: If True, skip IPv6 link-local addresses (fe80::/64)
-
-    Returns:
-        IP address with CIDR prefix, just IP, or None if invalid
-    """
-    ip_text = str(addr.get("ip_address") or "").strip()
-    if not ip_text:
-        return None
-    try:
-        parsed = ip_address(ip_text)
-    except ValueError:
-        return None
-    if parsed.is_loopback:
-        return None
-    if ignore_ipv6_link_local and parsed.is_link_local:
-        return None
-    prefix = addr.get("prefix")
-    if isinstance(prefix, int) and 0 <= prefix <= 128:
-        return f"{parsed.compressed}/{prefix}"
-    return parsed.compressed
-
-
-def _best_guest_agent_ip(
-    guest_iface: dict | None, ignore_ipv6_link_local: bool = True
-) -> str | None:
-    """Select the best IP address from guest agent interface data.
-
-    Prioritizes IPv4 addresses with valid CIDR prefixes, then falls back to
-    any valid IPv4 address. Skips loopback and optionally link-local addresses.
-
-    Args:
-        guest_iface: Guest agent interface dict with 'ip_addresses' list
-        ignore_ipv6_link_local: If True, skip IPv6 link-local addresses
-
-    Returns:
-        Best available IP address (with prefix if available), or None
-    """
-    if not isinstance(guest_iface, dict):
-        return None
-    for addr in guest_iface.get("ip_addresses") or []:
-        if not isinstance(addr, dict):
-            continue
-        if str(addr.get("ip_address_type") or "").lower() == "ipv6":
-            continue
-        candidate = _guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
-        if candidate:
-            return candidate
-    for addr in guest_iface.get("ip_addresses") or []:
-        if not isinstance(addr, dict):
-            continue
-        candidate = _guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=ignore_ipv6_link_local)
-        if candidate:
-            return candidate
-    return None
-
-
 async def _create_vm_interface_parallel(
     nb,
     virtual_machine: dict,
@@ -443,54 +676,33 @@ async def _create_vm_interface_parallel(
     use_guest_agent_interface_name: bool,
     ignore_ipv6_link_local_addresses: bool,
     now: datetime,
+    primary_ip_preference: str = "ipv4",
+    device: dict | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
 
     Returns a dict with 'interface' (the created interface), 'ip' (the created IP or None),
     and 'first_ip_id' (first IP id found, for setting VM primary_ip).
     """
+    from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
     vm_id = virtual_machine.get("id")
     result: dict = {"interface": None, "ip": None, "first_ip_id": None}
 
-    bridge: dict = {}
+    bridge_id: int | None = None
     bridge_name = interface_config.get("bridge")
     if bridge_name and vm_id:
-        existing_bridge = await rest_first_async(
+        device_id = device.get("id") if isinstance(device, dict) else getattr(device, "id", None)
+        bridge_id = await ensure_bridge_interfaces(
             nb,
-            "/api/virtualization/interfaces/",
-            query={"name": bridge_name, "virtual_machine_id": vm_id},
+            device_id,
+            vm_id,
+            bridge_name,
+            tag_refs,
+            now,
+            overwrite_flags=overwrite_flags,
         )
-        if existing_bridge:
-            bridge = (
-                existing_bridge.serialize()
-                if hasattr(existing_bridge, "serialize")
-                else dict(existing_bridge)
-            )
-        else:
-            bridge = await rest_reconcile_async(
-                nb,
-                "/api/virtualization/interfaces/",
-                lookup={"name": bridge_name, "virtual_machine_id": vm_id},
-                payload={
-                    "name": bridge_name,
-                    "virtual_machine": vm_id,
-                    "type": "bridge",
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
-                schema=NetBoxVirtualMachineInterfaceSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "virtual_machine": record.get("virtual_machine"),
-                    "type": record.get("type"),
-                    "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
-                },
-            )
-            if not isinstance(bridge, dict):
-                bridge = getattr(bridge, "dict", lambda: {})()
-        if bridge and not isinstance(bridge, dict):
-            bridge = getattr(bridge, "dict", lambda: {})()
 
     vlan_nb_id: int | None = None
     vlan_tag_raw = interface_config.get("tag")
@@ -540,12 +752,15 @@ async def _create_vm_interface_parallel(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "bridge": bridge.get("id") if bridge else None,
         "mac_address": mac_address,
+        "bridge": None,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
         "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+        "custom_fields": {
+            "proxmox_last_updated": now.isoformat(),
+            **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+        },
     }
     if vm_id:
         payload["virtual_machine"] = vm_id
@@ -564,15 +779,17 @@ async def _create_vm_interface_parallel(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "bridge": record.get("bridge"),
             "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
+            "bridge": record.get("bridge"),
             "untagged_vlan": record.get("untagged_vlan"),
             "mode": record.get("mode"),
             "tags": record.get("tags"),
             "custom_fields": record.get("custom_fields"),
         },
+        nullable_fields={"bridge"},
+        strict_lookup=True,
     )
     if not isinstance(vm_interface, dict):
         vm_interface = getattr(vm_interface, "dict", lambda: {})()
@@ -584,7 +801,9 @@ async def _create_vm_interface_parallel(
     )
     result["interface"] = vm_interface
 
-    ip_id, interface_ip = await _resolve_vm_interface_ip(
+    from proxbox_api.services.sync.network import _resolve_vm_interface_ips
+
+    ip_results = await _resolve_vm_interface_ips(
         nb,
         interface_config,
         guest_iface,
@@ -594,10 +813,12 @@ async def _create_vm_interface_parallel(
         now=now,
         create_ip=True,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
     )
-    if interface_ip and interface_ip != "dhcp":
-        result["ip"] = {"id": ip_id, "address": interface_ip}
-        result["first_ip_id"] = ip_id
+    if ip_results:
+        first_ip_id, first_ip = ip_results[0]
+        result["ip"] = {"id": first_ip_id, "address": first_ip}
+        result["first_ip_id"] = first_ip_id
 
     return result
 
@@ -675,6 +896,13 @@ async def _create_virtual_machine_by_netbox_id(
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
+    overwrite_vm_role: bool | None = None,
+    overwrite_vm_type: bool | None = None,
+    overwrite_vm_tags: bool | None = None,
+    overwrite_vm_description: bool | None = None,
+    overwrite_vm_custom_fields: bool | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ):
     """Create a single virtual machine by its NetBox ID.
 
@@ -695,6 +923,7 @@ async def _create_virtual_machine_by_netbox_id(
         use_websocket: Whether to send WebSocket updates.
         use_guest_agent_interface_name: Use guest-agent interface names if available.
         ignore_ipv6_link_local_addresses: Ignore IPv6 link-local addresses when selecting IPs.
+        primary_ip_preference: Preferred family when selecting VM primary IP.
 
     Returns:
         List of created/synced VM records from NetBox.
@@ -754,6 +983,13 @@ async def _create_virtual_machine_by_netbox_id(
         use_websocket=use_websocket,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
+        overwrite_vm_role=overwrite_vm_role,
+        overwrite_vm_type=overwrite_vm_type,
+        overwrite_vm_tags=overwrite_vm_tags,
+        overwrite_vm_description=overwrite_vm_description,
+        overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+        overwrite_flags=overwrite_flags if overwrite_flags is not None else SyncOverwriteFlags(),
     )
 
 
@@ -828,6 +1064,57 @@ async def create_virtual_machines(  # noqa: C901
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_vm_role: bool | None = Query(
+        default=None,
+        title="Overwrite VM Role",
+        description=(
+            "When false, the VM role is not patched on existing VMs that already have a role. "
+            "The role is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_role."
+        ),
+    ),
+    overwrite_vm_type: bool | None = Query(
+        default=None,
+        title="Overwrite VM Type",
+        description=(
+            "When false, the VM type is not patched on existing VMs that already have a type. "
+            "The type is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_type."
+        ),
+    ),
+    overwrite_vm_tags: bool | None = Query(
+        default=None,
+        title="Overwrite VM Tags",
+        description=(
+            "When false, tags are not patched on existing VMs that already have tags. "
+            "Tags are still applied when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_tags."
+        ),
+    ),
+    overwrite_vm_description: bool | None = Query(
+        default=None,
+        title="Overwrite VM Description",
+        description=(
+            "When false, the VM description is not patched on existing VMs that already "
+            "have a non-empty description. The description is still set on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_description."
+        ),
+    ),
+    overwrite_vm_custom_fields: bool | None = Query(
+        default=None,
+        title="Overwrite VM Custom Fields",
+        description=(
+            "When false, custom_fields are not patched on existing VMs that already have "
+            "non-empty custom_fields. Custom fields are still applied on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
+        ),
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -853,7 +1140,35 @@ async def create_virtual_machines(  # noqa: C901
         HTTP response with creation status, or streaming SSE response if using WebSocket.
     """
 
+    (
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+    ) = _resolve_vm_overwrites(
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+        overwrite_flags,
+    )
+    effective_vm_overwrite_flags = overwrite_flags.model_copy(
+        update={
+            "overwrite_vm_role": overwrite_vm_role,
+            "overwrite_vm_type": overwrite_vm_type,
+            "overwrite_vm_tags": overwrite_vm_tags,
+            "overwrite_vm_description": overwrite_vm_description,
+            "overwrite_vm_custom_fields": overwrite_vm_custom_fields,
+        }
+    )
+    vm_patchable_fields = frozenset(_compute_vm_patchable_fields(effective_vm_overwrite_flags))
+
     filtered_cluster_resources = cluster_resources
+    bridge: WebSocketSSEBridge | None = (
+        websocket if isinstance(websocket, WebSocketSSEBridge) else None
+    )
 
     if netbox_vm_ids and isinstance(netbox_vm_ids, str):
         vm_ids = parse_comma_separated_ints(netbox_vm_ids)
@@ -865,6 +1180,15 @@ async def create_virtual_machines(  # noqa: C901
             )
 
     nb = netbox_session
+
+    # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link.
+    proxmox_url_by_cluster: dict[str, str] = {}
+    for px, cs in zip(pxs, cluster_status):
+        cluster_n = getattr(cs, "name", None) or getattr(px, "cluster_name", None)
+        px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
+        px_port = getattr(px, "http_port", 8006)
+        if cluster_n and px_domain:
+            proxmox_url_by_cluster[str(cluster_n)] = f"https://{px_domain}:{px_port}"
 
     total_vms = 0  # Track total VMs processed
     successful_vms = 0  # Track successful VM creations
@@ -880,6 +1204,200 @@ async def create_virtual_machines(  # noqa: C901
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
     flattened_results = []
     storage_index: dict[tuple[str, str], dict] = {}
+    cluster_dependency_cache: dict[str, dict[str, object]] = {}
+    node_device_cache: dict[tuple[str, str], object] = {}
+    vm_role_cache: dict[str, object] = {}
+    vm_type_cache: dict[str, object] = {}
+    vm_role_mapping: dict[str, dict[str, object]] = {
+        "qemu": {
+            "name": "Virtual Machine (QEMU)",
+            "slug": "virtual-machine-qemu",
+            "color": "00ffff",
+            "description": "Proxmox Virtual Machine",
+            "tags": [tag_id],
+            "vm_role": True,
+        },
+        "lxc": {
+            "name": "Container (LXC)",
+            "slug": "container-lxc",
+            "color": "7fffd4",
+            "description": "Proxmox LXC Container",
+            "tags": [tag_id],
+            "vm_role": True,
+        },
+        "undefined": {
+            "name": "Unknown",
+            "slug": "unknown",
+            "color": "000000",
+            "description": "VM Type not found. Neither QEMU nor LXC.",
+            "tags": [tag_id],
+            "vm_role": True,
+        },
+    }
+
+    # Emit discovery event immediately if using bridge/SSE streaming.
+    # This prevents the stream consumer from hanging while waiting for the first event.
+    if bridge:
+        vm_items: list[dict[str, object]] = []
+        for cluster in filtered_cluster_resources:
+            if isinstance(cluster, dict):
+                for cluster_name, resources in cluster.items():
+                    if isinstance(resources, list):
+                        for resource in resources:
+                            if isinstance(resource, dict) and resource.get("type") in (
+                                "qemu",
+                                "lxc",
+                            ):
+                                vm_items.append(
+                                    {
+                                        "name": str(
+                                            resource.get("name")
+                                            or resource.get("vmid")
+                                            or "unknown"
+                                        ),
+                                        "type": str(resource.get("type") or "unknown"),
+                                        "cluster": str(cluster_name),
+                                        "node": str(resource.get("node") or ""),
+                                    }
+                                )
+        await bridge.emit_discovery(
+            phase="virtual-machines",
+            items=vm_items,
+            message=f"Discovered {len(vm_items)} virtual machine(s) to synchronize",
+            metadata={"sync_vm_network": sync_vm_network},
+        )
+
+    async def _precompute_vm_dependencies() -> None:
+        """Ensure shared dependencies in strict parent-to-child order.
+
+        Dependency chain enforced here:
+        manufacturer -> device type -> cluster type -> cluster/site -> node device -> VM role -> VM type.
+        """
+
+        resources_by_cluster: dict[str, list[dict]] = {}
+        for cluster in filtered_cluster_resources:
+            if not isinstance(cluster, dict):
+                continue
+            for candidate_cluster_name, resources in cluster.items():
+                if not isinstance(resources, list):
+                    continue
+                vm_resources = [
+                    resource
+                    for resource in resources
+                    if isinstance(resource, dict) and resource.get("type") in ("qemu", "lxc")
+                ]
+                if vm_resources:
+                    resources_by_cluster[str(candidate_cluster_name)] = vm_resources
+
+        # Nothing to precompute when no VM resources were discovered.
+        if not resources_by_cluster:
+            return
+
+        manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
+        device_type = await _ensure_device_type(
+            nb,
+            manufacturer_id=getattr(manufacturer, "id", None),
+            tag_refs=tag_refs,
+        )
+        device_role = await _ensure_proxmox_node_role(nb, tag_refs=tag_refs)
+
+        vm_types: set[str] = set()
+
+        for cluster_name, vm_resources in resources_by_cluster.items():
+            cluster_mode = next(
+                (
+                    cluster_state.mode
+                    for cluster_state in cluster_status
+                    if getattr(cluster_state, "name", None) == cluster_name
+                ),
+                "cluster",
+            )
+            cluster_type = await _ensure_cluster_type(
+                nb,
+                mode=cluster_mode,
+                tag_refs=tag_refs,
+            )
+            cluster = await _ensure_cluster(
+                nb,
+                cluster_name=cluster_name,
+                cluster_type_id=getattr(cluster_type, "id", None),
+                mode=cluster_mode,
+                tag_refs=tag_refs,
+            )
+            site = await _ensure_site(nb, cluster_name=cluster_name, tag_refs=tag_refs)
+
+            cluster_dependency_cache[cluster_name] = {
+                "cluster": cluster,
+                "site": site,
+                "device_type": device_type,
+                "device_role": device_role,
+            }
+
+            node_names = {
+                str(resource.get("node"))
+                for resource in vm_resources
+                if resource.get("node") is not None
+            }
+            for node_name in sorted(node_names):
+                node_device_cache[(cluster_name, node_name)] = await _ensure_device(
+                    nb,
+                    device_name=node_name,
+                    cluster_id=getattr(cluster, "id", None),
+                    device_type_id=getattr(device_type, "id", None),
+                    role_id=getattr(device_role, "id", None),
+                    site_id=getattr(site, "id", None),
+                    tag_refs=tag_refs,
+                    overwrite_device_role=overwrite_flags.overwrite_device_role,
+                    overwrite_device_type=overwrite_flags.overwrite_device_type,
+                    overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                    overwrite_flags=overwrite_flags,
+                )
+
+            for resource in vm_resources:
+                vm_type = str(resource.get("type") or "undefined").lower()
+                if vm_type not in vm_role_mapping:
+                    vm_type = "undefined"
+                vm_types.add(vm_type)
+
+        sorted_vm_types = sorted(vm_types)
+        role_results = await asyncio.gather(
+            *[
+                rest_reconcile_async(
+                    nb,
+                    "/api/dcim/device-roles/",
+                    lookup={
+                        "slug": vm_role_mapping.get(vt, vm_role_mapping["undefined"]).get("slug")
+                    },
+                    payload={
+                        **vm_role_mapping.get(vt, vm_role_mapping["undefined"]),
+                        "tags": tag_refs,
+                    },
+                    schema=NetBoxDeviceRoleSyncState,
+                    current_normalizer=lambda record: {
+                        "name": record.get("name"),
+                        "slug": record.get("slug"),
+                        "color": record.get("color"),
+                        "description": record.get("description"),
+                        "vm_role": record.get("vm_role"),
+                        "tags": record.get("tags"),
+                    },
+                )
+                for vt in sorted_vm_types
+            ],
+            return_exceptions=True,
+        )
+        for vt, role in zip(sorted_vm_types, role_results):
+            if not isinstance(role, BaseException):
+                vm_role_cache[vt] = role
+
+        type_results = await asyncio.gather(
+            *[ensure_vm_type(nb, vt, tag_refs) for vt in sorted_vm_types],
+            return_exceptions=True,
+        )
+        for vt, result in zip(sorted_vm_types, type_results):
+            if result is not None and not isinstance(result, BaseException):
+                vm_type_cache[vt] = result
+
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
         storage_index = build_storage_index(storage_records)
@@ -887,6 +1405,250 @@ async def create_virtual_machines(  # noqa: C901
         error_detail = getattr(error, "detail", str(error))
         error_msg = f"{type(error).__name__}: {error_detail}"
         logger.warning("Error loading storage records for VM sync: %s", error_msg)
+
+    try:
+        await _precompute_vm_dependencies()
+    except Exception as error:
+        raise ProxboxException(
+            message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
+            python_exception=f"Error: {str(error)}",
+        )
+
+    async def _get_vm_type(vm_type_key: str) -> object | None:
+        if vm_type_key not in vm_type_cache and vm_type_key in VM_TYPE_MAPPINGS:
+            result = await ensure_vm_type(nb, vm_type_key, tag_refs)
+            if result is not None:
+                vm_type_cache[vm_type_key] = result
+        return vm_type_cache.get(vm_type_key)
+
+    async def _prepare_vm_state(cluster_name: str, resource: dict) -> _PreparedVMState:  # noqa: C901
+        vm_type = str(resource.get("type") or "unknown")
+        vm_type_key = vm_type.lower() if vm_type else "undefined"
+        if vm_type_key not in vm_role_mapping:
+            vm_type_key = "undefined"
+
+        vm_config_result = get_vm_config(
+            pxs=pxs,
+            cluster_status=cluster_status,
+            node=resource.get("node"),
+            type=vm_type,
+            vmid=resource.get("vmid"),
+        )
+        if inspect.isawaitable(vm_config_result):
+            vm_config_result = await vm_config_result
+        vm_config = vm_config_result or {}
+        vm_config_obj = ProxmoxVmConfigInput.model_validate(vm_config)
+
+        cluster_dependencies = cluster_dependency_cache.get(str(cluster_name), {})
+        cluster = cluster_dependencies.get("cluster")
+        if cluster is None:
+            raise ProxboxException(
+                message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
+                python_exception=(
+                    f"Missing precomputed cluster dependency for cluster={cluster_name}"
+                ),
+            )
+
+        node_name = str(resource.get("node"))
+        device = node_device_cache.get((str(cluster_name), node_name))
+        if device is None:
+            device = await _ensure_device(
+                nb,
+                device_name=node_name,
+                cluster_id=getattr(cluster, "id", None),
+                device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
+                role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
+                site_id=getattr(cluster_dependencies.get("site"), "id", None),
+                tag_refs=tag_refs,
+                overwrite_device_role=overwrite_flags.overwrite_device_role,
+                overwrite_device_type=overwrite_flags.overwrite_device_type,
+                overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                overwrite_flags=overwrite_flags,
+            )
+            node_device_cache[(str(cluster_name), node_name)] = device
+
+        role = vm_role_cache.get(vm_type_key)
+        if role is None:
+            role_payload = vm_role_mapping.get(vm_type_key, vm_role_mapping["undefined"])
+            role = await rest_reconcile_async(
+                nb,
+                "/api/dcim/device-roles/",
+                lookup={"slug": role_payload.get("slug")},
+                payload={
+                    **role_payload,
+                    "tags": tag_refs,
+                },
+                schema=NetBoxDeviceRoleSyncState,
+                current_normalizer=lambda record: {
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "color": record.get("color"),
+                    "description": record.get("description"),
+                    "vm_role": record.get("vm_role"),
+                    "tags": record.get("tags"),
+                },
+            )
+            vm_role_cache[vm_type_key] = role
+
+        vm_type_obj = await _get_vm_type(vm_type_key)
+        vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
+
+        now = datetime.now(timezone.utc)
+        desired_payload = build_netbox_virtual_machine_payload(
+            proxmox_resource=resource,
+            proxmox_config=vm_config,
+            cluster_id=int(getattr(cluster, "id", 0) or 0),
+            device_id=int(getattr(device, "id", 0) or 0),
+            role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
+            tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            virtual_machine_type_id=vm_type_id,
+            last_updated=now,
+            cluster_name=str(cluster_name),
+            proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
+        )
+        lookup = {
+            "cf_proxmox_vm_id": int(resource.get("vmid")),
+            "cluster_id": int(getattr(cluster, "id", 0) or 0),
+        }
+
+        return _PreparedVMState(
+            cluster_name=str(cluster_name),
+            resource=resource,
+            vm_config=vm_config,
+            vm_config_obj=vm_config_obj,
+            desired_payload=desired_payload,
+            lookup=lookup,
+            now=now,
+            vm_type=vm_type,
+        )
+
+    async def _run_full_update_vm_batch() -> list[dict[str, object]]:  # noqa: C901
+        operation_inputs: list[tuple[str, dict]] = []
+        for cluster in filtered_cluster_resources:
+            if not isinstance(cluster, dict):
+                continue
+            for cluster_name, resources in cluster.items():
+                if not isinstance(resources, list):
+                    continue
+                for resource in resources:
+                    if isinstance(resource, dict) and resource.get("type") in ("qemu", "lxc"):
+                        operation_inputs.append((str(cluster_name), resource))
+
+        if not operation_inputs:
+            return []
+
+        fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
+
+        async def _prepare_with_limit(cluster_name: str, resource: dict):
+            async with fetch_semaphore:
+                return await _prepare_vm_state(cluster_name, resource)
+
+        prepared_results = await asyncio.gather(
+            *[
+                _prepare_with_limit(cluster_name, resource)
+                for cluster_name, resource in operation_inputs
+            ],
+            return_exceptions=True,
+        )
+
+        prepared_vms: list[_PreparedVMState] = []
+        for prepared_result in prepared_results:
+            if isinstance(prepared_result, Exception):
+                logger.warning("VM preparation failed: %s", prepared_result)
+                continue
+            prepared_vms.append(prepared_result)
+
+        if not prepared_vms:
+            return []
+
+        netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
+        operation_queue = _build_vm_operation_queue(
+            prepared_vms,
+            netbox_snapshot,
+            overwrite_vm_role=overwrite_vm_role,
+            overwrite_vm_type=overwrite_vm_type,
+            overwrite_vm_tags=overwrite_vm_tags,
+            overwrite_vm_description=overwrite_vm_description,
+            overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+        )
+
+        operation_counts: dict[str, int] = {"GET": 0, "CREATE": 0, "UPDATE": 0}
+        for operation in operation_queue:
+            operation_counts[operation.method] = operation_counts.get(operation.method, 0) + 1
+        logger.info(
+            "VM reconciliation queue prepared: GET=%s CREATE=%s UPDATE=%s",
+            operation_counts["GET"],
+            operation_counts["CREATE"],
+            operation_counts["UPDATE"],
+        )
+
+        resolved_records = await _dispatch_vm_operation_queue(nb, operation_queue)
+
+        results: list[dict[str, object]] = []
+        for operation in operation_queue:
+            vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
+            key = (operation.prepared.cluster_name, vmid)
+            vm_record = resolved_records.get(key)
+            if vm_record is None and operation.existing_record is not None:
+                vm_record = operation.existing_record
+            if vm_record is None:
+                logger.warning(
+                    "VM operation completed without resolved NetBox record: cluster=%s vmid=%s method=%s",
+                    operation.prepared.cluster_name,
+                    vmid,
+                    operation.method,
+                )
+                continue
+            results.append(vm_record)
+
+            vm_id = _relation_id(vm_record.get("id"))
+            if vm_id is None:
+                continue
+            try:
+                await sync_virtual_machine_task_history(
+                    netbox_session=nb,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    virtual_machine_id=vm_id,
+                    proxmox_vmid=vmid,
+                    vm_type=str(operation.prepared.vm_type or "unknown"),
+                    cluster_name=operation.prepared.cluster_name,
+                    tag_refs=tag_refs,
+                    websocket=websocket,
+                    use_websocket=use_websocket,
+                )
+            except Exception as error:
+                logger.warning(
+                    "Error syncing task history for VM %s (%s): %s",
+                    operation.prepared.resource.get("name"),
+                    operation.prepared.resource.get("vmid"),
+                    error,
+                )
+
+        return results
+
+    if not sync_vm_network:
+        flattened_results = await _run_full_update_vm_batch()
+        total_vms = len(flattened_results)
+        successful_vms = len(flattened_results)
+        failed_vms = 0
+        if bridge:
+            await bridge.emit_phase_summary(
+                phase="virtual-machines",
+                created=successful_vms,
+                failed=failed_vms,
+                message=(f"Virtual machine sync completed: {successful_vms} synchronized"),
+            )
+        if all([use_websocket, websocket]):
+            await websocket.send_json({"object": "virtual_machine", "end": True})
+        global_cache.clear_cache()
+        logger.info(
+            "VM sync summary: total=%s ok=%s failed=%s",
+            total_vms,
+            successful_vms,
+            failed_vms,
+        )
+        return flattened_results
 
     async def create_vm_task(cluster_name, resource):  # noqa: C901
         undefined_html = return_status_html("undefined", use_css)
@@ -905,34 +1667,10 @@ async def create_virtual_machines(  # noqa: C901
             "vm_interfaces": undefined_html,
         }
 
-        vm_role_mapping: dict = {
-            "qemu": {
-                "name": "Virtual Machine (QEMU)",
-                "slug": "virtual-machine-qemu",
-                "color": "00ffff",
-                "description": "Proxmox Virtual Machine",
-                "tags": [tag_id],
-                "vm_role": True,
-            },
-            "lxc": {
-                "name": "Container (LXC)",
-                "slug": "container-lxc",
-                "color": "7fffd4",
-                "description": "Proxmox LXC Container",
-                "tags": [tag_id],
-                "vm_role": True,
-            },
-            "undefined": {
-                "name": "Unknown",
-                "slug": "unknown",
-                "color": "000000",
-                "description": "VM Type not found. Neither QEMU nor LXC.",
-                "tags": [tag_id],
-                "vm_role": True,
-            },
-        }
-
         vm_type = resource.get("type", "unknown")
+        vm_type_key = str(vm_type).lower() if vm_type else "undefined"
+        if vm_type_key not in vm_role_mapping:
+            vm_type_key = "undefined"
         vm_config_result = get_vm_config(
             pxs=pxs,
             cluster_status=cluster_status,
@@ -956,87 +1694,146 @@ async def create_virtual_machines(  # noqa: C901
             "device": str(resource.get("node")),
         }
 
+        vm_name = str(resource.get("name") or resource.get("vmid") or "unknown")
+        timing_key = f"vm_{cluster_name}_{resource.get('vmid')}"
+        if bridge:
+            bridge.start_timer(timing_key)
+            await bridge.emit_item_progress(
+                phase="virtual-machines",
+                item={
+                    "name": vm_name,
+                    "type": str(resource.get("type") or "unknown"),
+                    "cluster": str(cluster_name),
+                    "node": str(resource.get("node") or ""),
+                },
+                operation=ItemOperation.CREATED,
+                status="processing",
+                message=f"Processing VM '{vm_name}'",
+                progress_current=0,
+                progress_total=0,
+            )
+
         if all([use_websocket, websocket]):
             await websocket.send_json(
                 {"object": "virtual_machine", "type": "create", "data": initial_vm_json}
             )
 
         try:
-            cluster_mode = next(
-                (
-                    cluster_state.mode
-                    for cluster_state in cluster_status
-                    if getattr(cluster_state, "name", None) == cluster_name
-                ),
-                "cluster",
-            )
-            cluster_type = await _ensure_cluster_type(
-                nb,
-                mode=cluster_mode,
-                tag_refs=tag_refs,
-            )
-            cluster = await _ensure_cluster(
-                nb,
-                cluster_name=cluster_name,
-                cluster_type_id=getattr(cluster_type, "id", None),
-                mode=cluster_mode,
-                tag_refs=tag_refs,
-            )
-            manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
-            device_type = await _ensure_device_type(
-                nb,
-                manufacturer_id=getattr(manufacturer, "id", None),
-                tag_refs=tag_refs,
-            )
-            device_role = await _ensure_proxmox_node_role(nb, tag_refs=tag_refs)
-            site = await _ensure_site(nb, cluster_name=cluster_name, tag_refs=tag_refs)
-            device = await _ensure_device(
-                nb,
-                device_name=resource.get("node"),
-                cluster_id=getattr(cluster, "id", None),
-                device_type_id=getattr(device_type, "id", None),
-                role_id=getattr(device_role, "id", None),
-                site_id=getattr(site, "id", None),
-                tag_refs=tag_refs,
-            )
-            role = await rest_reconcile_async(
-                nb,
-                "/api/dcim/device-roles/",
-                lookup={"slug": vm_role_mapping.get(vm_type, {}).get("slug")},
-                payload={
-                    **vm_role_mapping.get(vm_type, {}),
-                    "tags": tag_refs,
-                },
-                schema=NetBoxDeviceRoleSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "slug": record.get("slug"),
-                    "color": record.get("color"),
-                    "description": record.get("description"),
-                    "vm_role": record.get("vm_role"),
-                    "tags": record.get("tags"),
-                },
-            )
+            if bridge:
+                await bridge.emit_substep(
+                    phase="virtual-machines",
+                    substep="resolve_dependencies",
+                    status=SubstepStatus.PROCESSING,
+                    message=f"Resolving dependencies for VM '{vm_name}'",
+                    item={"name": vm_name},
+                )
+            cluster_dependencies = cluster_dependency_cache.get(str(cluster_name), {})
+            cluster = cluster_dependencies.get("cluster")
+
+            if cluster is None:
+                raise ProxboxException(
+                    message=(
+                        "Error creating Virtual Machine dependent objects "
+                        "(cluster, device, tag and role)"
+                    ),
+                    python_exception=(
+                        f"Missing precomputed cluster dependency for cluster={cluster_name}"
+                    ),
+                )
+
+            node_name = str(resource.get("node"))
+            device = node_device_cache.get((str(cluster_name), node_name))
+            if device is None:
+                # Fallback for edge cases where a node appears after preflight filtering.
+                device = await _ensure_device(
+                    nb,
+                    device_name=node_name,
+                    cluster_id=getattr(cluster, "id", None),
+                    device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
+                    role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
+                    site_id=getattr(cluster_dependencies.get("site"), "id", None),
+                    tag_refs=tag_refs,
+                    overwrite_device_role=overwrite_flags.overwrite_device_role,
+                    overwrite_device_type=overwrite_flags.overwrite_device_type,
+                    overwrite_device_tags=overwrite_flags.overwrite_device_tags,
+                    overwrite_flags=overwrite_flags,
+                )
+                node_device_cache[(str(cluster_name), node_name)] = device
+
+            role = vm_role_cache.get(vm_type_key)
+            if role is None:
+                role_payload = vm_role_mapping.get(vm_type_key, vm_role_mapping["undefined"])
+                role = await rest_reconcile_async(
+                    nb,
+                    "/api/dcim/device-roles/",
+                    lookup={"slug": role_payload.get("slug")},
+                    payload={
+                        **role_payload,
+                        "tags": tag_refs,
+                    },
+                    schema=NetBoxDeviceRoleSyncState,
+                    current_normalizer=lambda record: {
+                        "name": record.get("name"),
+                        "slug": record.get("slug"),
+                        "color": record.get("color"),
+                        "description": record.get("description"),
+                        "vm_role": record.get("vm_role"),
+                        "tags": record.get("tags"),
+                    },
+                )
+                vm_role_cache[vm_type_key] = role
+
+            vm_type_obj = await _get_vm_type(vm_type_key)
+            vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
 
             logger.debug("VM deps cluster=%s device=%s role=%s", cluster, device, role)
+            if bridge:
+                await bridge.emit_substep(
+                    phase="virtual-machines",
+                    substep="resolve_dependencies",
+                    status=SubstepStatus.COMPLETED,
+                    message=f"Dependencies ready for VM '{vm_name}'",
+                    item={"name": vm_name},
+                    timing_key=timing_key,
+                )
 
         except Exception as error:
+            if bridge:
+                await bridge.emit_error_detail(
+                    message="Failed to resolve VM dependencies",
+                    category=ErrorCategory.VALIDATION,
+                    phase="virtual-machines",
+                    item={"name": vm_name},
+                    detail=str(error),
+                    suggestion="Check cluster, node device, and VM role mappings in NetBox",
+                )
             raise ProxboxException(
                 message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
                 python_exception=f"Error: {str(error)}",
             )
 
-        # try:
         now = datetime.now(timezone.utc)
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
             cluster_id=int(getattr(cluster, "id", 0) or 0),
             device_id=int(getattr(device, "id", 0) or 0),
-            role_id=int(getattr(role, "id", 0) or 0),
+            role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            virtual_machine_type_id=vm_type_id,
             last_updated=now,
+            cluster_name=str(cluster_name),
+            proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
         )
+
+        if bridge:
+            await bridge.emit_substep(
+                phase="virtual-machines",
+                substep="reconcile_vm",
+                status=SubstepStatus.PROCESSING,
+                message=f"Reconciling VM '{vm_name}' in NetBox",
+                item={"name": vm_name},
+            )
 
         virtual_machine = await rest_reconcile_async(
             nb,
@@ -1047,11 +1844,13 @@ async def create_virtual_machines(  # noqa: C901
             },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
+            patchable_fields=vm_patchable_fields,
             current_normalizer=lambda record: {
                 "name": record.get("name"),
                 "status": record.get("status"),
                 "cluster": record.get("cluster"),
                 "device": record.get("device"),
+                "virtual_machine_type": record.get("virtual_machine_type"),
                 "role": record.get("role"),
                 "vcpus": record.get("vcpus"),
                 "memory": record.get("memory"),
@@ -1063,16 +1862,15 @@ async def create_virtual_machines(  # noqa: C901
         )
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)
-
-        """
-        except ProxboxException:
-            raise
-        except Exception as error:
-            raise ProxboxException(
-                message="Error creating Virtual Machine in Netbox",
-                python_exception=f"Error: {str(error)}"
+        if bridge:
+            await bridge.emit_substep(
+                phase="virtual-machines",
+                substep="reconcile_vm",
+                status=SubstepStatus.COMPLETED,
+                message=f"VM '{vm_name}' reconciled in NetBox",
+                item={"name": vm_name},
+                timing_key=timing_key,
             )
-        """
 
         if not isinstance(virtual_machine, dict):
             virtual_machine = virtual_machine.dict()
@@ -1092,7 +1890,7 @@ async def create_virtual_machines(  # noqa: C901
                     None,
                 )
                 if proxmox_session is not None:
-                    guest_agent_interfaces = get_qemu_guest_agent_network_interfaces(
+                    guest_agent_interfaces = await get_qemu_guest_agent_network_interfaces(
                         proxmox_session,
                         node=str(resource.get("node")),
                         vmid=int(resource.get("vmid")),
@@ -1109,9 +1907,9 @@ async def create_virtual_machines(  # noqa: C901
                 for iface in guest_agent_interfaces
             }
             guest_by_mac = {
-                _normalized_mac(iface.get("mac_address")): iface
+                normalized_mac(iface.get("mac_address")): iface
                 for iface in guest_agent_interfaces
-                if _normalized_mac(iface.get("mac_address"))
+                if normalized_mac(iface.get("mac_address"))
             }
 
             vm_networks = _parse_vm_networks(vm_config)
@@ -1126,7 +1924,7 @@ async def create_virtual_machines(  # noqa: C901
                         interface_mac = value.get("virtio", value.get("hwaddr", None))
                         guest_iface = None
                         if interface_mac:
-                            guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                            guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
                         if guest_iface is None:
                             guest_iface = guest_by_name.get(config_interface_name.lower())
                         resolved_interface_name = config_interface_name
@@ -1145,7 +1943,10 @@ async def create_virtual_machines(  # noqa: C901
                                 tag_refs=tag_refs,
                                 use_guest_agent_interface_name=use_guest_agent_interface_name,
                                 ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                                primary_ip_preference=primary_ip_preference,
                                 now=now,
+                                device=device,
+                                overwrite_flags=overwrite_flags,
                             )
                         )
 
@@ -1177,37 +1978,34 @@ async def create_virtual_machines(  # noqa: C901
             if disk_tasks:
                 await asyncio.gather(*disk_tasks, return_exceptions=True)
 
-        # Set primary IP only when NetBox has no primary IP yet (user choice is preserved)
-        vm_id = virtual_machine.get("id")
-        if virtual_machine.get("primary_ip4") is None:
+        # Set primary IP only when NetBox has no primary IP yet (user choice is preserved).
+        has_primary_ip = (
+            virtual_machine.get("primary_ip4") is not None
+            or virtual_machine.get("primary_ip6") is not None
+        )
+        if not has_primary_ip:
             if first_ip_id is not None:
-                try:
-                    await rest_patch_async(
-                        nb,
-                        "/api/virtualization/virtual-machines/",
-                        vm_id,
-                        {"primary_ip4": first_ip_id},
+                from proxbox_api.services.sync.vm_network import set_primary_ip
+
+                primary_set = await set_primary_ip(
+                    nb=nb,
+                    virtual_machine=virtual_machine,
+                    primary_ip_id=first_ip_id,
+                    primary_ip_preference=primary_ip_preference,
+                )
+                if not primary_set and websocket:
+                    await websocket.send_json(
+                        {
+                            "object": "virtual_machine",
+                            "data": {
+                                "error": "Could not set primary IP.",
+                                "rowid": virtual_machine.get("name"),
+                            },
+                        }
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to set primary_ip4 for VM %s (id=%s): %s",
-                        virtual_machine.get("name"),
-                        vm_id,
-                        exc,
-                    )
-                    if websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "virtual_machine",
-                                "data": {
-                                    "error": f"Could not set primary IP: {exc}",
-                                    "rowid": virtual_machine.get("name"),
-                                },
-                            }
-                        )
             else:
                 logger.info(
-                    "No IP available for VM %s (vmid=%s), skipping primary_ip4 assignment.",
+                    "No IP available for VM %s (vmid=%s), skipping primary IP assignment.",
                     resource.get("name"),
                     resource.get("vmid"),
                 )
@@ -1230,6 +2028,7 @@ async def create_virtual_machines(  # noqa: C901
                 pxs=pxs,
                 cluster_status=cluster_status,
                 virtual_machine_id=int(virtual_machine.get("id")),
+                proxmox_vmid=int(resource.get("vmid")),
                 vm_type=str(vm_type or "unknown"),
                 cluster_name=cluster_name,
                 tag_refs=tag_refs,
@@ -1248,6 +2047,26 @@ async def create_virtual_machines(  # noqa: C901
                 resource.get("vmid"),
                 error,
             )
+
+        if bridge:
+            await bridge.emit_item_progress(
+                phase="virtual-machines",
+                item={
+                    "name": vm_name,
+                    "type": str(resource.get("type") or "unknown"),
+                    "cluster": str(cluster_name),
+                    "node": str(resource.get("node") or ""),
+                    "netbox_id": virtual_machine.get("id"),
+                    "netbox_url": virtual_machine.get("display_url"),
+                },
+                operation=ItemOperation.CREATED,
+                status="completed",
+                message=f"Synced VM '{vm_name}'",
+                progress_current=0,
+                progress_total=0,
+                timing_key=timing_key,
+            )
+            bridge.clear_timer(timing_key)
 
         return virtual_machine
 
@@ -1278,12 +2097,12 @@ async def create_virtual_machines(  # noqa: C901
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
     try:
-        # Process each cluster
+        total_vms = 0
+        # Count VMs for logging
         for cluster in filtered_cluster_resources:
             cluster_name = list(cluster.keys())[0]
             resources = cluster[cluster_name]
             vm_count = len([r for r in resources if r.get("type") in ("qemu", "lxc")])
-
             total_vms += vm_count
 
         # Return the created virtual machines.
@@ -1292,7 +2111,10 @@ async def create_virtual_machines(  # noqa: C901
             return_exceptions=True,
         )
 
-        logger.info(f"VM Creation Result list: {result_list}")
+        logger.info(
+            "VM creation gather complete: %d cluster result(s)",
+            len(result_list),
+        )
         for cluster_result in result_list:
             if isinstance(cluster_result, Exception):
                 continue
@@ -1316,6 +2138,16 @@ async def create_virtual_machines(  # noqa: C901
                         successful_vms += 1
                         flattened_results.append(vm_result)
 
+        if bridge:
+            await bridge.emit_phase_summary(
+                phase="virtual-machines",
+                created=successful_vms,
+                failed=failed_vms,
+                message=(
+                    f"Virtual machine sync completed: {successful_vms} synchronized, {failed_vms} failed"
+                ),
+            )
+
         # Send end message to websocket
         if all([use_websocket, websocket]):
             await websocket.send_json({"object": "virtual_machine", "end": True})
@@ -1332,6 +2164,14 @@ async def create_virtual_machines(  # noqa: C901
 
     except Exception as error:
         error_msg = f"Error during VM sync: {str(error)}"
+        if bridge:
+            await bridge.emit_error_detail(
+                message="Virtual machine sync failed",
+                category=ErrorCategory.INTERNAL,
+                phase="virtual-machines",
+                detail=str(error),
+                suggestion="Review backend logs and retry the synchronization",
+            )
         raise ProxboxException(message=error_msg)
 
     return flattened_results
@@ -1348,6 +2188,8 @@ async def create_only_vm_interfaces(  # noqa: C901
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Sync VM interfaces only (no VM creation) with per-interface progress events.
 
@@ -1366,8 +2208,6 @@ async def create_only_vm_interfaces(  # noqa: C901
     Returns:
         List of synced interface records.
     """
-    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
-
     nb = netbox_session
     tag_refs = [
         {
@@ -1380,7 +2220,11 @@ async def create_only_vm_interfaces(  # noqa: C901
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
-    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
+    vm_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
+    vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
+
+    async def _sync_vm_interfaces(cluster_name: str, resource: dict) -> tuple[list[dict], dict]:  # noqa: C901
+        """Collect interface payloads for a single VM. Returns (payloads, interface_info_dict)."""
         cluster_name_str = str(cluster_name)
         resource_node = str(resource.get("node", ""))
         vm_type = resource.get("type", "unknown")
@@ -1397,20 +2241,23 @@ async def create_only_vm_interfaces(  # noqa: C901
                         break
 
         if not vm_record:
-            return []
+            return [], {}
 
         vmid = resource.get("vmid")
         if vmid is None:
-            return []
+            return [], {}
 
-        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
+        try:
+            netbox_vm = vm_index.get(int(str(vmid).strip()))
+        except (TypeError, ValueError):
+            netbox_vm = None
         if not netbox_vm:
             logger.warning(
                 "Skipping VM interface sync for %s (vmid=%s): NetBox VM not found",
                 vm_name,
                 vmid,
             )
-            return []
+            return [], {}
 
         proxmox_session = next(
             (
@@ -1441,7 +2288,7 @@ async def create_only_vm_interfaces(  # noqa: C901
         if vm_type == "qemu" and vm_config.get("agent"):
             if proxmox_session and resource_node:
                 guest_agent_interfaces = (
-                    get_qemu_guest_agent_network_interfaces(
+                    await get_qemu_guest_agent_network_interfaces(
                         proxmox_session, resource_node, int(vmid)
                     )
                     or []
@@ -1451,14 +2298,14 @@ async def create_only_vm_interfaces(  # noqa: C901
             str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
         }
         guest_by_mac = {
-            _normalized_mac(iface.get("mac_address")): iface
+            normalized_mac(iface.get("mac_address")): iface
             for iface in guest_agent_interfaces
-            if _normalized_mac(iface.get("mac_address"))
+            if normalized_mac(iface.get("mac_address"))
         }
 
         vm_networks = _parse_vm_networks(vm_config)
-
-        interfaces_synced: list[dict] = []
+        interface_payloads: list[dict] = []
+        interface_info: dict = {}
 
         for network in vm_networks:
             for iface_name, config_dict in network.items():
@@ -1468,7 +2315,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                 interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                 guest_iface = None
                 if interface_mac:
-                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                    guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
                 if guest_iface is None:
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 
@@ -1493,43 +2340,42 @@ async def create_only_vm_interfaces(  # noqa: C901
                     )
 
                 try:
-                    result = await sync_vm_interface_and_ip(
-                        nb=nb,
-                        virtual_machine={
-                            "id": netbox_vm.get("id"),
-                            "name": netbox_vm.get("name") or vm_name,
-                        },
-                        interface_name=resolved_name,
-                        interface_config=config_dict,
-                        guest_iface=guest_iface,
-                        tag_refs=tag_refs,
-                        use_guest_agent_interface_name=use_guest_agent_interface_name,
-                        create_ip=False,
-                        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
-                        now=now,
-                    )
-                    interfaces_synced.append(result)
+                    # Collect interface payload info for later bulk processing
+                    payload = {
+                        "name": resolved_name,
+                        "enabled": True,
+                        "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
+                        "bridge": None,
+                        "untagged_vlan": None,
+                        "mode": None,
+                        "tags": tag_refs,
+                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                        "virtual_machine": netbox_vm.get("id"),
+                    }
 
-                    if use_websocket and websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "vm_interface",
-                                "data": {
-                                    "completed": True,
-                                    "rowid": resolved_name,
-                                    "name": resolved_name,
-                                    "vm": vm_name,
-                                    "netbox_id": result.get("id"),
-                                    "mac_address": result.get("mac_address"),
-                                    "ip_address": result.get("ip_address"),
-                                },
-                            }
-                        )
+                    # Store bridge reference info for later resolution
+                    vlan_tag = config_dict.get("tag")
+                    bridge_name = config_dict.get("bridge")
+
+                    # Store metadata for processing
+                    key = f"{netbox_vm.get('id')}:{resolved_name}"
+                    interface_info[key] = {
+                        "payload": payload,
+                        "vlan_tag": vlan_tag,
+                        "bridge_name": bridge_name,
+                        "vm_id": netbox_vm.get("id"),
+                        "resource_node": resource_node,
+                        "resolved_name": resolved_name,
+                        "config_dict": config_dict,
+                        "guest_iface": guest_iface,
+                        "vm_name": vm_name,
+                    }
+                    interface_payloads.append(payload)
                 except Exception as exc:
                     error_detail = getattr(exc, "detail", str(exc))
                     error_msg = f"{type(exc).__name__}: {error_detail}"
                     logger.warning(
-                        "Failed to sync interface %s for VM %s: %s",
+                        "Failed to collect interface payload %s for VM %s: %s",
                         resolved_name,
                         vm_name,
                         error_msg,
@@ -1548,12 +2394,12 @@ async def create_only_vm_interfaces(  # noqa: C901
                             }
                         )
 
-        return interfaces_synced
+        return interface_payloads, interface_info
 
     max_concurrency = resolve_vm_sync_concurrency()
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+    async def _run_task(cluster_name: str, resource: dict) -> tuple[list[dict], dict]:
         async with semaphore:
             return await _sync_vm_interfaces(cluster_name, resource)
 
@@ -1565,20 +2411,209 @@ async def create_only_vm_interfaces(  # noqa: C901
                     tasks.append(_run_task(cluster_name, resource))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Collect all interface payloads and metadata from all VMs
+    all_interface_payloads: list[dict] = []
+    all_interface_info: dict = {}
+    all_vlan_tags: dict[int, list[dict]] = {}  # tag → [payload_list]
+
     try:
         for cluster in cluster_resources:
             cluster_results = await _create_cluster_tasks(cluster)
             for cluster_result in cluster_results:
                 if isinstance(cluster_result, Exception):
                     continue
-                for result in cluster_result:
-                    if isinstance(result, Exception):
-                        continue
-                    results.append(result)
+                payloads, iface_info = cluster_result
+                if isinstance(payloads, list):
+                    all_interface_payloads.extend(payloads)
+                    all_interface_info.update(iface_info)
+
+                    # Collect VLAN tags for bulk creation
+                    for key, info in iface_info.items():
+                        vlan_tag = info.get("vlan_tag")
+                        if vlan_tag:
+                            try:
+                                vid = int(vlan_tag)
+                                if vid not in all_vlan_tags:
+                                    all_vlan_tags[vid] = []
+                            except (ValueError, TypeError):
+                                pass
     except Exception as exc:
         error_detail = getattr(exc, "detail", str(exc))
         error_msg = f"{type(exc).__name__}: {error_detail}"
-        logger.warning("Error during VM interfaces sync: %s", error_msg)
+        logger.warning("Error during VM interfaces collection: %s", error_msg)
+
+    # Bulk reconcile VLANs first
+    vlan_vid_to_id = {}
+    if all_vlan_tags:
+        try:
+            from proxbox_api.services.sync.network import (
+                build_vlan_payload,
+                bulk_reconcile_vlans,
+            )
+
+            vlan_payloads = [build_vlan_payload(vid, tag_refs, now) for vid in all_vlan_tags.keys()]
+            vlan_vid_to_id = await bulk_reconcile_vlans(nb, vlan_payloads)
+            logger.info(
+                "Bulk VLAN reconciliation completed: %d VLANs processed", len(vlan_payloads)
+            )
+        except Exception as e:
+            logger.error("Error during VLAN bulk reconciliation: %s", e)
+
+    # Update interface payloads with resolved VLAN IDs
+    for key, info in all_interface_info.items():
+        vlan_tag = info.get("vlan_tag")
+        if vlan_tag:
+            try:
+                vid = int(vlan_tag)
+                if vid in vlan_vid_to_id:
+                    info["payload"]["untagged_vlan"] = vlan_vid_to_id[vid]
+                    info["payload"]["mode"] = "access"
+            except (ValueError, TypeError):
+                pass
+
+    # Bulk reconcile interfaces
+    if all_interface_payloads:
+        try:
+            from proxbox_api.services.sync.network import bulk_reconcile_vm_interfaces
+
+            created_interfaces, interface_name_vm_to_id = await bulk_reconcile_vm_interfaces(
+                nb, all_interface_payloads, overwrite_flags=overwrite_flags
+            )
+            logger.info(
+                "Bulk interface reconciliation completed: %d interfaces processed",
+                len(all_interface_payloads),
+            )
+
+            # Emit WebSocket progress for each created interface
+            if use_websocket and websocket:
+                for interface in created_interfaces:
+                    # Find the original info for this interface
+                    iface_name = interface.get("name")
+                    vm_id = interface.get("virtual_machine")
+                    iface_id = interface.get("id")
+
+                    key = f"{vm_id}:{iface_name}"
+                    if key in all_interface_info:
+                        info = all_interface_info[key]
+                        await websocket.send_json(
+                            {
+                                "object": "vm_interface",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": iface_name,
+                                    "name": iface_name,
+                                    "vm": info.get("vm_name"),
+                                    "netbox_id": iface_id,
+                                    "mac_address": interface.get("mac_address"),
+                                },
+                            }
+                        )
+
+            # Build results list for compatibility
+            results = [
+                {
+                    "id": i.get("id"),
+                    "mac_address": i.get("mac_address"),
+                    "interface": i,
+                }
+                for i in created_interfaces
+            ]
+        except Exception as e:
+            logger.error("Error during interface bulk reconciliation: %s", e)
+    else:
+        results = []
+
+    # Create node-level dcim bridge interfaces for any NIC that references a
+    # Proxmox bridge (e.g. vmbr0, vmbr1).  The bulk path skips bridge resolution
+    # during payload collection, so we handle it here after all VM interfaces exist.
+    # Then update each NIC's proxbox_bridge custom field with the dcim.Interface ID.
+    if all_interface_info:
+        from proxbox_api.netbox_rest import rest_first_async
+        from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
+        node_device_id_cache: dict[str, int | None] = {}
+
+        async def _resolve_device_id(node_name: str) -> int | None:
+            if node_name in node_device_id_cache:
+                return node_device_id_cache[node_name]
+            try:
+                device_record = await rest_first_async(
+                    nb,
+                    "/api/dcim/devices/",
+                    query={"name": node_name, "limit": 1},
+                )
+                did = (
+                    device_record.get("id")
+                    if isinstance(device_record, dict)
+                    else getattr(device_record, "id", None)
+                )
+            except Exception:
+                did = None
+            node_device_id_cache[node_name] = did
+            return did
+
+        for key, info in all_interface_info.items():
+            bridge_name = info.get("bridge_name")
+            if not bridge_name:
+                continue
+            vm_id_val = info.get("vm_id")
+            resource_node_val = info.get("resource_node", "")
+            if not vm_id_val:
+                continue
+            try:
+                device_id_val = (
+                    await _resolve_device_id(resource_node_val) if resource_node_val else None
+                )
+                vm_bridge_id = await ensure_bridge_interfaces(
+                    nb,
+                    device_id_val,
+                    int(vm_id_val),
+                    bridge_name,
+                    tag_refs,
+                    now,
+                    overwrite_flags=overwrite_flags,
+                )
+                # Update the NIC interface in NetBox to set the bridge FK.
+                if vm_bridge_id:
+                    resolved_name = info.get("resolved_name", "")
+                    if resolved_name:
+                        try:
+                            existing_iface = await rest_first_async(
+                                nb,
+                                "/api/virtualization/interfaces/",
+                                query={
+                                    "virtual_machine_id": int(vm_id_val),
+                                    "name": resolved_name,
+                                    "limit": 1,
+                                },
+                            )
+                            if existing_iface:
+                                iface_id = (
+                                    existing_iface.get("id")
+                                    if isinstance(existing_iface, dict)
+                                    else getattr(existing_iface, "id", None)
+                                )
+                                if iface_id:
+                                    await rest_patch_async(
+                                        nb,
+                                        "/api/virtualization/interfaces/",
+                                        iface_id,
+                                        {"custom_fields": {"proxbox_bridge": vm_bridge_id}},
+                                    )
+                        except Exception as patch_exc:
+                            logger.warning(
+                                "Failed to set proxbox_bridge on interface %s (VM %s): %s",
+                                resolved_name,
+                                vm_id_val,
+                                patch_exc,
+                            )
+            except Exception as bridge_exc:
+                logger.warning(
+                    "Failed to create bridge interfaces for %s on VM %s: %s",
+                    bridge_name,
+                    vm_id_val,
+                    bridge_exc,
+                )
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_interface", "end": True})
@@ -1597,6 +2632,8 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
     ignore_ipv6_link_local_addresses: bool = True,
+    primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Sync VM IP addresses and primary IP assignment.
 
@@ -1619,7 +2656,6 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     Returns:
         List of synced IP address records.
     """
-    from proxbox_api.services.sync.network import sync_vm_interface_and_ip
     from proxbox_api.services.sync.vm_network import set_primary_ip
 
     nb = netbox_session
@@ -1634,7 +2670,13 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     now = datetime.now(timezone.utc)
     results: list[dict] = []
 
-    async def _sync_vm_ips(cluster_name: str, resource: dict) -> list[dict]:  # noqa: C901
+    vm_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
+    vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
+
+    async def _sync_vm_ips(
+        cluster_name: str, resource: dict
+    ) -> tuple[list[dict], list[dict], dict]:  # noqa: C901
+        """Collect IP payloads for a single VM. Returns (ip_payloads, first_ip_per_vm, ip_info)."""
         cluster_name_str = str(cluster_name)
         resource_node = str(resource.get("node", ""))
         vm_type = resource.get("type", "unknown")
@@ -1642,16 +2684,19 @@ async def create_only_vm_ip_addresses(  # noqa: C901
 
         vmid = resource.get("vmid")
         if vmid is None:
-            return []
+            return [], [], {}
 
-        netbox_vm = await _resolve_netbox_virtual_machine_by_proxmox_id(nb, vmid)
+        try:
+            netbox_vm = vm_index.get(int(str(vmid).strip()))
+        except (TypeError, ValueError):
+            netbox_vm = None
         if not netbox_vm:
             logger.warning(
                 "Skipping VM IP sync for %s (vmid=%s): NetBox VM not found",
                 vm_name,
                 vmid,
             )
-            return []
+            return [], [], {}
 
         proxmox_session = next(
             (
@@ -1684,7 +2729,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         if vm_type == "qemu" and vm_config.get("agent"):
             if proxmox_session and resource_node:
                 guest_agent_interfaces = (
-                    get_qemu_guest_agent_network_interfaces(
+                    await get_qemu_guest_agent_network_interfaces(
                         proxmox_session, resource_node, int(vmid)
                     )
                     or []
@@ -1694,15 +2739,27 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
         }
         guest_by_mac = {
-            _normalized_mac(iface.get("mac_address")): iface
+            normalized_mac(iface.get("mac_address")): iface
             for iface in guest_agent_interfaces
-            if _normalized_mac(iface.get("mac_address"))
+            if normalized_mac(iface.get("mac_address"))
         }
 
         vm_networks = _parse_vm_networks(vm_config)
+        ip_payloads: list[dict] = []
+        first_ips: list[dict] = []  # Track first IP per VM
+        ip_info: dict = {}
 
-        ips_synced: list[dict] = []
-        first_ip_id: int | None = None
+        # Pre-fetch interfaces for this VM to get their IDs
+        from proxbox_api.netbox_rest import rest_list_async
+
+        vm_interfaces = await rest_list_async(
+            nb,
+            "/api/virtualization/interfaces/",
+            query={"virtual_machine_id": netbox_vm.get("id"), "limit": 500},
+        )
+        interface_name_to_id = {
+            iface.get("name"): iface.get("id") for iface in (vm_interfaces or [])
+        }
 
         for network in vm_networks:
             for iface_name, config_dict in network.items():
@@ -1712,7 +2769,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                 guest_iface = None
                 if interface_mac:
-                    guest_iface = guest_by_mac.get(_normalized_mac(interface_mac))
+                    guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
                 if guest_iface is None:
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 
@@ -1721,6 +2778,15 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     guest_name = str(guest_iface.get("name") or "").strip()
                     if guest_name:
                         resolved_name = guest_name
+
+                interface_id = interface_name_to_id.get(resolved_name)
+                if not interface_id:
+                    logger.debug(
+                        "Skipping IP sync for interface %s on VM %s: interface not found in NetBox",
+                        resolved_name,
+                        vm_name,
+                    )
+                    continue
 
                 if use_websocket and websocket:
                     await websocket.send_json(
@@ -1737,51 +2803,72 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     )
 
                 try:
-                    result = await sync_vm_interface_and_ip(
-                        nb=nb,
-                        virtual_machine={
-                            "id": netbox_vm.get("id"),
-                            "name": netbox_vm.get("name") or vm_name,
-                        },
-                        interface_name=resolved_name,
-                        interface_config=config_dict,
-                        guest_iface=guest_iface,
-                        tag_refs=tag_refs,
-                        use_guest_agent_interface_name=use_guest_agent_interface_name,
-                        create_interface=False,
-                        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
-                        now=now,
-                    )
-                    if result.get("ip_id"):
-                        if first_ip_id is None:
-                            first_ip_id = result.get("ip_id")
-                        ips_synced.append(
-                            {
-                                "ip_id": result.get("ip_id"),
-                                "address": result.get("ip_address"),
-                                "interface_name": resolved_name,
-                                "interface_id": result.get("id"),
-                                "vm": vm_name,
-                            }
-                        )
+                    # Collect ALL IPs from guest agent (or fallback to config)
+                    from proxbox_api.services.sync.network import build_vm_interface_ip_payload
+                    from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
 
-                    if use_websocket and websocket:
-                        await websocket.send_json(
-                            {
-                                "object": "vm_ip",
-                                "data": {
-                                    "completed": True,
-                                    "rowid": resolved_name,
-                                    "name": resolved_name,
-                                    "vm": vm_name,
-                                    "ip_id": result.get("ip_id"),
-                                    "address": result.get("ip_address"),
-                                },
-                            }
+                    all_ips_for_iface: list[str] = []
+                    if guest_iface:
+                        all_ips_for_iface = all_guest_agent_ips(
+                            guest_iface,
+                            ignore_ipv6_link_local_addresses,
+                            primary_ip_preference=primary_ip_preference,
                         )
+                    if not all_ips_for_iface:
+                        config_ip = config_dict.get("ip")
+                        if config_ip and str(config_ip) != "dhcp":
+                            all_ips_for_iface = [str(config_ip)]
+
+                    all_ips_for_iface = preferred_primary_ip_order(
+                        all_ips_for_iface,
+                        primary_ip_preference=primary_ip_preference,
+                    )
+
+                    if all_ips_for_iface:
+                        for interface_ip in all_ips_for_iface:
+                            if interface_ip == "dhcp":
+                                continue
+                            payload = build_vm_interface_ip_payload(
+                                interface_ip,
+                                interface_id,
+                                tag_refs,
+                                now,
+                            )
+                            ip_payloads.append(payload)
+
+                            # Track first IP for primary assignment
+                            if not first_ips:
+                                first_ips.append(
+                                    {
+                                        "vm_id": netbox_vm.get("id"),
+                                        "netbox_vm": netbox_vm,
+                                        "address": interface_ip,
+                                    }
+                                )
+
+                            ip_info[interface_ip] = {
+                                "address": interface_ip,
+                                "interface_name": resolved_name,
+                                "interface_id": interface_id,
+                                "vm_name": vm_name,
+                            }
+                    else:
+                        if use_websocket and websocket:
+                            await websocket.send_json(
+                                {
+                                    "object": "vm_ip",
+                                    "data": {
+                                        "completed": True,
+                                        "rowid": resolved_name,
+                                        "name": resolved_name,
+                                        "vm": vm_name,
+                                        "address": "No IP",
+                                    },
+                                }
+                            )
                 except Exception as exc:
                     logger.warning(
-                        "Failed to sync IP for VM %s interface %s: %s",
+                        "Failed to collect IP payload for VM %s interface %s: %s",
                         vm_name,
                         resolved_name,
                         exc,
@@ -1800,19 +2887,12 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                             }
                         )
 
-        if first_ip_id is not None:
-            await set_primary_ip(
-                nb=nb,
-                virtual_machine=netbox_vm,
-                primary_ip_id=first_ip_id,
-            )
-
-        return ips_synced
+        return ip_payloads, first_ips, ip_info
 
     max_concurrency = resolve_vm_sync_concurrency()
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def _run_task(cluster_name: str, resource: dict) -> list[dict]:
+    async def _run_task(cluster_name: str, resource: dict) -> tuple[list[dict], list[dict], dict]:
         async with semaphore:
             return await _sync_vm_ips(cluster_name, resource)
 
@@ -1824,20 +2904,124 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     tasks.append(_run_task(cluster_name, resource))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Collect all IP payloads and metadata from all VMs
+    all_ip_payloads: list[dict] = []
+    all_ip_info: dict = {}
+    vms_with_first_ips: list[dict] = []
+
     try:
         for cluster in cluster_resources:
             cluster_results = await _create_cluster_tasks(cluster)
             for cluster_result in cluster_results:
                 if isinstance(cluster_result, Exception):
                     continue
-                for result in cluster_result:
-                    if isinstance(result, Exception):
-                        continue
-                    results.append(result)
+                ip_payloads, first_ips, ip_info = cluster_result
+                if isinstance(ip_payloads, list):
+                    all_ip_payloads.extend(ip_payloads)
+                    all_ip_info.update(ip_info)
+                    vms_with_first_ips.extend(first_ips)
     except Exception as exc:
         error_detail = getattr(exc, "detail", str(exc))
         error_msg = f"{type(exc).__name__}: {error_detail}"
-        logger.warning("Error during VM IP address sync: %s", error_msg)
+        logger.warning("Error during VM IP address collection: %s", error_msg)
+
+    # Bulk reconcile IP addresses
+    if all_ip_payloads:
+        try:
+            from proxbox_api.services.sync.network import bulk_reconcile_vm_interface_ips
+
+            created_ips = await bulk_reconcile_vm_interface_ips(
+                nb, all_ip_payloads, overwrite_flags=overwrite_flags
+            )
+            logger.info(
+                "Bulk IP address reconciliation completed: %d IPs processed",
+                len(all_ip_payloads),
+            )
+
+            # Emit WebSocket progress for each created IP
+            if use_websocket and websocket:
+                for ip_record in created_ips:
+                    address = ip_record.get("address")
+                    if address in all_ip_info:
+                        info = all_ip_info[address]
+                        await websocket.send_json(
+                            {
+                                "object": "vm_ip",
+                                "data": {
+                                    "completed": True,
+                                    "rowid": info.get("interface_name"),
+                                    "name": info.get("interface_name"),
+                                    "vm": info.get("vm_name"),
+                                    "ip_id": ip_record.get("id"),
+                                    "address": address,
+                                },
+                            }
+                        )
+
+            # Build results list for compatibility
+            results = [
+                {
+                    "ip_id": ip.get("id"),
+                    "address": ip.get("address"),
+                }
+                for ip in created_ips
+            ]
+
+            # Cleanup stale IPs per interface: remove any Proxbox-tagged IPs on the
+            # interface that were NOT in this sync run
+            from proxbox_api.services.sync.network import cleanup_stale_ips_for_interface
+
+            interface_current_ips: dict[int, set[str]] = {}
+            for payload in all_ip_payloads:
+                iface_id = payload.get("assigned_object_id")
+                address = payload.get("address")
+                if iface_id and address:
+                    interface_current_ips.setdefault(int(iface_id), set()).add(str(address))
+
+            for iface_id, current_set in interface_current_ips.items():
+                try:
+                    await cleanup_stale_ips_for_interface(nb, iface_id, current_set)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Failed to cleanup stale IPs for interface id=%s: %s",
+                        iface_id,
+                        cleanup_exc,
+                    )
+
+        except Exception as e:
+            logger.error("Error during bulk IP reconciliation: %s", e)
+    else:
+        results = []
+
+    # Set primary IPs per VM (low volume, keep as per-VM operations)
+    if vms_with_first_ips:
+        try:
+            for vm_info in vms_with_first_ips:
+                netbox_vm = vm_info.get("netbox_vm")
+                if netbox_vm:
+                    # Fetch the IP record to get its ID for primary assignment
+                    from proxbox_api.netbox_rest import rest_first_async
+
+                    ip_record = await rest_first_async(
+                        nb,
+                        "/api/ipam/ip-addresses/",
+                        query={"address": vm_info.get("address"), "limit": 1},
+                    )
+                    if ip_record:
+                        ip_id = (
+                            ip_record.get("id")
+                            if isinstance(ip_record, dict)
+                            else getattr(ip_record, "id", None)
+                        )
+                        if ip_id:
+                            await set_primary_ip(
+                                nb=nb,
+                                virtual_machine=netbox_vm,
+                                primary_ip_id=ip_id,
+                                primary_ip_preference=primary_ip_preference,
+                            )
+        except Exception as e:
+            logger.warning("Error setting primary IPs: %s", e)
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_ip", "end": True})
@@ -1870,6 +3054,12 @@ async def create_virtual_machine_by_netbox_id(
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     return await _create_virtual_machine_by_netbox_id(
         netbox_vm_id=netbox_vm_id,
@@ -1881,6 +3071,8 @@ async def create_virtual_machine_by_netbox_id(
         tag=tag,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
+        overwrite_flags=overwrite_flags,
     )
 
 
@@ -1913,7 +3105,81 @@ async def create_virtual_machines_stream(
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_vm_role: bool | None = Query(
+        default=None,
+        title="Overwrite VM Role",
+        description=(
+            "When false, the VM role is not patched on existing VMs that already have a role. "
+            "The role is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_role."
+        ),
+    ),
+    overwrite_vm_type: bool | None = Query(
+        default=None,
+        title="Overwrite VM Type",
+        description=(
+            "When false, the VM type is not patched on existing VMs that already have a type. "
+            "The type is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_type."
+        ),
+    ),
+    overwrite_vm_tags: bool | None = Query(
+        default=None,
+        title="Overwrite VM Tags",
+        description=(
+            "When false, tags are not patched on existing VMs that already have tags. "
+            "Tags are still applied when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_tags."
+        ),
+    ),
+    overwrite_vm_description: bool | None = Query(
+        default=None,
+        title="Overwrite VM Description",
+        description=(
+            "When false, the VM description is not patched on existing VMs that already "
+            "have a non-empty description. The description is still set on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_description."
+        ),
+    ),
+    overwrite_vm_custom_fields: bool | None = Query(
+        default=None,
+        title="Overwrite VM Custom Fields",
+        description=(
+            "When false, custom_fields are not patched on existing VMs that already have "
+            "non-empty custom_fields. Custom fields are still applied on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
+        ),
+    ),
+    sync_vm_network: bool = Query(
+        default=True,
+        title="Sync VM Network",
+        description=(
+            "When false, VM interface and IP address reconciliation is skipped in this pass. "
+            "Use when a dedicated network-sync stage follows immediately after."
+        ),
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
+    (
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+    ) = _resolve_vm_overwrites(
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+        overwrite_flags,
+    )
+
     filtered_cluster_resources = cluster_resources
     vm_ids: list[int] = []
 
@@ -1942,6 +3208,14 @@ async def create_virtual_machines_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
+                    overwrite_vm_role=overwrite_vm_role,
+                    overwrite_vm_type=overwrite_vm_type,
+                    overwrite_vm_tags=overwrite_vm_tags,
+                    overwrite_vm_description=overwrite_vm_description,
+                    overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+                    sync_vm_network=sync_vm_network,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
@@ -1979,7 +3253,37 @@ async def create_virtual_machines_stream(
                     "result": {"count": len(result)},
                 },
             )
+        except asyncio.CancelledError:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-machines",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual machines sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
+                },
+            )
         except Exception as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
@@ -1997,6 +3301,13 @@ async def create_virtual_machines_stream(
                     "errors": [{"detail": str(error)}],
                 },
             )
+        finally:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await asyncio.shield(sync_task)
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     return StreamingResponse(
         event_stream(),
@@ -2033,7 +3344,73 @@ async def create_virtual_machine_by_netbox_id_stream(
             "VM interface IP address selection. Disable only if you need link-local addresses included."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_vm_role: bool | None = Query(
+        default=None,
+        title="Overwrite VM Role",
+        description=(
+            "When false, the VM role is not patched on existing VMs that already have a role. "
+            "The role is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_role."
+        ),
+    ),
+    overwrite_vm_type: bool | None = Query(
+        default=None,
+        title="Overwrite VM Type",
+        description=(
+            "When false, the VM type is not patched on existing VMs that already have a type. "
+            "The type is still set when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_type."
+        ),
+    ),
+    overwrite_vm_tags: bool | None = Query(
+        default=None,
+        title="Overwrite VM Tags",
+        description=(
+            "When false, tags are not patched on existing VMs that already have tags. "
+            "Tags are still applied when a VM is first created. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_tags."
+        ),
+    ),
+    overwrite_vm_description: bool | None = Query(
+        default=None,
+        title="Overwrite VM Description",
+        description=(
+            "When false, the VM description is not patched on existing VMs that already "
+            "have a non-empty description. The description is still set on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_description."
+        ),
+    ),
+    overwrite_vm_custom_fields: bool | None = Query(
+        default=None,
+        title="Overwrite VM Custom Fields",
+        description=(
+            "When false, custom_fields are not patched on existing VMs that already have "
+            "non-empty custom_fields. Custom fields are still applied on first create. "
+            "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
+        ),
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
+    (
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+    ) = _resolve_vm_overwrites(
+        overwrite_vm_role,
+        overwrite_vm_type,
+        overwrite_vm_tags,
+        overwrite_vm_description,
+        overwrite_vm_custom_fields,
+        overwrite_flags,
+    )
+
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
@@ -2051,6 +3428,13 @@ async def create_virtual_machine_by_netbox_id_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
+                    overwrite_vm_role=overwrite_vm_role,
+                    overwrite_vm_type=overwrite_vm_type,
+                    overwrite_vm_tags=overwrite_vm_tags,
+                    overwrite_vm_description=overwrite_vm_description,
+                    overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
@@ -2086,7 +3470,37 @@ async def create_virtual_machine_by_netbox_id_stream(
                     "result": {"count": len(result)},
                 },
             )
+        except asyncio.CancelledError:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
+            yield sse_event(
+                "error",
+                {
+                    "step": "virtual-machine",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            )
+            yield sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Virtual machine sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
+                },
+            )
         except HTTPException as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
@@ -2105,6 +3519,12 @@ async def create_virtual_machine_by_netbox_id_stream(
                 },
             )
         except Exception as error:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             yield sse_event(
                 "error",
                 {
@@ -2122,6 +3542,13 @@ async def create_virtual_machine_by_netbox_id_stream(
                     "errors": [{"detail": str(error)}],
                 },
             )
+        finally:
+            if not sync_task.done():
+                sync_task.cancel()
+                try:
+                    await asyncio.shield(sync_task)
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     return StreamingResponse(
         event_stream(),

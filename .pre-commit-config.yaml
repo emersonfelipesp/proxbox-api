@@ -15,17 +15,10 @@ repos:
         args: [--fix, --exit-zero]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.7.1
+  - repo: local
     hooks:
-      - id: mypy
-        additional_dependencies: [types-all]
-        args: [--strict, --ignore-missing-imports]
-        exclude: |
-          (?x)^(
-              proxbox_api/generated/|
-              proxbox_api/session/proxmox_core\.py|
-              proxbox_api/session/proxmox_providers\.py|
-              proxbox_api/routes/proxmox/__init__\.py|
-              proxbox_api/routes/proxmox/cluster\.py
-          )$
+      - id: ty
+        name: ty
+        entry: uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+        language: system
+        pass_filenames: false

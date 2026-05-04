@@ -21,7 +21,7 @@ from proxbox_api.services.sync.virtual_disks import (
 )
 from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
-from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
@@ -105,61 +105,15 @@ async def create_virtual_disks_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "virtual-disks",
-                    "status": "started",
-                    "message": "Starting virtual disks synchronization."
-                    if not netbox_vm_id_list
-                    else f"Starting virtual disks synchronization for {len(netbox_vm_id_list)} VM(s).",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "virtual-disks",
-                    "status": "completed",
-                    "message": "Virtual disks synchronization finished.",
-                    "result": {
-                        "count": result.get("count", 0),
-                        "created": result.get("created", 0),
-                        "updated": result.get("updated", 0),
-                        "skipped": result.get("skipped", 0),
-                    },
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Virtual disks sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "virtual-disks",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Virtual disks sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        started_msg = (
+            "Starting virtual disks synchronization."
+            if not netbox_vm_id_list
+            else f"Starting virtual disks synchronization for {len(netbox_vm_id_list)} VM(s)."
+        )
+        async for frame in sse_stream_generator(
+            bridge, sync_task, "virtual-disks", started_message=started_msg
+        ):
+            yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -210,59 +164,13 @@ async def create_virtual_disks_for_vm_stream(
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "virtual-disks",
-                    "status": "started",
-                    "message": f"Starting virtual disks sync for VM id={netbox_vm_id}.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "virtual-disks",
-                    "status": "completed",
-                    "message": "Virtual disks synchronization finished.",
-                    "result": {
-                        "count": result.get("count", 0),
-                        "created": result.get("created", 0),
-                        "updated": result.get("updated", 0),
-                        "skipped": result.get("skipped", 0),
-                    },
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "Virtual disks sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "virtual-disks",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "Virtual disks sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(
+            bridge,
+            sync_task,
+            "virtual-disks",
+            started_message=f"Starting virtual disks sync for VM id={netbox_vm_id}.",
+        ):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

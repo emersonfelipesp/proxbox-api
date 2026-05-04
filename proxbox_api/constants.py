@@ -4,9 +4,27 @@
 NETBOX_PAGE_SIZE = 200
 NETBOX_MAX_OFFSET = 10_000
 
+# NetBox typed-schema version targeted by netbox-sdk's `build_schema_index`.
+# Bump alongside the netbox-sdk pin and the OpenAPI snapshots when targeting a new NetBox release.
+NETBOX_SCHEMA_VERSION = "4.6"
+
 # VM sync defaults
 DEFAULT_VM_STATUS = "active"
 DEFAULT_VM_ROLE = "undefined"
+
+# VM type mappings for NetBox VirtualMachineType objects (NetBox v4.6+)
+VM_TYPE_MAPPINGS = {
+    "qemu": {
+        "name": "QEMU Virtual Machine",
+        "slug": "qemu-virtual-machine",
+        "description": "Proxmox QEMU/KVM Virtual Machine",
+    },
+    "lxc": {
+        "name": "LXC Container",
+        "slug": "lxc-container",
+        "description": "Proxmox LXC Container",
+    },
+}
 
 # VM role mappings for different VM types
 VM_ROLE_MAPPINGS = {
@@ -63,8 +81,12 @@ HTTP_INTERNAL_ERROR = 500
 DEFAULT_DB_PATH = "database.db"
 DEFAULT_LOG_PATH = "/var/log/proxbox.log"
 
+# Proxmox node name validation — must start with alphanumeric, then allow dots/hyphens/underscores.
+# Applied to all `node` path parameters to prevent path traversal and injection.
+NODE_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+
 # Proxmox API versions
-SUPPORTED_PROXMOX_VERSIONS = ["8.3.0", "latest"]
+SUPPORTED_PROXMOX_VERSIONS = ["8.1", "8.2", "8.3", "latest"]
 DEFAULT_PROXMOX_VERSION = "latest"
 
 # NetBox object types

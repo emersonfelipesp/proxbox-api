@@ -1,6 +1,7 @@
 """Virtual machine read/query routes."""
 
 import asyncio
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -10,6 +11,7 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_sdk_helpers import to_dict
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.schemas.virtualization import (  # Schemas
     CPU,
     Backup,
@@ -26,7 +28,7 @@ router = APIRouter()
 
 @router.get(
     "/",
-    response_model=list[dict],
+    response_model=list[dict[str, object]],
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
@@ -170,6 +172,12 @@ async def create_virtual_machines_interfaces(
             "VM interface IP address selection."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
@@ -186,6 +194,8 @@ async def create_virtual_machines_interfaces(
         use_websocket=False,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
+        overwrite_flags=overwrite_flags,
     )
     return results
 
@@ -214,11 +224,17 @@ async def create_virtual_machines_interfaces_stream(
             "VM interface IP address selection."
         ),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
     )
-    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -236,58 +252,15 @@ async def create_virtual_machines_interfaces_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-interfaces",
-                    "status": "started",
-                    "message": "Starting VM interfaces synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-interfaces",
-                    "status": "completed",
-                    "message": "VM interfaces synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "VM interfaces sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "vm-interfaces",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "VM interfaces sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "vm-interfaces"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -320,6 +293,12 @@ async def create_virtual_machines_interfaces_ip_address(
         title="Ignore IPv6 Link-Local Addresses",
         description=("When true, IPv6 link-local addresses (fe80::/64) are ignored."),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_ip_addresses,
@@ -336,6 +315,8 @@ async def create_virtual_machines_interfaces_ip_address(
         use_websocket=False,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+        primary_ip_preference=primary_ip_preference,
+        overwrite_flags=overwrite_flags,
     )
     return results
 
@@ -361,11 +342,17 @@ async def create_virtual_machines_ip_address_stream(
         title="Ignore IPv6 Link-Local Addresses",
         description=("When true, IPv6 link-local addresses (fe80::/64) are ignored."),
     ),
+    primary_ip_preference: Literal["ipv4", "ipv6"] = Query(
+        default="ipv4",
+        title="Primary IP Preference",
+        description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
 ):
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_ip_addresses,
     )
-    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+    from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -383,58 +370,15 @@ async def create_virtual_machines_ip_address_stream(
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+                    primary_ip_preference=primary_ip_preference,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()
 
         sync_task = asyncio.create_task(_run_sync())
-        try:
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-ip-addresses",
-                    "status": "started",
-                    "message": "Starting VM IP address synchronization.",
-                },
-            )
-            async for frame in bridge.iter_sse():
-                yield frame
-            result = await sync_task
-            yield sse_event(
-                "step",
-                {
-                    "step": "vm-ip-addresses",
-                    "status": "completed",
-                    "message": "VM IP address synchronization finished.",
-                    "result": {"count": len(result)},
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": True,
-                    "message": "VM IP address sync completed.",
-                    "result": result,
-                },
-            )
-        except Exception as error:
-            yield sse_event(
-                "error",
-                {
-                    "step": "vm-ip-addresses",
-                    "status": "failed",
-                    "error": str(error),
-                    "detail": str(error),
-                },
-            )
-            yield sse_event(
-                "complete",
-                {
-                    "ok": False,
-                    "message": "VM IP address sync failed.",
-                    "errors": [{"detail": str(error)}],
-                },
-            )
+        async for frame in sse_stream_generator(bridge, sync_task, "vm-ip-addresses"):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

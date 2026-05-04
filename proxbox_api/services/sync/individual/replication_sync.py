@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxReplicationSyncState
 from proxbox_api.services.proxmox_helpers import get_cluster_replication
+from proxbox_api.services.sync.backup_routines import (
+    _extract_choice_value,
+    _extract_fk_id,
+    _get_netbox_endpoint_id,
+)
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.helpers import (
     build_sync_response,
@@ -37,6 +42,7 @@ async def _build_replication_dry_run_result(
     guest_vmid: int,
     replication_id: str,
     proxmox_resource: dict[str, object],
+    vm_type: str = "qemu",
 ) -> dict:
     vm_record, _ = await ensure_vm_record(
         nb,
@@ -44,7 +50,7 @@ async def _build_replication_dry_run_result(
         tag,
         vmid=guest_vmid,
         node=None,
-        vm_type="qemu",
+        vm_type=vm_type,
         auto_create_vm=False,
     )
     vm_id = getattr(vm_record, "id", None) if vm_record is not None else None
@@ -72,6 +78,7 @@ async def sync_replication_individual(
     px: object,
     tag: object,
     replication_id: str,
+    vm_type: str = "qemu",
     auto_create_vm: bool = True,
     dry_run: bool = False,
 ) -> dict:
@@ -93,7 +100,7 @@ async def sync_replication_individual(
     now = datetime.now(timezone.utc)
 
     try:
-        replications = get_cluster_replication(px)
+        replications = await get_cluster_replication(px)
     except Exception:
         replications = []
 
@@ -140,16 +147,19 @@ async def sync_replication_individual(
             guest_vmid=guest_vmid,
             replication_id=replication_id,
             proxmox_resource=proxmox_resource,
+            vm_type=vm_type,
         )
 
     try:
+        endpoint_id = await _get_netbox_endpoint_id(nb, px)
+
         vm_record, vm_error = await ensure_vm_record(
             nb,
             px,
             tag,
             vmid=guest_vmid,
             node=None,
-            vm_type="qemu",
+            vm_type=vm_type,
             auto_create_vm=auto_create_vm,
         )
         if vm_error:
@@ -179,6 +189,7 @@ async def sync_replication_individual(
         node_id = await _resolve_node_id(nb, node_name)
 
         replication_payload: dict[str, object] = {
+            "endpoint": endpoint_id,
             "virtual_machine": vm_id,
             "proxmox_node": node_id,
             "replication_id": target_replication.get("id"),
@@ -192,6 +203,8 @@ async def sync_replication_individual(
             "source": target_replication.get("source"),
             "jobnum": target_replication.get("jobnum"),
             "remove_job": target_replication.get("remove_job"),
+            "raw_config": target_replication,
+            "status": "active",
             "tags": tag_refs,
         }
 
@@ -207,19 +220,22 @@ async def sync_replication_individual(
             payload=replication_payload,
             schema=NetBoxReplicationSyncState,
             current_normalizer=lambda record: {
-                "virtual_machine": record.get("virtual_machine"),
-                "proxmox_node": record.get("proxmox_node"),
+                "endpoint": _extract_fk_id(record.get("endpoint")),
+                "virtual_machine": _extract_fk_id(record.get("virtual_machine")),
+                "proxmox_node": _extract_fk_id(record.get("proxmox_node")),
                 "replication_id": record.get("replication_id"),
                 "guest": record.get("guest"),
                 "target": record.get("target"),
-                "job_type": record.get("job_type"),
+                "job_type": _extract_choice_value(record.get("job_type")),
                 "schedule": record.get("schedule"),
                 "rate": record.get("rate"),
                 "comment": record.get("comment"),
                 "disable": record.get("disable"),
                 "source": record.get("source"),
                 "jobnum": record.get("jobnum"),
-                "remove_job": record.get("remove_job"),
+                "remove_job": _extract_choice_value(record.get("remove_job")),
+                "raw_config": record.get("raw_config"),
+                "status": _extract_choice_value(record.get("status")),
                 "tags": record.get("tags"),
             },
         )

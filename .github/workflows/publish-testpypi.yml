@@ -130,13 +130,16 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
+      - name: Ty (type check)
+        run: uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+
       - name: Compile package
         run: uv run python -m compileall proxbox_api scripts tests
 
       - name: Import smoke checks
         run: |
           uv run python -c "import proxbox_api.main"
-          uv run python -c "import proxmox_mock.main"
+          uv run python -c "import proxmox_sdk.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
       - name: Run mocked schema-driven tests
@@ -145,13 +148,163 @@ jobs:
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
-            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80 \
-            --deselect=tests/test_individual_sync.py::test_sync_backup_individual_reports_updated_when_backup_exists
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80
+
+  e2e-pre-publish:
+    name: E2E pre-publish (dev deps)
+    runs-on: ubuntu-latest
+    needs: [prepare-release]
+    timeout-minutes: 30
+    env:
+      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta2
+      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync E2E dependencies
+        run: uv sync --frozen --extra e2e --group dev
+
+      - name: Start E2E stack
+        run: |
+          set -eux
+          docker network create proxbox-e2e || true
+          SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
+          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/heads/develop.tar.gz'
+          DEV_OVERRIDES='git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main'
+
+          docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
+
+          docker run -d --name netbox-e2e-postgres --network proxbox-e2e \
+            -e POSTGRES_DB=netbox \
+            -e POSTGRES_USER=netbox \
+            -e POSTGRES_PASSWORD=netbox \
+            postgres:16-alpine
+
+          docker run -d --name netbox-e2e-redis --network proxbox-e2e \
+            redis:7-alpine
+
+          docker pull "${PROXMOX_OPENAPI_IMAGE}"
+          docker run -d --name proxmox-e2e-mock --network proxbox-e2e -p 18006:8000 \
+            -e PROXMOX_API_MODE=mock \
+            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
+            "${PROXMOX_OPENAPI_IMAGE}"
+
+          if ! docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
+            NETBOX_VERSION="${NETBOX_IMAGE##*:}"
+            git clone --depth 1 https://github.com/netbox-community/netbox-docker.git /tmp/netbox-docker
+            git clone --depth 1 --branch "${NETBOX_VERSION}" \
+              https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
+            docker build \
+              --build-arg "FROM=ubuntu:24.04" \
+              --build-arg "NETBOX_PATH=.netbox" \
+              -t "${NETBOX_IMAGE}" \
+              /tmp/netbox-docker
+          fi
+
+          docker run -d --name netbox-e2e-http --network proxbox-e2e -p 18080:8000 \
+            -e DB_HOST=netbox-e2e-postgres \
+            -e DB_NAME=netbox \
+            -e DB_USER=netbox \
+            -e DB_PASSWORD=netbox \
+            -e REDIS_HOST=netbox-e2e-redis \
+            -e REDIS_DATABASE=0 \
+            -e REDIS_CACHE_HOST=netbox-e2e-redis \
+            -e REDIS_CACHE_DATABASE=1 \
+            -e REDIS_TASK_HOST=netbox-e2e-redis \
+            -e REDIS_TASK_DATABASE=2 \
+            -e SECRET_KEY="$SECRET_KEY" \
+            -e SUPERUSER_NAME=admin \
+            -e SUPERUSER_EMAIL=admin@example.com \
+            -e SUPERUSER_PASSWORD=admin \
+            -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http" \
+            -e LOGIN_REQUIRED=False \
+            --entrypoint /bin/bash \
+            "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${NETBOX_PROXBOX_TARGET}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+
+          docker build --target raw \
+            --build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}" \
+            -t proxbox-e2e:raw .
+
+          docker run -d --name proxbox-e2e --network proxbox-e2e -p 18081:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_BIND_HOST=0.0.0.0 \
+            proxbox-e2e:raw
+
+      - name: Wait for services and verify connectivity
+        run: |
+          set -eux
+          for i in $(seq 1 240); do
+            http_code="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/ 2>/dev/null || true)"
+            if [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 400 ]; then break; fi
+            sleep 2
+            if [ "$i" -eq 240 ]; then echo "NetBox did not become ready"; docker logs netbox-e2e-http || true; exit 1; fi
+          done
+
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 5 http://127.0.0.1:18006/openapi.json >/dev/null 2>&1; then break; fi
+            sleep 2
+            if [ "$i" -eq 60 ]; then echo "proxmox mock did not become ready"; docker logs proxmox-e2e-mock || true; exit 1; fi
+          done
+
+          for i in $(seq 1 120); do
+            if curl -fsS --max-time 5 http://127.0.0.1:18081/ >/dev/null 2>&1; then break; fi
+            sleep 2
+            if [ "$i" -eq 120 ]; then echo "proxbox-api did not become ready"; docker logs proxbox-e2e || true; exit 1; fi
+          done
+
+          TOKEN_OUTPUT=$(docker exec netbox-e2e-http /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "from users.models import Token, User; u=User.objects.get(username='admin'); t=Token.objects.create(user=u, version=1, token='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'); print(f'{t.id}:{t.plaintext}')")
+          NETBOX_API_TOKEN=$(printf '%s' "$TOKEN_OUTPUT" | tail -n 1 | cut -d: -f2)
+
+          PROXBOX_API_KEY="proxbox-e2e-api-key-proxbox-e2e-api-key-1234567890"
+          curl -fsS -X POST http://127.0.0.1:18081/auth/register-key \
+            -H "Content-Type: application/json" \
+            --data "{\"api_key\":\"${PROXBOX_API_KEY}\",\"label\":\"e2e\"}"
+          curl -fsS -X POST http://127.0.0.1:18081/netbox/endpoint \
+            -H "Content-Type: application/json" \
+            -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}" \
+            --data "{\"name\":\"e2e-netbox\",\"ip_address\":\"netbox-e2e-http\",\"domain\":\"\",\"port\":8000,\"token_version\":\"v1\",\"token\":\"${NETBOX_API_TOKEN}\",\"verify_ssl\":false}"
+
+          STATUS_JSON=$(curl -sS http://127.0.0.1:18081/netbox/status -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}")
+          echo "$STATUS_JSON"
+          export STATUS_JSON
+          python3 - <<'PY'
+          import json, os, sys
+          p = json.loads(os.environ["STATUS_JSON"])
+          if not (p.get("available") or "netbox-version" in p or "django-version" in p):
+              sys.exit(f"NetBox status check failed: {p}")
+          PY
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker logs netbox-e2e-http || true
+          docker logs proxbox-e2e || true
+          docker logs proxmox-e2e-mock || true
+          docker logs netbox-e2e-postgres || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
+          docker network rm proxbox-e2e 2>/dev/null || true
 
   publish-pypi:
     name: publish to PyPI
     if: github.event_name == 'release'
-    needs: [prepare-release, validate-testpypi]
+    needs: [prepare-release, validate-testpypi, e2e-pre-publish]
     runs-on: ubuntu-latest
     steps:
       - name: Set up Python 3.13
@@ -183,3 +336,163 @@ jobs:
             --username "$PYPI_USERNAME" \
             --password "$PYPI_TOKEN" \
             dist/*
+
+  publish-docker:
+    name: publish Docker images
+    if: github.event_name == 'release'
+    needs: [publish-pypi]
+    uses: ./.github/workflows/docker-hub-publish.yml
+    secrets: inherit
+    with:
+      source_ref: ${{ github.event.release.tag_name }}
+      mode: publish
+
+  e2e-post-publish:
+    name: E2E post-publish (published artifacts)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    needs: [publish-docker, prepare-release]
+    timeout-minutes: 30
+    env:
+      NETBOX_IMAGE: netboxcommunity/netbox:v4.6.0-beta2
+      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
+      PROXBOX_API_IMAGE: emersonfelipesp/proxbox-api
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync E2E dependencies
+        run: uv sync --frozen --extra e2e --group dev
+
+      - name: Start E2E stack (published artifacts)
+        env:
+          RELEASE_VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -eux
+          docker network create proxbox-e2e || true
+          SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
+
+          docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
+
+          docker run -d --name netbox-e2e-postgres --network proxbox-e2e \
+            -e POSTGRES_DB=netbox \
+            -e POSTGRES_USER=netbox \
+            -e POSTGRES_PASSWORD=netbox \
+            postgres:16-alpine
+
+          docker run -d --name netbox-e2e-redis --network proxbox-e2e \
+            redis:7-alpine
+
+          docker pull "${PROXMOX_OPENAPI_IMAGE}"
+          docker run -d --name proxmox-e2e-mock --network proxbox-e2e -p 18006:8000 \
+            -e PROXMOX_API_MODE=mock \
+            -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
+            "${PROXMOX_OPENAPI_IMAGE}"
+
+          if ! docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
+            NETBOX_VERSION="${NETBOX_IMAGE##*:}"
+            git clone --depth 1 https://github.com/netbox-community/netbox-docker.git /tmp/netbox-docker
+            git clone --depth 1 --branch "${NETBOX_VERSION}" \
+              https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
+            docker build \
+              --build-arg "FROM=ubuntu:24.04" \
+              --build-arg "NETBOX_PATH=.netbox" \
+              -t "${NETBOX_IMAGE}" \
+              /tmp/netbox-docker
+          fi
+
+          docker run -d --name netbox-e2e-http --network proxbox-e2e -p 18080:8000 \
+            -e DB_HOST=netbox-e2e-postgres \
+            -e DB_NAME=netbox \
+            -e DB_USER=netbox \
+            -e DB_PASSWORD=netbox \
+            -e REDIS_HOST=netbox-e2e-redis \
+            -e REDIS_DATABASE=0 \
+            -e REDIS_CACHE_HOST=netbox-e2e-redis \
+            -e REDIS_CACHE_DATABASE=1 \
+            -e REDIS_TASK_HOST=netbox-e2e-redis \
+            -e REDIS_TASK_DATABASE=2 \
+            -e SECRET_KEY="$SECRET_KEY" \
+            -e SUPERUSER_NAME=admin \
+            -e SUPERUSER_EMAIL=admin@example.com \
+            -e SUPERUSER_PASSWORD=admin \
+            -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http" \
+            -e LOGIN_REQUIRED=False \
+            --entrypoint /bin/bash \
+            "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir netbox-proxbox && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+
+          docker pull "${PROXBOX_API_IMAGE}:${RELEASE_VERSION}"
+          docker run -d --name proxbox-e2e --network proxbox-e2e -p 18081:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_BIND_HOST=0.0.0.0 \
+            "${PROXBOX_API_IMAGE}:${RELEASE_VERSION}"
+
+      - name: Wait for services and verify connectivity
+        run: |
+          set -eux
+          for i in $(seq 1 240); do
+            http_code="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/ 2>/dev/null || true)"
+            if [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 400 ]; then break; fi
+            sleep 2
+            if [ "$i" -eq 240 ]; then echo "NetBox did not become ready"; docker logs netbox-e2e-http || true; exit 1; fi
+          done
+
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 5 http://127.0.0.1:18006/openapi.json >/dev/null 2>&1; then break; fi
+            sleep 2
+            if [ "$i" -eq 60 ]; then echo "proxmox mock did not become ready"; docker logs proxmox-e2e-mock || true; exit 1; fi
+          done
+
+          for i in $(seq 1 120); do
+            if curl -fsS --max-time 5 http://127.0.0.1:18081/ >/dev/null 2>&1; then break; fi
+            sleep 2
+            if [ "$i" -eq 120 ]; then echo "proxbox-api did not become ready"; docker logs proxbox-e2e || true; exit 1; fi
+          done
+
+          TOKEN_OUTPUT=$(docker exec netbox-e2e-http /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "from users.models import Token, User; u=User.objects.get(username='admin'); t=Token.objects.create(user=u, version=1, token='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'); print(f'{t.id}:{t.plaintext}')")
+          NETBOX_API_TOKEN=$(printf '%s' "$TOKEN_OUTPUT" | tail -n 1 | cut -d: -f2)
+
+          PROXBOX_API_KEY="proxbox-e2e-api-key-proxbox-e2e-api-key-1234567890"
+          curl -fsS -X POST http://127.0.0.1:18081/auth/register-key \
+            -H "Content-Type: application/json" \
+            --data "{\"api_key\":\"${PROXBOX_API_KEY}\",\"label\":\"e2e\"}"
+          curl -fsS -X POST http://127.0.0.1:18081/netbox/endpoint \
+            -H "Content-Type: application/json" \
+            -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}" \
+            --data "{\"name\":\"e2e-netbox\",\"ip_address\":\"netbox-e2e-http\",\"domain\":\"\",\"port\":8000,\"token_version\":\"v1\",\"token\":\"${NETBOX_API_TOKEN}\",\"verify_ssl\":false}"
+
+          STATUS_JSON=$(curl -sS http://127.0.0.1:18081/netbox/status -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}")
+          echo "$STATUS_JSON"
+          export STATUS_JSON
+          python3 - <<'PY'
+          import json, os, sys
+          p = json.loads(os.environ["STATUS_JSON"])
+          if not (p.get("available") or "netbox-version" in p or "django-version" in p):
+              sys.exit(f"NetBox status check failed: {p}")
+          PY
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker logs netbox-e2e-http || true
+          docker logs proxbox-e2e || true
+          docker logs proxmox-e2e-mock || true
+          docker logs netbox-e2e-postgres || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
+          docker network rm proxbox-e2e 2>/dev/null || true

@@ -20,14 +20,16 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - `e2e/` — browser-backed test helpers and fixtures. See `e2e/CLAUDE.md`.
 - `custom_objects/` — reserved area for custom NetBox object wrappers. See `custom_objects/CLAUDE.md`.
 - `diode/` — experimental Diode sandbox integration. See `diode/CLAUDE.md`.
+- `testing/` — test helper utilities including the Proxmox mock fixture (`proxmox_mock.py`).
 - `templates/` — Jinja2 templates used by the admin route.
 - `static/` — static assets bundled with the package.
 - `test_*.py` — package-level smoke tests that run with the repository test suite.
 
 ## Runtime Boundaries
 
-- `proxbox_api.app.factory.create_app()` is the application assembly point. It initializes bootstrap state, registers middleware, mounts root/cache/full-update/WebSocket routes, and exposes the `app` object imported by `proxbox_api.main`.
-- `database.py` persists NetBox and Proxmox endpoint records in SQLite and feeds bootstrap/session creation.
+- `proxbox_api.app.factory.create_app()` is the application assembly point. It initializes bootstrap state, registers middleware (including `APIKeyAuthMiddleware`), mounts root/cache/full-update/WebSocket routes, and exposes the `app` object imported by `proxbox_api.main`.
+- `auth.py` implements bcrypt-hashed API key validation, IP-based brute-force lockout, and the `check_auth_header_with_session` helper used by `APIKeyAuthMiddleware`.
+- `database.py` persists NetBox and Proxmox endpoint records, API keys, and auth lockout state in SQLite.
 - `session/netbox.py` and `session/proxmox.py` own client construction and dependency wiring. Route handlers should use these dependencies instead of creating clients inline.
 - `services/sync/` and `routes/virtualization/virtual_machines/` handle the main Proxmox-to-NetBox sync flow, including per-object journal tracking and stream progress.
 - `proxmox_to_netbox/` is the normalization boundary. Parsing and conversion must happen in schemas and mappers, not in route handlers.

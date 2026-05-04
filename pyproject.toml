@@ -6,36 +6,39 @@ build-backend = "setuptools.build_meta"
 include = ["proxbox_api*"]
 
 [tool.setuptools.package-data]
-proxbox_api = ["static/*"]
+proxbox_api = ["static/*", "static/**/*", "generated/**/*.json", "generated/**/*.py"]
 
 [project]
 name = "proxbox_api"
-version = "0.0.6.post5"
+version = "0.0.9.post2"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi[standard]>=0.135.2",
-    "proxmoxer>=2.3.0",
-    "netbox-sdk>=0.0.6",
-    "sqlmodel>=0.0.37",
+    "fastapi[standard]==0.136.1",
+    "proxmox-sdk==0.0.3.post1",
+    "netbox-sdk==0.0.7.post6",
+    "sqlmodel==0.0.38",
+    "pydantic==2.13.3",
+    "aiosqlite>=0.20.0,<1.0.0",
+    "cryptography>=43.0.0,<50.0.0",
+    "bcrypt>=5.0.0,<6.0.0",
 ]
 
 [project.optional-dependencies]
 test = [
     "httpx>=0.28.1",
     "playwright>=1.58.0",
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.6.1",
 ]
 e2e = [
     "httpx>=0.28.1",
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.6.1",
-    "playwright>=1.58.0",
 ]
 playwright = [
     "playwright>=1.58.0",
@@ -45,23 +48,30 @@ docs = [
     "mkdocs-material>=9.7.6",
     "mkdocs-static-i18n>=1.3.1",
 ]
+granian = [
+    "granian>=2.7.0",
+]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.8",
     "proxmox-mock-api>=0.0.6.post5",
+    "ruff>=0.15.8",
+    "ty>=0.0.29",
 ]
 
 [project.scripts]
 proxbox-proxmox-codegen = "proxbox_api.proxmox_codegen.cli:main"
+proxbox-schema = "proxbox_api.schema_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+addopts = "--dist loadgroup"
 markers = [
-    "image_http: smoke tests against PROXBOX_IMAGE_E2E_BASE_URL (published Docker images)",
+    "mock_backend: tests using in-process MockBackend (fast, no HTTP)",
+    "mock_http: tests using HTTP mock container (realistic, validates HTTP layer)",
 ]
 
 [tool.coverage.run]
@@ -75,7 +85,7 @@ show_missing = true
 [tool.uv]
 default-groups = ["dev"]
 # Raise transitive Pygments (pytest / MkDocs stack) above Dependabot-patched floor.
-constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4"]
+constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4", "pytest>=9.0.3", "python-multipart>=0.0.26"]
 
 [tool.uv.sources]
 "proxmox-mock-api" = { path = "proxmox-mock", editable = true }
@@ -85,7 +95,6 @@ target-version = "py311"
 line-length = 100
 extend-exclude = [
     "proxbox_api/generated",
-    "proxmox-mock",
     "site",
     "nextjs-ui",
     ".venv",
@@ -100,8 +109,9 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 [tool.ruff.lint.per-file-ignores]
 "proxbox_api/**/*.py" = ["ANN201", "D103"]
 # Pytest tests: public test_* names trigger ANN201/D103; keep checks focused on package code.
-"tests/**/*.py" = ["ANN201", "D103"]
+"tests/**/*.py" = ["ANN201", "D103", "C901"]
 "scripts/**/*.py" = ["D103"]
+"test_*.py" = ["ANN201", "D103", "C901"]
 "proxbox_api/app/**/*.py" = []
 "proxbox_api/netbox_async_bridge.py" = []
 "proxbox_api/services/sync/device_ensure.py" = []
@@ -113,24 +123,10 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 # C901: inherently complex retry/ reconcile functions
 "proxbox_api/netbox_rest.py" = ["C901"]
 "proxbox_api/routes/virtualization/virtual_machines/sync_vm.py" = ["C901"]
+"proxbox_api/services/sync/vm_coordinator.py" = ["C901"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
 [tool.ruff.format]
 quote-style = "double"
-
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
-disallow_untyped_calls = false
-disallow_incomplete_defs = false
-check_untyped_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-strict_optional = true
-strict_equality = true

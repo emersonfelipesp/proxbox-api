@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
 
 
@@ -34,7 +35,8 @@ def _mb_from_bytes(value: object) -> int:
         return 0
     if as_int <= 0:
         return 0
-    return as_int // 1_000_000
+    # NetBox VM disk must match virtual disk aggregate, which is parsed in MiB.
+    return as_int // (1024 * 1024)
 
 
 def _relation_id(value: object) -> object:
@@ -97,6 +99,8 @@ def _normalized_tag_list(value: object) -> list[dict[str, object]]:
     for item in value:
         if isinstance(item, dict):
             normalized.append(item)
+        elif hasattr(item, "serialize"):
+            normalized.append(item.serialize())
         else:
             text = str(item or "").strip()
             if text:
@@ -223,6 +227,7 @@ class NetBoxCustomFieldSyncState(BaseModel):
     search_weight: int = 1000
     group_name: str | None = None
     object_types: list[str] = Field(default_factory=list)
+    related_object_type: str | None = None
 
     @field_validator(
         "name",
@@ -263,12 +268,13 @@ class NetBoxInterfaceSyncState(BaseModel):
     name: str
     status: str = "active"
     type: str
+    bridge: int | None = None
     untagged_vlan: int | None = None
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("device", "untagged_vlan", mode="before")
+    @field_validator("device", "bridge", "untagged_vlan", mode="before")
     @classmethod
     def normalize_device(cls, value: object) -> object:
         return _relation_id(value)
@@ -278,6 +284,12 @@ class NetBoxInterfaceSyncState(BaseModel):
     def normalize_status(cls, value: object) -> str:
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: object) -> str:
+        text = str(_choice_value(value) or "").strip().lower()
+        return text or "other"
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -299,19 +311,27 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     virtual_machine: int
     name: str
     enabled: bool | None = None
-    bridge: int | None = None
     mac_address: str | None = None
     type: str | None = None
     description: str | None = None
+    bridge: int | None = None
     untagged_vlan: int | None = None
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("virtual_machine", "bridge", "untagged_vlan", mode="before")
+    @field_validator("virtual_machine", "untagged_vlan", "bridge", mode="before")
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: object) -> object:
+        normalized = _choice_value(value)
+        if normalized in (None, ""):
+            return None
+        return str(normalized).strip().lower() or None
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -379,10 +399,13 @@ class NetBoxBackupSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     proxmox_storage: int | None = None
+    storage: str | None = None
     virtual_machine: int
     subtype: str | None = None
     creation_time: str | None = None
     size: int | None = None
+    used: int | None = None
+    encrypted: str | None = None
     verification_state: str | None = None
     verification_upid: str | None = None
     volume_id: str
@@ -451,7 +474,7 @@ class NetBoxTaskHistorySyncState(BaseModel):
     upid: str
     node: str
     pid: int | None = None
-    pstart: str | None = None
+    pstart: int | None = None
     task_id: str | None = None
     task_type: str
     username: str
@@ -467,12 +490,21 @@ class NetBoxTaskHistorySyncState(BaseModel):
     @field_validator(
         "virtual_machine",
         "pid",
-        "pstart",
         mode="before",
     )
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("pstart", mode="before")
+    @classmethod
+    def normalize_pstart(cls, value: object) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @field_validator(
         "vm_type",
@@ -493,7 +525,14 @@ class NetBoxTaskHistorySyncState(BaseModel):
         text = str(value).strip()
         return text or None
 
-    @field_validator("pstart", "start_time", "end_time", mode="before")
+    @field_validator("status", "exitstatus", mode="before")
+    @classmethod
+    def truncate_long_text(cls, value: object) -> object:
+        if isinstance(value, str) and len(value) > 2048:
+            return value[:2048]
+        return value
+
+    @field_validator("start_time", "end_time", mode="before")
     @classmethod
     def normalize_datetimes(cls, value: object) -> object:
         normalized = _task_datetime(value)
@@ -567,6 +606,30 @@ class NetBoxStorageSyncState(BaseModel):
     nodes: str | None = None
     shared: bool = False
     enabled: bool = True
+    # Remote-host fields
+    server: str | None = None
+    port: int | None = None
+    username: str | None = None
+    # NFS / CIFS
+    export: str | None = None
+    share: str | None = None
+    # Ceph / RBD
+    pool: str | None = None
+    monhost: str | None = None
+    namespace: str | None = None
+    # PBS
+    datastore: str | None = None
+    subdir: str | None = None
+    # Filesystem
+    mountpoint: str | None = None
+    is_mountpoint: str | None = None
+    preallocation: str | None = None
+    format: str | None = None
+    # Retention / backup
+    prune_backups: str | None = Field(None, alias="prune-backups")
+    max_protected_backups: int | None = Field(None, alias="max-protected-backups")
+    # Full raw config
+    raw_config: dict[str, object] = Field(default_factory=dict)
     backups: list[int] = Field(default_factory=list)
     tags: list[NetBoxTagRef] = Field(default_factory=list)
 
@@ -611,6 +674,7 @@ class NetBoxReplicationSyncState(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    endpoint: int | None = None
     virtual_machine: int
     proxmox_node: int | None = None
     replication_id: str
@@ -624,10 +688,12 @@ class NetBoxReplicationSyncState(BaseModel):
     source: str | None = None
     jobnum: int
     remove_job: str | None = None
+    status: str = "active"
+    raw_config: dict[str, object] = Field(default_factory=dict)
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("virtual_machine", "proxmox_node", mode="before")
+    @field_validator("endpoint", "virtual_machine", "proxmox_node", mode="before")
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
@@ -765,8 +831,9 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
 
     name: str
     status: str
-    cluster: int
+    cluster: int | None = None
     device: int | None = None
+    virtual_machine_type: int | None = None
     role: int | None = None
     vcpus: int = 0
     memory: int = 0
@@ -788,29 +855,21 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: object) -> str:
-        mapping = {
-            "running": "active",
-            "online": "active",
-            "active": "active",
-            "stopped": "offline",
-            "paused": "offline",
-            "offline": "offline",
-            "planned": "planned",
-        }
-        text = str(value or "active").strip().lower()
-        return mapping.get(text, "active")
+        return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
 
-    @field_validator("cluster", "device", "role", mode="before")
+    @field_validator("cluster", "device", "virtual_machine_type", "role", mode="before")
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
 
     @model_validator(mode="after")
     def validate_required_relations(self):
-        if self.cluster <= 0:
+        if self.cluster is not None and self.cluster <= 0:
             raise ValueError("cluster must be a positive NetBox object id")
         if self.device is not None and self.device <= 0:
             raise ValueError("device must be positive when provided")
+        if self.virtual_machine_type is not None and self.virtual_machine_type <= 0:
+            raise ValueError("virtual_machine_type must be positive when provided")
         if self.role is not None and self.role <= 0:
             raise ValueError("role must be positive when provided")
         return self
@@ -871,6 +930,17 @@ class NetBoxDeviceSyncState(BaseModel):
         return self
 
 
+class NetBoxVirtualMachineTypeSyncState(BaseModel):
+    """Validated NetBox sync body for virtualization virtual-machine-types endpoint (NetBox v4.6+)."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str
+    slug: str
+    description: str | None = None
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+
 class ProxmoxToNetBoxVirtualMachine(BaseModel):
     """Schema-driven transform object for Proxmox input to NetBox VM create payload."""
 
@@ -881,8 +951,11 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     cluster_id: int
     device_id: int | None = None
     role_id: int | None = None
+    virtual_machine_type_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
     last_updated: datetime | None = None
+    cluster_name: str | None = None
+    proxmox_url: str | None = None
 
     @computed_field(return_type=dict)
     @property
@@ -895,10 +968,27 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             "proxmox_unprivileged_container": self.config.unprivileged_container,
             "proxmox_qemu_agent": self.config.qemu_agent_enabled,
             "proxmox_search_domain": self.config.searchdomain,
+            "proxmox_node": self.resource.node,
+            "proxmox_status": self.resource.status,
         }
+        if self.cluster_name:
+            fields["proxmox_cluster"] = self.cluster_name
+        if self.proxmox_url:
+            fields["proxmox_link"] = f"{self.proxmox_url}/#v1:0:={vm_type}/{self.resource.vmid}"
         if self.last_updated:
             fields["proxmox_last_updated"] = self.last_updated.isoformat()
         return fields
+
+    @computed_field(return_type=int)
+    @property
+    def disk_mb(self) -> int:
+        """VM disk in MiB, preferring aggregate parsed VM config disks when available."""
+        disks = self.config.disks
+        if disks:
+            aggregate = sum(max(int(getattr(disk, "size", 0) or 0), 0) for disk in disks)
+            if aggregate > 0:
+                return aggregate
+        return self.resource.disk_mb
 
     def as_netbox_create_body(self) -> NetBoxVirtualMachineCreateBody:
         """Return validated NetBox virtual machine create body."""
@@ -908,10 +998,11 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             status=self.resource.status,
             cluster=self.cluster_id,
             device=self.device_id,
+            virtual_machine_type=self.virtual_machine_type_id,
             role=self.role_id,
             vcpus=int(self.resource.maxcpu or 0),
             memory=self.resource.memory_mb,
-            disk=self.resource.disk_mb,
+            disk=self.disk_mb,
             tags=[tag for tag in self.tag_ids if int(tag) > 0],
             custom_fields=self.vm_custom_fields,
             description=f"Synced from Proxmox node {self.resource.node}",

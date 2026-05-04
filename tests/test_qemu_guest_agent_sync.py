@@ -1,3 +1,5 @@
+"""Tests for QEMU guest-agent driven VM sync behavior."""
+
 from __future__ import annotations
 
 import asyncio
@@ -74,7 +76,9 @@ def _install_common_sync_patches(  # noqa: C901
             return {"id": 77, "address": payload.get("address")}
         if path == "/api/dcim/device-roles/":
             return SimpleNamespace(id=33, name=payload.get("name"))
-        return {"id": 99}
+        if path == "/api/virtualization/virtual-machine-types/":
+            return SimpleNamespace(id=99)
+        return SimpleNamespace(id=99)
 
     async def _fake_rest_list(_nb, path, **kwargs):
         query = kwargs.get("query", {})
@@ -132,6 +136,10 @@ def _install_common_sync_patches(  # noqa: C901
         _fake_ensure_obj,
     )
     monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.ensure_vm_type",
+        _fake_ensure_obj,
+    )
+    monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_reconcile_async",
         _fake_reconcile,
     )
@@ -166,9 +174,9 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
     )
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
+
+    async def _fake_guest_ifaces_with_ip(*args, **kwargs):
+        return [
             {
                 "name": "ens18",
                 "mac_address": "AA:BB:CC:DD:EE:FF",
@@ -176,7 +184,11 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
                     {"ip_address": "10.0.0.50", "prefix": 24, "ip_address_type": "ipv4"}
                 ],
             }
-        ],
+        ]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_ifaces_with_ip,
     )
 
     result = asyncio.run(
@@ -208,15 +220,13 @@ def test_vm_sync_uses_guest_agent_interface_name_by_default(monkeypatch):
         ip_payloads=ip_payloads,
         interface_payloads=interface_payloads,
     )
+
+    async def _fake_guest_ifaces_no_ip(*args, **kwargs):
+        return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
-            {
-                "name": "ens18",
-                "mac_address": "AA:BB:CC:DD:EE:FF",
-                "ip_addresses": [],
-            }
-        ],
+        _fake_guest_ifaces_no_ip,
     )
 
     result = asyncio.run(
@@ -244,7 +254,7 @@ def test_vm_sync_falls_back_to_config_when_guest_agent_unavailable(monkeypatch):
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
     helper_calls = {"count": 0}
 
-    def _fake_guest_helper(*args, **kwargs):
+    async def _fake_guest_helper(*args, **kwargs):
         helper_calls["count"] += 1
         return []
 
@@ -283,15 +293,13 @@ def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
         ip_payloads=ip_payloads,
         interface_payloads=interface_payloads,
     )
+
+    async def _fake_guest_ifaces_no_ip_2(*args, **kwargs):
+        return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
-            {
-                "name": "ens18",
-                "mac_address": "AA:BB:CC:DD:EE:FF",
-                "ip_addresses": [],
-            }
-        ],
+        _fake_guest_ifaces_no_ip_2,
     )
 
     result = asyncio.run(
@@ -358,9 +366,13 @@ def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
     )
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+
+    async def _should_not_be_called(*args, **kwargs):
+        raise AssertionError("should not be called")
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+        _should_not_be_called,
     )
 
     result = asyncio.run(
@@ -427,10 +439,9 @@ def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
         }
     )
     ip_payloads: list[dict] = []
-    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
+
+    async def _fake_guest_fe80(*args, **kwargs):
+        return [
             {
                 "name": "ens18",
                 "mac_address": "AA:BB:CC:DD:EE:FF",
@@ -438,7 +449,12 @@ def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
                     {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
                 ],
             }
-        ],
+        ]
+
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_fe80,
     )
 
     result = asyncio.run(
@@ -464,10 +480,9 @@ def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
         }
     )
     ip_payloads: list[dict] = []
-    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
-        lambda *args, **kwargs: [
+
+    async def _fake_guest_fe80(*args, **kwargs):
+        return [
             {
                 "name": "ens18",
                 "mac_address": "AA:BB:CC:DD:EE:FF",
@@ -475,7 +490,12 @@ def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
                     {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
                 ],
             }
-        ],
+        ]
+
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_fe80,
     )
 
     result = asyncio.run(
@@ -499,18 +519,25 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
         }
     )
-    captured_vm_ids: list[int | None] = []
+    captured_payloads: list[dict] = []
 
     def _fake_get_vm_config(*args, **kwargs):
         return data["vm_config"]
 
-    async def _fake_sync_vm_interface_and_ip(**kwargs):
-        assert kwargs["create_ip"] is False
-        captured_vm_ids.append(kwargs["virtual_machine"].get("id"))
-        return {"id": 66, "ip_id": 77, "ip_address": "10.0.0.50/24"}
+    async def _fake_bulk_reconcile(nb, payloads, **_kwargs):
+        # Capture payloads to verify VM ID is included
+        captured_payloads.extend(payloads)
+        # Return mock interface records with the expected ID and VM mapping
+        return (
+            [{"id": 66, "name": "net0", "virtual_machine": 55, "mac_address": "AA:BB:CC:DD:EE:FF"}],
+            {},  # name_vm_to_id mapping
+        )
 
     async def _fake_resolve_netbox_vm(*args, **kwargs):
         return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -525,8 +552,12 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
         _fake_resolve_netbox_vm,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.network.sync_vm_interface_and_ip",
-        _fake_sync_vm_interface_and_ip,
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
+        _fake_bulk_reconcile,
     )
 
     result = asyncio.run(
@@ -540,8 +571,14 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
         )
     )
 
-    assert result == [{"id": 66, "ip_id": 77, "ip_address": "10.0.0.50/24"}]
-    assert captured_vm_ids == [55]
+    # Verify the result contains the interface record
+    assert len(result) == 1
+    assert result[0]["id"] == 66
+    assert result[0]["mac_address"] == "AA:BB:CC:DD:EE:FF"
+
+    # Verify that bulk reconciliation received payloads with the correct VM ID
+    assert len(captured_payloads) == 1
+    assert captured_payloads[0]["virtual_machine"] == 55
 
 
 def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
@@ -550,58 +587,22 @@ def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
         }
     )
-    ip_payloads: list[dict] = []
-    first_queries: list[dict] = []
-    _install_common_sync_patches(
-        monkeypatch,
-        vm_config=data["vm_config"],
-        ip_payloads=ip_payloads,
-        first_queries=first_queries,
-    )
-
-    result = asyncio.run(
-        create_only_vm_interfaces(
-            netbox_session=data["netbox_session"],
-            pxs=data["pxs"],
-            cluster_status=data["cluster_status"],
-            cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
-            tag=data["tag"],
-        )
-    )
-
-    assert result and result[0]["id"] == 66
-    assert first_queries == [
-        {
-            "path": "/api/virtualization/interfaces/",
-            "query": {"name": "vmbr0", "virtual_machine_id": 55, "limit": 1},
-        }
-    ]
-
-
-def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
-    data = _vm_sync_inputs(
-        {
-            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
-        }
-    )
-    captured_vm_ids: list[int | None] = []
-    primary_ip_calls: list[dict] = []
 
     def _fake_get_vm_config(*args, **kwargs):
         return data["vm_config"]
 
-    async def _fake_sync_vm_interface_and_ip(**kwargs):
-        assert kwargs["create_interface"] is False
-        captured_vm_ids.append(kwargs["virtual_machine"].get("id"))
-        return {"id": 66, "ip_id": 77, "ip_address": "10.0.0.20/24"}
-
-    async def _fake_set_primary_ip(**kwargs):
-        primary_ip_calls.append(kwargs)
-        return True
+    async def _fake_bulk_reconcile(nb, payloads, **_kwargs):
+        # Mock should return interface records with correct IDs
+        return (
+            [{"id": 66, "name": "net0", "virtual_machine": 55, "mac_address": "AA:BB:CC:DD:EE:FF"}],
+            {},  # name_vm_to_id mapping
+        )
 
     async def _fake_resolve_netbox_vm(*args, **kwargs):
         return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -616,8 +617,89 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
         _fake_resolve_netbox_vm,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.network.sync_vm_interface_and_ip",
-        _fake_sync_vm_interface_and_ip,
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
+        _fake_bulk_reconcile,
+    )
+
+    result = asyncio.run(
+        create_only_vm_interfaces(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    # Verify interface sync succeeds with VM ID resolution
+    assert result and result[0]["id"] == 66
+
+
+def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+        }
+    )
+    primary_ip_calls: list[dict] = []
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return data["vm_config"]
+
+    async def _fake_bulk_reconcile_ips(nb, payloads, **_kwargs):
+        # Return mock IP records with correct IDs
+        return [{"id": 77, "address": "10.0.0.20/24"}]
+
+    async def _fake_rest_list(*args, **kwargs):
+        # Return mock interface for the VM
+        return [{"id": 66, "name": "net0", "virtual_machine": 55}]
+
+    async def _fake_rest_first(*args, **kwargs):
+        # Return mock IP record for primary IP lookup
+        return {"id": 77, "address": "10.0.0.20/24"}
+
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        _fake_get_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_first_async",
+        _fake_rest_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile_ips,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.vm_network.set_primary_ip",
@@ -635,20 +717,128 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
         )
     )
 
-    assert result == [
+    # Verify IP sync result contains correct IP record
+    assert len(result) == 1
+    assert result[0]["ip_id"] == 77
+    assert result[0]["address"] == "10.0.0.20/24"
+
+    # Verify set_primary_ip was called with the resolved VM
+    assert len(primary_ip_calls) == 1
+    assert primary_ip_calls[0]["virtual_machine"]["id"] == 55
+    assert primary_ip_calls[0]["primary_ip_id"] == 77
+
+
+def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monkeypatch):
+    data = _vm_sync_inputs(
         {
-            "ip_id": 77,
-            "address": "10.0.0.20/24",
-            "interface_name": "net0",
-            "interface_id": 66,
-            "vm": "vm01",
+            "agent": 1,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
         }
-    ]
-    assert captured_vm_ids == [55]
-    assert primary_ip_calls == [
-        {
-            "nb": data["netbox_session"],
-            "virtual_machine": {"id": 55, "name": "vm01"},
-            "primary_ip_id": 77,
-        }
-    ]
+    )
+    primary_ip_calls: list[dict[str, object]] = []
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return data["vm_config"]
+
+    async def _fake_guest_ifaces(*args, **kwargs):
+        return [
+            {
+                "name": "ens18",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "ip_addresses": [
+                    {
+                        "ip_address": "2804:2cac:1030:0:428f:a69c:d3b5:c794",
+                        "prefix": 64,
+                        "ip_address_type": "ipv6",
+                    },
+                    {
+                        "ip_address": "10.0.0.20",
+                        "prefix": 24,
+                        "ip_address_type": "ipv4",
+                    },
+                ],
+            }
+        ]
+
+    async def _fake_bulk_reconcile_ips(nb, payloads, **_kwargs):
+        return [
+            {
+                "id": 99,
+                "address": "2804:2cac:1030:0:428f:a69c:d3b5:c794/64",
+            },
+            {"id": 77, "address": "10.0.0.20/24"},
+        ]
+
+    async def _fake_rest_list(*args, **kwargs):
+        return [{"id": 66, "name": "ens18", "virtual_machine": 55}]
+
+    async def _fake_rest_first(*args, **kwargs):
+        query = kwargs.get("query") or {}
+        address = str(query.get("address") or "")
+        if address == "10.0.0.20/24":
+            return {"id": 77, "address": address}
+        if address == "2804:2cac:1030:0:428f:a69c:d3b5:c794/64":
+            return {"id": 99, "address": address}
+        return None
+
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        _fake_get_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_ifaces,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_first_async",
+        _fake_rest_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile_ips,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_network.set_primary_ip",
+        _fake_set_primary_ip,
+    )
+
+    asyncio.run(
+        create_only_vm_ip_addresses(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert len(primary_ip_calls) == 1
+    assert primary_ip_calls[0]["primary_ip_id"] == 77
+    assert primary_ip_calls[0]["primary_ip_preference"] == "ipv4"

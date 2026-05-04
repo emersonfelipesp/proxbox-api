@@ -4,15 +4,20 @@ import os
 
 
 def resolve_vm_sync_concurrency() -> int:
-    """Get max concurrency for VM sync operations (NetBox API writes)."""
-    raw_value = os.environ.get("PROXBOX_VM_SYNC_MAX_CONCURRENCY", "").strip()
-    if not raw_value:
-        return 4
+    """Get max concurrency for VM sync operations from settings, with env var fallback."""
+    from proxbox_api.settings_client import get_settings
+
     try:
-        value = int(raw_value)
-    except ValueError:
-        return 4
-    return max(1, value)
+        return max(1, int(get_settings().get("vm_sync_max_concurrency", 4)))
+    except Exception:
+        raw_value = os.environ.get("PROXBOX_VM_SYNC_MAX_CONCURRENCY", "").strip()
+        if not raw_value:
+            return 4
+        try:
+            value = int(raw_value)
+        except ValueError:
+            return 4
+        return max(1, value)
 
 
 def resolve_netbox_write_concurrency() -> int:

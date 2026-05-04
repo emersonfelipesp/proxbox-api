@@ -4,16 +4,11 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, ConfigDict, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 
+from proxbox_api.enum.proxmox import DiskFormat, ProxmoxVMStatus
 from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry, parse_vm_config_disks
-
-
-def _normalize_text(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+from proxbox_api.schemas._coerce import normalize_bool
 
 
 def _parse_key_value_string(value: object) -> dict[str, str]:
@@ -47,20 +42,25 @@ class VMConfig(BaseModel):
     memory: int | None = None
     description: str | None = None
     ostype: str | None = None
-    numa: int | None = None
+    numa: bool | None = None
     sockets: int | None = None
     cpulimit: int | None = None
-    onboot: int | None = None
+    onboot: bool | None = None
     cpuunits: int | None = None
-    agent: int | None = None
+    agent: bool | None = None
     tags: str | None = None
     rootfs: str | None = None
-    unprivileged: int | None = None
-    nesting: int | None = None
+    unprivileged: bool | None = None
+    nesting: bool | None = None
     nameserver: str | None = None
     arch: str | None = None
     hostname: str | None = None
     features: str | None = None
+
+    @field_validator("numa", "onboot", "agent", "unprivileged", "nesting", mode="before")
+    @classmethod
+    def _coerce_bool_fields(cls, value: object) -> bool | None:
+        return normalize_bool(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -120,7 +120,7 @@ class Disk(BaseModel):
     size: int
     used: int
     usage: int
-    format: str
+    format: DiskFormat | str
     path: str
 
 
@@ -152,7 +152,7 @@ class Backup(BaseModel):
 class VirtualMachineSummary(BaseModel):
     id: str
     name: str
-    status: str
+    status: ProxmoxVMStatus | str
     node: str
     cluster: str
     os: str

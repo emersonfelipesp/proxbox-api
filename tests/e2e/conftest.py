@@ -1,146 +1,103 @@
 """Pytest configuration and fixtures for e2e tests.
 
-This module provides session-scoped fixtures for e2e testing with NetBox demo.
+This module provides session-scoped fixtures for e2e testing with a local NetBox instance.
 It handles:
-- Demo profile bootstrap (Playwright authentication)
-- NetBox session creation
+- NetBox session creation from environment variables
 - E2E tag management
 - Mock Proxmox data
 
 Usage:
     pytest tests/e2e/ -v
-    # Avoid pytest-xdist against demo.netbox.dev (rate limits / object quotas).
 
 Environment variables:
-    PROXBOX_E2E_USERNAME: Demo username (default: auto-generated)
-    PROXBOX_E2E_PASSWORD: Demo password (default: auto-generated)
-    PROXBOX_E2E_DEMO_URL: NetBox demo URL (default: https://demo.netbox.dev)
-    PROXBOX_E2E_TIMEOUT: Browser timeout in seconds (default: 60)
-    PROXBOX_E2E_HEADLESS: Run browser headless (default: true)
-    PROXBOX_IMAGE_E2E_BASE_URL: For ``image_http`` tests only — running container root URL
-    PROXBOX_IMAGE_E2E_TLS_INSECURE: Set to 1/true for mkcert HTTPS smoke (insecure TLS)
+    PROXBOX_E2E_NETBOX_URL: NetBox base URL (required, e.g., http://127.0.0.1:18080)
+    PROXBOX_E2E_NETBOX_TOKEN: NetBox API token (required)
+    PROXMOX_API_MODE: Set to "mock" for mock Proxmox (default)
+    PROXMOX_MOCK_PUBLISHED_URL: Proxmox mock HTTP URL (optional)
 """
 
 from __future__ import annotations
 
-import asyncio
+import os
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 import pytest
 import pytest_asyncio
 
 if TYPE_CHECKING:
-    from netbox_sdk.config import Config
     from netbox_sdk.facade import Api
 
-from proxbox_api.e2e.demo_auth import (
-    DemoUnavailableError,
-    PlaywrightNotInstalledError,
-    bootstrap_demo_profile,
-)
-from proxbox_api.e2e.fixtures.proxmox_mock import (
+from proxbox_api.e2e.fixtures.proxmox_sdk_mock import (
     MockProxmoxCluster,
     create_minimal_cluster,
     create_multi_cluster,
 )
-from proxbox_api.e2e.fixtures.test_data import (
-    E2E_TAG,
-    generate_unique_resource_prefix,
-    get_e2e_credentials,
-    get_e2e_demo_config,
-)
+from proxbox_api.e2e.fixtures.test_data import E2E_TAG, generate_unique_resource_prefix
 from proxbox_api.e2e.session import (
     build_e2e_tag_refs,
-    create_netbox_demo_session,
-    ensure_e2e_tag,
+    create_netbox_e2e_session,
 )
-from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import rest_list_async
+from proxbox_api.netbox_rest import _reset_netbox_globals
+
+
+@pytest.fixture(scope="session", autouse=True)
+def reset_netbox_globals_session():
+    """Reset netbox_rest module globals before and after the E2E session."""
+    _reset_netbox_globals()
+    yield
+    _reset_netbox_globals()
 
 
 @pytest.fixture(scope="session")
 def event_loop_policy():
     """Use the default event loop policy for the session."""
+    import asyncio
+
     return asyncio.DefaultEventLoopPolicy()
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def netbox_demo_config() -> "Config":
-    """Bootstrap demo profile once per test session.
-
-    This fixture creates a NetBox demo user and provisions an API token.
-    It is session-scoped to avoid repeated browser launches.
+@pytest.fixture(scope="session")
+def netbox_e2e_config() -> dict[str, str]:
+    """Get NetBox E2E configuration from environment variables.
 
     Returns:
-        Config object with demo credentials and token.
+        Dict with base_url and token.
 
     Raises:
-        PlaywrightNotInstalledError: If Playwright is not installed.
+        pytest.Skip: If required environment variables are not set.
     """
-    username, password = get_e2e_credentials()
-    config = get_e2e_demo_config()
+    url = os.environ.get("PROXBOX_E2E_NETBOX_URL", "").strip()
+    token = os.environ.get("PROXBOX_E2E_NETBOX_TOKEN", "").strip()
 
-    print(f"\n[E2E Setup] Bootstrapping demo profile for user: {username}")
-
-    try:
-        cfg = await bootstrap_demo_profile(
-            username=username,
-            password=password,
-            timeout=config["timeout"],
-            headless=config["headless"],
-            token_name="proxbox-e2e",
-        )
-        print("[E2E Setup] Demo profile bootstrapped successfully")
-        print(f"[E2E Setup] Token version: {cfg.token_version}")
-        return cfg
-    except PlaywrightNotInstalledError:
+    if not url or not token:
         pytest.skip(
-            "Playwright not installed. Run: pip install playwright && playwright install chromium"
+            "PROXBOX_E2E_NETBOX_URL and PROXBOX_E2E_NETBOX_TOKEN environment variables required"
         )
-    except DemoUnavailableError as exc:
-        pytest.skip(str(exc))
+
+    return {"base_url": url, "token": token}
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def netbox_demo_session(netbox_demo_config: "Config") -> "Api":
-    """Create NetBox API session from demo config.
+async def netbox_e2e_session(netbox_e2e_config: dict[str, str]) -> "Api":
+    """Create NetBox API session from environment config.
 
-    This fixture depends on netbox_demo_config to ensure the demo profile
-    exists before creating the session.
+    This fixture creates a NetBox API session using URL and token from
+    environment variables. It is session-scoped to avoid repeated connections.
 
     Returns:
         Async NetBox API instance.
     """
-    print("[E2E Setup] Creating NetBox session...")
-    api = await create_netbox_demo_session(netbox_demo_config)
+    print(f"\n[E2E Setup] Connecting to NetBox at: {netbox_e2e_config['base_url']}")
+    api = await create_netbox_e2e_session(
+        base_url=netbox_e2e_config["base_url"],
+        token=netbox_e2e_config["token"],
+    )
     print("[E2E Setup] NetBox session created")
     return api
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def netbox_proxbox_plugin_available(netbox_demo_session: "Api") -> bool:
-    """True if ``/api/plugins/proxbox/`` is reachable (not installed on demo.netbox.dev)."""
-
-    try:
-        await rest_list_async(
-            netbox_demo_session, "/api/plugins/proxbox/backups/", query={"limit": 1}
-        )
-    except ProxboxException as exc:
-        combined = f"{exc.message} {exc.detail or ''}".lower()
-        if "404" in combined or "not found" in combined:
-            return False
-        raise
-    return True
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def require_proxbox_netbox_plugin(netbox_proxbox_plugin_available: bool) -> None:
-    if not netbox_proxbox_plugin_available:
-        pytest.skip("Proxbox NetBox plugin API not available on this instance (e.g. public demo).")
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def e2e_tag(netbox_demo_session: "Api") -> dict[str, Any]:
+async def e2e_tag(netbox_e2e_session: "Api") -> dict[str, Any]:
     """Ensure the 'proxbox e2e testing' tag exists.
 
     Creates the tag if it doesn't exist. This is session-scoped
@@ -149,10 +106,32 @@ async def e2e_tag(netbox_demo_session: "Api") -> dict[str, Any]:
     Returns:
         Tag dict with id, name, slug, color, url.
     """
+    from proxbox_api.netbox_rest import ensure_tag_async
+
     print("[E2E Setup] Ensuring e2e tag exists...")
-    tag = await ensure_e2e_tag(netbox_demo_session)
-    print(f"[E2E Setup] E2E tag ready: {tag['name']} (id={tag['id']})")
-    return tag
+    tag = await ensure_tag_async(
+        netbox_e2e_session,
+        name=E2E_TAG["name"],
+        slug=E2E_TAG["slug"],
+        color=E2E_TAG["color"],
+        description=E2E_TAG["description"],
+    )
+
+    if isinstance(tag, dict):
+        tag_data = tag
+    elif hasattr(tag, "serialize"):
+        tag_data = tag.serialize()
+    else:
+        tag_data = {
+            "id": getattr(tag, "id", None),
+            "name": getattr(tag, "name", None),
+            "slug": getattr(tag, "slug", None),
+            "color": getattr(tag, "color", None),
+            "url": getattr(tag, "url", None),
+        }
+
+    print(f"[E2E Setup] E2E tag ready: {tag_data.get('name')} (id={tag_data.get('id')})")
+    return tag_data
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -166,15 +145,15 @@ async def e2e_tag_refs(e2e_tag: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def e2e_shared_proxmox_site(netbox_demo_session: "Api", e2e_tag: dict[str, Any]) -> Any:
-    """Single DCIM site reused by VM e2e tests to avoid demo per-run site limits."""
+async def e2e_shared_proxmox_site(netbox_e2e_session: "Api", e2e_tag: dict[str, Any]) -> Any:
+    """Single DCIM site reused by VM e2e tests."""
 
     from proxbox_api.netbox_rest import nested_tag_payload, rest_reconcile_async
     from proxbox_api.proxmox_to_netbox.models import NetBoxSiteSyncState
 
     tag_refs = nested_tag_payload(e2e_tag)
     return await rest_reconcile_async(
-        netbox_demo_session,
+        netbox_e2e_session,
         "/api/dcim/sites/",
         lookup={"slug": "proxbox-api-e2e-shared-site"},
         payload={
@@ -241,43 +220,25 @@ def e2e_tag_info() -> dict[str, str]:
 
 @pytest_asyncio.fixture
 async def clean_test_objects(
-    netbox_demo_session: "Api", e2e_tag: dict[str, Any]
+    netbox_e2e_session: "Api", e2e_tag: dict[str, Any]
 ) -> AsyncGenerator[None, None]:
     """Fixture that optionally cleans up test objects after test.
 
-    Note: This is disabled by default since NetBox demo resets daily.
-    Uncomment the cleanup code below to enable cleanup between tests.
+    Cleanup is disabled - relying on fresh NetBox instance per run.
 
     Args:
-        netbox_demo_session: NetBox API session.
+        netbox_e2e_session: NetBox API session.
         e2e_tag: E2E testing tag.
 
     Yields:
         Control to the test.
     """
     yield
-    # Cleanup is disabled since NetBox demo resets daily
-    # To enable cleanup, uncomment below:
-    # from proxbox_api.e2e.session import cleanup_e2e_objects
-    # deleted = await cleanup_e2e_objects(netbox_demo_session)
-    # print(f"[E2E Cleanup] Deleted objects: {deleted}")
-
-
-@pytest.fixture
-def skip_if_no_playwright():
-    """Skip test if Playwright is not installed."""
-    import importlib.util
-
-    if importlib.util.find_spec("playwright") is None:
-        pytest.skip("Playwright not installed")
 
 
 @pytest.fixture
 def mock_proxmox_session(minimal_cluster: MockProxmoxCluster):
     """Create a mock Proxmox session that returns fixture data.
-
-    This fixture monkeypatches the Proxmox session to return
-    the mock cluster data instead of making real API calls.
 
     Args:
         minimal_cluster: The mock cluster data.
@@ -290,3 +251,29 @@ def mock_proxmox_session(minimal_cluster: MockProxmoxCluster):
         "resources": minimal_cluster.to_cluster_resources(),
         "storage": minimal_cluster.storage,
     }
+
+
+@pytest.fixture(params=["backend", "http_published", "http_local"])
+async def proxmox_mock_client(
+    request, proxmox_mock_backend, proxmox_mock_http_published, proxmox_mock_http_local
+):
+    """Parametrized fixture that provides Proxmox SDK in all mock modes.
+
+    This fixture runs tests against all three mock backends:
+    - backend: In-process MockBackend (fastest)
+    - http_published: HTTP container (published image, port 8006)
+    - http_local: HTTP container (local build, port 8007)
+
+    Usage:
+        @pytest.mark.mock_backend
+        @pytest.mark.mock_http
+        async def test_something(proxmox_mock_client):
+            # Test runs 3 times: once per mock backend
+            vms = await proxmox_mock_client.nodes.get()
+    """
+    if request.param == "backend":
+        yield proxmox_mock_backend
+    elif request.param == "http_published":
+        yield proxmox_mock_http_published
+    else:
+        yield proxmox_mock_http_local

@@ -110,16 +110,30 @@ Regras de autenticacao para create/update:
 | Variavel | Padrao | Descricao |
 |----------|--------|-----------|
 | `PROXBOX_NETBOX_TIMEOUT` | `120` | Timeout da API NetBox em segundos. Aplicado ao `netbox-sdk` e as requisicoes internas. |
-| `PROXBOX_NETBOX_MAX_RETRIES` | `3` | Numero de tentativas para falhas transientes do NetBox. |
-| `PROXBOX_NETBOX_RETRY_DELAY` | `1.0` | Delay inicial, em segundos, para retries do NetBox. |
+| `PROXBOX_NETBOX_MAX_RETRIES` | `5` | Numero de tentativas para falhas transientes do NetBox. |
+| `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Delay inicial, em segundos, para retries do NetBox. |
+| `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximo de requisicoes simultaneas ao NetBox. Mantenha baixo (1-2) para evitar agotar o pool de conexoes PostgreSQL do NetBox. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximo de tarefas concorrentes de escrita no sync de VMs. |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` | Maximo de operacoes concorrentes de escrita no NetBox. |
-| `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` | Maximo de operacoes concorrentes de leitura no Proxmox. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (sync de VM) / `4` (task-history, snapshots) | Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync. |
+| `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (maioria dos fluxos) / `4` (task-history) | Maximo de operacoes concorrentes de leitura no Proxmox. O padrao varia por servico de sync. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Override legado de concorrencia usado por alguns entrypoints de sync. |
+| `PROXBOX_RATE_LIMIT` | `60` | Maximo de requisicoes por minuto por endereco IP. |
+| `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Tamanho do lote de sync de backups. Reduza para diminuir a pressao de escrita no NetBox. |
+| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup. |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (vazio) | Lista de origens CORS extras, separadas por virgula. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | nao definido | Quando `1`, `true` ou `yes`, respostas HTTP 500 incluem detalhes internos da excecao. |
 | `PROXBOX_STRICT_STARTUP` | nao definido | Quando `1`, `true` ou `yes`, falha no mount de rotas Proxmox geradas interrompe o startup. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | nao definido | Quando `1`, `true` ou `yes`, nao cria o cliente NetBox padrao no startup. |
+
+### Tratando erros de NetBox sobrecarregado
+
+Quando o pool de conexoes PostgreSQL do NetBox esta saturado, o proxbox-api retorna erros `netbox_overwhelmed`. Para mitigar:
+
+1. **Reduza a concorrencia**: Defina `PROXBOX_NETBOX_MAX_CONCURRENT=1` para serializar requisicoes
+2. **Aumente os retries**: Mais tentativas com delays maiores dao tempo ao NetBox para recuperar
+3. **Estenda o TTL do cache**: Use `PROXBOX_NETBOX_GET_CACHE_TTL=300` para reduzir fetches redundantes
+
+A logica de retry aplica backoff agressivo (ate 30 segundos) quando erros de sobrecarga sao detectados.
 
 ## Comportamento de CORS
 

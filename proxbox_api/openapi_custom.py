@@ -14,7 +14,7 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
 )
 
 
-def _generated_proxmox_openapi() -> dict[str, object]:
+def _generated_proxmox_sdk() -> dict[str, object]:
     return load_proxmox_generated_openapi(version_tag=DEFAULT_PROXMOX_OPENAPI_TAG)
 
 
@@ -32,7 +32,7 @@ def custom_openapi_builder(app: FastAPI) -> dict[str, object]:
         routes=app.routes,
     )
 
-    proxmox_generated = _generated_proxmox_openapi()
+    proxmox_generated = _generated_proxmox_sdk()
     if proxmox_generated:
         source = str(
             proxmox_generated_openapi_path(
@@ -45,7 +45,7 @@ def custom_openapi_builder(app: FastAPI) -> dict[str, object]:
             "version": proxmox_generated.get("info", {}).get("version"),
             "version_tag": DEFAULT_PROXMOX_OPENAPI_TAG,
         }
-        openapi_schema["x-proxmox-generated-openapi"] = proxmox_generated
+        # Full Proxmox schema available at GET /proxmox/viewer/openapi
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema

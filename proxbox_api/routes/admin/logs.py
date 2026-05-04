@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
-from proxbox_api.log_buffer import LogLevel, get_logs
+from proxbox_api.log_buffer import LogLevel, get_log_buffer, get_logs
 
 router = APIRouter()
 
@@ -111,3 +114,79 @@ async def get_backend_logs(
     )
 
     return result
+
+
+@router.get("/logs/stream")
+async def stream_backend_logs(
+    level: Annotated[
+        LogLevel | None,
+        Query(description="Filter by exact log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"),
+    ] = None,
+    errors_only: Annotated[
+        bool,
+        Query(description="Stream only error-related logs"),
+    ] = False,
+    operation_id: Annotated[
+        str | None,
+        Query(description="Filter by operation ID (fixed at connection time)"),
+    ] = None,
+    newer_than_id: Annotated[
+        int | None,
+        Query(description="Only stream entries with ID greater than this cursor"),
+    ] = None,
+) -> StreamingResponse:
+    """Stream new log entries as Server-Sent Events.
+
+    Opens a persistent SSE connection and pushes new log entries as they arrive.
+    Filters are fixed at connection time; to change filters reconnect with new params.
+
+    Each SSE event has type ``log`` and a JSON-serialized log entry as data.
+    Keepalive comments are sent every 15 seconds to prevent proxy timeouts.
+    """
+    buffer = get_log_buffer()
+    loop = asyncio.get_running_loop()
+    notify = asyncio.Event()
+    buffer.subscribe(loop, notify)
+
+    async def event_generator() -> asyncio.AsyncGenerator[str, None]:
+        cursor: int | None = newer_than_id
+        try:
+            while True:
+                result = buffer.get_logs(
+                    level=level,
+                    errors_only=errors_only,
+                    operation_id=operation_id,
+                    newer_than_id=cursor,
+                    limit=200,
+                )
+                entries = result.get("logs", [])
+                # Entries come back newest-first; send in chronological order
+                for entry in reversed(entries):
+                    data = json.dumps(entry)
+                    yield f"event: log\ndata: {data}\n\n"
+                    try:
+                        entry_id = int(entry["id"])
+                        if cursor is None or entry_id > cursor:
+                            cursor = entry_id
+                    except (KeyError, ValueError):
+                        pass
+
+                notify.clear()
+                try:
+                    await asyncio.wait_for(notify.wait(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            return
+        finally:
+            buffer.unsubscribe(notify)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

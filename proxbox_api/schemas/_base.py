@@ -16,14 +16,27 @@ class ProxboxBaseModel(BaseModel):
         str_strip_whitespace=True,
     )
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> object:
         return getattr(self, key)
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None) -> object:
         return getattr(self, key, default)
 
     def __iter__(self) -> Iterator[tuple[str, object]]:
         return iter(self.model_dump(mode="python", by_alias=True, exclude_none=True).items())
+
+
+class ProxboxStrictModel(BaseModel):
+    """Base model that forbids arbitrary extras for security.
+
+    Use this for request schemas where mass-assignment is a concern.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
 
 
 class ProxboxLenientModel(ProxboxBaseModel):

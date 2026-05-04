@@ -14,16 +14,17 @@ from typing import Literal
 
 from fastapi import Body, Depends, FastAPI, Path, Query
 
-from proxbox_api.database import get_session
+from proxbox_api.database import get_async_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
 from proxbox_api.proxmox_codegen.utils import extract_path_params, pascal_case, slugify_identifier
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
-    available_proxmox_openapi_versions,
+    available_proxmox_sdk_versions,
     load_proxmox_generated_openapi,
     proxmox_generated_route_cache_path,
 )
@@ -94,7 +95,10 @@ def _request_schema_without_path_params(
 def _render_proxmox_path(path_template: str, path_values: dict[str, object]) -> str:
     rendered = path_template
     for name, value in path_values.items():
-        rendered = rendered.replace(f"{{{name}}}", str(value))
+        str_value = str(value)
+        if ".." in str_value or str_value.startswith("/") or str_value.startswith("\\"):
+            raise ValueError(f"Invalid path parameter value for {name}: {str_value!r}")
+        rendered = rendered.replace(f"{{{name}}}", str_value)
     return rendered
 
 
@@ -263,7 +267,7 @@ def _build_generated_endpoint(  # noqa: C901
             "_database_session",
             inspect.Parameter.KEYWORD_ONLY,
             annotation=object,
-            default=Depends(get_session),
+            default=Depends(get_async_session),
         ),
         inspect.Parameter(
             "source",
@@ -386,37 +390,38 @@ def _build_generated_endpoint(  # noqa: C901
         domain = kwargs.pop("target_domain", None)
         ip_address = kwargs.pop("target_ip_address", None)
 
-        target = await resolve_proxmox_target_session(
-            database_session=database_session,
-            source=source,
-            name=name,
-            domain=domain,
-            ip_address=ip_address,
-        )
-
-        path_values = {
-            original_name: kwargs.pop(python_name)
-            for python_name, original_name in path_param_map.items()
-        }
-        query_values = {
-            original_name: kwargs.get(python_name)
-            for python_name, original_name in query_param_map.items()
-            if kwargs.get(python_name) is not None
-        }
-
-        resource = target.session(_render_proxmox_path(openapi_path, path_values).lstrip("/"))
-        handler = getattr(resource, method.lower())
-
-        payload: dict[str, object] = {}
-        if request_body is not None:
-            payload.update(request_body.model_dump(by_alias=True, exclude_none=True))
-        payload.update(query_values)
-
+        target = None
         try:
+            target = await resolve_proxmox_target_session(
+                database_session=database_session,
+                source=source,
+                name=name,
+                domain=domain,
+                ip_address=ip_address,
+            )
+
+            path_values = {
+                original_name: kwargs.pop(python_name)
+                for python_name, original_name in path_param_map.items()
+            }
+            query_values = {
+                original_name: kwargs.get(python_name)
+                for python_name, original_name in query_param_map.items()
+                if kwargs.get(python_name) is not None
+            }
+
+            resource = target.session(_render_proxmox_path(openapi_path, path_values).lstrip("/"))
+            handler = getattr(resource, method.lower())
+
+            payload: dict[str, object] = {}
+            if request_body is not None:
+                payload.update(request_body.model_dump(by_alias=True, exclude_none=True))
+            payload.update(query_values)
+
             if method.upper() == "GET":
-                result = handler(**query_values)
+                result = await resolve_async(handler(**query_values))
             else:
-                result = handler(**payload)
+                result = await resolve_async(handler(**payload))
         except ProxboxException:
             raise
         except Exception as error:
@@ -425,6 +430,10 @@ def _build_generated_endpoint(  # noqa: C901
                 detail=f"Operation ID: {operation_id}",
                 python_exception=str(error),
             )
+        finally:
+            close_method = getattr(target, "aclose", None)
+            if callable(close_method):
+                await close_method()
 
         if response_model is None:
             return result
@@ -519,6 +528,9 @@ def _build_version_route_specs(
                     "description": operation.get("description"),
                     "response_model": response_model,
                     "tags": [f"{_GENERATED_ROUTE_TAG_PREFIX} / {version_tag}"],
+                    # Only expose the latest version in Swagger UI; older versions
+                    # are still routable but hidden to keep /openapi.json small.
+                    "include_in_schema": version_tag == DEFAULT_PROXMOX_OPENAPI_TAG,
                 }
             )
             version_route_names.add(base_route_name)
@@ -535,6 +547,9 @@ def _build_version_route_specs(
                         "description": operation.get("description"),
                         "response_model": response_model,
                         "tags": [f"{_GENERATED_ROUTE_TAG_PREFIX} / {version_tag}"],
+                        # Alias duplicates the versioned latest route; hide to avoid
+                        # doubling the Swagger entry count.
+                        "include_in_schema": False,
                     }
                 )
                 version_route_names.add(alias_route_name)
@@ -569,7 +584,7 @@ def _load_documents_for_registration(
     if cached is not None:
         return cached["documents"]
 
-    versions = available_proxmox_openapi_versions()
+    versions = available_proxmox_sdk_versions()
     return {
         discovered_version: load_proxmox_generated_openapi(version_tag=discovered_version)
         for discovered_version in sorted(versions, key=_version_sort_key)

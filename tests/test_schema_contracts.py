@@ -1,7 +1,12 @@
+"""Schema contract tests for generated API artifacts."""
+
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
 
 from proxbox_api.main import app
 from proxbox_api.proxmox_to_netbox import netbox_schema
@@ -10,6 +15,7 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     proxmox_generated_openapi_path,
     proxmox_operation_schema,
 )
+from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 from tests.fixtures import NETBOX_OPENAPI_SNAPSHOT
 
 
@@ -18,10 +24,10 @@ def test_custom_openapi_contains_embedded_generated_proxmox_schema():
     assert schema["info"]["x-proxmox-generated-openapi"]["source"].endswith(
         "proxbox_api/generated/proxmox/latest/openapi.json"
     )
-    assert "x-proxmox-generated-openapi" in schema
+    assert "x-proxmox-generated-openapi" in schema["info"]
 
 
-def test_generated_proxmox_openapi_snapshot_is_available():
+def test_generated_proxmox_sdk_snapshot_is_available():
     document = load_proxmox_generated_openapi()
     assert proxmox_generated_openapi_path().exists()
     assert document["openapi"] == "3.1.0"
@@ -48,6 +54,29 @@ def test_generated_proxmox_pydantic_models_are_importable():
 
     assert hasattr(module, "GetAccessResponse")
     assert hasattr(module, "GetAccessAclResponse")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("timeout", 0),
+        ("timeout", 3601),
+        ("max_retries", -1),
+        ("max_retries", 101),
+        ("retry_backoff", -0.1),
+        ("retry_backoff", 300.1),
+    ],
+)
+def test_proxmox_session_schema_rejects_out_of_bounds_values(field, value):
+    with pytest.raises(ValidationError):
+        ProxmoxSessionSchema(**{field: value})
+
+
+def test_proxmox_session_schema_accepts_valid_bounds():
+    schema = ProxmoxSessionSchema(timeout=30, max_retries=5, retry_backoff=1.5)
+    assert schema.timeout == 30
+    assert schema.max_retries == 5
+    assert schema.retry_backoff == 1.5
 
 
 def test_netbox_schema_resolution_prefers_live_then_cache_then_fallback(

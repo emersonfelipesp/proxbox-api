@@ -50,9 +50,30 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
             }
         ]
 
-    async def _fake_reconcile(_nb, _path, lookup, payload, **kwargs):
-        reconciled.append((lookup, payload))
-        return {"id": 99, **payload}
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        # Capture lookup info from the payloads for test verification
+        if _path == "/api/plugins/proxbox/snapshots/":
+            for payload in payloads:
+                reconciled.append(
+                    (
+                        {
+                            "vmid": payload.get("vmid"),
+                            "name": payload.get("name"),
+                            "node": payload.get("node"),
+                        },
+                        payload,
+                    )
+                )
+        # Return bulk reconcile result with created snapshots
+        from proxbox_api.netbox_rest import BulkReconcileResult
+
+        return BulkReconcileResult(
+            records=[{"id": 99, **payload} for payload in payloads],
+            created=len(payloads),
+            updated=0,
+            unchanged=0,
+            failed=0,
+        )
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.snapshots.rest_list_async",
@@ -63,18 +84,15 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
         _fake_get_vm_snapshots,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.snapshots.rest_reconcile_async",
-        _fake_reconcile,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.snapshots.rest_create_async",
-        lambda *args, **kwargs: asyncio.sleep(0, result={"id": 1}),
+        "proxbox_api.services.sync.snapshots.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
     )
 
+    px = type("P", (), {"session": proxmox_session, "name": "lab"})()
     result = asyncio.run(
         create_virtual_machine_snapshots(
             netbox_session=session,
-            pxs=[type("P", (), {"session": proxmox_session, "name": "lab"})()],
+            pxs=[px],
             cluster_status=[],
             cluster_resources=[
                 {"cluster-a": [{"type": "qemu", "name": "vm-101", "vmid": "101", "node": "pve01"}]}
@@ -86,7 +104,7 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
 
     assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0, "deleted": 0}
     assert calls["get_vm_snapshots"] == [
-        {"session": proxmox_session, "node": "pve01", "vm_type": "qemu", "vmid": 101}
+        {"session": px, "node": "pve01", "vm_type": "qemu", "vmid": 101}
     ]
     assert calls["rest_list_async"][0] == {
         "path": "/api/virtualization/virtual-machines/",
@@ -98,7 +116,7 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
     }
     assert calls["rest_list_async"][2] == {
         "path": "/api/virtualization/virtual-disks/",
-        "query": {"virtual_machine_id": 101, "ordering": "name"},
+        "query": {"virtual_machine_id": 7, "ordering": "name"},
     }
     assert len(reconciled) == 1
     assert reconciled[0][0] == {"vmid": 101, "name": "pre-upgrade", "node": "pve01"}

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TypeVar
+
 from proxbox_api.logger import logger
+from proxbox_api.types import NetBoxRecord, TagLike
+
+T = TypeVar("T", bound=NetBoxRecord)
 
 
 def to_dict(value: object) -> dict[str, object]:
@@ -83,8 +88,20 @@ def _candidate_reuse_lookups(
 
 async def ensure_record(
     endpoint: object, lookup: dict[str, object], payload: dict[str, object]
-) -> object:
-    """Get a record by lookup fields or create it when missing."""
+) -> NetBoxRecord:
+    """Get a record by lookup fields or create it when missing.
+
+    Args:
+        endpoint: NetBox API endpoint object for the resource type.
+        lookup: Dictionary of lookup fields for finding existing records.
+        payload: Dictionary of fields for creating new records if not found.
+
+    Returns:
+        The NetBox record (existing or newly created).
+
+    Raises:
+        Exception: If the record cannot be found or created.
+    """
     for candidate in _candidate_reuse_lookups(lookup, payload):
         record = await endpoint.get(**candidate)
         if record:
@@ -104,8 +121,19 @@ async def ensure_record(
         raise error
 
 
-async def ensure_tag(nb: object, *, name: str, slug: str, color: str, description: str) -> object:
-    """Get or create a NetBox tag."""
+async def ensure_tag(nb: object, *, name: str, slug: str, color: str, description: str) -> TagLike:
+    """Get or create a NetBox tag.
+
+    Args:
+        nb: NetBox API facade object.
+        name: Tag name.
+        slug: Tag slug (URL-safe identifier).
+        color: Tag color (hex code).
+        description: Tag description.
+
+    Returns:
+        The NetBox tag (existing or newly created).
+    """
     return await ensure_record(
         nb.extras.tags,
         {"slug": slug},

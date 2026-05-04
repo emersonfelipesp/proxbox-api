@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
@@ -23,38 +24,6 @@ from proxbox_api.services.sync.individual.helpers import (
     get_serialized_first_record,
     resolve_guest_interface,
 )
-
-
-def _best_guest_agent_ip(
-    guest_iface: dict | None,
-    ignore_ipv6_link_local: bool = True,
-) -> str | None:
-    """Select the best IP address from guest agent interface data."""
-    from ipaddress import ip_address
-
-    if not isinstance(guest_iface, dict):
-        return None
-    for addr in guest_iface.get("ip_addresses") or []:
-        if not isinstance(addr, dict):
-            continue
-        if str(addr.get("ip_address_type") or "").lower() == "ipv6":
-            continue
-        ip_text = str(addr.get("ip_address") or "").strip()
-        if not ip_text:
-            continue
-        try:
-            parsed = ip_address(ip_text)
-        except ValueError:
-            continue
-        if parsed.is_loopback:
-            continue
-        if ignore_ipv6_link_local and parsed.is_link_local:
-            continue
-        prefix = addr.get("prefix")
-        if isinstance(prefix, int) and 0 <= prefix <= 128:
-            return f"{parsed.compressed}/{prefix}"
-        return parsed.compressed
-    return None
 
 
 async def _resolve_vlan_id(
@@ -106,7 +75,7 @@ async def _resolve_vlan_id(
         return None
 
 
-async def sync_interface_individual(
+async def sync_interface_individual(  # noqa: C901
     nb: object,
     px: object,
     tag: object,
@@ -138,7 +107,7 @@ async def sync_interface_individual(
     now = datetime.now(timezone.utc)
 
     try:
-        vm_config = get_vm_config_individual(px, node, vm_type, vmid)
+        vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
     except Exception:
         vm_config = {}
 
@@ -251,17 +220,51 @@ async def sync_interface_individual(
             interface_name=interface_name,
         )
 
+        # Resolve node device and create bridge interfaces (dcim on node + VMInterface on VM)
         bridge_id: int | None = None
+        bridge_name = target_config.get("bridge")
+        if bridge_name and vm_id:
+            from proxbox_api.netbox_rest import rest_first_async
+            from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
+
+            try:
+                device_record = await rest_first_async(
+                    nb,
+                    "/api/dcim/devices/",
+                    query={"name": node, "limit": 1},
+                )
+                device_id = (
+                    (
+                        device_record.get("id")
+                        if isinstance(device_record, dict)
+                        else getattr(device_record, "id", None)
+                    )
+                    if device_record
+                    else None
+                )
+                bridge_id = await ensure_bridge_interfaces(
+                    nb, device_id, int(vm_id), bridge_name, tag_refs, now
+                )
+            except Exception as bridge_exc:
+                logger.warning(
+                    "Failed to create bridge %s for interface %s: %s",
+                    bridge_name,
+                    interface_name,
+                    bridge_exc,
+                )
 
         interface_payload: dict[str, object] = {
             "name": resolved_name,
             "enabled": True,
-            "bridge": bridge_id,
             "mac_address": mac_address,
+            "bridge": None,
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id else None,
             "tags": tag_refs,
-            "custom_fields": {"proxmox_last_updated": now.isoformat()},
+            "custom_fields": {
+                "proxmox_last_updated": now.isoformat(),
+                **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+            },
         }
 
         if vm_id:
@@ -282,15 +285,16 @@ async def sync_interface_individual(
                 "name": record.get("name"),
                 "virtual_machine": record.get("virtual_machine"),
                 "enabled": record.get("enabled"),
-                "bridge": record.get("bridge"),
                 "mac_address": record.get("mac_address"),
                 "type": record.get("type"),
                 "description": record.get("description"),
+                "bridge": record.get("bridge"),
                 "untagged_vlan": record.get("untagged_vlan"),
                 "mode": record.get("mode"),
                 "tags": record.get("tags"),
                 "custom_fields": record.get("custom_fields"),
             },
+            nullable_fields={"bridge"},
         )
 
         netbox_object = (

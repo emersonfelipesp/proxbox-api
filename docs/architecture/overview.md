@@ -11,6 +11,20 @@
 - Persistence layer: `proxbox_api/database.py`
 - Utility layer: streaming, logging, cache, retry, and error helpers
 
+## Request-Level Caching
+
+NetBox GET requests are cached in-memory to reduce database load during sync operations:
+
+- **Cache location**: `proxbox_api/netbox_rest.py` provides `rest_list_async()`, `rest_first_async()`, etc.
+- **TTL**: configurable via `PROXBOX_NETBOX_GET_CACHE_TTL` (default: 60 seconds)
+- **Entry limit**: configurable via `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` (default: 4096)
+- **Byte limit**: configurable via `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` (default: 52428800 = 50MB)
+- **Eviction policy**: LRU (Least Recently Used) when either entry or byte limit is reached
+- **Invalidation**: automatic on POST/PATCH/DELETE to related endpoints
+- **Observability**: metrics available at `/cache` and `/cache/metrics/prometheus`
+
+Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55/` only invalidates that exact path and its parent list, not other device detail paths like `/api/dcim/devices/10/`.
+
 ## Runtime Components
 
 - FastAPI app mounts the current route groups:
@@ -29,7 +43,7 @@
   - `/sync/individual`
 - SQLite-backed endpoint configuration and bootstrap state.
 - NetBox API access via `netbox-sdk` sync and async clients.
-- Proxmox API access via `proxmoxer` sessions and typed helper wrappers.
+- Proxmox API access via `proxmox-sdk` sync SDK sessions and typed helper wrappers.
 - Runtime-generated Proxmox live routes mounted during app lifespan startup.
 
 ## Core Data Models

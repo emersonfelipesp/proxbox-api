@@ -8,7 +8,7 @@ Playwright-based helpers for NetBox demo authentication, shared e2e test data, a
 
 - `demo_auth.py`: async demo.netbox.dev login and token provisioning with explicit browser and dependency errors.
 - `session.py`: session bootstrap helpers for e2e tests and the shared `proxbox e2e testing` tag.
-- `fixtures/proxmox_mock.py`: mock Proxmox clusters, nodes, VMs, and storage fixtures.
+- `fixtures/proxmox_sdk_mock.py`: mock Proxmox clusters, nodes, VMs, and storage fixtures.
 - `fixtures/test_data.py`: reusable constants, env-driven demo config, and unique resource helpers.
 - `fixtures/__init__.py`: fixture package namespace.
 

@@ -7,6 +7,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, RootModel
 
+from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.netbox_sdk_helpers import ensure_record, to_dict
 
 
@@ -17,6 +18,7 @@ def _slugify(value: str) -> str:
 
 
 def _run(coro: object) -> object:
+    """Run a coroutine from sync code, even when already inside an event loop."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -27,7 +29,7 @@ def _run(coro: object) -> object:
     def _runner() -> None:
         try:
             result["value"] = asyncio.run(coro)
-        except Exception as error:
+        except Exception as error:  # pragma: no cover - surfaced to caller
             result["error"] = error
 
     import threading
@@ -35,7 +37,7 @@ def _run(coro: object) -> object:
     thread = threading.Thread(target=_runner, daemon=True)
     thread.start()
     thread.join()
-    if result["error"]:
+    if result["error"] is not None:
         raise result["error"]
     return result["value"]
 
@@ -247,13 +249,10 @@ class IPAddress(_BaseCompat):
 class VirtualMachine(_BaseCompat):
     endpoint_getter = "virtualization.virtual_machines"
 
-    status_field = {
-        "running": "active",
-        "stopped": "offline",
-        "paused": "offline",
-        "active": "active",
-        "online": "active",
-    }
+    @staticmethod
+    def map_status(proxmox_status: str) -> str:
+        """Map a Proxmox VM status string to the corresponding NetBox status value."""
+        return ProxmoxToNetBoxVMStatus.from_proxmox(proxmox_status)
 
     def _lookup(self, payload: dict[str, object]) -> dict[str, object]:
         custom_fields = payload.get("custom_fields", {})

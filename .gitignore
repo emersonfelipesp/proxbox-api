@@ -146,3 +146,11 @@ dmypy.json
 
 # other stuff
 .vscode
+
+# Local dev copies of SDK packages (installed from PyPI, not tracked as submodules)
+/netbox-sdk/
+/proxmox-sdk/
+
+# Docker compose
+docker-compose.override.yml
+.env.test

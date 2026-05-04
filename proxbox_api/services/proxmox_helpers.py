@@ -1,10 +1,22 @@
-"""Typed helpers for direct proxmoxer calls validated through generated models."""
+"""Typed helpers for proxmox-sdk calls validated through generated models."""
 
 from __future__ import annotations
 
-from proxbox_api.exception import ProxboxException
+import asyncio
+import functools
+from collections.abc import Callable
+from typing import TypeVar
+
+from proxmox_sdk.sdk.exceptions import (
+    ProxmoxConnectionError,
+    ProxmoxTimeoutError,
+    ResourceException,
+)
+
+from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSession
 
 
@@ -12,56 +24,95 @@ def _model_dump(model: object) -> dict[str, object]:
     return model.model_dump(mode="python", by_alias=True, exclude_none=True)
 
 
-def _wrap_backend_call(message: str, operation):
-    try:
-        return operation()
-    except ProxboxException:
-        raise
-    except Exception as error:
-        raise ProxboxException(message=message, python_exception=str(error))
+_T = TypeVar("_T")
 
 
-def get_cluster_status(
+def _dual_mode(async_fn: Callable[..., _T]) -> Callable[..., _T]:
+    """Allow async helpers to be called from both async and sync contexts."""
+
+    @functools.wraps(async_fn)
+    def wrapper(*args: object, **kwargs: object) -> _T:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(async_fn(*args, **kwargs))
+        return async_fn(*args, **kwargs)
+
+    return wrapper
+
+
+@_dual_mode
+async def get_cluster_status(
     session: ProxmoxSession,
 ) -> list[generated_models.GetClusterStatusResponseItem]:
-    return _wrap_backend_call(
-        "Error fetching Proxmox cluster status",
-        lambda: (
-            generated_models.GetClusterStatusResponse.model_validate(
-                session.session("cluster/status").get()
-            ).root
-        ),
-    )
+    """Get cluster status from Proxmox."""
+    try:
+        result = await resolve_async(session.session("cluster/status").get())
+        validated = generated_models.GetClusterStatusResponse.model_validate(result)
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox cluster status request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for cluster status", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox cluster status",
+            original_error=error,
+        )
 
 
-def get_cluster_resources(
+@_dual_mode
+async def get_cluster_resources(
     session: ProxmoxSession,
     resource_type: str | None = None,
 ) -> list[generated_models.GetClusterResourcesResponseItem]:
-    return _wrap_backend_call(
-        "Error fetching Proxmox cluster resources",
-        lambda: (
-            generated_models.GetClusterResourcesResponse.model_validate(
+    """Get cluster resources from Proxmox."""
+    try:
+        if resource_type:
+            result = await resolve_async(
                 session.session("cluster/resources").get(type=resource_type)
-                if resource_type
-                else session.session("cluster/resources").get()
-            ).root
-        ),
-    )
+            )
+        else:
+            result = await resolve_async(session.session("cluster/resources").get())
+        validated = generated_models.GetClusterResourcesResponse.model_validate(result)
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox cluster resources request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for cluster resources", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox cluster resources",
+            original_error=error,
+        )
 
 
-def get_cluster_replication(
+@_dual_mode
+async def get_cluster_replication(
     session: ProxmoxSession,
 ) -> list[dict[str, object]]:
     """Get cluster replication jobs from Proxmox."""
     try:
-        result = session.session("cluster/replication").get()
+        result = await resolve_async(session.session("cluster/replication").get())
         return result if isinstance(result, list) else []
     except Exception:
         return []
 
 
-def get_vm_config(
+@_dual_mode
+async def get_vm_config(
     session: ProxmoxSession,
     node: str,
     vm_type: str,
@@ -70,16 +121,28 @@ def get_vm_config(
     generated_models.GetNodesNodeQemuVmidConfigResponse
     | generated_models.GetNodesNodeLxcVmidConfigResponse
 ):
-    def _fetch_config():
+    """Get VM configuration from Proxmox."""
+    try:
         if vm_type == "qemu":
-            payload = session.session.nodes(node).qemu(vmid).config.get()
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).config.get())
             return generated_models.GetNodesNodeQemuVmidConfigResponse.model_validate(payload)
         if vm_type == "lxc":
-            payload = session.session.nodes(node).lxc(vmid).config.get()
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).config.get())
             return generated_models.GetNodesNodeLxcVmidConfigResponse.model_validate(payload)
         raise ValueError(f"Unsupported VM type: {vm_type}")
-
-    return _wrap_backend_call("Error fetching Proxmox VM config", _fetch_config)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM config request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM config", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox VM config",
+            original_error=error,
+        )
 
 
 def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]]:
@@ -121,16 +184,18 @@ def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]
     return normalized
 
 
-def get_qemu_guest_agent_network_interfaces(
+@_dual_mode
+async def get_qemu_guest_agent_network_interfaces(
     session: ProxmoxSession,
     node: str,
     vmid: int,
 ) -> list[dict[str, object]]:
     """Return normalized guest-agent interfaces or [] when unavailable."""
-
     try:
         try:
-            payload = session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+            )
         except Exception as error:
             logger.debug(
                 "Primary guest-agent interfaces call failed for node=%s vmid=%s: %s",
@@ -138,7 +203,7 @@ def get_qemu_guest_agent_network_interfaces(
                 vmid,
                 error,
             )
-            payload = (
+            payload = await resolve_async(
                 session.session.nodes(node).qemu(vmid).agent.get(command="network-get-interfaces")
             )
         return _normalize_guest_agent_interfaces(payload)
@@ -152,18 +217,34 @@ def get_qemu_guest_agent_network_interfaces(
         return []
 
 
-def get_storage_list(
+@_dual_mode
+async def get_storage_list(
     session: ProxmoxSession,
 ) -> list[generated_models.GetStorageResponseItem]:
-    return _wrap_backend_call(
-        "Error fetching Proxmox storage list",
-        lambda: (
-            generated_models.GetStorageResponse.model_validate(session.session.storage.get()).root
-        ),
-    )
+    """Get storage list from Proxmox."""
+    try:
+        result = await resolve_async(session.session.storage.get())
+        validated = generated_models.GetStorageResponse.model_validate(result)
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox storage list request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for storage list", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox storage list",
+            original_error=error,
+        )
 
 
-def get_storage_config(
+@_dual_mode
+async def get_storage_config(
     session: ProxmoxSession,
     storage_id: str,
 ) -> dict[str, object]:
@@ -172,34 +253,65 @@ def get_storage_config(
     The /storage endpoint only returns storage IDs. This helper fetches
     the full configuration including type, content, path, nodes, shared, etc.
     """
-    return _wrap_backend_call(
-        f"Error fetching Proxmox storage config for {storage_id}",
-        lambda: _model_dump(
-            generated_models.GetStorageStorageResponse.model_validate(
-                session.session.storage(storage_id).get()
-            )
-        ),
-    )
+    try:
+        result = await resolve_async(session.session.storage(storage_id).get())
+        validated = generated_models.GetStorageStorageResponse.model_validate(result)
+        return _model_dump(validated)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message=f"Proxmox storage config request timed out for {storage_id}",
+            original_error=error,
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message=f"Unable to connect to Proxmox for storage config {storage_id}",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message=f"Error fetching Proxmox storage config for {storage_id}",
+            original_error=error,
+        )
 
 
-def get_node_storage_content(
+@_dual_mode
+async def get_node_storage_content(
     session: ProxmoxSession,
     node: str,
     storage: str,
     **kwargs: object,
 ) -> list[generated_models.GetNodesNodeStorageStorageContentResponseItem]:
-    params = {key: value for key, value in kwargs.items() if value is not None}
-    return _wrap_backend_call(
-        "Error fetching Proxmox node storage content",
-        lambda: (
-            generated_models.GetNodesNodeStorageStorageContentResponse.model_validate(
-                session.session.nodes(node).storage(storage).content.get(**params)
-            ).root
-        ),
-    )
+    """Get storage content from a specific node."""
+    try:
+        params = {key: value for key, value in kwargs.items() if value is not None}
+        result = await resolve_async(
+            session.session.nodes(node).storage(storage).content.get(**params)
+        )
+        validated = generated_models.GetNodesNodeStorageStorageContentResponse.model_validate(
+            result
+        )
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox node storage content request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for node storage content", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox node storage content",
+            original_error=error,
+        )
 
 
-def get_node_tasks(
+@_dual_mode
+async def get_node_tasks(
     session: ProxmoxSession,
     node: str,
     *,
@@ -210,76 +322,97 @@ def get_node_tasks(
     until: int | None = None,
     userfilter: str | None = None,
 ) -> list[generated_models.GetNodesNodeTasksResponseItem]:
-    params = {
-        "vmid": vmid,
-        "source": source,
-        "statusfilter": statusfilter,
-        "typefilter": typefilter,
-        "until": until,
-        "userfilter": userfilter,
-    }
-    filtered = {key: value for key, value in params.items() if value is not None}
-    return _wrap_backend_call(
-        "Error fetching Proxmox node tasks",
-        lambda: (
-            generated_models.GetNodesNodeTasksResponse.model_validate(
-                session.session.nodes(node).tasks.get(**filtered)
-            ).root
-        ),
-    )
+    """Get tasks from a specific node."""
+    try:
+        params = {
+            "vmid": vmid,
+            "source": source,
+            "statusfilter": statusfilter,
+            "typefilter": typefilter,
+            "until": until,
+            "userfilter": userfilter,
+        }
+        filtered = {key: value for key, value in params.items() if value is not None}
+        result = await resolve_async(session.session.nodes(node).tasks.get(**filtered))
+        validated = generated_models.GetNodesNodeTasksResponse.model_validate(result)
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox node tasks request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for node tasks", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox node tasks",
+            original_error=error,
+        )
 
 
-def get_node_task_status(
+@_dual_mode
+async def get_node_task_status(
     session: ProxmoxSession,
     node: str,
     upid: str,
 ) -> generated_models.GetNodesNodeTasksUpidStatusResponse:
-    return _wrap_backend_call(
-        "Error fetching Proxmox task status",
-        lambda: generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(
-            session.session.nodes(node).tasks(upid).status.get()
-        ),
-    )
+    """Get status of a specific task."""
+    try:
+        result = await resolve_async(session.session.nodes(node).tasks(upid).status.get())
+        return generated_models.GetNodesNodeTasksUpidStatusResponse.model_validate(result)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox task status request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for task status", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox task status",
+            original_error=error,
+        )
 
 
 def dump_models(items: list[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 
 
-def get_vm_snapshots(
+@_dual_mode
+async def get_vm_snapshots(
     session: ProxmoxSession,
     node: str,
     vm_type: str,
     vmid: int,
 ) -> list[dict[str, object]]:
-    """
-    Get snapshots for a specific VM from Proxmox.
-
-    Args:
-        session: Proxmox session
-        node: Proxmox node name
-        vm_type: 'qemu' or 'lxc'
-        vmid: Proxmox VM ID
-
-    Returns:
-        List of snapshot dictionaries
-    """
-
-    def _fetch_snapshots():
+    """Get snapshots for a specific VM from Proxmox."""
+    try:
         if vm_type == "qemu":
-            payload = session.session.nodes(node).qemu(vmid).snapshot.get()
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).snapshot.get())
         elif vm_type == "lxc":
-            payload = session.session.nodes(node).lxc(vmid).snapshot.get()
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).snapshot.get())
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
-        return payload
-
-    try:
-        result = _wrap_backend_call(
-            f"Error fetching snapshots for VM {vmid} on node {node}",
-            _fetch_snapshots,
-        )
-        return result if isinstance(result, list) else []
+        return payload if isinstance(payload, list) else []
+    except ResourceException as error:
+        if error.status_code == 501:
+            logger.debug(
+                "Snapshots not supported for vmid=%s node=%s type=%s (501 Not Implemented)",
+                vmid,
+                node,
+                vm_type,
+            )
+        else:
+            logger.warning(
+                "Error fetching snapshots for vmid=%s node=%s type=%s: %s",
+                vmid,
+                node,
+                vm_type,
+                error,
+            )
+        return []
     except Exception as error:
         logger.warning(
             "Error fetching snapshots for vmid=%s node=%s type=%s: %s",
@@ -291,29 +424,18 @@ def get_vm_snapshots(
         return []
 
 
-def get_cluster_snapshots_for_vm(
+@_dual_mode
+async def get_cluster_snapshots_for_vm(
     session: ProxmoxSession,
     node: str,
     vm_type: str,
     vmid: int,
 ) -> list[dict[str, object]]:
-    """
-    Get all snapshots for a VM across all nodes in the cluster.
-    Uses the VM's configured nodes if available.
-
-    Args:
-        session: Proxmox session
-        node: Proxmox node name
-        vm_type: 'qemu' or 'lxc'
-        vmid: Proxmox VM ID
-
-    Returns:
-        List of snapshot dictionaries from all accessible nodes
-    """
+    """Get all snapshots for a VM across all nodes in the cluster."""
     all_snapshots = []
 
     try:
-        snapshots = get_vm_snapshots(session, node, vm_type, vmid)
+        snapshots = await get_vm_snapshots(session, node, vm_type, vmid)
         all_snapshots.extend(snapshots)
     except Exception as error:
         logger.warning(
@@ -327,24 +449,18 @@ def get_cluster_snapshots_for_vm(
     return all_snapshots
 
 
-def get_node_status_individual(
+@_dual_mode
+async def get_node_status_individual(
     session: ProxmoxSession,
     node: str,
 ) -> dict[str, object]:
-    """Get a single node's status from cluster status.
-
-    Args:
-        session: Proxmox session.
-        node: Node name to filter by.
-
-    Returns:
-        Node status dict or empty dict if not found.
-    """
+    """Get a single node's status from cluster status."""
     try:
-        status_list = get_cluster_status(session)
+        status_list = await get_cluster_status(session)
         for item in status_list:
-            if str(item.get("node", "")) == node or str(item.get("name", "")) == node:
-                return _model_dump(item)
+            item_dict = _model_dump(item)
+            if str(item_dict.get("node", "")) == node or str(item_dict.get("name", "")) == node:
+                return item_dict
     except Exception as error:
         logger.warning(
             "Error fetching node status for node=%s: %s",
@@ -354,82 +470,47 @@ def get_node_status_individual(
     return {}
 
 
-def get_storage_config_individual(
+@_dual_mode
+async def get_storage_config_individual(
     session: ProxmoxSession,
     storage_id: str,
 ) -> dict[str, object]:
-    """Get storage configuration for a specific storage.
-
-    Args:
-        session: Proxmox session.
-        storage_id: Storage identifier.
-
-    Returns:
-        Storage config dict.
-    """
-    return get_storage_config(session, storage_id)
+    """Get storage configuration for a specific storage."""
+    return await get_storage_config(session, storage_id)
 
 
-def get_vm_config_individual(
+async def get_vm_config_individual(
     session: ProxmoxSession,
     node: str,
     vm_type: str,
     vmid: int,
 ) -> dict[str, object]:
-    """Get VM configuration for a specific VM.
-
-    Args:
-        session: Proxmox session.
-        node: Node name.
-        vm_type: 'qemu' or 'lxc'.
-        vmid: VM ID.
-
-    Returns:
-        VM config dictionary.
-    """
-    config = get_vm_config(session, node, vm_type, vmid)
+    """Get VM configuration for a specific VM."""
+    config = await get_vm_config(session, node, vm_type, vmid)
     return _model_dump(config)
 
 
-def get_vm_snapshots_individual(
+async def get_vm_snapshots_individual(
     session: ProxmoxSession,
     node: str,
     vm_type: str,
     vmid: int,
 ) -> list[dict[str, object]]:
-    """Get snapshots for a specific VM.
-
-    Args:
-        session: Proxmox session.
-        node: Node name.
-        vm_type: 'qemu' or 'lxc'.
-        vmid: VM ID.
-
-    Returns:
-        List of snapshot dictionaries.
-    """
-    return get_vm_snapshots(session, node, vm_type, vmid)
+    """Get snapshots for a specific VM."""
+    return await get_vm_snapshots(session, node, vm_type, vmid)
 
 
-def get_vm_backups_individual(
+async def get_vm_backups_individual(
     session: ProxmoxSession,
     node: str,
     storage: str,
     vmid: int,
 ) -> list[dict[str, object]]:
-    """Get backups for a specific VM from storage content.
-
-    Args:
-        session: Proxmox session.
-        node: Node name.
-        storage: Storage name.
-        vmid: VM ID to filter backups.
-
-    Returns:
-        List of backup dictionaries matching the VM.
-    """
+    """Get backups for a specific VM from storage content."""
     try:
-        content = get_node_storage_content(session, node, storage, vmid=str(vmid), content="backup")
+        content = await get_node_storage_content(
+            session, node, storage, vmid=str(vmid), content="backup"
+        )
         backups = []
         for item in content:
             item_dict = _model_dump(item)
@@ -448,25 +529,15 @@ def get_vm_backups_individual(
         return []
 
 
-def get_vm_tasks_individual(
+async def get_vm_tasks_individual(
     session: ProxmoxSession,
     node: str,
     vmid: int | None = None,
     source: str = "archive",
 ) -> list[dict[str, object]]:
-    """Get tasks for a specific VM.
-
-    Args:
-        session: Proxmox session.
-        node: Node name.
-        vmid: Optional VM ID to filter tasks.
-        source: Task source filter ('archive' or 'active').
-
-    Returns:
-        List of task dictionaries.
-    """
+    """Get tasks for a specific VM."""
     try:
-        tasks = get_node_tasks(session, node, vmid=vmid, source=source)
+        tasks = await get_node_tasks(session, node, vmid=vmid, source=source)
         task_dicts = [_model_dump(t) for t in tasks]
         if vmid is not None:
             filtered = []
@@ -486,25 +557,15 @@ def get_vm_tasks_individual(
         return []
 
 
-def get_vm_resource_individual(
+async def get_vm_resource_individual(
     session: ProxmoxSession,
     node: str,
     vm_type: str,
     vmid: int,
 ) -> dict[str, object]:
-    """Get a single VM resource from cluster resources filtered by node and vmid.
-
-    Args:
-        session: Proxmox session.
-        node: Node name.
-        vm_type: VM type ('qemu' or 'lxc').
-        vmid: VM ID.
-
-    Returns:
-        VM resource dict or empty dict if not found.
-    """
+    """Get a single VM resource from cluster resources filtered by node and vmid."""
     try:
-        resources = get_cluster_resources(session)
+        resources = await get_cluster_resources(session)
         for resource in resources:
             resource_dict = _model_dump(resource)
             res_type = resource_dict.get("type", "")

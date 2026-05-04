@@ -10,11 +10,26 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 - `GET /version` - Backend service version for external cache invalidation.
 - `GET /cache` - Inspect the in-memory cache snapshot.
 - `GET /clear-cache` - Clear the in-memory cache.
+- `GET /cache/metrics` - JSON snapshot of NetBox GET cache metrics (hit ratio, entries, byte usage).
+- `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same metrics for scrape jobs.
+
+## Authentication (`/auth`)
+
+All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. See [Authentication](../getting-started/authentication.md) for the full bootstrap flow and key management guide.
+
+- `GET /auth/bootstrap-status` - Check whether first-time key registration is still needed. Auth-exempt.
+- `POST /auth/register-key` - Register the first API key. Auth-exempt; fails once a key already exists.
+- `POST /auth/keys` - Create a new API key. Returns the raw key value once; store it securely.
+- `GET /auth/keys` - List all API keys. Key values are redacted (only metadata is returned).
+- `DELETE /auth/keys/{key_id}` - Delete an API key by ID.
+- `POST /auth/keys/{key_id}/activate` - Re-activate a previously deactivated key.
+- `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key without deleting it.
 
 ## Admin
 
 - `GET /admin/` - HTML admin dashboard for the configured NetBox endpoint records. This route is excluded from OpenAPI.
 - `GET /admin/logs` - In-memory backend log buffer with optional filters for `level`, `limit`, `offset`, `since`, and `operation_id`.
+- `GET /admin/logs/stream` - SSE real-time log stream. Supports query parameters `level`, `errors_only`, `operation_id`, and `newer_than_id`.
 
 ## NetBox Routes (`/netbox`)
 
@@ -73,12 +88,15 @@ Validation rules:
 
 ### Viewer and generated contract helpers
 
-- `POST /proxmox/viewer/generate`
-- `GET /proxmox/viewer/openapi`
-- `GET /proxmox/viewer/openapi/embedded`
-- `GET /proxmox/viewer/integration/contracts`
-- `POST /proxmox/viewer/routes/refresh`
-- `GET /proxmox/viewer/pydantic`
+- `POST /proxmox/viewer/generate` - Crawl the Proxmox API Viewer and generate OpenAPI + Pydantic artifacts. Accepts `version_tag`, `workers`, `persist`, and other tuning query parameters.
+- `GET /proxmox/viewer/openapi` - Return the generated Proxmox OpenAPI document.
+- `GET /proxmox/viewer/openapi/embedded` - Return an embedded subset of the generated OpenAPI.
+- `GET /proxmox/viewer/integration/contracts` - Report Proxmox and NetBox schema contract sources.
+- `POST /proxmox/viewer/routes/refresh` - Rebuild runtime-generated Proxmox routes from disk without restarting. Accepts optional `version_tag` to rebuild a single version.
+- `GET /proxmox/viewer/schema-status` - Report available bundled schema versions and active background generation tasks. Accepts optional `version_tag` to inspect a specific version.
+- `GET /proxmox/viewer/pydantic` - Return generated Pydantic v2 model source code.
+
+See [Schema Management](../development/schema-management.md) for the full workflow guide and the `proxbox-schema` CLI reference.
 
 ### Runtime-generated live proxy routes
 
@@ -94,7 +112,7 @@ Behavior:
 - On `uvicorn --reload`, startup prefers that cache manifest so the previously mounted live route set is preserved in development.
 - Routes are rebuilt on demand with `POST /proxmox/viewer/routes/refresh`.
 - `POST /proxmox/viewer/routes/refresh` with no query parameters rebuilds all available generated versions.
-- `POST /proxmox/viewer/routes/refresh?version_tag=8.3.0` rebuilds only that mounted version.
+- `POST /proxmox/viewer/routes/refresh?version_tag=8.3` rebuilds only that mounted version.
 - The unversioned `/proxmox/api2/*` alias forwards to the `latest` generated contract.
 - Request bodies and responses are validated with runtime-generated Pydantic models.
 - Generated response models cover object, array, scalar, and `null` response schemas.
@@ -109,7 +127,7 @@ Path parameter normalization:
 - Example:
   - Proxmox contract path: `/nodes/{node}/hardware/pci/{pci-id-or-mapping}`
   - Mounted FastAPI path: `/proxmox/api2/latest/nodes/{node}/hardware/pci/{pci_id_or_mapping}`
-- The upstream proxmoxer call still uses the original Proxmox parameter name from the generated OpenAPI contract.
+- The upstream proxmox-sdk SDK call still uses the original Proxmox parameter name from the generated OpenAPI contract.
 
 Version discovery:
 
@@ -127,14 +145,14 @@ Target selection:
 
 Typed sync integration:
 
-- Handcrafted sync-facing routes still call proxmoxer directly, but now do so through `proxbox_api/services/proxmox_helpers.py`.
-- That helper layer validates live proxmoxer payloads with the generated models in `proxbox_api/generated/proxmox/latest/pydantic_models.py` before returning data to route handlers.
+- Handcrafted sync-facing routes still call Proxmox directly, but now do so through `proxbox_api/services/proxmox_helpers.py` backed by the proxmox-sdk SDK.
+- That helper layer validates live proxmox-sdk payloads with the generated models in `proxbox_api/generated/proxmox/latest/pydantic_models.py` before returning data to route handlers.
 - This avoids internal HTTP round-trips while keeping VM config, cluster status, cluster resources, storage listing, and node storage content aligned with the generated contract used by `/proxmox/api2/*`.
 
 Examples of generated route shapes:
 
 - `GET /proxmox/api2/latest/cluster/resources`
-- `GET /proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config`
+- `GET /proxmox/api2/8.3/nodes/{node}/qemu/{vmid}/config`
 - `POST /proxmox/api2/latest/access/acl`
 - `GET /proxmox/api2/cluster/resources` as the compatibility alias for `latest`
 
@@ -197,6 +215,16 @@ Test coverage:
 - `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
+
+### VM stream overwrite query parameters
+
+Every VM stream endpoint listed above (`/virtualization/virtual-machines/...create/stream`) accepts the `SyncOverwriteFlags` query parameters defined in `proxbox_api/schemas/sync.py`. They control which user-managed NetBox fields the sync may overwrite:
+
+- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
+- `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, `overwrite_ip_tags`
+- `sync_vm_network` - when `false`, skips the VM-network sub-step.
+
+See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaults.
 
 ## Full Update
 

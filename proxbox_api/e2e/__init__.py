@@ -1,24 +1,24 @@
-"""E2E testing utilities for proxbox-api integration testing with NetBox demo."""
+"""E2E testing utilities for proxbox-api integration testing with NetBox."""
 
-from proxbox_api.e2e.demo_auth import (
-    DemoUnavailableError,
-    bootstrap_demo_profile,
-    create_demo_user,
-    demo_auth_required,
-    login,
-    provision_demo_token,
-    refresh_demo_profile,
+from proxbox_api.e2e.demo_auth import generate_password, generate_username
+from proxbox_api.e2e.session import (
+    E2E_TAG_COLOR,
+    E2E_TAG_DESCRIPTION,
+    E2E_TAG_NAME,
+    E2E_TAG_SLUG,
+    build_e2e_tag_refs,
+    create_netbox_e2e_session,
+    ensure_e2e_tag,
 )
-from proxbox_api.e2e.session import create_netbox_demo_session, ensure_e2e_tag
 
 __all__ = [
-    "DemoUnavailableError",
-    "bootstrap_demo_profile",
-    "create_demo_user",
-    "demo_auth_required",
-    "login",
-    "provision_demo_token",
-    "refresh_demo_profile",
-    "create_netbox_demo_session",
+    "generate_password",
+    "generate_username",
+    "E2E_TAG_COLOR",
+    "E2E_TAG_DESCRIPTION",
+    "E2E_TAG_NAME",
+    "E2E_TAG_SLUG",
+    "build_e2e_tag_refs",
+    "create_netbox_e2e_session",
     "ensure_e2e_tag",
 ]

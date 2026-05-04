@@ -5,16 +5,19 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
+from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import (
     get_vm_config_individual,
     get_vm_resource_individual,
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
 
 
 def _mb_from_bytes(value: object) -> int:
@@ -25,22 +28,12 @@ def _mb_from_bytes(value: object) -> int:
         return 0
     if as_int <= 0:
         return 0
-    return as_int // 1_000_000
+    return as_int // (1024 * 1024)
 
 
 def _status_value(value: object) -> str:
-    """Normalize status value."""
-    mapping = {
-        "running": "active",
-        "online": "active",
-        "active": "active",
-        "stopped": "offline",
-        "paused": "offline",
-        "offline": "offline",
-        "planned": "planned",
-    }
-    text = str(value or "active").strip().lower()
-    return mapping.get(text, "active")
+    """Normalize Proxmox VM status to NetBox VM status."""
+    return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
 
 
 def _as_bool(value: object) -> bool:
@@ -62,6 +55,9 @@ def _build_netbox_vm_payload(
     role_id: int | None,
     tag_ids: list[int],
     last_updated: datetime,
+    cluster_name: str | None = None,
+    proxmox_url: str | None = None,
+    virtual_machine_type_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -81,18 +77,27 @@ def _build_netbox_vm_payload(
     disk_mb = _mb_from_bytes(maxdisk)
 
     status = _status_value(resource.get("status", "stopped"))
+    node = resource.get("node", "unknown")
+    proxmox_status = str(resource.get("status", "stopped"))
 
-    vm_custom_fields = {
+    vm_custom_fields: dict[str, object] = {
         "proxmox_vm_id": int(resource.get("vmid") or 0),
         "proxmox_vm_type": vm_type,
         "proxmox_start_at_boot": _as_bool(onboot),
         "proxmox_unprivileged_container": _as_bool(unprivileged),
         "proxmox_qemu_agent": _as_bool(agent),
         "proxmox_search_domain": searchdomain,
+        "proxmox_node": node,
+        "proxmox_status": proxmox_status,
         "proxmox_last_updated": last_updated.isoformat(),
     }
+    if cluster_name:
+        vm_custom_fields["proxmox_cluster"] = cluster_name
+    if proxmox_url:
+        vmid = int(resource.get("vmid") or 0)
+        vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
-    return {
+    payload: dict[str, object] = {
         "name": str(resource.get("name", "")),
         "status": status,
         "cluster": cluster_id,
@@ -103,8 +108,11 @@ def _build_netbox_vm_payload(
         "disk": disk_mb,
         "tags": tag_ids,
         "custom_fields": vm_custom_fields,
-        "description": f"Synced from Proxmox node {resource.get('node', 'unknown')}",
+        "description": f"Synced from Proxmox node {node}",
     }
+    if virtual_machine_type_id is not None:
+        payload["virtual_machine_type"] = virtual_machine_type_id
+    return payload
 
 
 async def sync_vm_individual(
@@ -116,6 +124,7 @@ async def sync_vm_individual(
     vm_type: str,
     vmid: int,
     dry_run: bool = False,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Sync a single Virtual Machine from Proxmox to NetBox.
 
@@ -130,18 +139,19 @@ async def sync_vm_individual(
         vm_type: 'qemu' or 'lxc'.
         vmid: Proxmox VM ID.
         dry_run: If True, return what would be synced without making changes.
+        overwrite_flags: Per-field overwrite gates for existing VM updates.
 
     Returns:
         IndividualSyncResponse dict.
     """
-    service = BaseIndividualSyncService(nb, px, tag)
+    service = BaseIndividualSyncService(nb, px, tag, overwrite_flags=overwrite_flags)
     now = datetime.now(timezone.utc)
 
     tag_id = int(getattr(tag, "id", 0) or 0)
     tag_ids = [tag_id] if tag_id > 0 else []
 
     try:
-        proxmox_config = get_vm_config_individual(px, node, vm_type, vmid)
+        proxmox_config = await get_vm_config_individual(px, node, vm_type, vmid)
     except Exception:
         proxmox_config = {}
 
@@ -199,11 +209,40 @@ async def sync_vm_individual(
             _site,
             device,
             vm_role,
+            vm_type_obj,
         ) = await service._get_or_create_vm_dependencies(cluster_name, node, vm_type)
 
         cluster_id = int(getattr(cluster, "id", 0) or 0)
         device_id = int(getattr(device, "id", 0) or 0) if device else None
         role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
+        vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
+
+        px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
+        px_port = getattr(px, "http_port", 8006)
+        px_url = f"https://{px_domain}:{px_port}" if px_domain else None
+
+        existing_vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
+        )
+
+        # Merge proxbox tag with any existing user tags so sync never erases them.
+        existing_tag_ids: list[int] = []
+        if existing_vms:
+            raw_record = existing_vms[0]
+            raw_tags = (
+                raw_record.get("tags")
+                if isinstance(raw_record, dict)
+                else getattr(raw_record, "tags", None)
+            ) or []
+            for t in raw_tags:
+                tid = t.get("id") if isinstance(t, dict) else t
+                try:
+                    existing_tag_ids.append(int(tid))
+                except (TypeError, ValueError):
+                    continue
+        merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids))
 
         netbox_vm_payload = _build_netbox_vm_payload(
             resource=proxmox_resource,
@@ -211,13 +250,11 @@ async def sync_vm_individual(
             cluster_id=cluster_id,
             device_id=device_id,
             role_id=role_id,
-            tag_ids=tag_ids,
+            tag_ids=merged_tag_ids,
             last_updated=now,
-        )
-        existing_vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
+            cluster_name=cluster_name,
+            proxmox_url=px_url,
+            virtual_machine_type_id=vm_type_id,
         )
 
         virtual_machine = await rest_reconcile_async(
@@ -229,11 +266,13 @@ async def sync_vm_individual(
             },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
+            patchable_fields=frozenset(_compute_vm_patchable_fields(overwrite_flags)),
             current_normalizer=lambda record: {
                 "name": record.get("name"),
                 "status": record.get("status"),
                 "cluster": record.get("cluster"),
                 "device": record.get("device"),
+                "virtual_machine_type": record.get("virtual_machine_type"),
                 "role": record.get("role"),
                 "vcpus": record.get("vcpus"),
                 "memory": record.get("memory"),
@@ -297,6 +336,7 @@ async def sync_vm_with_related(
     dry_run: bool = False,
     sync_interfaces: bool = True,
     sync_task_history: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Sync a VM with its related objects (interfaces, task history) in parallel.
 
@@ -317,7 +357,17 @@ async def sync_vm_with_related(
     """
     from proxbox_api.services.sync.individual.task_history_sync import sync_task_history_individual
 
-    vm_result = await sync_vm_individual(nb, px, tag, cluster_name, node, vm_type, vmid, dry_run)
+    vm_result = await sync_vm_individual(
+        nb,
+        px,
+        tag,
+        cluster_name,
+        node,
+        vm_type,
+        vmid,
+        dry_run,
+        overwrite_flags=overwrite_flags,
+    )
 
     related_results: list[dict] = []
     related_dependencies: list[dict] = []
@@ -326,7 +376,7 @@ async def sync_vm_with_related(
 
     if sync_interfaces:
         try:
-            vm_config = get_vm_config_individual(px, node, vm_type, vmid)
+            vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
         except Exception:
             vm_config = {}
         interface_names = sorted(

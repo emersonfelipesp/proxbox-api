@@ -80,7 +80,7 @@ async def sync_backup_individual(
     now = datetime.now(timezone.utc)
 
     try:
-        backups = get_vm_backups_individual(px, node, storage, vmid)
+        backups = await get_vm_backups_individual(px, node, storage, vmid)
     except Exception:
         backups = []
 
@@ -126,6 +126,7 @@ async def sync_backup_individual(
             error=None,
         )
 
+    vm_type_inferred = "lxc" if "vzdump-lxc-" in volid else "qemu"
     try:
         vm_record, vm_error = await ensure_vm_record(
             nb,
@@ -133,7 +134,7 @@ async def sync_backup_individual(
             tag,
             vmid=vmid,
             node=node,
-            vm_type="qemu",
+            vm_type=vm_type_inferred,
             auto_create_vm=auto_create_vm,
         )
         if vm_error:
@@ -172,6 +173,8 @@ async def sync_backup_individual(
             "proxmox_storage": storage_id,
             "subtype": target_backup.get("format") if target_backup else None,
             "size": target_backup.get("size") if target_backup else None,
+            "used": target_backup.get("used") if target_backup else None,
+            "encrypted": target_backup.get("encrypted") if target_backup else None,
             "volume_id": volid,
             "vmid": str(vmid),
             "notes": target_backup.get("notes") if target_backup else None,
@@ -194,6 +197,8 @@ async def sync_backup_individual(
                 "proxmox_storage": record.get("proxmox_storage"),
                 "subtype": record.get("subtype"),
                 "size": record.get("size"),
+                "used": record.get("used"),
+                "encrypted": record.get("encrypted"),
                 "volume_id": record.get("volume_id"),
                 "vmid": record.get("vmid"),
                 "notes": record.get("notes"),

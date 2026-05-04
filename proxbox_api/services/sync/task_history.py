@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from datetime import datetime, timezone
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import RestRecord, rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
 from proxbox_api.services.proxmox_helpers import (
     dump_models,
@@ -28,6 +29,13 @@ _TASK_HISTORY_PATCHABLE_FIELDS = frozenset(
         "custom_fields",
     }
 )
+
+
+def _extract_fk_id(value: object) -> object:
+    """Return the integer ID from a nested FK dict, or the value itself."""
+    if isinstance(value, dict):
+        return value.get("id")
+    return value
 
 
 def _normalize_text(value: object) -> str | None:
@@ -104,7 +112,11 @@ def _format_task_description(vm_type: str, task_id: str | None, task_type: str) 
     return f"{vm_display} - {action}"
 
 
-def _find_cluster_session(pxs: list | None, cluster_status: list | None, cluster_name: str | None):
+def _find_cluster_session(
+    pxs: list[object] | None,
+    cluster_status: list[object] | None,
+    cluster_name: str | None,
+) -> object | None:
     """Find Proxmox session for a cluster."""
     if not pxs or not cluster_status:
         return None
@@ -192,7 +204,7 @@ def _build_task_payload(
     pstart_val = task.get("pstart")
     if pstart_val is not None:
         try:
-            pstart = datetime.fromtimestamp(int(pstart_val), timezone.utc).isoformat()
+            pstart = int(pstart_val)
         except (ValueError, TypeError):
             pstart = None
     else:
@@ -282,6 +294,7 @@ async def _sync_single_vm_task_history(
             pxs=pxs,
             cluster_status=cluster_status,
             virtual_machine_id=int(vm_id),
+            proxmox_vmid=int(proxmox_vmid),
             vm_type=proxmox_type,
             cluster_name=cluster_name,
             tag_refs=normalized_tags,
@@ -329,17 +342,24 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
     total_reconciled = 0
     skipped = 0
 
-    if use_websocket and websocket:
-        await websocket.send_json(
-            {
-                "object": "task_history",
-                "type": "sync",
-                "data": {
-                    "status": "started",
-                    "message": f"Starting task history sync for {total_vms} VMs",
-                },
-            }
-        )
+    if websocket:
+        if hasattr(websocket, "emit_discovery"):
+            await websocket.emit_discovery(
+                phase="task-history",
+                items=[{"name": vm.get("name", ""), "type": "vm"} for vm in vms_with_proxmox_id],
+                message=f"Starting task history sync for {total_vms} VMs",
+            )
+        elif use_websocket:
+            await websocket.send_json(
+                {
+                    "object": "task_history",
+                    "type": "sync",
+                    "data": {
+                        "status": "started",
+                        "message": f"Starting task history sync for {total_vms} VMs",
+                    },
+                }
+            )
 
     vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
 
@@ -365,8 +385,19 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
             total_reconciled += reconciled_count
             skipped += skipped_count
 
-    if use_websocket and websocket:
-        await websocket.send_json({"object": "task_history", "end": True})
+    if websocket:
+        if hasattr(websocket, "emit_phase_summary"):
+            await websocket.emit_phase_summary(
+                phase="task-history",
+                created=total_reconciled,
+                skipped=skipped,
+                message=(
+                    f"Task history sync completed: {total_reconciled} records reconciled, "
+                    f"{skipped} skipped"
+                ),
+            )
+        elif use_websocket:
+            await websocket.send_json({"object": "task_history", "end": True})
 
     logger.info(
         "Task history sync completed: %s records reconciled, %s skipped",
@@ -380,12 +411,13 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
     }
 
 
-async def sync_virtual_machine_task_history(
+async def sync_virtual_machine_task_history(  # noqa: C901
     *,
     netbox_session: object,
     pxs: list[object] | None,
     cluster_status: list[object] | None,
     virtual_machine_id: int,
+    proxmox_vmid: int,
     vm_type: str,
     cluster_name: str | None,
     tag_refs: list[dict[str, object]] | None = None,
@@ -415,25 +447,24 @@ async def sync_virtual_machine_task_history(
     normalized_tags = [tag for tag in (tag_refs or []) if tag.get("name") and tag.get("slug")]
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
     seen_upids: set[str] = set()
-    reconciled = 0
     now = datetime.now(timezone.utc)
+    task_payloads: list[dict[str, object]] = []
 
     for node_name in node_names:
         try:
             async with fetch_semaphore:
-                tasks = await asyncio.to_thread(
-                    lambda: dump_models(
-                        get_node_tasks(
-                            proxmox_session,
-                            node=node_name,
-                            vmid=virtual_machine_id,
-                        )
-                    )
+                raw_tasks = get_node_tasks(
+                    proxmox_session,
+                    node=node_name,
+                    vmid=proxmox_vmid,
                 )
+                if inspect.isawaitable(raw_tasks):
+                    raw_tasks = await raw_tasks
+                tasks = dump_models(raw_tasks)
         except Exception as error:
             logger.warning(
                 "Error fetching task history for VM %s on node %s: %s",
-                virtual_machine_id,
+                proxmox_vmid,
                 node_name,
                 error,
             )
@@ -447,9 +478,9 @@ async def sync_virtual_machine_task_history(
 
             try:
                 async with fetch_semaphore:
-                    task_status = await asyncio.to_thread(
-                        lambda: get_node_task_status(proxmox_session, node=node_name, upid=upid)
-                    )
+                    task_status = get_node_task_status(proxmox_session, node=node_name, upid=upid)
+                    if inspect.isawaitable(task_status):
+                        task_status = await task_status
                 status_payload = task_status.model_dump(
                     mode="python",
                     by_alias=True,
@@ -474,15 +505,73 @@ async def sync_virtual_machine_task_history(
                 now=now,
             )
 
+            task_payloads.append(payload)
+
+    if not task_payloads:
+        return 0
+
+    # Perform bulk reconciliation with a single API call
+    try:
+        reconcile_result = await rest_bulk_reconcile_async(
+            nb,
+            "/api/plugins/proxbox/task-history/",
+            payloads=task_payloads,
+            lookup_fields=["upid"],
+            schema=NetBoxTaskHistorySyncState,
+            current_normalizer=lambda record: {
+                "virtual_machine": _extract_fk_id(record.get("virtual_machine")),
+                "vm_type": record.get("vm_type"),
+                "upid": record.get("upid"),
+                "node": record.get("node"),
+                "pid": record.get("pid"),
+                "pstart": record.get("pstart"),
+                "task_id": record.get("task_id"),
+                "task_type": record.get("task_type"),
+                "username": record.get("username"),
+                "start_time": record.get("start_time"),
+                "end_time": record.get("end_time"),
+                "description": record.get("description"),
+                "status": record.get("status"),
+                "task_state": record.get("task_state"),
+                "exitstatus": record.get("exitstatus"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+            patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
+        )
+
+        reconciled = (
+            reconcile_result.created + reconcile_result.updated + reconcile_result.unchanged
+        )
+        logger.debug(
+            "Task history bulk reconcile for VM %s: created=%s, updated=%s, unchanged=%s",
+            virtual_machine_id,
+            reconcile_result.created,
+            reconcile_result.updated,
+            reconcile_result.unchanged,
+        )
+        return reconciled
+
+    except Exception as error:
+        logger.error(
+            "Error during bulk task history reconciliation for VM %s: %s",
+            virtual_machine_id,
+            error,
+        )
+        # Fall back to per-task writes on bulk failure
+        reconciled = 0
+        from proxbox_api.netbox_rest import rest_reconcile_async
+
+        for payload in task_payloads:
             try:
                 await rest_reconcile_async(
                     nb,
                     "/api/plugins/proxbox/task-history/",
-                    lookup={"upid": upid},
+                    lookup={"upid": payload.get("upid")},
                     payload=payload,
                     schema=NetBoxTaskHistorySyncState,
                     current_normalizer=lambda record: {
-                        "virtual_machine": record.get("virtual_machine"),
+                        "virtual_machine": _extract_fk_id(record.get("virtual_machine")),
                         "vm_type": record.get("vm_type"),
                         "upid": record.get("upid"),
                         "node": record.get("node"),
@@ -503,12 +592,12 @@ async def sync_virtual_machine_task_history(
                     patchable_fields=_TASK_HISTORY_PATCHABLE_FIELDS,
                 )
                 reconciled += 1
-            except Exception as error:
+            except Exception as item_error:
                 logger.warning(
-                    "Error reconciling task history for VM %s task %s: %s",
+                    "Error reconciling task history upid=%s for VM %s: %s",
+                    payload.get("upid"),
                     virtual_machine_id,
-                    upid,
-                    error,
+                    item_error,
                 )
 
-    return reconciled
+        return reconciled

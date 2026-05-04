@@ -15,7 +15,50 @@ docker pull emersonfelipesp/proxbox-api:latest
 docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest
 ```
 
-## Opcao 2: Codigo-fonte local
+### Bind em IPv6 / dual-stack
+
+Para escutar simultaneamente em IPv4 e IPv6, defina `PROXBOX_BIND_HOST=::`:
+
+```bash
+docker run -d -p 8000:8000 -e PROXBOX_BIND_HOST=:: \
+  emersonfelipesp/proxbox-api:latest
+```
+
+#### Cuidado com aspas no Docker Compose
+
+No formato **lista** de `environment:` do Compose, o valor e usado literalmente — as aspas **nao** sao removidas. Ou seja, `- PROXBOX_BIND_HOST="::"` chega ao container como a string de 4 caracteres `"::"`, o que ja causou o erro `[Errno -2] Name does not resolve`. O container hoje normaliza aspas defensivamente, mas as formas recomendadas sao:
+
+```yaml
+environment:
+  - PROXBOX_BIND_HOST=::          # formato lista: SEM aspas
+```
+
+```yaml
+environment:
+  PROXBOX_BIND_HOST: "::"         # formato mapa: o YAML remove as aspas
+```
+
+## Opcao 2: PyPI
+
+O pacote esta publicado no [PyPI](https://pypi.org/project/proxbox-api/) como `proxbox-api`.
+
+```bash
+pip install proxbox-api
+```
+
+Ou com `uv`:
+
+```bash
+uv add proxbox-api
+```
+
+Inicie o servidor apos instalar:
+
+```bash
+python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+```
+
+## Opcao 3: Codigo-fonte local
 
 ```bash
 git clone https://github.com/emersonfelipesp/proxbox-api.git

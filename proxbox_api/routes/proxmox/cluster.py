@@ -1,11 +1,15 @@
 """Proxmox cluster endpoints and cluster response schemas."""
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from proxbox_api.enum.proxmox import *
+from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
@@ -13,7 +17,10 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_status as get_typed_cluster_status,
 )
+from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
+from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
+from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
@@ -27,14 +34,14 @@ class BaseClusterStatusSchema(BaseModel):
 class ClusterNodeStatusSchema(BaseClusterStatusSchema):
     ip: str
     level: str | None = None
-    local: int
+    local: bool
     nodeid: int
-    online: int
+    online: bool
 
 
 class ClusterStatusSchema(BaseClusterStatusSchema):
     nodes: int
-    quorate: int
+    quorate: bool
     version: int
     mode: str
     node_list: list[ClusterNodeStatusSchema] | None = None
@@ -58,7 +65,7 @@ def _cluster_item_defaults(
         "name": name,
         "type": item_data.get("type") or "cluster",
         "nodes": int(item_data.get("nodes") or node_count),
-        "quorate": int(quorate) if quorate is not None else int(node_count > 0),
+        "quorate": bool(quorate) if quorate is not None else bool(node_count > 0),
         "version": int(item_data.get("version") or 0),
         "mode": mode,
     }
@@ -73,9 +80,9 @@ def _node_item_defaults(item_data: dict[str, object]) -> dict[str, object]:
         "type": item_data.get("type") or "node",
         "ip": item_data.get("ip") or "",
         "level": item_data.get("level"),
-        "local": int(item_data.get("local") or 0),
+        "local": bool(item_data.get("local") or False),
         "nodeid": int(item_data.get("nodeid") or 0),
-        "online": int(item_data.get("online") or 0),
+        "online": bool(item_data.get("online") or False),
     }
 
 
@@ -156,7 +163,10 @@ async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
 
     return ClusterStatusSchemaList(
         [
-            await parse_cluster_status(proxmox_object=px, data=get_typed_cluster_status(px))
+            await parse_cluster_status(
+                proxmox_object=px,
+                data=await get_typed_cluster_status(px),
+            )
             for px in pxs
         ]
     )
@@ -192,26 +202,36 @@ async def cluster_resources(
     """
 
     resource_type = type if isinstance(type, str) else None
-    json_response = []
+
+    # Deduplicate resources across sessions that belong to the same Proxmox cluster.
+    # When multiple Proxmox endpoints are nodes of the same cluster, each one returns
+    # the full cluster resource list.  Track seen resource IDs globally so that the
+    # same VM/LXC is never submitted to NetBox twice.
+    cluster_resource_map: dict[str, list[dict]] = {}
+    seen_resource_ids: set[str] = set()
 
     for px in pxs:
-        json_response.append(
-            {
-                px.name: [
-                    resource.model_dump(mode="python", by_alias=True, exclude_none=True)
-                    for resource in get_typed_cluster_resources(px, resource_type=resource_type)
-                ]
-            }
-        )
+        resources = await get_typed_cluster_resources(px, resource_type=resource_type)
+        cluster_name = px.name
+        if cluster_name not in cluster_resource_map:
+            cluster_resource_map[cluster_name] = []
+        for resource in resources:
+            resource_id: str = resource.id
+            if resource_id in seen_resource_ids:
+                continue
+            seen_resource_ids.add(resource_id)
+            cluster_resource_map[cluster_name].append(
+                resource.model_dump(mode="python", by_alias=True, exclude_none=True)
+            )
 
-    return json_response
+    return [{name: items} for name, items in cluster_resource_map.items()]
 
 
 ClusterResourcesDep = Annotated[ClusterResourcesList, Depends(cluster_resources)]
 
 
 # Backup routines endpoint
-@router.get("/backup", response_model=list)
+@router.get("/backup", response_model=list[dict[str, object]])
 async def cluster_backup(pxs: ProxmoxSessionsDep):
     """
     ### Retrieve backup job configurations from multiple Proxmox sessions.
@@ -226,7 +246,7 @@ async def cluster_backup(pxs: ProxmoxSessionsDep):
 
     for px in pxs:
         try:
-            backup_jobs = px.session.cluster.backup.get()
+            backup_jobs = await resolve_async(px.session.cluster.backup.get())
             for job in backup_jobs:
                 job["cluster_name"] = px.name
                 results.append(job)
@@ -235,3 +255,37 @@ async def cluster_backup(pxs: ProxmoxSessionsDep):
             results.append({"cluster_name": px.name, "error": str(error)})
 
     return results
+
+
+@router.get("/backup/stream", response_model=None)
+async def cluster_backup_stream(
+    netbox_session: NetBoxSessionDep,
+    pxs: ProxmoxSessionsDep,
+):
+    """Stream backup-routines sync progress and terminal status via SSE."""
+
+    async def event_stream():
+        bridge = WebSocketSSEBridge()
+
+        async def _run_sync():
+            try:
+                return await sync_all_backup_routines(
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    bridge=bridge,
+                )
+            finally:
+                await bridge.close()
+
+        sync_task = asyncio.create_task(_run_sync())
+        async for frame in sse_stream_generator(bridge, sync_task, "backup-routines"):
+            yield frame
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -1,3 +1,5 @@
+"""Tests for virtual machine mapping and sync logic."""
+
 from __future__ import annotations
 
 import pytest
@@ -46,6 +48,50 @@ def test_map_proxmox_vm_to_netbox_vm_body_uses_schema_driven_normalization(monke
     assert body["tags"] == [7]
     assert body["custom_fields"]["proxmox_vm_id"] == 101
     assert body["custom_fields"]["proxmox_vm_type"] == "qemu"
+
+
+def test_map_proxmox_vm_to_netbox_vm_body_uses_config_disk_aggregate(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.normalize.resolve_netbox_schema_contract",
+        lambda: {"source": "cache", "openapi": {"paths": {}}},
+    )
+
+    body = map_proxmox_vm_to_netbox_vm_body(
+        resource=PROXMOX_VM_RESOURCE,
+        config={
+            **PROXMOX_VM_CONFIG,
+            "scsi0": "local-lvm:vm-101-disk-0,size=32G",
+            "scsi1": "local-lvm:vm-101-disk-1,size=64G",
+        },
+        cluster_id=11,
+        device_id=22,
+        role_id=33,
+        tag_ids=[7],
+    )
+
+    # NetBox validates VM.disk against the sum of assigned virtual disk sizes (MiB).
+    assert body["disk"] == 98_304
+
+
+def test_map_proxmox_vm_to_netbox_vm_body_parses_virtio_disks(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.normalize.resolve_netbox_schema_contract",
+        lambda: {"source": "cache", "openapi": {"paths": {}}},
+    )
+
+    body = map_proxmox_vm_to_netbox_vm_body(
+        resource=PROXMOX_VM_RESOURCE,
+        config={
+            **PROXMOX_VM_CONFIG,
+            "virtio0": "local-lvm:vm-101-disk-0,size=40G",
+        },
+        cluster_id=11,
+        device_id=22,
+        role_id=33,
+        tag_ids=[7],
+    )
+
+    assert body["disk"] == 40_960
 
 
 def test_build_netbox_virtual_machine_payload_matches_mapper(monkeypatch):
@@ -146,3 +192,27 @@ def test_interface_state_accepts_choice_object_mode():
     )
 
     assert state.mode == "access"
+
+
+def test_interface_state_accepts_choice_object_type():
+    state = NetBoxInterfaceSyncState.model_validate(
+        {
+            "device": 1,
+            "name": "vmbr0",
+            "type": {"value": "bridge", "label": "Bridge"},
+        }
+    )
+
+    assert state.type == "bridge"
+
+
+def test_virtual_machine_interface_state_accepts_choice_object_type():
+    state = NetBoxVirtualMachineInterfaceSyncState.model_validate(
+        {
+            "virtual_machine": 1,
+            "name": "vmbr0",
+            "type": {"value": "bridge", "label": "Bridge"},
+        }
+    )
+
+    assert state.type == "bridge"

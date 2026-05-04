@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from datetime import datetime
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     RestRecord,
-    rest_create_async,
-    rest_list,
+    rest_bulk_delete_async,
+    rest_bulk_reconcile_async,
     rest_list_async,
-    rest_reconcile_async,
 )
-from proxbox_api.proxmox_to_netbox.models import (
-    NetBoxSnapshotSyncState,
-)
+from proxbox_api.proxmox_to_netbox.models import NetBoxSnapshotSyncState
 from proxbox_api.services.proxmox_helpers import get_vm_snapshots
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -33,6 +31,20 @@ from proxbox_api.utils import return_status_html
 
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
 _DEFAULT_VM_SYNC_CONCURRENCY = max(1, int(os.getenv("PROXBOX_NETBOX_WRITE_CONCURRENCY", "4")))
+
+
+def _extract_fk_id(value: object) -> object:
+    """Return the integer ID from a nested FK dict, or the value itself."""
+    if isinstance(value, dict):
+        return value.get("id")
+    return value
+
+
+def _extract_choice_value(value: object) -> object:
+    """Return the raw choice string from a nested choice dict, or the value itself."""
+    if isinstance(value, dict):
+        return value.get("value")
+    return value
 
 
 async def _load_storage_index(netbox_session: object) -> dict[tuple[str, str], dict[str, object]]:
@@ -83,43 +95,33 @@ async def _resolve_snapshot_storage_record(
     return None
 
 
-async def create_netbox_snapshots(
+async def build_snapshot_payload(
     snapshot: object,
-    netbox_session: object,
     vmid: str | int,
     node: str,
+    netbox_vm_id: int,
     storage_record: dict | None = None,
-) -> object | None:
+    proxmox_type: str = "qemu",
+) -> dict | None:
     """
-    Create or update a snapshot in NetBox.
+    Build a snapshot payload dict for bulk operations (no NetBox writes).
 
     Args:
         snapshot: Snapshot data from Proxmox
-        netbox_session: NetBox session
         vmid: Proxmox VM ID
         node: Proxmox node name
+        netbox_vm_id: NetBox VM ID (pre-fetched)
+        storage_record: Storage record dict or None
 
     Returns:
-        NetBox snapshot object or None on failure
+        Snapshot payload dict or None if invalid
     """
-    nb = netbox_session
-
     try:
         if not isinstance(snapshot, dict):
             return None
 
         snapshot_name = snapshot.get("name")
         if not snapshot_name:
-            return None
-
-        vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": int(vmid)},
-        )
-        virtual_machine = vms[0] if vms else None
-
-        if not virtual_machine:
             return None
 
         snaptime = None
@@ -130,10 +132,10 @@ async def create_netbox_snapshots(
             except (ValueError, OSError, TypeError) as error:
                 logger.debug("Invalid snapshot snaptime for vmid=%s: %s (%s)", vmid, st, error)
 
-        subtype = snapshot.get("type", "qemu")
+        subtype = proxmox_type if proxmox_type in ("qemu", "lxc") else "qemu"
 
-        snapshot_payload = {
-            "virtual_machine": virtual_machine.get("id"),
+        return {
+            "virtual_machine": netbox_vm_id,
             "proxmox_storage": storage_record.get("id") if storage_record else None,
             "name": snapshot_name,
             "description": snapshot.get("description", ""),
@@ -145,65 +147,9 @@ async def create_netbox_snapshots(
             "status": "active",
         }
 
-        netbox_snapshot = await rest_reconcile_async(
-            nb,
-            "/api/plugins/proxbox/snapshots/",
-            lookup={"vmid": int(vmid), "name": snapshot_name, "node": node},
-            payload=snapshot_payload,
-            schema=NetBoxSnapshotSyncState,
-            current_normalizer=lambda record: {
-                "virtual_machine": record.get("virtual_machine"),
-                "proxmox_storage": record.get("proxmox_storage"),
-                "name": record.get("name"),
-                "description": record.get("description"),
-                "vmid": record.get("vmid"),
-                "node": record.get("node"),
-                "snaptime": record.get("snaptime"),
-                "parent": record.get("parent"),
-                "subtype": record.get("subtype"),
-                "status": record.get("status"),
-            },
-        )
-
-        if netbox_snapshot and hasattr(netbox_snapshot, "id"):
-            await rest_create_async(
-                nb,
-                "/api/extras/journal-entries/",
-                {
-                    "assigned_object_type": "netbox_proxbox.vmsnapshot",
-                    "assigned_object_id": netbox_snapshot.id,
-                    "kind": "info",
-                    "comments": f"Snapshot '{snapshot_name}' synced for VM {vmid} on node {node}",
-                },
-            )
-
-        return netbox_snapshot
-
     except Exception as error:
-        error_detail = getattr(error, "detail", str(error))
-        error_msg = f"{type(error).__name__}: {error_detail}"
-        logger.error(f"Error creating NetBox snapshot for VM {vmid}: {error_msg}")
+        logger.debug("Error building snapshot payload for VM %s: %s", vmid, error)
         return None
-
-
-async def process_snapshots_batch(snapshot_tasks: list, batch_size: int = 10) -> tuple[list, int]:
-    """
-    Process a list of snapshot tasks in batches.
-
-    Returns:
-        (successful_reconcile_results, failure_count)
-    """
-    results: list = []
-    failures = 0
-    for i in range(0, len(snapshot_tasks), batch_size):
-        batch = snapshot_tasks[i : i + batch_size]
-        batch_results = await asyncio.gather(*batch, return_exceptions=True)
-        for r in batch_results:
-            if isinstance(r, Exception):
-                failures += 1
-            elif r is not None:
-                results.append(r)
-    return results, failures
 
 
 def _resolve_snapshot_node_from_resources(
@@ -269,34 +215,43 @@ def _resolve_snapshot_node_context(
     return _resolve_snapshot_node_from_status(node, cluster_status)
 
 
-async def _collect_snapshot_tasks_for_vm(
+async def _collect_snapshot_payloads_for_vm(
     pxs: list,
     *,
     node_name: str,
     proxmox_type: str,
     vmid: int,
+    netbox_vm_id: int,
     fetch_semaphore: asyncio.Semaphore,
-    nb,
     storage_record: dict | None,
-) -> tuple[list, set[str]]:
-    """Fetch snapshots from all Proxmox sessions and build NetBox reconcile tasks."""
-    snapshot_tasks = []
+) -> tuple[list[dict], set[str]]:
+    """Fetch snapshots from all Proxmox sessions and build payload dicts for bulk reconcile."""
+    snapshot_payloads: list[dict] = []
     proxmox_snapshot_names: set[str] = set()
 
-    async def _fetch_snapshots_for_endpoint(proxmox):
+    async def _fetch_snapshots_for_endpoint(proxmox: object) -> list[dict[str, object]]:
         async with fetch_semaphore:
-            return await asyncio.to_thread(
-                lambda: get_vm_snapshots(
-                    session=proxmox.session,
-                    node=node_name,
-                    vm_type=proxmox_type,
-                    vmid=int(vmid),
-                )
+            result = get_vm_snapshots(
+                session=proxmox,
+                node=node_name,
+                vm_type=proxmox_type,
+                vmid=int(vmid),
             )
+            if inspect.isawaitable(result):
+                return await result
+            return result
 
     snapshot_results = await asyncio.gather(
         *[_fetch_snapshots_for_endpoint(proxmox) for proxmox in pxs],
         return_exceptions=True,
+    )
+    logger.debug(
+        "VM vmid=%s node=%s type=%s: fetched snapshots from %d Proxmox endpoint(s), %d result set(s)",
+        vmid,
+        node_name,
+        proxmox_type,
+        len(pxs),
+        len(snapshot_results),
     )
     for result in snapshot_results:
         if isinstance(result, Exception):
@@ -309,19 +264,28 @@ async def _collect_snapshot_tasks_for_vm(
             continue
         for snapshot in result:
             snap_name = snapshot.get("name")
-            if snap_name:
-                proxmox_snapshot_names.add(snap_name)
-                snapshot_tasks.append(
-                    create_netbox_snapshots(
-                        snapshot,
-                        nb,
-                        vmid,
-                        node_name,
-                        storage_record=storage_record,
-                    )
+            if not snap_name:
+                continue
+            if snap_name == "current":
+                logger.debug(
+                    "Skipping 'current' pseudo-snapshot for vmid=%s on node=%s",
+                    vmid,
+                    node_name,
                 )
+                continue
+            proxmox_snapshot_names.add(snap_name)
+            payload = await build_snapshot_payload(
+                snapshot,
+                vmid,
+                node_name,
+                netbox_vm_id,
+                storage_record=storage_record,
+                proxmox_type=proxmox_type,
+            )
+            if payload is not None:
+                snapshot_payloads.append(payload)
 
-    return snapshot_tasks, proxmox_snapshot_names
+    return snapshot_payloads, proxmox_snapshot_names
 
 
 async def _sync_single_vm_snapshots(
@@ -339,18 +303,17 @@ async def _sync_single_vm_snapshots(
     undefined_html: str,
     completed_html: str,
     failed_html: str,
-) -> tuple[int, int, int]:
-    """Sync snapshots for a single VM. Returns (created, updated, skipped)."""
-    created = 0
-    updated = 0
-    skipped = 0
+) -> tuple[list[dict], set[str]]:
+    """Sync snapshots for a single VM. Returns (payload_list, proxmox_snapshot_names)."""
+    snapshot_payloads: list[dict] = []
     proxmox_snapshot_names: set[str] = set()
 
     vmid = extract_proxmox_vmid(vm)
     vm_name = vm.get("name", "unknown")
+    netbox_vm_id = vm.get("id")
 
     if not vmid:
-        return (0, 0, 1, set())
+        return ([], set())
 
     if use_websocket and websocket:
         await websocket.send_json(
@@ -360,7 +323,7 @@ async def _sync_single_vm_snapshots(
                 "data": {
                     "sync_status": undefined_html,
                     "name": vm_name,
-                    "netbox_id": vm.get("id"),
+                    "netbox_id": netbox_vm_id,
                     "status": "Processing...",
                 },
             }
@@ -376,6 +339,15 @@ async def _sync_single_vm_snapshots(
             node,
             cluster_status,
             cluster_resources,
+        )
+
+        logger.debug(
+            "VM %s (vmid=%s): resolved node=%s cluster=%s type=%s",
+            vm_name,
+            vmid,
+            node_name,
+            cluster_name,
+            proxmox_type,
         )
 
         if not node_name:
@@ -397,31 +369,33 @@ async def _sync_single_vm_snapshots(
                         },
                     }
                 )
-            return (0, 0, 1, set())
+            return ([], set())
 
         storage_record = await _resolve_snapshot_storage_record(
             nb,
-            vm_id=int(vmid),
+            vm_id=int(netbox_vm_id),
             cluster_name=cluster_name,
             storage_index=storage_index,
         )
 
-        snapshot_tasks, proxmox_snapshot_names = await _collect_snapshot_tasks_for_vm(
-            pxs,
+        # Only query the Proxmox session that owns this VM's cluster/node.
+        # Fanning out to all sessions causes N duplicate warnings per VM when
+        # a session doesn't host the VM (e.g. HTTP 501 for LXC snapshots on the
+        # wrong cluster).
+        matched_pxs = [
+            px for px in pxs if px.name and (px.name == cluster_name or px.name == node_name)
+        ]
+        effective_pxs = matched_pxs if matched_pxs else pxs
+
+        snapshot_payloads, proxmox_snapshot_names = await _collect_snapshot_payloads_for_vm(
+            effective_pxs,
             node_name=node_name,
             proxmox_type=proxmox_type,
             vmid=vmid,
+            netbox_vm_id=netbox_vm_id,
             fetch_semaphore=fetch_semaphore,
-            nb=nb,
             storage_record=storage_record,
         )
-
-        if snapshot_tasks:
-            results, failures = await process_snapshots_batch(snapshot_tasks)
-            created = len(results)
-            skipped = failures
-        else:
-            skipped = 1
 
         if use_websocket and websocket:
             await websocket.send_json(
@@ -431,7 +405,7 @@ async def _sync_single_vm_snapshots(
                     "data": {
                         "completed": True,
                         "name": vm_name,
-                        "netbox_id": vm.get("id"),
+                        "netbox_id": netbox_vm_id,
                         "snapshots_found": len(proxmox_snapshot_names),
                         "sync_status": completed_html,
                     },
@@ -440,7 +414,6 @@ async def _sync_single_vm_snapshots(
 
     except Exception as e:
         logger.error(f"Error syncing snapshots for VM {vm_name} ({vmid}): {e}")
-        skipped = 1
         if use_websocket and websocket:
             await websocket.send_json(
                 {
@@ -455,7 +428,7 @@ async def _sync_single_vm_snapshots(
                 }
             )
 
-    return (created, updated, skipped, proxmox_snapshot_names)
+    return (snapshot_payloads, proxmox_snapshot_names)
 
 
 async def _list_all_vms_with_proxmox_id(
@@ -538,10 +511,18 @@ async def create_virtual_machine_snapshots(  # noqa: C901
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
+    logger.info("Fetched %d VMs from NetBox before proxmox_vm_id filtering", len(vms))
+
     vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
 
+    logger.info("After proxmox_vm_id filtering: %d VMs remain for snapshot sync", len(vms))
+
     if not vms:
-        logger.warning("No VMs found with cf_proxmox_vm_id set")
+        logger.warning(
+            "No VMs found with proxmox_vm_id custom field set; "
+            "ensure the VM sync stage runs before snapshot sync and that the "
+            "'proxmox_vm_id' custom field is defined and populated in NetBox"
+        )
         if use_websocket and websocket:
             await websocket.send_json(
                 {
@@ -567,10 +548,19 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     storage_index = await _load_storage_index(nb)
 
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
+
+    # Emit structured discovery event so the live panel shows total VM count
+    if use_websocket and websocket and hasattr(websocket, "emit_discovery"):
+        await websocket.emit_discovery(
+            phase="vm-snapshots",
+            items=[{"name": str(vm.get("name", "")), "type": "virtual-machine"} for vm in vms],
+            message=f"Discovered {total_vms} VM(s) to scan for snapshots",
+        )
+
     fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
     vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
 
-    async def _sync_vm_with_semaphore(vm):
+    async def _sync_vm_with_semaphore(vm: object) -> tuple[list[dict[str, object]], set[str]]:
         async with vm_sync_semaphore:
             return await _sync_single_vm_snapshots(
                 vm=vm,
@@ -592,54 +582,139 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     sync_tasks = [_sync_vm_with_semaphore(vm) for vm in vms]
     results = await asyncio.gather(*sync_tasks, return_exceptions=True)
 
+    # Collect all snapshot payloads from all VMs, emit per-VM item_progress
+    all_snapshot_payloads: list[dict] = []
     proxmox_snapshot_names_by_vmid: dict[int, set[str]] = {}
+    vm_failed = 0
 
-    for vm, result in zip(vms, results):
+    for idx, (vm, result) in enumerate(zip(vms, results), start=1):
+        vm_name = str(vm.get("name", ""))
         if isinstance(result, Exception):
             logger.warning("Snapshot sync task failed: %s", result)
             skipped += 1
+            vm_failed += 1
+            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
+                await websocket.emit_item_progress(
+                    phase="vm-snapshots",
+                    item={"name": vm_name, "type": "virtual-machine"},
+                    operation="failed",
+                    status="failed",
+                    message=f"Snapshot fetch failed for VM '{vm_name}': {result}",
+                    progress_current=idx,
+                    progress_total=total_vms,
+                    error=str(result),
+                )
         else:
-            c, u, s, snapshot_names = result
-            created += c
-            updated += u
-            skipped += s
+            snapshot_payloads, snapshot_names = result
+            all_snapshot_payloads.extend(snapshot_payloads)
             vm_vmid = extract_proxmox_vmid(vm)
             if vm_vmid:
                 try:
                     proxmox_snapshot_names_by_vmid[int(vm_vmid)] = snapshot_names
                 except (ValueError, TypeError):
                     pass
+            snap_count = len(snapshot_payloads)
+            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
+                await websocket.emit_item_progress(
+                    phase="vm-snapshots",
+                    item={"name": vm_name, "type": "virtual-machine"},
+                    operation="updated",
+                    status="completed",
+                    message=f"Scanned VM '{vm_name}': {snap_count} snapshot(s) found",
+                    progress_current=idx,
+                    progress_total=total_vms,
+                )
+
+    logger.info(
+        "Collected %d total snapshot payload(s) from %d VM(s) (%d failed/skipped)",
+        len(all_snapshot_payloads),
+        total_vms,
+        vm_failed,
+    )
+
+    # Perform bulk reconciliation if we have payloads
+    if all_snapshot_payloads:
+        try:
+            reconcile_result = await rest_bulk_reconcile_async(
+                nb,
+                "/api/plugins/proxbox/snapshots/",
+                payloads=all_snapshot_payloads,
+                lookup_fields=["vmid", "name", "node"],
+                schema=NetBoxSnapshotSyncState,
+                current_normalizer=lambda record: {
+                    "vmid": record.get("vmid"),
+                    "name": record.get("name"),
+                    "node": record.get("node"),
+                    "virtual_machine": _extract_fk_id(record.get("virtual_machine")),
+                },
+            )
+            created = reconcile_result.created
+            updated = reconcile_result.updated
+            logger.info(
+                "Snapshot sync completed via bulk operation: created=%s, updated=%s",
+                created,
+                updated,
+            )
+        except Exception as e:
+            logger.error("Error during bulk snapshot reconciliation: %s", e)
+            skipped = len(all_snapshot_payloads)
+            vm_failed += 1
 
     if delete_nonexistent_snapshot and proxmox_snapshot_names_by_vmid:
         try:
-            netbox_snapshots = rest_list(nb, "/api/plugins/proxbox/snapshots/")
+            netbox_snapshots = await rest_list_async(nb, "/api/plugins/proxbox/snapshots/")
+            orphan_ids: list[int] = []
             for nb_snapshot in netbox_snapshots or []:
                 snapshot_vmid = nb_snapshot.vmid
                 snapshot_name = nb_snapshot.name
-                if snapshot_vmid and snapshot_name:
-                    proxmox_names = proxmox_snapshot_names_by_vmid.get(snapshot_vmid, set())
+                snapshot_id = (
+                    nb_snapshot.id
+                    if hasattr(nb_snapshot, "id")
+                    else (nb_snapshot.get("id") if isinstance(nb_snapshot, dict) else None)
+                )
+                if (
+                    snapshot_vmid
+                    and snapshot_name
+                    and snapshot_id
+                    and snapshot_vmid in proxmox_snapshot_names_by_vmid
+                ):
+                    proxmox_names = proxmox_snapshot_names_by_vmid[snapshot_vmid]
                     if snapshot_name not in proxmox_names:
-                        try:
-                            nb_snapshot.delete()
-                            deleted += 1
-                            logger.info(
-                                "Deleted orphaned snapshot %s for VM vmid=%s",
-                                snapshot_name,
-                                snapshot_vmid,
-                            )
-                        except Exception as del_err:
-                            logger.warning(
-                                "Failed to delete orphaned snapshot %s for VM vmid=%s: %s",
-                                snapshot_name,
-                                snapshot_vmid,
-                                del_err,
-                            )
+                        orphan_ids.append(int(snapshot_id))
+                        logger.info(
+                            "Marking orphaned snapshot %s (id=%s) for VM vmid=%s for bulk deletion",
+                            snapshot_name,
+                            snapshot_id,
+                            snapshot_vmid,
+                        )
+            if orphan_ids:
+                try:
+                    deleted = await rest_bulk_delete_async(
+                        nb, "/api/plugins/proxbox/snapshots/", orphan_ids
+                    )
+                    logger.info("Bulk deleted %d orphaned snapshot(s)", deleted)
+                except Exception as del_err:
+                    logger.warning("Bulk delete of orphaned snapshots failed: %s", del_err)
         except Exception as list_err:
             logger.warning("Error loading NetBox snapshots for cleanup: %s", list_err)
 
     logger.info(
         f"Snapshot sync completed: {created} created/updated, {skipped} skipped, {deleted} deleted"
     )
+
+    if use_websocket and websocket and hasattr(websocket, "emit_phase_summary"):
+        await websocket.emit_phase_summary(
+            phase="vm-snapshots",
+            created=created,
+            updated=updated,
+            deleted=deleted,
+            failed=vm_failed,
+            skipped=skipped,
+            message=(
+                f"Snapshot sync completed: {created} created, {updated} updated, "
+                f"{deleted} deleted, {skipped} skipped"
+            ),
+        )
 
     return {
         "count": total_vms,

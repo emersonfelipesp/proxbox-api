@@ -20,6 +20,8 @@ Current execution order:
 8. Sync node interfaces and IP addresses.
 9. Sync VM interfaces.
 10. Sync VM IP addresses and primary IP assignment.
+11. Sync replication jobs across Proxmox clusters.
+12. Sync backup routines (scheduled backup job configurations).
 
 The streaming variant at `GET /full-update/stream` emits the same stage transitions over Server-Sent Events.
 
@@ -38,6 +40,54 @@ Core behavior:
 - Creates VM interfaces and IP addresses when possible.
 - Writes journal entries for auditability.
 - In full-update mode, VM creation skips network writes so the dedicated VM interface and IP stages own that work.
+
+### Dependency-Ordered Async Model
+
+VM sync is async end-to-end, but not every step can run in parallel. The workflow enforces a strict dependency chain before running VM-level fan-out.
+
+Sequential dependency preflight:
+
+1. Ensure global parent objects exist in NetBox:
+	- Manufacturer
+	- Device type (depends on manufacturer)
+	- Proxmox node role
+2. For each cluster, ensure cluster-scoped parents:
+	- Cluster type
+	- Cluster
+	- Site
+3. For each node in the cluster, ensure device:
+	- Device (depends on cluster + device type + role + site)
+4. Ensure VM role objects by VM type (`qemu` and `lxc`).
+
+After this preflight, VM operations run concurrently per VM with a semaphore limit.
+
+Per-VM required order:
+
+1. Fetch VM data from Proxmox (resource/config).
+2. Reconcile VM in NetBox (create/patch).
+3. Reconcile VM interfaces and IPs (if enabled).
+4. Reconcile VM disks.
+5. Reconcile VM task history.
+
+This means async is used for throughput where objects are independent, while parent-child dependencies are always awaited in sequence.
+
+### Parallelism Rules
+
+Allowed in parallel:
+
+- Different VMs in the same or different clusters, after preflight dependencies are ready.
+- Interface operations for a single VM once the VM object exists.
+- Disk operations for a single VM once the VM object exists.
+
+Not allowed in parallel:
+
+- Creating child objects before required parent objects exist.
+- Reconciling NetBox VM state before Proxmox VM data is fetched.
+- Creating a device before manufacturer/device type/site/cluster prerequisites exist.
+
+### Tag Preservation
+
+When `overwrite_vm_tags=False` (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The `Proxbox` tag is always retained so the plugin can identify objects it owns. Setting `overwrite_vm_tags=True` switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, and `overwrite_ip_tags`. See [Overwrite Flags](./overwrite-flags.md).
 
 ## Backup Sync Flow
 

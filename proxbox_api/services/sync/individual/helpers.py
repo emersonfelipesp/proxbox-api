@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import rest_list_async
+from proxbox_api.services.sync.vm_helpers import parse_key_value_string
 
 
 def normalize_mac(value: str | None) -> str:
@@ -121,34 +122,42 @@ def build_ip_lookup_key(ip_address: str) -> dict[str, str]:
     return {"address": address}
 
 
+def _build_guest_interface_maps(
+    guest_interfaces: list[dict],
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Build lookup maps for guest interfaces by name and MAC."""
+    by_name: dict[str, dict] = {}
+    by_mac: dict[str, dict] = {}
+    for iface in guest_interfaces:
+        name_key = str(iface.get("name", "")).strip().lower()
+        if name_key:
+            by_name[name_key] = iface
+        mac = normalize_mac(iface.get("mac_address"))
+        if mac:
+            by_mac[mac] = iface
+    return by_name, by_mac
+
+
 def resolve_guest_interface(
     guest_interfaces: list[dict],
     interface_name: str,
     mac_address: str | None = None,
 ) -> tuple[dict | None, str, str | None]:
     """Resolve a guest interface by name or MAC and normalize its display name."""
-    resolved_name = interface_name
-    guest_iface: dict | None = None
-    if guest_interfaces:
-        guest_by_name = {
-            str(iface.get("name", "")).strip().lower(): iface for iface in guest_interfaces
-        }
-        guest_by_mac = {
-            normalize_mac(iface.get("mac_address")): iface
-            for iface in guest_interfaces
-            if normalize_mac(iface.get("mac_address"))
-        }
-        guest_iface = guest_by_name.get(interface_name.lower())
-        if guest_iface is None and mac_address:
-            guest_iface = guest_by_mac.get(normalize_mac(mac_address))
-        if guest_iface:
-            guest_name = str(guest_iface.get("name") or "").strip()
-            if guest_name:
-                resolved_name = guest_name
-                guest_mac = guest_iface.get("mac_address")
-                if guest_mac and not mac_address:
-                    mac_address = normalize_mac(guest_mac)
-    return guest_iface, resolved_name, mac_address
+    if not guest_interfaces:
+        return None, interface_name, mac_address
+    guest_by_name, guest_by_mac = _build_guest_interface_maps(guest_interfaces)
+    guest_iface = guest_by_name.get(interface_name.lower())
+    if guest_iface is None and mac_address:
+        guest_iface = guest_by_mac.get(normalize_mac(mac_address))
+    if guest_iface is None:
+        return None, interface_name, mac_address
+    guest_name = str(guest_iface.get("name") or "").strip()
+    if not guest_name:
+        return guest_iface, interface_name, mac_address
+    guest_mac = guest_iface.get("mac_address")
+    resolved_mac = normalize_mac(guest_mac) if guest_mac and not mac_address else mac_address
+    return guest_iface, guest_name, resolved_mac
 
 
 def resolve_guest_interface_by_ip(
@@ -164,29 +173,6 @@ def resolve_guest_interface_by_ip(
             if addr_ip_clean == ip_address_clean:
                 return str(iface.get("name") or "").strip() or None
     return None
-
-
-def parse_key_value_string(raw_value: object) -> dict[str, str]:
-    """Parse a Proxmox `netX` or `virtio` config entry into a key/value mapping.
-
-    Proxmox returns these values as comma-separated `key=value` pairs.
-
-    Args:
-        raw_value: Raw config value (string or None).
-
-    Returns:
-        Dict of parsed key-value pairs.
-    """
-    if raw_value is None:
-        return {}
-    if not isinstance(raw_value, str):
-        return {}
-    result: dict[str, str] = {}
-    for part in raw_value.split(","):
-        if "=" in part:
-            key, value = part.split("=", 1)
-            result[key.strip()] = value.strip()
-    return result
 
 
 def parse_disk_config_entry(raw_value: object) -> dict[str, str]:
