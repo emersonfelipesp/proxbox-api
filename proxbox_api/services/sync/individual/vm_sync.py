@@ -6,6 +6,8 @@ import asyncio
 from datetime import datetime, timezone
 
 from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
+from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
@@ -152,8 +154,21 @@ async def sync_vm_individual(
 
     try:
         proxmox_config = await get_vm_config_individual(px, node, vm_type, vmid)
-    except Exception:
-        proxmox_config = {}
+    except Exception as exc:
+        logger.warning(
+            "Failed to fetch Proxmox config for %s/%s vmid=%s: %s",
+            node,
+            vm_type,
+            vmid,
+            exc,
+        )
+        raise ProxboxException(
+            message=(
+                f"Failed to fetch Proxmox config for {vm_type} vmid={vmid} on node {node}; "
+                "refusing to sync with empty config to avoid overwriting NetBox values."
+            ),
+            python_exception=str(exc),
+        )
 
     proxmox_resource = get_vm_resource_individual(px, node, vm_type, vmid) or {}
     proxmox_resource = {

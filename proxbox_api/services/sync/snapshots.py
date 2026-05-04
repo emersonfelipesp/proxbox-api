@@ -16,6 +16,7 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxSnapshotSyncState
 from proxbox_api.services.proxmox_helpers import get_vm_snapshots
+from proxbox_api.services.sync._helpers import _extract_fk_id
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -31,20 +32,6 @@ from proxbox_api.utils import return_status_html
 
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
 _DEFAULT_VM_SYNC_CONCURRENCY = max(1, int(os.getenv("PROXBOX_NETBOX_WRITE_CONCURRENCY", "4")))
-
-
-def _extract_fk_id(value: object) -> object:
-    """Return the integer ID from a nested FK dict, or the value itself."""
-    if isinstance(value, dict):
-        return value.get("id")
-    return value
-
-
-def _extract_choice_value(value: object) -> object:
-    """Return the raw choice string from a nested choice dict, or the value itself."""
-    if isinstance(value, dict):
-        return value.get("value")
-    return value
 
 
 async def _load_storage_index(netbox_session: object) -> dict[tuple[str, str], dict[str, object]]:

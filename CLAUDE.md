@@ -137,7 +137,8 @@ Open the nearest scoped guide for the code you are changing.
 - `PROXBOX_EXPOSE_INTERNAL_ERRORS`: returns raw exception details in 500 responses when enabled.
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
-- `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. The raw value is hashed with SHA-256 to derive a Fernet key. If unset, proxbox-api falls back to the `encryption_key` field in `ProxboxPluginSettings` (configurable from the NetBox plugin settings page). If neither is set, credentials are stored in plaintext and a CRITICAL warning is logged. Priority: env var > plugin settings > none (plaintext).
+- `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. The raw value is hashed with SHA-256 to derive a Fernet key. If unset, proxbox-api falls back to the `encryption_key` field in `ProxboxPluginSettings` (configurable from the NetBox plugin settings page). If neither is set, startup aborts unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS=1` is set. Priority: env var > plugin settings > none (refuses to start by default).
+- `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: set to `1`/`true`/`yes` to opt into legacy plaintext credential storage when no encryption key is configured. Logs a CRITICAL warning at startup. Development-only — never enable in production.
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 60).
 - `PROXBOX_NETBOX_WRITE_CONCURRENCY`: max concurrent NetBox write operations (default: 8 in VM sync path, 4 in task-history/snapshot paths).
 - `PROXBOX_PROXMOX_FETCH_CONCURRENCY`: max concurrent Proxmox read operations (default: 8 in most paths, 4 in task-history path).

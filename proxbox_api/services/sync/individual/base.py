@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from proxbox_api.constants import VM_ROLE_MAPPINGS
 from proxbox_api.netbox_rest import nested_tag_payload
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 
@@ -158,21 +159,7 @@ class BaseIndividualSyncService:
         from proxbox_api.netbox_rest import rest_reconcile_async
         from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceRoleSyncState
 
-        role_mapping = {
-            "qemu": {
-                "name": "Virtual Machine (QEMU)",
-                "slug": "virtual-machine-qemu",
-                "color": "00ffff",
-                "description": "Proxmox Virtual Machine",
-            },
-            "lxc": {
-                "name": "Container (LXC)",
-                "slug": "container-lxc",
-                "color": "7fffd4",
-                "description": "Proxmox LXC Container",
-            },
-        }
-        role_data = role_mapping.get(vm_type, role_mapping["qemu"])
+        role_data = VM_ROLE_MAPPINGS.get(vm_type, VM_ROLE_MAPPINGS["qemu"])
 
         return await rest_reconcile_async(
             self.nb,
@@ -188,6 +175,7 @@ class BaseIndividualSyncService:
                 "slug": record.get("slug"),
                 "color": record.get("color"),
                 "description": record.get("description"),
+                "vm_role": record.get("vm_role"),
                 "tags": record.get("tags"),
             },
         )

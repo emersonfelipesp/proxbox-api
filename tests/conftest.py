@@ -12,6 +12,11 @@ from typing import Any
 # parametrized tests hit the shared app singleton in rapid succession.
 os.environ.setdefault("PROXBOX_RATE_LIMIT", "999999")
 
+# Tests use synthetic credentials that never leave the suite, so opt into the
+# plaintext credential storage path. Production startup refuses this path
+# unless PROXBOX_ENCRYPTION_KEY is set; tests don't exercise on-disk storage.
+os.environ.setdefault("PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS", "1")
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine

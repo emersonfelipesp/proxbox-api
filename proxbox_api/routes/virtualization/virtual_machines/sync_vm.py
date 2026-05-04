@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
-from proxbox_api.constants import VM_TYPE_MAPPINGS
+from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -73,6 +73,15 @@ from proxbox_api.services.sync.vm_helpers import (
     parse_comma_separated_ints,
     parse_key_value_string,
     preferred_primary_ip_order,
+)
+from proxbox_api.services.sync.vm_helpers import (
+    relation_id as _relation_id,
+)
+from proxbox_api.services.sync.vm_helpers import (
+    relation_name as _relation_name,
+)
+from proxbox_api.services.sync.vm_helpers import (
+    to_mapping as _to_mapping,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
@@ -377,93 +386,6 @@ async def _dispatch_vm_operation_queue(
                 resolved_records[key] = merged
 
     return resolved_records
-
-
-def _to_mapping(value: object) -> dict[str, object]:
-    """Coerce a value to a dictionary representation.
-
-    Attempts multiple serialization strategies in order:
-    1. Direct dict check
-    2. Call serialize() method if available
-    3. Call dict() method if available (Pydantic models)
-    4. Return empty dict if all fail
-
-    Args:
-        value: Value to convert to a dictionary
-
-    Returns:
-        Dictionary representation of the value, or empty dict if conversion fails
-    """
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "serialize"):
-        try:
-            serialized = value.serialize()
-            if isinstance(serialized, dict):
-                return serialized
-        except Exception as error:
-            logger.debug("serialize() failed while coercing mapping: %s", error)
-            return {}
-    if hasattr(value, "dict"):
-        try:
-            dumped = value.dict()
-            if isinstance(dumped, dict):
-                return dumped
-        except Exception as error:
-            logger.debug("dict() failed while coercing mapping: %s", error)
-            return {}
-    return {}
-
-
-def _relation_name(value: object) -> str | None:
-    """Extract a human-readable name from a relation object or value.
-
-    Attempts to extract a name string from various object representations:
-    - Dict values by key priority: 'name', 'display', 'label', 'value'
-    - Direct string values (trimmed)
-
-    Args:
-        value: Value to extract name from (dict, string, or object)
-
-    Returns:
-        Extracted name string, or None if no valid name found
-    """
-    if isinstance(value, dict):
-        for key in ("name", "display", "label", "value"):
-            candidate = value.get(key)
-            if candidate:
-                return str(candidate)
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
-
-
-def _relation_id(value: object) -> int | None:
-    """Extract a numeric ID from a relation object or value.
-
-    Attempts to extract an integer ID from various object representations:
-    - Direct int values
-    - Dict values by key priority: 'id', 'value' (as int or digit string)
-    - String digit values
-
-    Args:
-        value: Value to extract ID from (int, dict, or string)
-
-    Returns:
-        Extracted ID as integer, or None if no valid ID found
-    """
-    if isinstance(value, int):
-        return value
-    if isinstance(value, dict):
-        for key in ("id", "value"):
-            candidate = value.get(key)
-            if isinstance(candidate, int):
-                return candidate
-            if isinstance(candidate, str) and candidate.isdigit():
-                return int(candidate)
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
 
 
 def _parse_network_config_entry(raw_value: object) -> dict[str, str]:
@@ -1193,7 +1115,6 @@ async def create_virtual_machines(  # noqa: C901
     total_vms = 0  # Track total VMs processed
     successful_vms = 0  # Track successful VM creations
     failed_vms = 0  # Track failed VM creations
-    tag_id = int(getattr(tag, "id", 0) or 0)
     tag_refs = [
         {
             "name": getattr(tag, "name", None),
@@ -1208,32 +1129,7 @@ async def create_virtual_machines(  # noqa: C901
     node_device_cache: dict[tuple[str, str], object] = {}
     vm_role_cache: dict[str, object] = {}
     vm_type_cache: dict[str, object] = {}
-    vm_role_mapping: dict[str, dict[str, object]] = {
-        "qemu": {
-            "name": "Virtual Machine (QEMU)",
-            "slug": "virtual-machine-qemu",
-            "color": "00ffff",
-            "description": "Proxmox Virtual Machine",
-            "tags": [tag_id],
-            "vm_role": True,
-        },
-        "lxc": {
-            "name": "Container (LXC)",
-            "slug": "container-lxc",
-            "color": "7fffd4",
-            "description": "Proxmox LXC Container",
-            "tags": [tag_id],
-            "vm_role": True,
-        },
-        "undefined": {
-            "name": "Unknown",
-            "slug": "unknown",
-            "color": "000000",
-            "description": "VM Type not found. Neither QEMU nor LXC.",
-            "tags": [tag_id],
-            "vm_role": True,
-        },
-    }
+    vm_role_mapping: dict[str, dict[str, object]] = VM_ROLE_MAPPINGS
 
     # Emit discovery event immediately if using bridge/SSE streaming.
     # This prevents the stream consumer from hanging while waiting for the first event.

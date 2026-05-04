@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from proxbox_api.constants import VM_TYPE_MAPPINGS
-from proxbox_api.dependencies import NetBoxSessionDep
+from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
@@ -16,7 +15,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     ProxmoxVmConfigInput,
     ProxmoxVmResourceInput,
 )
-from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.schemas.proxmox import ClusterStatusSchemaList
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
@@ -32,35 +31,10 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
 from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
 
-# VM role mappings for different VM types
-VM_ROLE_MAPPINGS = {
-    "qemu": {
-        "name": "Virtual Machine (QEMU)",
-        "slug": "virtual-machine-qemu",
-        "color": "00ffff",
-        "description": "Proxmox Virtual Machine",
-        "vm_role": True,
-    },
-    "lxc": {
-        "name": "Container (LXC)",
-        "slug": "container-lxc",
-        "color": "7fffd4",
-        "description": "Proxmox LXC Container",
-        "vm_role": True,
-    },
-    "undefined": {
-        "name": "Unknown",
-        "slug": "unknown",
-        "color": "000000",
-        "description": "VM Type not found. Neither QEMU nor LXC.",
-        "vm_role": True,
-    },
-}
-
 
 async def ensure_vm_dependencies(
-    netbox_session: NetBoxSessionDep,
-    cluster_status: ClusterStatusDep,
+    netbox_session: object,
+    cluster_status: ClusterStatusSchemaList,
     cluster_name: str,
     tag_id: int,
     tag_refs: list[dict],
@@ -155,7 +129,7 @@ async def ensure_vm_dependencies(
 
 
 async def ensure_vm_role(
-    netbox_session: NetBoxSessionDep,
+    netbox_session: object,
     vm_type: str,
     tag_id: int,
     tag_refs: list[dict],
@@ -194,7 +168,7 @@ async def ensure_vm_role(
 
 
 async def ensure_vm_type(
-    netbox_session: NetBoxSessionDep,
+    netbox_session: object,
     vm_type: str,
     tag_refs: list[dict],
 ) -> object | None:
@@ -231,7 +205,7 @@ async def ensure_vm_type(
 
 
 async def create_or_update_virtual_machine(
-    netbox_session: NetBoxSessionDep,
+    netbox_session: object,
     proxmox_resource: ProxmoxVmResourceInput | dict[str, object],
     proxmox_config: ProxmoxVmConfigInput | dict[str, object] | None,
     cluster_id: int,
@@ -266,6 +240,24 @@ async def create_or_update_virtual_machine(
     """
     now = datetime.now(timezone.utc)
 
+    raw_vmid = (
+        proxmox_resource.get("vmid")
+        if isinstance(proxmox_resource, dict)
+        else getattr(proxmox_resource, "vmid", None)
+    )
+    if raw_vmid is None or (isinstance(raw_vmid, str) and not raw_vmid.strip()):
+        raise ProxboxException(
+            message="Proxmox resource is missing 'vmid'; cannot reconcile VM in NetBox.",
+            detail=f"resource keys: {sorted(proxmox_resource.keys()) if isinstance(proxmox_resource, dict) else type(proxmox_resource).__name__}",
+        )
+    try:
+        vmid_int = int(raw_vmid)
+    except (TypeError, ValueError) as exc:
+        raise ProxboxException(
+            message="Proxmox resource has a non-integer 'vmid'.",
+            python_exception=str(exc),
+        )
+
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource=proxmox_resource,
         proxmox_config=proxmox_config,
@@ -282,7 +274,7 @@ async def create_or_update_virtual_machine(
         netbox_session,
         "/api/virtualization/virtual-machines/",
         lookup={
-            "cf_proxmox_vm_id": int(proxmox_resource.get("vmid")),
+            "cf_proxmox_vm_id": vmid_int,
             "cluster_id": cluster_id,
         },
         payload=payload,

@@ -7,7 +7,6 @@ import re
 from datetime import datetime, timezone
 from ipaddress import ip_address, ip_interface
 
-from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
@@ -71,7 +70,7 @@ def _primary_field_from_ip_address(address: object) -> str | None:
 
 
 async def sync_vm_interfaces(  # noqa: C901
-    nb: NetBoxSessionDep,
+    nb: object,
     virtual_machine: dict[str, object],
     vm_config: dict[str, object],
     guest_agent_interfaces: list[dict[str, object]],
@@ -255,7 +254,7 @@ async def sync_vm_interfaces(  # noqa: C901
 
 
 async def sync_vm_disks(
-    nb: NetBoxSessionDep,
+    nb: object,
     virtual_machine: dict[str, object],
     disk_entries: list[object],
     storage_index: dict[tuple[str, str], dict[str, object]],
@@ -328,7 +327,7 @@ async def sync_vm_disks(
     return disk_count
 
 
-async def _clear_primary_ip_on_parent(nb: NetBoxSessionDep, ip_id: int) -> bool:
+async def _clear_primary_ip_on_parent(nb: object, ip_id: int) -> bool:
     """Remove the primary IP designation from any VM that claims ip_id as its primary.
 
     NetBox rejects reassigning an IP while it is set as the primary IP of its parent object.
@@ -372,7 +371,7 @@ async def _clear_primary_ip_on_parent(nb: NetBoxSessionDep, ip_id: int) -> bool:
 
 
 async def ensure_ip_assigned_to_vm(
-    nb: NetBoxSessionDep,
+    nb: object,
     ip_id: int,
     vm_id: int,
 ) -> tuple[bool, str]:
@@ -495,7 +494,7 @@ async def ensure_ip_assigned_to_vm(
 
 
 async def set_primary_ip(  # noqa: C901
-    nb: NetBoxSessionDep,
+    nb: object,
     virtual_machine: dict[str, object],
     primary_ip_id: int | None,
     primary_ip_preference: str = "ipv4",

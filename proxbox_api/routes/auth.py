@@ -7,6 +7,7 @@ Subsequent operations require authentication.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 
 from fastapi import APIRouter, HTTPException
@@ -16,6 +17,12 @@ from sqlmodel import select
 from proxbox_api.database import ApiKey, AsyncDatabaseSessionDep
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Serializes the bootstrap path so concurrent first-key registrations cannot both
+# pass the has_any_key check and create duplicate "first" keys. Multi-worker
+# deployments must still rely on the recheck under lock + DB write serialization
+# of SQLite (aiosqlite holds the write lock during commit).
+_BOOTSTRAP_LOCK = asyncio.Lock()
 
 
 class RegisterKeyRequest(BaseModel):
@@ -63,10 +70,10 @@ async def register_key(body: RegisterKeyRequest, session: AsyncDatabaseSessionDe
     if len(body.api_key) < 32:
         raise HTTPException(status_code=400, detail="API key must be at least 32 characters.")
 
-    if await ApiKey.has_any_key_async(session):
-        raise HTTPException(status_code=409, detail="An API key is already configured.")
-
-    await ApiKey.store_key_async(session, body.api_key, label=body.label)
+    async with _BOOTSTRAP_LOCK:
+        if await ApiKey.has_any_key_async(session):
+            raise HTTPException(status_code=409, detail="An API key is already configured.")
+        await ApiKey.store_key_async(session, body.api_key, label=body.label)
     return {"detail": "API key registered."}
 
 

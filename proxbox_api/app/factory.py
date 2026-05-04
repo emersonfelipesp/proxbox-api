@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import time
 from collections import defaultdict
@@ -60,6 +61,56 @@ AUTH_EXEMPT_PATHS = frozenset(
 )
 
 
+def _load_trusted_proxies() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    raw = os.environ.get("PROXBOX_TRUSTED_PROXIES", "").strip()
+    if not raw:
+        return ()
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            logger.warning("Ignoring invalid PROXBOX_TRUSTED_PROXIES entry: %s", token)
+    return tuple(networks)
+
+
+_TRUSTED_PROXIES = _load_trusted_proxies()
+
+
+def _peer_is_trusted(peer_ip: str) -> bool:
+    if not _TRUSTED_PROXIES:
+        return False
+    try:
+        peer = ipaddress.ip_address(peer_ip)
+    except ValueError:
+        return False
+    return any(peer in net for net in _TRUSTED_PROXIES)
+
+
+def resolve_client_ip(request: Request) -> str:
+    """Return the originating client IP, trusting X-Forwarded-For only from configured proxies.
+
+    Set PROXBOX_TRUSTED_PROXIES to a comma-separated list of CIDRs / IPs to enable header trust.
+    Without this env var, the peer IP is always returned, which prevents per-IP rate-limit
+    and brute-force-lockout bypass via spoofed X-Forwarded-For headers.
+    """
+    peer_ip = request.client.host if request.client else "unknown"
+    if not _peer_is_trusted(peer_ip):
+        return peer_ip
+    forwarded = request.headers.get("X-Forwarded-For")
+    if not forwarded:
+        return peer_ip
+    # Walk right-to-left, skipping trusted-proxy hops, to find the first untrusted client.
+    candidates = [token.strip() for token in forwarded.split(",") if token.strip()]
+    for candidate in reversed(candidates):
+        if not _peer_is_trusted(candidate):
+            return candidate
+    return candidates[0] if candidates else peer_ip
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Simple in-memory rate limiting per IP address.
 
@@ -80,10 +131,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             del self._requests[ip]
 
     def _get_client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        return resolve_client_ip(request)
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
@@ -159,10 +207,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     def _get_client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        return resolve_client_ip(request)
 
 
 # Legacy module-level placeholders (some tooling may read these names).

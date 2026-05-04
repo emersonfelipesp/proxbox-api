@@ -27,54 +27,128 @@ from proxbox_api.utils.retry import (
 )
 
 
-def _resolve_netbox_max_concurrent() -> int:
-    """Resolve max concurrent NetBox requests from settings, with env var fallback."""
-    from proxbox_api.settings_client import get_settings
+@dataclass(frozen=True)
+class NetBoxRestConfig:
+    """Resolved configuration values used by netbox_rest helpers.
 
-    try:
-        return int(get_settings().get("netbox_max_concurrent", 1))
-    except Exception:
-        raw = os.environ.get("PROXBOX_NETBOX_MAX_CONCURRENT", "").strip()
-        if not raw:
-            # Default to 1 to avoid exhausting NetBox DB connection pools.
-            # Increase only if NetBox has sufficient PostgreSQL pool capacity.
-            return 1
+    Built lazily from `settings_client.get_settings()` with environment
+    variable fallback. Refresh by calling `invalidate_netbox_rest_config()`
+    after a settings change.
+    """
+
+    max_concurrent: int
+    max_retries: int
+    retry_delay: float
+
+    @classmethod
+    def from_runtime(cls) -> NetBoxRestConfig:
+        from proxbox_api.settings_client import get_settings
+
+        settings: dict[str, object] | None
         try:
-            return max(1, int(raw))
-        except ValueError:
-            return 1
+            settings = get_settings()
+        except Exception:
+            settings = None
+
+        max_concurrent = _resolve_int(
+            settings,
+            key="netbox_max_concurrent",
+            env="PROXBOX_NETBOX_MAX_CONCURRENT",
+            default=1,
+            minimum=1,
+        )
+        max_retries = _resolve_int(
+            settings,
+            key="netbox_max_retries",
+            env="PROXBOX_NETBOX_MAX_RETRIES",
+            default=5,
+            minimum=0,
+        )
+        retry_delay = _resolve_float(
+            settings,
+            key="netbox_retry_delay",
+            env="PROXBOX_NETBOX_RETRY_DELAY",
+            default=2.0,
+            minimum=0.0,
+        )
+        return cls(
+            max_concurrent=max_concurrent,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+        )
+
+
+def _resolve_int(
+    settings: dict[str, object] | None,
+    *,
+    key: str,
+    env: str,
+    default: int,
+    minimum: int,
+) -> int:
+    if settings is not None:
+        try:
+            return max(minimum, int(settings.get(key, default)))
+        except (TypeError, ValueError):
+            pass
+    raw = os.environ.get(env, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        return default
+
+
+def _resolve_float(
+    settings: dict[str, object] | None,
+    *,
+    key: str,
+    env: str,
+    default: float,
+    minimum: float,
+) -> float:
+    if settings is not None:
+        try:
+            return max(minimum, float(settings.get(key, default)))
+        except (TypeError, ValueError):
+            pass
+    raw = os.environ.get(env, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, float(raw))
+    except ValueError:
+        return default
+
+
+_netbox_rest_config: NetBoxRestConfig | None = None
+
+
+def get_netbox_rest_config() -> NetBoxRestConfig:
+    """Return the cached NetBox REST config, building it lazily on first access."""
+    global _netbox_rest_config
+    if _netbox_rest_config is None:
+        _netbox_rest_config = NetBoxRestConfig.from_runtime()
+    return _netbox_rest_config
+
+
+def invalidate_netbox_rest_config() -> None:
+    """Drop the cached NetBox REST config so the next access rebuilds it from settings/env."""
+    global _netbox_rest_config
+    _netbox_rest_config = None
+
+
+def _resolve_netbox_max_concurrent() -> int:
+    return get_netbox_rest_config().max_concurrent
 
 
 def _resolve_netbox_max_retries() -> int:
-    """Resolve max retry attempts from settings, with env var fallback."""
-    from proxbox_api.settings_client import get_settings
-
-    try:
-        return max(0, int(get_settings().get("netbox_max_retries", 5)))
-    except Exception:
-        raw = os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "").strip()
-        if not raw:
-            return 5
-        try:
-            return max(0, int(raw))
-        except ValueError:
-            return 5
+    return get_netbox_rest_config().max_retries
 
 
 def _resolve_netbox_retry_delay() -> float:
-    """Resolve retry delay in seconds from settings, with env var fallback."""
-    from proxbox_api.settings_client import get_settings
-
-    try:
-        return float(get_settings().get("netbox_retry_delay", 2.0))
-    except Exception:
-        raw = os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "").strip()
-        if not raw:
-            return 2.0
-        try:
-            return float(raw)
-        except ValueError:
-            return 2.0
+    return get_netbox_rest_config().retry_delay
 
 
 _netbox_request_semaphore: asyncio.Semaphore | None = None
@@ -106,6 +180,7 @@ def _reset_netbox_globals() -> None:
     _cache_metrics_evictions_ttl = 0
     _cache_metrics_evictions_size = 0
     _cache_metrics_evictions_bytes = 0
+    invalidate_netbox_rest_config()
 
 
 def get_cache_metrics() -> dict[str, object]:
@@ -201,17 +276,15 @@ def _debug_cache_enabled() -> bool:
 
 
 def _resolve_get_cache_ttl_seconds() -> float:
-    """Resolve NetBox GET cache TTL from settings, with env var priority."""
+    """Resolve NetBox GET cache TTL with env var taking priority over settings."""
     # Check environment variable FIRST (allows tests to override)
     raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_TTL", "").strip()
     if raw:
         try:
-            ttl = float(raw)
-            return max(0.0, ttl)
+            return max(0.0, float(raw))
         except ValueError:
             pass  # Fall through to settings
 
-    # Then try settings cache as fallback
     from proxbox_api.settings_client import get_settings
 
     try:
@@ -755,6 +828,31 @@ class RestRecord:
         return True
 
 
+def _parse_next_link(next_url: object) -> tuple[str, dict[str, object]] | None:
+    """Extract (path, query) from a NetBox pagination ``next`` URL.
+
+    NetBox returns absolute URLs in ``next``; we only need the path+query so that
+    we can re-issue the request through ``api.client`` with the existing base URL.
+    """
+    if not isinstance(next_url, str) or not next_url:
+        return None
+    from urllib.parse import parse_qsl, urlsplit
+
+    parts = urlsplit(next_url)
+    if not parts.path:
+        return None
+    query: dict[str, object] = {}
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        existing = query.get(key)
+        if existing is None:
+            query[key] = value
+        elif isinstance(existing, list):
+            existing.append(value)
+        else:
+            query[key] = [existing, value]
+    return parts.path, query
+
+
 async def rest_list_async(
     nb: object, path: str, *, query: dict[str, object] | None = None
 ) -> list[RestRecord]:
@@ -766,58 +864,84 @@ async def rest_list_async(
     if cached is not None:
         return [RestRecord(api, normalized_path, item) for item in cached]
 
-    async def _do_request() -> list[RestRecord]:
-        try:
-            response = await api.client.request("GET", normalized_path, query=query)
-        except Exception as e:
-            _handle_netbox_error(e, f"list {path}")
-            raise  # Early return via exception
-
-        try:
-            payload = _extract_payload(response)
-        except ProxboxException:
-            raise
-        except Exception as e:
-            _handle_netbox_error(e, f"parse list {path}")
-            raise  # Early return via exception
-
-        if isinstance(payload, dict):
-            results = payload.get("results", [])
-        elif isinstance(payload, list):
-            results = payload
-        else:
-            raise ProxboxException(message="NetBox REST list response was not JSON array/object")
-        if not isinstance(results, list):
-            raise ProxboxException(message="NetBox REST list response missing results list")
-        normalized_results = [item if isinstance(item, dict) else to_dict(item) for item in results]
-        _write_get_cache(api, normalized_path, query, normalized_results)
-        return [RestRecord(api, normalized_path, item) for item in normalized_results]
-
-    # Retry loop with semaphore and exponential backoff for transient errors
     max_retries = _resolve_netbox_max_retries()
     base_delay = _resolve_netbox_retry_delay()
 
-    for attempt in range(max_retries + 1):
-        async with semaphore:
+    async def _fetch_page(
+        page_path: str, page_query: dict[str, object] | None
+    ) -> tuple[list[dict], object]:
+        async def _do_request() -> tuple[list[dict], object]:
             try:
-                return await _do_request()
+                response = await api.client.request("GET", page_path, query=page_query)
             except Exception as e:
-                if attempt == max_retries or not _is_transient_netbox_error(e):
-                    raise
-                delay = _compute_retry_delay(base_delay, attempt, e)
-                pressure_note = " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
-                logger.warning(
-                    "NetBox request failed%s (attempt %s/%s), retrying in %ss: %s",
-                    pressure_note,
-                    attempt + 1,
-                    max_retries + 1,
-                    delay,
-                    str(e)[:200],
-                )
-        await asyncio.sleep(delay)
+                _handle_netbox_error(e, f"list {path}")
+                raise
 
-    # Should not reach here, but satisfy type checker
-    return await _do_request()
+            try:
+                payload = _extract_payload(response)
+            except ProxboxException:
+                raise
+            except Exception as e:
+                _handle_netbox_error(e, f"parse list {path}")
+                raise
+
+            if isinstance(payload, dict):
+                results = payload.get("results", [])
+                next_link = payload.get("next")
+            elif isinstance(payload, list):
+                results = payload
+                next_link = None
+            else:
+                raise ProxboxException(
+                    message="NetBox REST list response was not JSON array/object"
+                )
+            if not isinstance(results, list):
+                raise ProxboxException(message="NetBox REST list response missing results list")
+            return [
+                item if isinstance(item, dict) else to_dict(item) for item in results
+            ], next_link
+
+        for attempt in range(max_retries + 1):
+            async with semaphore:
+                try:
+                    return await _do_request()
+                except Exception as e:
+                    if attempt == max_retries or not _is_transient_netbox_error(e):
+                        raise
+                    delay = _compute_retry_delay(base_delay, attempt, e)
+                    pressure_note = (
+                        " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
+                    )
+                    logger.warning(
+                        "NetBox request failed%s (attempt %s/%s), retrying in %ss: %s",
+                        pressure_note,
+                        attempt + 1,
+                        max_retries + 1,
+                        delay,
+                        str(e)[:200],
+                    )
+            await asyncio.sleep(delay)
+        return await _do_request()
+
+    aggregated: list[dict] = []
+    current_path: str = normalized_path
+    current_query: dict[str, object] | None = query
+    seen_pages: set[tuple[str, str]] = set()
+    while True:
+        page_results, next_link = await _fetch_page(current_path, current_query)
+        aggregated.extend(page_results)
+        nxt = _parse_next_link(next_link)
+        if nxt is None:
+            break
+        page_signature = (nxt[0], repr(sorted(nxt[1].items())))
+        if page_signature in seen_pages:
+            logger.warning("NetBox pagination produced duplicate next link for %s; stopping", path)
+            break
+        seen_pages.add(page_signature)
+        current_path, current_query = nxt
+
+    _write_get_cache(api, normalized_path, query, aggregated)
+    return [RestRecord(api, normalized_path, item) for item in aggregated]
 
 
 async def rest_first_async(
@@ -832,7 +956,28 @@ async def rest_first_async(
     return records[0]
 
 
-async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -> RestRecord:
+async def rest_create_async(
+    nb: object,
+    path: str,
+    payload: dict[str, object],
+    *,
+    lookup: dict[str, object] | None = None,
+) -> RestRecord:
+    """POST a record to NetBox with idempotency-aware retries.
+
+    NetBox does not honor a generic idempotency-key header. To avoid creating
+    duplicate records when the response of a successful POST is lost (server
+    disconnect after write, response timeout), the caller can pass ``lookup`` —
+    a dict of fields that uniquely identify the record. Before each retry
+    attempt, we GET-by-lookup; if the prior attempt landed, we return that
+    record instead of POSTing again.
+
+    When no lookup is provided we retry only on errors that clearly indicate
+    the request never reached NetBox (e.g. connection refused). Generic
+    transient errors (server disconnect, timeout) are NOT retried for
+    POST without a lookup, since we cannot tell whether the record was
+    created.
+    """
     api = _unwrap_api(nb)
     semaphore = _get_netbox_semaphore()
     normalized_path = _normalize_path(path)
@@ -857,16 +1002,34 @@ async def rest_create_async(nb: object, path: str, payload: dict[str, object]) -
         _invalidate_get_cache_for_record(api, normalized_path, body)
         return RestRecord(api, normalized_path, body)
 
-    # Retry loop with semaphore and exponential backoff for transient errors
+    async def _is_already_created() -> RestRecord | None:
+        if not lookup:
+            return None
+        try:
+            return await rest_first_async(nb, path, query={**lookup, "limit": 2})
+        except Exception:  # noqa: BLE001
+            return None
+
     max_retries = _resolve_netbox_max_retries()
     base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
+        if attempt > 0:
+            existing = await _is_already_created()
+            if existing is not None:
+                logger.info(
+                    "NetBox create %s succeeded on a prior attempt; resolving via lookup", path
+                )
+                return existing
+
         async with semaphore:
             try:
                 return await _do_request()
             except Exception as e:
-                if attempt == max_retries or not _is_transient_netbox_error(e):
+                is_safe_retry = lookup is not None and _is_transient_netbox_error(e)
+                if not is_safe_retry:
+                    is_safe_retry = _is_connection_refused_error(e)
+                if attempt == max_retries or not is_safe_retry:
                     raise
                 delay = _compute_retry_delay(base_delay, attempt, e)
                 pressure_note = " (NetBox overwhelmed)" if _is_netbox_overwhelmed_error(e) else ""
@@ -900,7 +1063,7 @@ async def rest_ensure_async(
         if existing:
             return existing
     try:
-        return await rest_create_async(nb, path, payload)
+        return await rest_create_async(nb, path, payload, lookup=lookup)
     except ProxboxException as error:
         if _is_duplicate_error(error.detail):
             for candidate in _candidate_reuse_lookups(lookup, payload):
@@ -1158,7 +1321,11 @@ async def rest_bulk_create_async(
             try:
                 return await _do_request()
             except Exception as e:
-                if attempt == max_retries or not _is_transient_netbox_error(e):
+                # Bulk POST has no per-item lookup, so we can only safely retry
+                # when the request clearly never reached NetBox (connection
+                # refused). Retrying after a server disconnect or timeout could
+                # create duplicate records.
+                if attempt == max_retries or not _is_connection_refused_error(e):
                     raise
                 delay = _compute_retry_delay(base_delay, attempt, e)
                 logger.warning(

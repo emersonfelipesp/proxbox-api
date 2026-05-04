@@ -15,6 +15,7 @@ from proxbox_api.services.proxmox_helpers import (
     get_node_task_status,
     get_node_tasks,
 )
+from proxbox_api.services.sync._helpers import _extract_fk_id, _normalize_text
 from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 
 _DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "4")))
@@ -29,23 +30,6 @@ _TASK_HISTORY_PATCHABLE_FIELDS = frozenset(
         "custom_fields",
     }
 )
-
-
-def _extract_fk_id(value: object) -> object:
-    """Return the integer ID from a nested FK dict, or the value itself."""
-    if isinstance(value, dict):
-        return value.get("id")
-    return value
-
-
-def _normalize_text(value: object) -> str | None:
-    """Normalize text value, handling None, dict, and string types."""
-    if value is None:
-        return None
-    if isinstance(value, dict):
-        value = value.get("name") or value.get("slug") or value.get("id")
-    text = str(value).strip()
-    return text or None
 
 
 def _humanize_task_type(task_type: str) -> str:

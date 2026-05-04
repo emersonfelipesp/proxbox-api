@@ -21,12 +21,13 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProxboxException)
     async def proxbox_exception_handler(request: Request, exc: ProxboxException) -> JSONResponse:
+        expose = _expose_internal_errors(request.app)
         return JSONResponse(
             status_code=exc.http_status_code,
             content={
                 "message": exc.message,
                 "detail": exc.detail,
-                "python_exception": exc.python_exception,
+                "python_exception": exc.python_exception if expose else None,
             },
         )
 

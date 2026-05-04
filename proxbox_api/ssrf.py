@@ -13,6 +13,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
+import socket
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -206,7 +207,7 @@ def is_ip_blocked(  # noqa: C901
     return False, "OK"
 
 
-def validate_endpoint_host(
+def validate_endpoint_host(  # noqa: C901
     host: str | None,
     settings: dict | None = None,
 ) -> tuple[bool, str]:
@@ -246,6 +247,27 @@ def validate_endpoint_host(
 
     if re.match(r"^[\w.-]+\.(local|lan|internal|private)$", host, re.IGNORECASE):
         return False, f"Host '{host}' appears to be an internal domain"
+
+    # Hostname did not match any heuristic block. Resolve it and re-validate every
+    # resolved IP so that a hostname pointing at e.g. 127.0.0.1 cannot bypass the
+    # IP-based SSRF guard.
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except (socket.gaierror, OSError) as exc:
+        return False, f"Could not resolve host '{host}': {exc}"
+
+    resolved: set[str] = set()
+    for info in infos:
+        sockaddr = info[4]
+        if sockaddr:
+            resolved.add(str(sockaddr[0]))
+    if not resolved:
+        return False, f"Could not resolve host '{host}'"
+
+    for resolved_ip in resolved:
+        blocked, reason = is_ip_blocked(resolved_ip, settings)
+        if blocked:
+            return False, f"Host '{host}' resolves to {resolved_ip}: {reason}"
 
     return True, "OK"
 

@@ -141,27 +141,26 @@ def test_decrypt_plaintext_value_without_enc_prefix(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_decrypt_wrong_key_logs_warning_and_returns_ciphertext(monkeypatch):
+def test_decrypt_wrong_key_raises_proxbox_exception(monkeypatch):
     """A ciphertext encrypted with key A cannot be decrypted with key B.
 
-    decrypt_value must not raise; it logs a warning and returns the raw value.
+    decrypt_value must raise a ProxboxException so the caller surfaces the
+    failure instead of silently producing 401s downstream.
     """
+    import pytest
+
+    from proxbox_api.exception import ProxboxException
+
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "key-a")
     encrypted = creds_mod.encrypt_value("secret")
 
-    # Reset globals so next call uses key-b
     creds_mod._ENCRYPTION_KEY = None
     creds_mod._FERNET = None
 
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "key-b")
 
-    warnings: list[str] = []
-    monkeypatch.setattr(creds_mod.logger, "warning", lambda msg, *a: warnings.append(str(msg)))
-
-    result = creds_mod.decrypt_value(encrypted)
-
-    assert result == encrypted  # raw ciphertext returned unchanged, not raised
-    assert any("Decryption failed" in w for w in warnings)
+    with pytest.raises(ProxboxException, match="Credential decryption failed"):
+        creds_mod.decrypt_value(encrypted)
 
 
 # ---------------------------------------------------------------------------

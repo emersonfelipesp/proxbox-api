@@ -71,6 +71,49 @@ def _prefer_existing_device(records: list[object]) -> NetBoxRecord | None:
     return records[0] if records else None
 
 
+def _existing_device_site_pin(
+    existing_device: NetBoxRecord | None,
+    desired_site_id: int | None,
+) -> int | None:
+    """Pin the device's existing site when present.
+
+    NetBox enforces device names unique per site, so reusing the existing record's site
+    avoids a unique-name conflict on update.
+    """
+    if existing_device is None:
+        return desired_site_id
+    existing_site = _relation_id_or_none(existing_device.get("site"))
+    if existing_site is None:
+        return desired_site_id
+    if desired_site_id is None or existing_site != desired_site_id:
+        return existing_site
+    return desired_site_id
+
+
+async def _resolve_existing_device_sites(
+    nb: object,
+    device_names: list[str],
+) -> dict[str, int]:
+    """Return a {device_name: existing_site_id} map for any matching ProxBox-managed devices."""
+    pins: dict[str, int] = {}
+    for device_name in device_names:
+        try:
+            existing = await rest_list_async(
+                nb,
+                "/api/dcim/devices/",
+                query={"name": device_name, "limit": 2},
+            )
+        except Exception:
+            continue
+        record = _prefer_existing_device(existing)
+        if record is None:
+            continue
+        site_id = _relation_id_or_none(record.get("site"))
+        if site_id is not None:
+            pins[device_name] = site_id
+    return pins
+
+
 def _cluster_type_payload(mode: str, tag_refs: list[dict[str, object]]) -> dict[str, object]:
     return {
         "name": mode.capitalize(),
@@ -377,23 +420,27 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         else None
     )
 
+    existing_site_pins = await _resolve_existing_device_sites(nb, sorted(set(node_names)))
+
     device_payloads: list[dict[str, object]] = []
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
         site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
         cluster_record = cluster_by_name.get(cluster_name)
         site_record = site_by_slug.get(site_slug)
+        desired_site_id = _relation_id_or_none(getattr(site_record, "id", None))
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()
             if not node_name:
                 continue
+            site_id = existing_site_pins.get(node_name, desired_site_id)
             device_payloads.append(
                 _device_payload(
                     node_name,
                     cluster_id=_relation_id_or_none(getattr(cluster_record, "id", None)),
                     device_type_id=_relation_id_or_none(getattr(device_type, "id", None)),
                     role_id=_relation_id_or_none(getattr(role, "id", None)),
-                    site_id=_relation_id_or_none(getattr(site_record, "id", None)),
+                    site_id=site_id,
                     tag_refs=tag_refs,
                 )
             )
@@ -612,10 +659,7 @@ async def _ensure_device(
         query={"name": device_name, "limit": 2},
     )
     existing_device = _prefer_existing_device(existing_devices)
-    if existing_device is not None:
-        existing_site = existing_device.get("site")
-        if existing_site is not None and (site_id is None or existing_site != site_id):
-            site_id = existing_site
+    site_id = _existing_device_site_pin(existing_device, site_id)
 
     payload = {
         "name": device_name,

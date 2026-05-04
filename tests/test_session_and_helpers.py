@@ -346,11 +346,12 @@ class SerializableRecord:
 
 @pytest.fixture(autouse=False)
 def clear_cached_netbox_api():
-    """Clear LRU cache before test to prevent monkeypatch conflicts."""
-    from proxbox_api.session.netbox import _cached_netbox_api
+    """Drop cached NetBox Api objects to prevent monkeypatch conflicts."""
+    from proxbox_api.session.netbox import invalidate_netbox_api_cache
 
-    _cached_netbox_api.cache_clear()
+    invalidate_netbox_api_cache()
     yield
+    invalidate_netbox_api_cache()
 
 
 def test_to_dict_supports_dict_and_serializable_objects():
@@ -1245,7 +1246,7 @@ def test_get_netbox_session_returns_facade(monkeypatch, db_engine):
 
 
 def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
-    netbox_session_module._cached_netbox_api.cache_clear()
+    netbox_session_module.invalidate_netbox_api_cache()
 
     api_client_calls = {"count": 0}
 

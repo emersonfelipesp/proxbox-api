@@ -145,9 +145,13 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
         "proxbox_api.services.sync.individual.base.BaseIndividualSyncService._get_or_create_vm_dependencies",
         _fake_get_deps,
     )
+
+    async def _fake_get_vm_config_individual(*args, **kwargs):
+        return {"onboot": 1, "agent": 1}
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.vm_sync.get_vm_config_individual",
-        lambda *args, **kwargs: {"onboot": 1, "agent": 1},
+        _fake_get_vm_config_individual,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.vm_sync.get_vm_resource_individual",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
@@ -210,7 +211,9 @@ class ApiKey(SQLModel, table=True):
 
     @staticmethod
     async def store_key_async(session: AsyncSession, raw_key: str, label: str = "") -> "ApiKey":
-        key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+        key_hash = (
+            await asyncio.to_thread(bcrypt.hashpw, raw_key.encode(), bcrypt.gensalt(rounds=12))
+        ).decode()
         obj = ApiKey(label=label, key_hash=key_hash)
         session.add(obj)
         await session.commit()
@@ -230,9 +233,10 @@ class ApiKey(SQLModel, table=True):
     @staticmethod
     async def verify_any_async(session: AsyncSession, provided_key: str) -> bool:
         result = await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
+        provided = provided_key.encode()
         for row in result:
             try:
-                if bcrypt.checkpw(provided_key.encode(), row.key_hash.encode()):
+                if await asyncio.to_thread(bcrypt.checkpw, provided, row.key_hash.encode()):
                     return True
             except Exception:
                 continue

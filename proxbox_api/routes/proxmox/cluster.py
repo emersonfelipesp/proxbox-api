@@ -5,12 +5,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
 from proxbox_api.enum.proxmox import *
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
-from proxbox_api.schemas.proxmox import *
+from proxbox_api.schemas.proxmox import *  # noqa: F401,F403
+from proxbox_api.schemas.proxmox import (
+    BaseClusterStatusSchema,
+    ClusterNodeStatusSchema,
+    ClusterStatusSchema,
+    ClusterStatusSchemaList,
+)
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
 )
@@ -24,30 +29,12 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
 
-
-class BaseClusterStatusSchema(BaseModel):
-    id: str
-    name: str
-    type: str
-
-
-class ClusterNodeStatusSchema(BaseClusterStatusSchema):
-    ip: str
-    level: str | None = None
-    local: bool
-    nodeid: int
-    online: bool
-
-
-class ClusterStatusSchema(BaseClusterStatusSchema):
-    nodes: int
-    quorate: bool
-    version: int
-    mode: str
-    node_list: list[ClusterNodeStatusSchema] | None = None
-
-
-ClusterStatusSchemaList = list[ClusterStatusSchema]
+__all__ = [
+    "BaseClusterStatusSchema",
+    "ClusterNodeStatusSchema",
+    "ClusterStatusSchema",
+    "ClusterStatusSchemaList",
+]
 
 
 def _cluster_item_defaults(

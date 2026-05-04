@@ -14,15 +14,13 @@ from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.schemas._coerce import normalize_bool
 from proxbox_api.schemas.proxmox import *
 from proxbox_api.schemas.virtualization import VMConfig
+from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.proxmox_helpers import (
     dump_models,
     get_storage_list,
 )
 from proxbox_api.services.proxmox_helpers import (
     get_node_storage_content as get_typed_node_storage_content,
-)
-from proxbox_api.services.proxmox_helpers import (
-    get_vm_config as get_typed_vm_config,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep, close_proxmox_sessions
 
@@ -401,7 +399,7 @@ async def top_level_endpoint(
     response_model_exclude_none=True,
     response_model_exclude_unset=True,
 )
-async def get_vm_config(  # noqa: C901
+async def get_vm_config(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     name: str = Query(title="Cluster", description="Proxmox Cluster Name", default=None),
@@ -409,62 +407,11 @@ async def get_vm_config(  # noqa: C901
     type: str = Path(..., title="Type", description="Proxmox VM Type"),
     vmid: int = Path(..., title="VM ID", description="Proxmox VM ID"),
 ):
-    """
-    Loops through all Proxmox Clusters looking for a match in the node name.
-    If found, it returns the VM Config.
-    """
-
-    if type not in ("qemu", "lxc"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid VM Type. Use 'qemu' or 'lxc'.",
-        )
-
-    try:
-        config = None
-        for px, cluster in zip(pxs, cluster_status):
-            try:
-                for cluster_node in cluster.node_list:
-                    if str(node) == str(cluster_node.name):
-                        if type == "qemu":
-                            config = await get_typed_vm_config(
-                                px, node=node, vm_type=type, vmid=vmid
-                            )
-                        elif type == "lxc":
-                            config = await get_typed_vm_config(
-                                px, node=node, vm_type=type, vmid=vmid
-                            )
-
-                        if config:
-                            return config.model_dump(
-                                mode="python",
-                                by_alias=True,
-                                exclude_none=True,
-                            )
-
-            except ResourceException as error:
-                raise ProxboxException(
-                    message="Error getting VM Config",
-                    python_exception=f"Error: {str(error)}",
-                )
-
-        if config is None:
-            raise ProxboxException(
-                message="VM Config not found.",
-                detail="VM Config not found. Check if the 'node', 'type', and 'vmid' are correct.",
-            )
-
-    except ProxboxException:
-        raise
-    except Exception as error:
-        logger.exception(
-            "Unhandled error while getting VM config for node=%s type=%s vmid=%s",
-            node,
-            type,
-            vmid,
-        )
-        raise ProxboxException(
-            message="Unknown error getting VM Config. Search parameters probably wrong.",
-            detail="Check if the node, type, and vmid are correct.",
-            python_exception=str(error),
-        )
+    """Return the VM config by matching node across all Proxmox clusters."""
+    return await resolve_vm_config(
+        pxs=pxs,
+        cluster_status=cluster_status,
+        node=node,
+        vm_type=type,
+        vmid=vmid,
+    )

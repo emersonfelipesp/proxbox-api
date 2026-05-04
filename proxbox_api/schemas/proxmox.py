@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field, RootModel, field_validator
+from pydantic import BaseModel, Field, RootModel, field_validator
 
 from proxbox_api.enum.proxmox import CgroupMode, NodeStatus, ProxmoxVMStatus, ResourceType
 from proxbox_api.schemas._base import ProxboxBaseModel, ProxboxLenientModel
@@ -198,3 +198,28 @@ class Node(ProxboxLenientModel):
 
 NodeList = RootModel[list[Node]]
 ResponseNodeList = RootModel[list[dict[str, ResourcesList]]]
+
+
+class BaseClusterStatusSchema(BaseModel):
+    id: str
+    name: str
+    type: str
+
+
+class ClusterNodeStatusSchema(BaseClusterStatusSchema):
+    ip: str
+    level: str | None = None
+    local: bool
+    nodeid: int
+    online: bool
+
+
+class ClusterStatusSchema(BaseClusterStatusSchema):
+    nodes: int
+    quorate: bool
+    version: int
+    mode: str
+    node_list: list[ClusterNodeStatusSchema] | None = None
+
+
+ClusterStatusSchemaList = list[ClusterStatusSchema]

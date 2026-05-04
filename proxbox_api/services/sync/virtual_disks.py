@@ -5,7 +5,7 @@ from __future__ import annotations
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
-from proxbox_api.routes.proxmox import get_vm_config
+from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -227,11 +227,11 @@ async def create_virtual_disks(  # noqa: C901
 
             vm_config = None
             try:
-                vm_config = await get_vm_config(
+                vm_config = await resolve_vm_config(
                     pxs=pxs,
                     cluster_status=cluster_status,
                     node=node_name,
-                    type=vm_type,
+                    vm_type=vm_type,
                     vmid=vmid,
                 )
             except Exception as e:

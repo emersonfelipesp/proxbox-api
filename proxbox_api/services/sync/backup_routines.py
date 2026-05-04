@@ -13,6 +13,7 @@ from proxbox_api.netbox_rest import (
     rest_list_paginated_async,
 )
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.services.sync._helpers import _extract_choice_value, _extract_fk_id
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 if TYPE_CHECKING:
@@ -26,20 +27,6 @@ def _coerce_kv_string(value: object) -> str | None:
     if isinstance(value, dict):
         return ",".join(f"{k}={v}" for k, v in value.items())
     return str(value)
-
-
-def _extract_fk_id(value: object) -> object:
-    """Return the integer ID from a nested FK dict, or the value itself."""
-    if isinstance(value, dict):
-        return value.get("id")
-    return value
-
-
-def _extract_choice_value(value: object) -> object:
-    """Return the raw choice string from a nested choice dict, or the value itself."""
-    if isinstance(value, dict):
-        return value.get("value")
-    return value
 
 
 def _parse_vmid_selection(vmid_raw: object) -> list[int]:

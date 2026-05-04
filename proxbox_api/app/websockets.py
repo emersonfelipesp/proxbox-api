@@ -23,7 +23,7 @@ AUTH_MESSAGE_SCHEMA = {"type": "object", "properties": {"api_key": {"type": "str
 
 
 async def _do_ws_auth(websocket: WebSocket, api_key: str | None, client_ip: str) -> bool:
-    authorized, error_message = check_auth_header(api_key, client_ip)
+    authorized, error_message = await asyncio.to_thread(check_auth_header, api_key, client_ip)
     if not authorized:
         await websocket.close(code=4001, reason=error_message or "Authentication failed")
         return False
@@ -31,12 +31,20 @@ async def _do_ws_auth(websocket: WebSocket, api_key: str | None, client_ip: str)
 
 
 def _get_client_ip(websocket: WebSocket) -> str:
+    # Reuse the request-side resolver for trusted-proxy semantics.
+    from proxbox_api.app.factory import _peer_is_trusted
+
+    peer_ip = websocket.client.host if websocket.client else "unknown"
+    if not _peer_is_trusted(peer_ip):
+        return peer_ip
     forwarded = websocket.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if websocket.client:
-        return websocket.client.host or "unknown"
-    return "unknown"
+    if not forwarded:
+        return peer_ip
+    candidates = [token.strip() for token in forwarded.split(",") if token.strip()]
+    for candidate in reversed(candidates):
+        if not _peer_is_trusted(candidate):
+            return candidate
+    return candidates[0] if candidates else peer_ip
 
 
 @websocket_router.websocket("/")

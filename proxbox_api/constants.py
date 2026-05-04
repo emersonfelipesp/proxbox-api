@@ -26,22 +26,30 @@ VM_TYPE_MAPPINGS = {
     },
 }
 
-# VM role mappings for different VM types
-VM_ROLE_MAPPINGS = {
+# VM role mappings for NetBox device-role objects representing Proxmox VM types.
+# Single source of truth — services and route helpers import this; callers
+# extend with `tags` at the call site since tag refs vary per sync run.
+VM_ROLE_MAPPINGS: dict[str, dict[str, object]] = {
     "qemu": {
         "name": "Virtual Machine (QEMU)",
         "slug": "virtual-machine-qemu",
-        "description": "QEMU/KVM virtual machine from Proxmox",
+        "color": "00ffff",
+        "description": "Proxmox Virtual Machine",
+        "vm_role": True,
     },
     "lxc": {
         "name": "Container (LXC)",
         "slug": "container-lxc",
-        "description": "LXC container from Proxmox",
+        "color": "7fffd4",
+        "description": "Proxmox LXC Container",
+        "vm_role": True,
     },
     "undefined": {
-        "name": "Virtual Machine",
-        "slug": "virtual-machine",
-        "description": "Generic virtual machine",
+        "name": "Unknown",
+        "slug": "unknown",
+        "color": "000000",
+        "description": "VM Type not found. Neither QEMU nor LXC.",
+        "vm_role": True,
     },
 }
 

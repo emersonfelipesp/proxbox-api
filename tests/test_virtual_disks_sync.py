@@ -7,7 +7,7 @@ from proxbox_api.services.sync.virtual_disks import create_virtual_disks
 
 
 def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
-    calls = {"get_vm_config": []}
+    calls = {"resolve_vm_config": []}
     reconciled_payloads: list[dict] = []
 
     async def _fake_rest_list(_nb, _path, query=None):
@@ -31,8 +31,8 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
             ]
         return []
 
-    async def _fake_get_vm_config(**kwargs):
-        calls["get_vm_config"].append(kwargs)
+    async def _fake_resolve_vm_config(**kwargs):
+        calls["resolve_vm_config"].append(kwargs)
         return {"scsi0": "local-lvm:vm-101-disk-0,size=20G"}
 
     async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
@@ -44,8 +44,8 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
         _fake_rest_list,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.virtual_disks.get_vm_config",
-        _fake_get_vm_config,
+        "proxbox_api.services.sync.virtual_disks.resolve_vm_config",
+        _fake_resolve_vm_config,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.virtual_disks.rest_bulk_reconcile_async",
@@ -67,12 +67,12 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     )
 
     assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0}
-    assert calls["get_vm_config"] == [
+    assert calls["resolve_vm_config"] == [
         {
             "pxs": [],
             "cluster_status": [],
             "node": "pve01",
-            "type": "qemu",
+            "vm_type": "qemu",
             "vmid": "101",
         }
     ]

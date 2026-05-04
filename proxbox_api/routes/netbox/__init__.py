@@ -12,6 +12,7 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.session.netbox import invalidate_netbox_api_cache
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
@@ -86,12 +87,6 @@ def _validate_netbox_credentials(nb: NetBoxEndpoint) -> None:
         )
     nb.token = secret
     nb.token_key = key
-
-
-def _encrypt_credentials(nb: NetBoxEndpoint) -> None:
-    nb.token = nb.set_encrypted_token(nb.token) if hasattr(nb, "set_encrypted_token") else nb.token
-    if nb.token_key and hasattr(nb, "set_encrypted_token_key"):
-        nb.set_encrypted_token_key(nb.token_key)
 
 
 @router.post("/endpoint", response_model=NetBoxEndpointResponse)
@@ -214,6 +209,7 @@ async def update_netbox_endpoint(
     await _maybe_await(session.commit())
     await _maybe_await(session.refresh(db_netbox))
     clear_endpoint_cache()
+    invalidate_netbox_api_cache(db_netbox.id)
     return NetBoxEndpointResponse.model_validate(db_netbox)
 
 
@@ -222,9 +218,11 @@ async def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
     netbox_endpoint = await _maybe_await(session.get(NetBoxEndpoint, netbox_id))
     if not netbox_endpoint:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found.")
+    deleted_id = netbox_endpoint.id
     await _maybe_await(session.delete(netbox_endpoint))
     await _maybe_await(session.commit())
     clear_endpoint_cache()
+    invalidate_netbox_api_cache(deleted_id)
     return {"message": "NetBox Endpoint deleted."}
 
 

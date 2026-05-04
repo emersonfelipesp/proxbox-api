@@ -12,11 +12,8 @@ from proxbox_api.netbox_rest import (
     rest_list_paginated_async,
 )
 from proxbox_api.proxmox_async import resolve_async
-from proxbox_api.services.sync.backup_routines import (
-    _extract_choice_value,
-    _extract_fk_id,
-    _get_netbox_endpoint_id,
-)
+from proxbox_api.services.sync._helpers import _extract_choice_value, _extract_fk_id
+from proxbox_api.services.sync.backup_routines import _get_netbox_endpoint_id
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 

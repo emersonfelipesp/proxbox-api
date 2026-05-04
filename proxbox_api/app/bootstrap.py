@@ -9,6 +9,7 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
 from proxbox_api.constants import DEFAULT_LOG_PATH
+from proxbox_api.credentials import assert_encryption_configured
 from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import configure_file_logging_path, logger
@@ -60,6 +61,11 @@ def init_database_and_netbox() -> None:
     database_session = None
     netbox_endpoints = []
     NetBoxBase.nb = None
+
+    # Refuse to start without a credential encryption key. This must run before
+    # the try/except below so that a missing key actually aborts startup
+    # instead of being downgraded to a "NetBox not connected" warning.
+    assert_encryption_configured()
 
     try:
         create_db_and_tables()

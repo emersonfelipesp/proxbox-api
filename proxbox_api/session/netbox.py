@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
-from functools import lru_cache
+import threading
 from typing import Annotated
 
 from fastapi import Depends
@@ -56,40 +57,53 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
     )
 
 
-@lru_cache(maxsize=16)
-def _cached_netbox_api(
-    base_url: str,
-    token_version: str,
-    token_key: str | None,
-    token_secret: str | None,
-    timeout: float,
-    ssl_verify: bool,
-) -> Api:
-    """Build and cache a netbox-sdk Api for a stable endpoint configuration."""
-    cfg = Config(
-        base_url=base_url,
-        token_version=token_version,
-        token_key=token_key,
-        token_secret=token_secret,
-        timeout=timeout,
-        ssl_verify=ssl_verify,
-    )
-    return Api(
-        client=NetBoxApiClient(cfg), schema=build_schema_index(version=NETBOX_SCHEMA_VERSION)
-    )
+_API_CACHE_LOCK = threading.Lock()
+# Keyed on (endpoint_id, config_fingerprint). The fingerprint hashes the active
+# Config (URL/token/version) so token rotation produces a new key and the stale
+# Api becomes unreachable; explicit invalidation drops it from memory.
+_API_CACHE: dict[tuple[int, str], Api] = {}
+
+
+def _config_fingerprint(cfg: Config, ssl_verify: bool) -> str:
+    parts = [
+        cfg.base_url or "",
+        cfg.token_version or "",
+        cfg.token_key or "",
+        cfg.token_secret or "",
+        f"{cfg.timeout:.3f}",
+        "1" if ssl_verify else "0",
+    ]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def invalidate_netbox_api_cache(endpoint_id: int | None = None) -> None:
+    """Drop cached Api objects for an endpoint, or for all endpoints when id is None.
+
+    Call this after updating or deleting a NetBoxEndpoint so that the next session
+    request rebuilds the client with fresh credentials and no decrypted token is
+    retained in memory beyond its useful life.
+    """
+    with _API_CACHE_LOCK:
+        if endpoint_id is None:
+            _API_CACHE.clear()
+            return
+        for key in [k for k in _API_CACHE if k[0] == endpoint_id]:
+            _API_CACHE.pop(key, None)
 
 
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     """Instantiate netbox-sdk Api using NetBoxApiClient + Config (no string token shortcut)."""
     cfg = netbox_config_from_endpoint(endpoint)
-    return _cached_netbox_api(
-        cfg.base_url or "",
-        cfg.token_version,
-        cfg.token_key,
-        cfg.token_secret,
-        cfg.timeout,
-        bool(endpoint.verify_ssl),
-    )
+    fingerprint = _config_fingerprint(cfg, bool(endpoint.verify_ssl))
+    cache_key = (endpoint.id or 0, fingerprint)
+    with _API_CACHE_LOCK:
+        cached = _API_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+    api = Api(client=NetBoxApiClient(cfg), schema=build_schema_index(version=NETBOX_SCHEMA_VERSION))
+    with _API_CACHE_LOCK:
+        _API_CACHE.setdefault(cache_key, api)
+        return _API_CACHE[cache_key]
 
 
 def get_netbox_session(
