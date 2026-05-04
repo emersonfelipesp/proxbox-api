@@ -250,7 +250,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Proxbox Backend",
         description="## Proxbox Backend made in FastAPI framework",
-        version="0.0.8.post1",
+        version="0.0.10",
         lifespan=_lifespan,
         docs_url=None,
         redoc_url=None,
