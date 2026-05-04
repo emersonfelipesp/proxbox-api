@@ -40,8 +40,12 @@ EXPOSE 8000
 # Default image: raw uvicorn, no proxy, HTTP only. Smallest possible image.
 FROM runtime-base AS raw
 
+COPY docker/entrypoint-raw.sh /usr/local/bin/docker-entrypoint-raw.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint-raw.sh
+
 ENV PROXBOX_BIND_HOST=0.0.0.0
-CMD ["sh", "-c", "exec uvicorn proxbox_api.main:app --host ${PROXBOX_BIND_HOST:-0.0.0.0} --port ${PORT:-8000}"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-raw.sh"]
+CMD []
 
 # nginx image: nginx terminates HTTPS with mkcert certs, proxies to uvicorn on 127.0.0.1:8001.
 # Extra SANs: MKCERT_EXTRA_NAMES. Persist CA: CAROOT + volume.

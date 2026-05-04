@@ -105,6 +105,65 @@ jobs:
       - name: Core tests
         run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --ignore=tests/test_endpoint_crud.py --tb=short
 
+  docker-bind-smoke:
+    name: Docker bind-host smoke (issue #52)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build raw image
+        run: docker build --target raw -t proxbox-api:bind-smoke .
+
+      - name: Bind to IPv6 dual-stack (PROXBOX_BIND_HOST=::)
+        run: |
+          set -eux
+          docker run -d --name pb-v6 -e PROXBOX_BIND_HOST=:: -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -p 18000:8000 proxbox-api:bind-smoke
+          for i in $(seq 1 90); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18000/health >/dev/null 2>&1; then
+              echo "ready ($i s)"; break
+            fi
+            sleep 1
+            if [ "$i" -eq 90 ]; then
+              echo "timed out waiting for /health"; docker logs pb-v6 || true; exit 1
+            fi
+          done
+
+      - name: Bind tolerates Compose list-form quoted value (regression for #52)
+        run: |
+          set -eux
+          docker run -d --name pb-v6q -e 'PROXBOX_BIND_HOST="::"' -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -p 18001:8000 proxbox-api:bind-smoke
+          for i in $(seq 1 90); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18001/health >/dev/null 2>&1; then
+              echo "ready ($i s)"; break
+            fi
+            sleep 1
+            if [ "$i" -eq 90 ]; then
+              echo "timed out — sanitizer regressed"; docker logs pb-v6q || true; exit 1
+            fi
+          done
+
+      - name: Default bind (no PROXBOX_BIND_HOST set) still works
+        run: |
+          set -eux
+          docker run -d --name pb-default -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 -p 18002:8000 proxbox-api:bind-smoke
+          for i in $(seq 1 90); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18002/health >/dev/null 2>&1; then
+              echo "ready ($i s)"; break
+            fi
+            sleep 1
+            if [ "$i" -eq 90 ]; then
+              echo "default bind regressed"; docker logs pb-default || true; exit 1
+            fi
+          done
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f pb-v6 pb-v6q pb-default 2>/dev/null || true
+
   setup:
     runs-on: ubuntu-latest
     outputs:
