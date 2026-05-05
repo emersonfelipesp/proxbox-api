@@ -495,9 +495,6 @@ jobs:
               -e REDIS_TASK_HOST=netbox-e2e-redis \
               -e REDIS_TASK_DATABASE=2 \
               -e SECRET_KEY="$SECRET_KEY" \
-              -e SUPERUSER_NAME=admin \
-              -e SUPERUSER_EMAIL=admin@example.com \
-              -e SUPERUSER_PASSWORD=admin \
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
               --entrypoint /bin/bash \
@@ -515,9 +512,6 @@ jobs:
               -e REDIS_TASK_HOST=netbox-e2e-redis \
               -e REDIS_TASK_DATABASE=2 \
               -e SECRET_KEY="$SECRET_KEY" \
-              -e SUPERUSER_NAME=admin \
-              -e SUPERUSER_EMAIL=admin@example.com \
-              -e SUPERUSER_PASSWORD=admin \
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
               --entrypoint /bin/bash \
@@ -541,9 +535,6 @@ jobs:
               -e REDIS_TASK_HOST=netbox-e2e-redis \
               -e REDIS_TASK_DATABASE=2 \
               -e SECRET_KEY="$SECRET_KEY" \
-              -e SUPERUSER_NAME=admin \
-              -e SUPERUSER_EMAIL=admin@example.com \
-              -e SUPERUSER_PASSWORD=admin \
               -e PYTHONPATH=/opt/netbox/netbox \
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
@@ -610,7 +601,7 @@ jobs:
           done
           echo "PROXMOX_MOCK_HOST_URL=${PROXMOX_MOCK_HOST_URL}" >> "$GITHUB_ENV"
 
-          TOKEN_OUTPUT=$(docker exec ${{ matrix.netbox_app_container }} /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "from users.models import Token, User; u=User.objects.get(username='admin'); t=Token.objects.create(user=u, version=1, token='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'); print(f'{t.id}:{t.plaintext}')")
+          TOKEN_OUTPUT=$(docker exec ${{ matrix.netbox_app_container }} /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell -c "from users.models import Token, User; u, _ = User.objects.get_or_create(username='admin', defaults={'email':'admin@example.com'}); u.email='admin@example.com'; u.is_staff=True; u.is_superuser=True; u.set_password('admin'); u.save(); t=Token.objects.create(user=u, version=1, token='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'); print(f'{t.id}:{t.plaintext}')")
           TOKEN_ID=$(printf '%s' "$TOKEN_OUTPUT" | tail -n 1 | cut -d: -f1)
           TOKEN_VALUE=$(printf '%s' "$TOKEN_OUTPUT" | tail -n 1 | cut -d: -f2)
 
