@@ -355,11 +355,15 @@ jobs:
       - name: Resolve NetBox image source
         id: netbox_image
         run: |
-          if docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
-            echo "source=registry" >> "$GITHUB_OUTPUT"
-          else
-            echo "source=artifact" >> "$GITHUB_OUTPUT"
-          fi
+          for attempt in 1 2 3 4 5; do
+            if docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
+              echo "source=registry" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Registry pull attempt ${attempt}/5 failed for ${NETBOX_IMAGE}; retrying in $((attempt * 10))s"
+            sleep "$((attempt * 10))"
+          done
+          echo "source=artifact" >> "$GITHUB_OUTPUT"
 
       - name: Download NetBox image artifact (if built from source)
         if: steps.netbox_image.outputs.source == 'artifact'
