@@ -11,7 +11,7 @@ GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.git
 | `ci.yml` | Push / PR to any branch; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run `tests/` with coverage, then E2E Docker matrix (dev or pypi mode) |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes three Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert) |
-| `publish-testpypi.yml` | GitHub Release published | Validates release metadata, builds dist, publishes to TestPyPI, validates install across Python 3.11–3.13, runs E2E pre-publish gate (dev deps), publishes to PyPI, then publishes Docker images and runs E2E post-publish verification (published artifacts) |
+| `publish-testpypi.yml` | Version tag push, GitHub Release published, or manual dispatch | Validates release metadata, builds dist, then runs either the TestPyPI lane or the PyPI lane. Normal/post tag pushes publish to TestPyPI; rc tag pushes, releases, and `publish_target=pypi` dispatches publish to PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
 | `release-docker-verify.yml` | Release published | Post-release smoke test of all three published Docker images |
 
@@ -30,14 +30,18 @@ ci.yml (push/PR — dev mode E2E only)
 ci.yml (release event — both dev + pypi modes)
 └── e2e-docker matrix runs both netbox_proxbox_mode=dev and netbox_proxbox_mode=pypi
 
-publish-testpypi.yml (GitHub Release published)
+publish-testpypi.yml (staged package release)
 ├── prepare-release        (validate tag/version, build dist, upload artifact)
-├── publish-testpypi       (needs: prepare-release)
-├── validate-testpypi      (needs: prepare-release + publish-testpypi; matrix py3.11/3.12/3.13)
-├── e2e-pre-publish        (needs: prepare-release; dev deps — proxbox-api local build + DEV_OVERRIDES)
-├── publish-pypi           (needs: prepare-release + validate-testpypi + e2e-pre-publish)
-├── publish-docker         (needs: publish-pypi; calls docker-hub-publish.yml mode=publish)
-└── e2e-post-publish       (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox)
+├── TestPyPI lane
+│   ├── publish-testpypi   (needs: prepare-release)
+│   └── validate-testpypi  (needs: prepare-release + publish-testpypi; installs package from TestPyPI across py3.11/3.12/3.13, then runs local checks)
+└── PyPI lane
+    ├── validate-pypi-candidate (needs: prepare-release; local checks across py3.11/3.12/3.13)
+    ├── e2e-pre-publish         (needs: prepare-release; dev deps — proxbox-api local build + DEV_OVERRIDES)
+    ├── publish-pypi            (needs: prepare-release + validate-pypi-candidate + e2e-pre-publish)
+    ├── validate-pypi           (needs: prepare-release + publish-pypi; installs package from PyPI)
+    ├── publish-docker          (needs: prepare-release + validate-pypi; calls docker-hub-publish.yml mode=publish)
+    └── e2e-post-publish        (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox)
 ```
 
 ## E2E Dependency Modes
@@ -63,4 +67,5 @@ All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-ng
 
 - The `uv.lock` at the repo root must stay in sync with `pyproject.toml` because CI runs `uv sync --frozen`.
 - Release workflows validate that the `pyproject.toml` version matches the Git tag before publishing.
+- Package uploads intentionally do not use `twine --skip-existing`; if an artifact version was consumed, bump to the next `.postN` or `rcN` and publish that immutable version.
 - Do not add secrets to workflow files — use repository secrets (`PYPI_TOKEN`, `DOCKERHUB_TOKEN`, etc.).

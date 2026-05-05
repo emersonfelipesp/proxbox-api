@@ -1,12 +1,38 @@
 name: Release validation and publish
 
-# Runs when a GitHub Release is published (tag + release), not on raw tag pushes alone.
 on:
+  push:
+    tags:
+      - "v*"
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      publish_target:
+        description: "Package index to publish to. Tag pushes use TestPyPI except rc tags; releases use PyPI."
+        required: true
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+      source_ref:
+        description: "Version tag to publish, for example v0.0.15 or v0.0.15rc1. Empty uses the workflow ref."
+        required: false
+        type: string
+        default: ""
+      expected_version:
+        description: "Optional guard without the leading v, for example 0.0.15."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
 
 env:
   PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
+  PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
 
 jobs:
   prepare-release:
@@ -14,6 +40,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       package_name: ${{ steps.meta.outputs.package_name }}
+      publish_target: ${{ steps.meta.outputs.publish_target }}
+      tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       netbox_versions: ${{ steps.meta.outputs.netbox_versions }}
 
@@ -21,7 +49,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || (github.event_name == 'release' && github.event.release.tag_name || github.ref) }}
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6
@@ -35,30 +63,69 @@ jobs:
         id: meta
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          PUBLISH_TARGET_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_target || '' }}
           RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+          SOURCE_REF_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || '' }}
+          EXPECTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_version || '' }}
         run: |
           python - <<'PY'
           import json
           import os
           import pathlib
+          import re
           import tomllib
 
           data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
+          lock_data = tomllib.loads(pathlib.Path('uv.lock').read_text(encoding='utf-8'))
           netbox_versions = json.loads(
               pathlib.Path('.github/netbox-versions.json').read_text(encoding='utf-8')
           )
           project_name = data['project']['name']
           version = data['project']['version']
+          normalized_name = project_name.replace('_', '-')
+          lock_version = next(
+              (
+                  pkg['version']
+                  for pkg in lock_data.get('package', [])
+                  if pkg.get('name') == normalized_name
+              ),
+              None,
+          )
           event = os.getenv('GITHUB_EVENT_NAME', '')
+          expected_version = os.getenv('EXPECTED_VERSION', '') or ''
           release_tag = os.getenv('RELEASE_TAG_NAME', '') or ''
+          source_ref = os.getenv('SOURCE_REF_INPUT', '') or ''
+          github_ref_name = os.getenv('GITHUB_REF_NAME', '') or ''
+          ref_name = release_tag or source_ref or github_ref_name
+          if ref_name.startswith('refs/tags/'):
+              ref_name = ref_name.removeprefix('refs/tags/')
           if project_name != 'proxbox_api':
               raise SystemExit(f'Expected project name proxbox_api, got {project_name!r}')
-          if event == 'release' and release_tag != f'v{version}':
-              raise SystemExit(
-                  f'Release tag/version mismatch: tag={release_tag!r}, version={version!r}'
-              )
+          if lock_version != version:
+              raise SystemExit(f'uv.lock version mismatch: lock={lock_version!r}, version={version!r}')
+          if expected_version and expected_version != version:
+              raise SystemExit(f'Expected version {expected_version!r}, got {version!r}')
+          expected_tag = f'v{version}'
+          if not ref_name.startswith('v'):
+              raise SystemExit(f'Release publishing requires a version tag ref, got {ref_name!r}')
+          if ref_name != expected_tag:
+              raise SystemExit(f'Tag/version mismatch: tag={ref_name!r}, version={version!r}')
+
+          target_input = os.getenv('PUBLISH_TARGET_INPUT', '') or ''
+          if target_input:
+              publish_target = target_input
+          elif event == 'release':
+              publish_target = 'pypi'
+          elif event == 'push' and re.search(r'rc\d+$', version):
+              publish_target = 'pypi'
+          else:
+              publish_target = 'testpypi'
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
-              fh.write(f'package_name={project_name}\nversion={version}\n')
+              fh.write(f'package_name={project_name}\n')
+              fh.write(f'publish_target={publish_target}\n')
+              fh.write(f'tag={expected_tag}\n')
+              fh.write(f'version={version}\n')
               fh.write(f'netbox_versions={json.dumps(netbox_versions)}\n')
           PY
 
@@ -74,6 +141,7 @@ jobs:
 
   publish-testpypi:
     name: publish to TestPyPI
+    if: needs.prepare-release.outputs.publish_target == 'testpypi'
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -101,7 +169,6 @@ jobs:
         run: |
           uv run --with twine python -m twine upload \
             --non-interactive \
-            --skip-existing \
             --repository-url https://test.pypi.org/legacy/ \
             --username "$TEST_PYPI_USERNAME" \
             --password "$TEST_PYPI_TOKEN" \
@@ -109,6 +176,7 @@ jobs:
 
   validate-testpypi:
     name: validate TestPyPI / py${{ matrix.python-version }}
+    if: needs.prepare-release.outputs.publish_target == 'testpypi'
     needs: [prepare-release, publish-testpypi]
     runs-on: ubuntu-latest
     strategy:
@@ -119,7 +187,101 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || (github.event_name == 'release' && github.event.release.tag_name || github.ref) }}
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Validate package install from TestPyPI
+        env:
+          PACKAGE_NAME: ${{ needs.prepare-release.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -eux
+          uv venv --python "${{ matrix.python-version }}" .package-smoke
+          installed=0
+          for i in $(seq 1 30); do
+            if uv pip install \
+              --python .package-smoke/bin/python \
+              --index-url https://test.pypi.org/simple/ \
+              --extra-index-url https://pypi.org/simple/ \
+              "${PACKAGE_NAME}==${PACKAGE_VERSION}"; then
+              installed=1
+              break
+            fi
+            sleep 10
+          done
+          if [ "$installed" -ne 1 ]; then
+            exit 1
+          fi
+          .package-smoke/bin/python - <<'PY'
+          import importlib.metadata as metadata
+          import os
+
+          package_name = os.environ["PACKAGE_NAME"]
+          package_version = os.environ["PACKAGE_VERSION"]
+          installed_version = metadata.version(package_name)
+          if installed_version != package_version:
+              raise SystemExit(
+                  f"Installed {package_name} {installed_version}, expected {package_version}"
+              )
+          import proxbox_api.main  # noqa: F401
+          from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+              load_proxmox_generated_openapi,
+          )
+
+          assert load_proxmox_generated_openapi().get("paths")
+          PY
+
+      - name: Sync development environment
+        run: uv sync --frozen --extra test --group dev
+
+      - name: Ruff (lint + format check)
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Ty (type check)
+        run: uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+
+      - name: Compile package
+        run: uv run python -m compileall proxbox_api scripts tests
+
+      - name: Import smoke checks
+        run: |
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "import proxmox_sdk.mock_main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+
+      - name: Run mocked schema-driven tests
+        run: |
+          uv run pytest --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
+            --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80
+
+  validate-pypi-candidate:
+    name: validate PyPI candidate / py${{ matrix.python-version }}
+    if: needs.prepare-release.outputs.publish_target == 'pypi'
+    needs: [prepare-release]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || (github.event_name == 'release' && github.event.release.tag_name || github.ref) }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -161,6 +323,7 @@ jobs:
 
   e2e-pre-publish:
     name: E2E pre-publish (dev deps) [${{ matrix.netbox-version }}]
+    if: needs.prepare-release.outputs.publish_target == 'pypi'
     runs-on: ubuntu-latest
     needs: [prepare-release]
     timeout-minutes: 30
@@ -175,7 +338,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || (github.event_name == 'release' && github.event.release.tag_name || github.ref) }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -314,8 +477,8 @@ jobs:
 
   publish-pypi:
     name: publish to PyPI
-    if: github.event_name == 'release'
-    needs: [prepare-release, validate-testpypi, e2e-pre-publish]
+    if: needs.prepare-release.outputs.publish_target == 'pypi'
+    needs: [prepare-release, validate-pypi-candidate, e2e-pre-publish]
     runs-on: ubuntu-latest
     steps:
       - name: Set up Python 3.13
@@ -342,26 +505,86 @@ jobs:
         run: |
           uv run --with twine python -m twine upload \
             --non-interactive \
-            --skip-existing \
             --repository-url https://upload.pypi.org/legacy/ \
             --username "$PYPI_USERNAME" \
             --password "$PYPI_TOKEN" \
             dist/*
 
+  validate-pypi:
+    name: validate PyPI / py${{ matrix.python-version }}
+    if: needs.prepare-release.outputs.publish_target == 'pypi'
+    needs: [prepare-release, publish-pypi]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          ignore-empty-workdir: true
+
+      - name: Validate package install from PyPI
+        env:
+          PACKAGE_NAME: ${{ needs.prepare-release.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -eux
+          uv venv --python "${{ matrix.python-version }}" .package-smoke
+          installed=0
+          for i in $(seq 1 30); do
+            if uv pip install \
+              --python .package-smoke/bin/python \
+              --index-url https://pypi.org/simple/ \
+              "${PACKAGE_NAME}==${PACKAGE_VERSION}"; then
+              installed=1
+              break
+            fi
+            sleep 10
+          done
+          if [ "$installed" -ne 1 ]; then
+            exit 1
+          fi
+          .package-smoke/bin/python - <<'PY'
+          import importlib.metadata as metadata
+          import os
+
+          package_name = os.environ["PACKAGE_NAME"]
+          package_version = os.environ["PACKAGE_VERSION"]
+          installed_version = metadata.version(package_name)
+          if installed_version != package_version:
+              raise SystemExit(
+                  f"Installed {package_name} {installed_version}, expected {package_version}"
+              )
+          import proxbox_api.main  # noqa: F401
+          from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+              load_proxmox_generated_openapi,
+          )
+
+          assert load_proxmox_generated_openapi().get("paths")
+          PY
+
   publish-docker:
     name: publish Docker images
-    if: github.event_name == 'release'
-    needs: [publish-pypi]
+    if: needs.prepare-release.outputs.publish_target == 'pypi'
+    needs: [prepare-release, validate-pypi]
     uses: ./.github/workflows/docker-hub-publish.yml
     secrets: inherit
     with:
-      source_ref: ${{ github.event.release.tag_name }}
+      source_ref: ${{ needs.prepare-release.outputs.tag }}
       mode: publish
 
   e2e-post-publish:
     name: E2E post-publish (published artifacts) [${{ matrix.netbox-version }}]
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    if: needs.prepare-release.outputs.publish_target == 'pypi'
     needs: [publish-docker, prepare-release]
     timeout-minutes: 30
     strategy:
@@ -376,7 +599,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.prepare-release.outputs.tag }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6

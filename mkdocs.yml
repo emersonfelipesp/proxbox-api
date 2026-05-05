@@ -74,6 +74,7 @@ nav:
       - Schema Management: development/schema-management.md
       - Testing: development/testing.md
       - Deployment: development/deployment.md
+      - Release Publishing: development/release-publishing.md
       - Troubleshooting: development/troubleshooting.md
       - Contributing: development/contributing.md
       - Refactoring Summary: development/refactoring-summary.md
