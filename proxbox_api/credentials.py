@@ -19,7 +19,8 @@ import base64
 import hashlib
 import os
 import threading
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 from cryptography.fernet import Fernet
 
@@ -34,6 +35,10 @@ _FERNET: Fernet | None = None
 _ENCRYPTION_WARNING_LOGGED: bool = False
 _KEY_LOCK = threading.Lock()
 
+KeySource = Literal["env", "plugin", "local"]
+
+_DEFAULT_KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "encryption.key"
+
 
 def _allow_plaintext_credentials() -> bool:
     return os.environ.get("PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS", "").lower() in (
@@ -43,20 +48,46 @@ def _allow_plaintext_credentials() -> bool:
     )
 
 
-def _resolve_raw_key() -> str:
+def _local_key_file_path() -> Path:
+    override = os.environ.get("PROXBOX_ENCRYPTION_KEY_FILE", "").strip()
+    return Path(override) if override else _DEFAULT_KEY_FILE
+
+
+def _resolve_local_key_file() -> str:
+    path = _local_key_file_path()
+    try:
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        logger.warning("Could not read local encryption key file %s: %s", path, exc)
+        return ""
+
+
+def _resolve_raw_key_with_source() -> tuple[str, KeySource | None]:
     raw_key = os.environ.get("PROXBOX_ENCRYPTION_KEY", "").strip()
     if raw_key:
-        return raw_key
+        return raw_key, "env"
     try:
         from proxbox_api.settings_client import get_settings
 
         settings = get_settings()
-        return (settings.get("encryption_key") or "").strip()
+        plugin_key = (settings.get("encryption_key") or "").strip()
+        if plugin_key:
+            return plugin_key, "plugin"
     except Exception as exc:
         # Don't silently swallow — surface at WARNING so misconfigured settings
-        # backends are visible. Caller still falls back to plaintext checks.
+        # backends are visible. Caller still falls back to local + plaintext checks.
         logger.warning("Could not load encryption_key from plugin settings: %s", exc)
-        return ""
+
+    local_key = _resolve_local_key_file()
+    if local_key:
+        return local_key, "local"
+    return "", None
+
+
+def _resolve_raw_key() -> str:
+    return _resolve_raw_key_with_source()[0]
 
 
 def _get_encryption_key() -> bytes | None:
@@ -104,34 +135,100 @@ def _get_fernet() -> Fernet | None:
 
 
 def assert_encryption_configured() -> None:
-    """Refuse to start without an encryption key unless the operator explicitly opts in.
+    """Log encryption status during application startup.
 
-    Called once during application startup. If neither PROXBOX_ENCRYPTION_KEY nor
-    plugin-settings ``encryption_key`` is set, the process aborts with a clear
-    ProxboxException. Setting ``PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS=1`` opts into
-    the legacy plaintext-storage path with a CRITICAL log; this path is only
-    appropriate for development.
+    Startup is no longer aborted when no key is configured: the operator can set
+    one later via ``PROXBOX_ENCRYPTION_KEY``, ``ProxboxPluginSettings.encryption_key``,
+    or the ``/admin/encryption/*`` endpoints. Without a key, credentials are stored
+    in plaintext and a CRITICAL log is emitted on first encryption attempt.
     """
     if _get_encryption_key() is not None:
         return
-    if _allow_plaintext_credentials():
-        logger.critical(
-            "PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS is set: storing credentials in plaintext. "
-            "Configure PROXBOX_ENCRYPTION_KEY before deploying to production."
-        )
-        return
-    raise ProxboxException(
-        message=(
-            "Refusing to start without credential encryption. Set "
-            "PROXBOX_ENCRYPTION_KEY (or the plugin settings 'encryption_key' field), "
-            "or set PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS=1 to acknowledge insecure storage."
-        ),
+    logger.critical(
+        "Credential encryption is DISABLED. Configure PROXBOX_ENCRYPTION_KEY, the "
+        "ProxboxPluginSettings 'encryption_key' field, or POST /admin/encryption/key "
+        "before storing sensitive credentials in production."
     )
 
 
 def is_encryption_enabled() -> bool:
     """Check if credential encryption is enabled."""
     return _get_encryption_key() is not None
+
+
+def get_encryption_source() -> KeySource | None:
+    """Return where the active encryption key came from, or None if unset."""
+    return _resolve_raw_key_with_source()[1]
+
+
+def reset_encryption_cache() -> None:
+    """Reset the in-process key + Fernet cache so the next call re-resolves."""
+    global _ENCRYPTION_KEY, _FERNET, _ENCRYPTION_WARNING_LOGGED
+    with _KEY_LOCK:
+        _ENCRYPTION_KEY = None
+        _FERNET = None
+        _ENCRYPTION_WARNING_LOGGED = False
+
+
+def set_local_encryption_key(value: str) -> Path:
+    """Persist ``value`` as the local encryption key (mode 0600) and reset the cache.
+
+    Returns the absolute path of the key file written.
+    """
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ProxboxException(message="Encryption key value must be a non-empty string.")
+
+    path = _local_key_file_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, cleaned.encode("utf-8"))
+        finally:
+            os.close(fd)
+        try:
+            os.chmod(str(path), 0o600)
+        except OSError:
+            pass
+    except OSError as exc:
+        raise ProxboxException(
+            message=f"Could not write local encryption key file {path}: {exc}",
+            python_exception=str(exc),
+        ) from exc
+
+    reset_encryption_cache()
+    try:
+        from proxbox_api.settings_client import invalidate_settings_cache
+
+        invalidate_settings_cache()
+    except Exception:  # noqa: BLE001
+        pass
+    return path
+
+
+def clear_local_encryption_key() -> bool:
+    """Remove the local key file (if present) and reset the cache. Returns True if removed."""
+    path = _local_key_file_path()
+    removed = False
+    try:
+        if path.exists():
+            path.unlink()
+            removed = True
+    except OSError as exc:
+        raise ProxboxException(
+            message=f"Could not delete local encryption key file {path}: {exc}",
+            python_exception=str(exc),
+        ) from exc
+
+    reset_encryption_cache()
+    try:
+        from proxbox_api.settings_client import invalidate_settings_cache
+
+        invalidate_settings_cache()
+    except Exception:  # noqa: BLE001
+        pass
+    return removed
 
 
 def encrypt_value(plaintext: str | None) -> str | None:
