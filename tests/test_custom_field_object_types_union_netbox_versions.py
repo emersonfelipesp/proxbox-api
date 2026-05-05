@@ -8,7 +8,7 @@ is currently identical across all three certified NetBox releases:
 
 - NetBox 4.5.8
 - NetBox 4.5.9
-- NetBox 4.6.0-beta2
+- NetBox 4.6.0
 
 `netbox/extras/api/serializers_/customfields.py` declares ``object_types`` as
 a ``ContentTypeField`` whose ``to_representation`` (``netbox/api/fields.py``)
@@ -54,7 +54,7 @@ def proxbox_caplog(caplog):
 
 @pytest.mark.parametrize(
     "netbox_version",
-    ["4.5.8", "4.5.9", "4.6.0-beta2"],
+    ["4.5.8", "4.5.9", "4.6.0"],
 )
 def test_union_preserves_operator_additions_across_supported_netbox_versions(
     monkeypatch, proxbox_caplog, netbox_version
@@ -86,7 +86,7 @@ def test_union_preserves_operator_additions_across_supported_netbox_versions(
 
 @pytest.mark.parametrize(
     "netbox_version",
-    ["4.5.8", "4.5.9", "4.6.0-beta2"],
+    ["4.5.8", "4.5.9", "4.6.0"],
 )
 def test_union_handles_dict_shape_defensively_across_versions(monkeypatch, netbox_version):
     """Defensive: if a future NetBox release switches to a dict shape

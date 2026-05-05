@@ -8,6 +8,7 @@ from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
+from proxbox_api.netbox_version import detect_netbox_version, supports_virtual_machine_type
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualMachineCreateBody,
@@ -184,6 +185,15 @@ async def ensure_vm_type(
     """
     type_data = VM_TYPE_MAPPINGS.get(vm_type)
     if not type_data:
+        return None
+
+    netbox_version = await detect_netbox_version(netbox_session)
+    if not supports_virtual_machine_type(netbox_version):
+        logger.debug(
+            "Skipping NetBox VirtualMachineType sync for vm_type=%s on NetBox version %s",
+            vm_type,
+            ".".join(str(part) for part in netbox_version),
+        )
         return None
 
     return await rest_reconcile_async(
