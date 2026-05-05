@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
 from datetime import datetime
 
 from proxbox_api.logger import logger
@@ -15,6 +14,7 @@ from proxbox_api.netbox_rest import (
     rest_list_async,
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxSnapshotSyncState
+from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox_helpers import get_vm_snapshots
 from proxbox_api.services.sync._helpers import _extract_fk_id
 from proxbox_api.services.sync.storage_links import (
@@ -30,8 +30,23 @@ from proxbox_api.services.sync.vmid_helpers import (
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 
-_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
-_DEFAULT_VM_SYNC_CONCURRENCY = max(1, int(os.getenv("PROXBOX_NETBOX_WRITE_CONCURRENCY", "4")))
+
+def _resolve_fetch_concurrency() -> int:
+    return get_int(
+        settings_key="proxmox_fetch_concurrency",
+        env="PROXBOX_PROXMOX_FETCH_CONCURRENCY",
+        default=8,
+        minimum=1,
+    )
+
+
+def _resolve_vm_sync_concurrency() -> int:
+    return get_int(
+        settings_key="netbox_write_concurrency",
+        env="PROXBOX_NETBOX_WRITE_CONCURRENCY",
+        default=4,
+        minimum=1,
+    )
 
 
 async def _load_storage_index(netbox_session: object) -> dict[tuple[str, str], dict[str, object]]:
@@ -544,8 +559,8 @@ async def create_virtual_machine_snapshots(  # noqa: C901
             message=f"Discovered {total_vms} VM(s) to scan for snapshots",
         )
 
-    fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
-    vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
+    fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _resolve_fetch_concurrency())
+    vm_sync_semaphore = asyncio.Semaphore(_resolve_vm_sync_concurrency())
 
     async def _sync_vm_with_semaphore(vm: object) -> tuple[list[dict[str, object]], set[str]]:
         async with vm_sync_semaphore:

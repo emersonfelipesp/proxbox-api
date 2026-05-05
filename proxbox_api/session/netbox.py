@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 from typing import Annotated
 
@@ -18,20 +17,19 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api.constants import NETBOX_SCHEMA_VERSION
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
+from proxbox_api.runtime_settings import get_float
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 _DEFAULT_NETBOX_TIMEOUT = 120.0
 
 
 def _resolve_netbox_timeout() -> float:
-    raw_value = os.environ.get("PROXBOX_NETBOX_TIMEOUT", "").strip()
-    if not raw_value:
-        return _DEFAULT_NETBOX_TIMEOUT
-    try:
-        timeout = float(raw_value)
-    except ValueError:
-        return _DEFAULT_NETBOX_TIMEOUT
-    return timeout if timeout > 0 else _DEFAULT_NETBOX_TIMEOUT
+    return get_float(
+        settings_key="netbox_timeout",
+        env="PROXBOX_NETBOX_TIMEOUT",
+        default=_DEFAULT_NETBOX_TIMEOUT,
+        minimum=1.0,
+    )
 
 
 def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:

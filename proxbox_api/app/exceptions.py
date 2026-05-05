@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-import os
-
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.runtime_settings import get_bool
 
 
 def _expose_internal_errors(app: FastAPI) -> bool:
-    flag = os.environ.get("PROXBOX_EXPOSE_INTERNAL_ERRORS", "").lower()
-    return flag in ("1", "true", "yes")
+    return get_bool(
+        settings_key="expose_internal_errors",
+        env="PROXBOX_EXPOSE_INTERNAL_ERRORS",
+        default=False,
+    )
 
 
 def register_exception_handlers(app: FastAPI) -> None:

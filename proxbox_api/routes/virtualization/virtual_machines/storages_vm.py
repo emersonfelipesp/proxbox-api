@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.sync.storages import create_storages as sync_storages
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
-_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_FETCH_MAX_CONCURRENCY", "8")))
+
+
+def _resolve_fetch_concurrency() -> int:
+    return get_int(
+        settings_key="proxbox_fetch_max_concurrency",
+        env="PROXBOX_FETCH_MAX_CONCURRENCY",
+        default=8,
+        minimum=1,
+    )
 
 
 @router.get("/storage/create")
@@ -33,7 +41,7 @@ async def create_storages(
         tag=tag,
         websocket=websocket,
         use_websocket=use_websocket,
-        fetch_concurrency=fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY,
+        fetch_concurrency=fetch_max_concurrency or _resolve_fetch_concurrency(),
     )
 
 
@@ -59,7 +67,7 @@ async def create_storages_stream(
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
-                    fetch_concurrency=fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY,
+                    fetch_concurrency=fetch_max_concurrency or _resolve_fetch_concurrency(),
                 )
             finally:
                 await bridge.close()

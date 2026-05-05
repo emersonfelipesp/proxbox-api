@@ -272,47 +272,45 @@ def get_cache_prometheus_metrics() -> str:
 
 def _debug_cache_enabled() -> bool:
     """Check if debug cache logging is enabled."""
-    return os.environ.get("PROXBOX_DEBUG_CACHE", "0").strip() == "1"
+    from proxbox_api.runtime_settings import get_bool
+
+    return get_bool(settings_key="debug_cache", env="PROXBOX_DEBUG_CACHE", default=False)
 
 
 def _resolve_get_cache_ttl_seconds() -> float:
-    """Resolve NetBox GET cache TTL with env var taking priority over settings."""
-    # Check environment variable FIRST (allows tests to override)
-    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_TTL", "").strip()
-    if raw:
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            pass  # Fall through to settings
+    """Resolve NetBox GET cache TTL — env var > plugin settings > default."""
+    from proxbox_api.runtime_settings import get_float
 
-    from proxbox_api.settings_client import get_settings
-
-    try:
-        return float(get_settings().get("netbox_get_cache_ttl", 60.0))
-    except Exception:
-        return 60.0
+    return get_float(
+        settings_key="netbox_get_cache_ttl",
+        env="PROXBOX_NETBOX_GET_CACHE_TTL",
+        default=60.0,
+        minimum=0.0,
+    )
 
 
 def _resolve_get_cache_max_entries() -> int:
-    """Resolve NetBox GET cache max entries from environment."""
-    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES", "").strip()
-    if not raw:
-        return 4096
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return 4096
+    """Resolve NetBox GET cache max entries — env > settings > default."""
+    from proxbox_api.runtime_settings import get_int
+
+    return get_int(
+        settings_key="netbox_get_cache_max_entries",
+        env="PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES",
+        default=4096,
+        minimum=1,
+    )
 
 
 def _resolve_get_cache_max_bytes() -> int:
-    """Resolve NetBox GET cache max bytes from environment."""
-    raw = os.environ.get("PROXBOX_NETBOX_GET_CACHE_MAX_BYTES", "").strip()
-    if not raw:
-        return 50 * 1024 * 1024  # 50 MB default
-    try:
-        return max(1024, int(raw))
-    except ValueError:
-        return 50 * 1024 * 1024
+    """Resolve NetBox GET cache max bytes — env > settings > default."""
+    from proxbox_api.runtime_settings import get_int
+
+    return get_int(
+        settings_key="netbox_get_cache_max_bytes",
+        env="PROXBOX_NETBOX_GET_CACHE_MAX_BYTES",
+        default=50 * 1024 * 1024,
+        minimum=1024,
+    )
 
 
 def _calculate_cache_entry_size(records: list[dict[str, object]]) -> int:
@@ -1313,8 +1311,8 @@ async def rest_bulk_create_async(
             )
         return records
 
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+    max_retries = _resolve_netbox_max_retries()
+    base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -1374,8 +1372,8 @@ async def rest_bulk_patch_async(
             records.append(RestRecord(api, normalized_path, item))
         return records
 
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+    max_retries = _resolve_netbox_max_retries()
+    base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -1447,8 +1445,8 @@ async def _delete_single_record_async(
         _invalidate_get_cache_for_path(api, detail_path)
         return 1
 
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+    max_retries = _resolve_netbox_max_retries()
+    base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -1525,8 +1523,8 @@ async def rest_bulk_delete_async(
         _invalidate_get_cache_for_path(api, normalized_path)
         return len(ids)
 
-    max_retries = max(0, int(os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "5")))
-    base_delay = float(os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "2.0"))
+    max_retries = _resolve_netbox_max_retries()
+    base_delay = _resolve_netbox_retry_delay()
 
     for attempt in range(max_retries + 1):
         async with semaphore:
@@ -1574,25 +1572,27 @@ class BulkReconcilePhase:
 def _normalize_bulk_batch_size(batch_size: int | None) -> int:
     if batch_size is not None:
         return max(1, int(batch_size))
-    raw = os.environ.get("PROXBOX_BULK_BATCH_SIZE", "").strip()
-    if not raw:
-        return 50
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return 50
+    from proxbox_api.runtime_settings import get_int
+
+    return get_int(
+        settings_key="bulk_batch_size",
+        env="PROXBOX_BULK_BATCH_SIZE",
+        default=50,
+        minimum=1,
+    )
 
 
 def _normalize_bulk_batch_delay_ms(delay_ms: int | None) -> int:
     if delay_ms is not None:
         return max(0, int(delay_ms))
-    raw = os.environ.get("PROXBOX_BULK_BATCH_DELAY_MS", "").strip()
-    if not raw:
-        return 500
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 500
+    from proxbox_api.runtime_settings import get_int
+
+    return get_int(
+        settings_key="bulk_batch_delay_ms",
+        env="PROXBOX_BULK_BATCH_DELAY_MS",
+        default=500,
+        minimum=0,
+    )
 
 
 def _build_lookup_dict_from_fields(

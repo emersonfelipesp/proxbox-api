@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.runtime_settings import get_float, get_int
 
 T = TypeVar("T")
 
@@ -18,25 +18,21 @@ DEFAULT_BASE_DELAY = 2.0
 
 
 def _resolve_max_retries() -> int:
-    raw = os.environ.get("PROXBOX_NETBOX_MAX_RETRIES", "").strip()
-    if not raw:
-        return DEFAULT_MAX_RETRIES
-    try:
-        val = int(raw)
-    except ValueError:
-        return DEFAULT_MAX_RETRIES
-    return max(0, val)
+    return get_int(
+        settings_key="netbox_max_retries",
+        env="PROXBOX_NETBOX_MAX_RETRIES",
+        default=DEFAULT_MAX_RETRIES,
+        minimum=0,
+    )
 
 
 def _resolve_base_delay() -> float:
-    raw = os.environ.get("PROXBOX_NETBOX_RETRY_DELAY", "").strip()
-    if not raw:
-        return DEFAULT_BASE_DELAY
-    try:
-        val = float(raw)
-    except ValueError:
-        return DEFAULT_BASE_DELAY
-    return max(0.0, val)
+    return get_float(
+        settings_key="netbox_retry_delay",
+        env="PROXBOX_NETBOX_RETRY_DELAY",
+        default=DEFAULT_BASE_DELAY,
+        minimum=0.0,
+    )
 
 
 def _is_transient_netbox_error(error: Exception) -> bool:

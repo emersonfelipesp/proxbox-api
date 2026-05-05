@@ -1,44 +1,33 @@
 """Concurrency helpers for virtual machine sync routes."""
 
-import os
+from proxbox_api.runtime_settings import get_int
 
 
 def resolve_vm_sync_concurrency() -> int:
-    """Get max concurrency for VM sync operations from settings, with env var fallback."""
-    from proxbox_api.settings_client import get_settings
-
-    try:
-        return max(1, int(get_settings().get("vm_sync_max_concurrency", 4)))
-    except Exception:
-        raw_value = os.environ.get("PROXBOX_VM_SYNC_MAX_CONCURRENCY", "").strip()
-        if not raw_value:
-            return 4
-        try:
-            value = int(raw_value)
-        except ValueError:
-            return 4
-        return max(1, value)
+    """Max concurrency for VM sync operations."""
+    return get_int(
+        settings_key="vm_sync_max_concurrency",
+        env="PROXBOX_VM_SYNC_MAX_CONCURRENCY",
+        default=4,
+        minimum=1,
+    )
 
 
 def resolve_netbox_write_concurrency() -> int:
-    """Get max concurrency for NetBox API write operations (creates/updates)."""
-    raw_value = os.environ.get("PROXBOX_NETBOX_WRITE_CONCURRENCY", "").strip()
-    if not raw_value:
-        return 8
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return 8
-    return max(1, value)
+    """Max concurrency for NetBox API write operations (creates/updates)."""
+    return get_int(
+        settings_key="netbox_write_concurrency",
+        env="PROXBOX_NETBOX_WRITE_CONCURRENCY",
+        default=8,
+        minimum=1,
+    )
 
 
 def resolve_proxmox_fetch_concurrency() -> int:
-    """Get max concurrency for Proxmox API fetch operations (reads)."""
-    raw_value = os.environ.get("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "").strip()
-    if not raw_value:
-        return 8
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return 8
-    return max(1, value)
+    """Max concurrency for Proxmox API fetch operations (reads)."""
+    return get_int(
+        settings_key="proxmox_fetch_concurrency",
+        env="PROXBOX_PROXMOX_FETCH_CONCURRENCY",
+        default=8,
+        minimum=1,
+    )

@@ -126,35 +126,44 @@ Open the nearest scoped guide for the code you are changing.
 
 ## Environment Variables
 
+Most runtime tunables now resolve in order **env var > `ProxboxPluginSettings` (NetBox plugin settings page) > built-in default**, via `proxbox_api/runtime_settings.py`. Setting an env var still works as an override; leaving it unset means the plugin settings page is the authoritative source. The settings cache TTL is 5 minutes, so plugin-side changes take effect without a restart.
+
+### Required in `.env` (process-level, no plugin-settings equivalent)
+
 - `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
-- `PROXBOX_NETBOX_TIMEOUT`: NetBox client timeout in seconds (default: 120).
-- `PROXBOX_NETBOX_MAX_CONCURRENT`: max concurrent NetBox API requests (default: 1, keep low to avoid PostgreSQL pool exhaustion).
-- `PROXBOX_NETBOX_MAX_RETRIES`: retry attempts for transient failures (default: 5).
-- `PROXBOX_NETBOX_RETRY_DELAY`: base retry delay in seconds (default: 2.0).
-- `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: limits concurrent VM sync work.
-- `PROXBOX_FETCH_MAX_CONCURRENCY`: limits concurrent storage, backup, and snapshot fetches.
-- `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins.
-- `PROXBOX_EXPOSE_INTERNAL_ERRORS`: returns raw exception details in 500 responses when enabled.
+- `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 60). Read at app construction.
+- `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins (read at app construction).
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
+- `PROXBOX_GENERATED_DIR`: override output directory for the schema generator CLI (`proxbox-schema`); default is `$XDG_DATA_HOME/proxbox/generated/proxmox` (typically `~/.local/share/proxbox/generated/proxmox`).
 - `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. The raw value is hashed with SHA-256 to derive a Fernet key. Resolution order: env var > `ProxboxPluginSettings.encryption_key` (configurable from the NetBox plugin settings page) > local key file (default `<repo_root>/data/encryption.key`, managed via the `/admin/encryption/*` endpoints) > none. Startup never aborts; if no key is configured, credentials are stored in plaintext and a CRITICAL log is emitted on first encryption attempt.
 - `PROXBOX_ENCRYPTION_KEY_FILE`: optional override for the local key file path used when neither the env var nor the plugin settings provide a key. Defaults to `<repo_root>/data/encryption.key`.
 - `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: legacy opt-in flag for plaintext credential storage. No longer required for startup; kept for compatibility with operators who scripted it.
-- `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 60).
-- `PROXBOX_NETBOX_WRITE_CONCURRENCY`: max concurrent NetBox write operations (default: 8 in VM sync path, 4 in task-history/snapshot paths).
-- `PROXBOX_PROXMOX_FETCH_CONCURRENCY`: max concurrent Proxmox read operations (default: 8 in most paths, 4 in task-history path).
-- `PROXBOX_BACKUP_BATCH_SIZE`: backup sync batch size (default: 5).
-- `PROXBOX_BACKUP_BATCH_DELAY_MS`: delay in milliseconds between backup batches (default: 200).
-- `PROXBOX_BULK_BATCH_SIZE`: per-batch size for bulk VM-related sync requests (default: 50).
-- `PROXBOX_BULK_BATCH_DELAY_MS`: delay in milliseconds between bulk batches (default: 500).
-- `PROXBOX_GENERATED_DIR`: override output directory for the schema generator CLI (`proxbox-schema`); default is `$XDG_DATA_HOME/proxbox/generated/proxmox` (typically `~/.local/share/proxbox/generated/proxmox`).
 
-### Cache Configuration
+### Plugin-managed (env override optional, defaults shown)
 
-- `PROXBOX_NETBOX_GET_CACHE_TTL`: NetBox GET response cache TTL in seconds (default: 60.0, set to 0 to disable)
-- `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES`: maximum cached GET responses by entry count (default: 4096)
-- `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES`: maximum cache size in bytes (default: 52428800 = 50MB)
-- `PROXBOX_DEBUG_CACHE`: enable debug-level cache logging (default: 0)
+Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox plugin settings page.
+
+| Env var | Plugin key | Default |
+|---------|-----------|---------|
+| `PROXBOX_NETBOX_TIMEOUT` | `netbox_timeout` | 120 s |
+| `PROXBOX_NETBOX_MAX_CONCURRENT` | `netbox_max_concurrent` | 1 |
+| `PROXBOX_NETBOX_MAX_RETRIES` | `netbox_max_retries` | 5 |
+| `PROXBOX_NETBOX_RETRY_DELAY` | `netbox_retry_delay` | 2.0 s |
+| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 |
+| `PROXBOX_FETCH_MAX_CONCURRENCY` | `proxbox_fetch_max_concurrency` | 8 |
+| `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 (4 in task-history) |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in task-history/snapshots) |
+| `PROXBOX_BACKUP_BATCH_SIZE` | `backup_batch_size` | 5 |
+| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `backup_batch_delay_ms` | 200 ms |
+| `PROXBOX_BULK_BATCH_SIZE` | `bulk_batch_size` | 50 |
+| `PROXBOX_BULK_BATCH_DELAY_MS` | `bulk_batch_delay_ms` | 500 ms |
+| `PROXBOX_NETBOX_GET_CACHE_TTL` | `netbox_get_cache_ttl` | 60 s (0 = disabled) |
+| `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `netbox_get_cache_max_entries` | 4096 |
+| `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `netbox_get_cache_max_bytes` | 52_428_800 (50 MB) |
+| `PROXBOX_DEBUG_CACHE` | `debug_cache` | false |
+| `PROXBOX_EXPOSE_INTERNAL_ERRORS` | `expose_internal_errors` | false |
+| `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 
 ## Validation
 

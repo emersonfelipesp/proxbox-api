@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
 from datetime import datetime, timezone
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
+from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox_helpers import (
     dump_models,
     get_node_task_status,
@@ -18,8 +18,25 @@ from proxbox_api.services.proxmox_helpers import (
 from proxbox_api.services.sync._helpers import _extract_fk_id, _normalize_text
 from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 
-_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "4")))
-_DEFAULT_VM_SYNC_CONCURRENCY = max(1, int(os.getenv("PROXBOX_NETBOX_WRITE_CONCURRENCY", "4")))
+
+def _resolve_fetch_concurrency() -> int:
+    return get_int(
+        settings_key="proxmox_fetch_concurrency",
+        env="PROXBOX_PROXMOX_FETCH_CONCURRENCY",
+        default=4,
+        minimum=1,
+    )
+
+
+def _resolve_vm_sync_concurrency() -> int:
+    return get_int(
+        settings_key="netbox_write_concurrency",
+        env="PROXBOX_NETBOX_WRITE_CONCURRENCY",
+        default=4,
+        minimum=1,
+    )
+
+
 _TASK_HISTORY_PATCHABLE_FIELDS = frozenset(
     {
         "end_time",
@@ -345,7 +362,7 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
                 }
             )
 
-    vm_sync_semaphore = asyncio.Semaphore(_DEFAULT_VM_SYNC_CONCURRENCY)
+    vm_sync_semaphore = asyncio.Semaphore(_resolve_vm_sync_concurrency())
 
     async def _sync_vm_with_semaphore(vm):
         async with vm_sync_semaphore:
@@ -429,7 +446,7 @@ async def sync_virtual_machine_task_history(  # noqa: C901
         return 0
 
     normalized_tags = [tag for tag in (tag_refs or []) if tag.get("name") and tag.get("slug")]
-    fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
+    fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _resolve_fetch_concurrency())
     seen_upids: set[str] = set()
     now = datetime.now(timezone.utc)
     task_payloads: list[dict[str, object]] = []

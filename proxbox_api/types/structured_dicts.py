@@ -19,14 +19,23 @@ class ProxboxSettingsDict(TypedDict):
     proxbox_fetch_max_concurrency: int
     ignore_ipv6_link_local_addresses: bool
     primary_ip_preference: str
+    netbox_timeout: NotRequired[int]
     netbox_max_concurrent: int
     netbox_max_retries: int
     netbox_retry_delay: float
     netbox_get_cache_ttl: float
+    netbox_get_cache_max_entries: NotRequired[int]
+    netbox_get_cache_max_bytes: NotRequired[int]
+    netbox_write_concurrency: NotRequired[int]
+    proxmox_fetch_concurrency: NotRequired[int]
+    backup_batch_size: NotRequired[int]
+    backup_batch_delay_ms: NotRequired[int]
     bulk_batch_size: int
     bulk_batch_delay_ms: int
     vm_sync_max_concurrency: int
     custom_fields_request_delay: float
+    debug_cache: NotRequired[bool]
+    expose_internal_errors: NotRequired[bool]
     proxmox_timeout: NotRequired[int]
     proxmox_max_retries: NotRequired[int]
     proxmox_retry_backoff: NotRequired[float]

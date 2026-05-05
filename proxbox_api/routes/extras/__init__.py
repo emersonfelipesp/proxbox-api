@@ -1,7 +1,6 @@
 """Extras route handlers for NetBox custom field management."""
 
 import asyncio
-import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -10,6 +9,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxCustomFieldSyncState
+from proxbox_api.runtime_settings import get_float
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep
 from proxbox_api.utils.retry import is_netbox_overwhelmed_error
 
@@ -89,19 +89,12 @@ async def _union_object_types_with_current(
 
 
 def _resolve_custom_field_delay() -> float:
-    """Resolve optional delay between custom-field operations from settings, with env var fallback."""
-    from proxbox_api.settings_client import get_settings
-
-    try:
-        return float(get_settings().get("custom_fields_request_delay", 0.0))
-    except Exception:
-        raw = os.environ.get("PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY", "").strip()
-        if not raw:
-            return 0.0
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            return 0.0
+    return get_float(
+        settings_key="custom_fields_request_delay",
+        env="PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY",
+        default=0.0,
+        minimum=0.0,
+    )
 
 
 @router.get(

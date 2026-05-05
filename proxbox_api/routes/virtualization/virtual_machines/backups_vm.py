@@ -2,7 +2,6 @@
 
 import asyncio
 import inspect
-import os
 from datetime import datetime
 from typing import Annotated
 
@@ -26,6 +25,7 @@ from proxbox_api.netbox_rest import (
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxBackupSyncState
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
+from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox_helpers import dump_models, get_node_storage_content
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -37,29 +37,51 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
-_DEFAULT_FETCH_CONCURRENCY = max(1, int(os.getenv("PROXBOX_PROXMOX_FETCH_CONCURRENCY", "8")))
-_DEFAULT_BACKUP_BATCH_SIZE = max(1, int(os.getenv("PROXBOX_BACKUP_BATCH_SIZE", "5")))
-_DEFAULT_BACKUP_BATCH_DELAY_MS = max(0, int(os.getenv("PROXBOX_BACKUP_BATCH_DELAY_MS", "200")))
+
+
+def _resolve_fetch_concurrency() -> int:
+    return get_int(
+        settings_key="proxmox_fetch_concurrency",
+        env="PROXBOX_PROXMOX_FETCH_CONCURRENCY",
+        default=8,
+        minimum=1,
+    )
+
+
+def _resolve_backup_batch_size() -> int:
+    return get_int(
+        settings_key="backup_batch_size",
+        env="PROXBOX_BACKUP_BATCH_SIZE",
+        default=5,
+        minimum=1,
+    )
+
+
+def _resolve_backup_batch_delay_ms() -> int:
+    return get_int(
+        settings_key="backup_batch_delay_ms",
+        env="PROXBOX_BACKUP_BATCH_DELAY_MS",
+        default=200,
+        minimum=0,
+    )
 
 
 def _resolve_bulk_batch_size() -> int:
-    """Resolve bulk batch size from settings, with env var fallback."""
-    from proxbox_api.settings_client import get_settings
-
-    try:
-        return int(get_settings().get("bulk_batch_size", 50))
-    except Exception:
-        return max(1, int(os.getenv("PROXBOX_BULK_BATCH_SIZE", "50")))
+    return get_int(
+        settings_key="bulk_batch_size",
+        env="PROXBOX_BULK_BATCH_SIZE",
+        default=50,
+        minimum=1,
+    )
 
 
 def _resolve_bulk_batch_delay_ms() -> int:
-    """Resolve bulk batch delay in milliseconds from settings, with env var fallback."""
-    from proxbox_api.settings_client import get_settings
-
-    try:
-        return int(get_settings().get("bulk_batch_delay_ms", 500))
-    except Exception:
-        return max(0, int(os.getenv("PROXBOX_BULK_BATCH_DELAY_MS", "500")))
+    return get_int(
+        settings_key="bulk_batch_delay_ms",
+        env="PROXBOX_BULK_BATCH_DELAY_MS",
+        default=500,
+        minimum=0,
+    )
 
 
 _BACKUP_SUBTYPE_ALIASES: dict[str, str] = {
@@ -564,8 +586,8 @@ async def _bulk_reconcile_backups(  # noqa: C901
 
 async def process_backups_batch(
     backup_tasks: list,
-    batch_size: int = _DEFAULT_BACKUP_BATCH_SIZE,
-    delay_ms: int = _DEFAULT_BACKUP_BATCH_DELAY_MS,
+    batch_size: int | None = None,
+    delay_ms: int | None = None,
 ) -> tuple[list, int]:
     """
     Process a list of backup tasks in batches to avoid overwhelming the API.
@@ -578,6 +600,11 @@ async def process_backups_batch(
     Returns:
         (successful_reconcile_results, failure_count) where failures are exceptions from gather.
     """
+    if batch_size is None:
+        batch_size = _resolve_backup_batch_size()
+    if delay_ms is None:
+        delay_ms = _resolve_backup_batch_delay_ms()
+
     results: list = []
     failures = 0
     total_batches = (len(backup_tasks) + batch_size - 1) // batch_size
@@ -775,7 +802,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
         all_raw_backups: list[dict] = []
         proxmox_backups: set[str] = set()
         discovery_tasks: list[asyncio.Task] = []
-        fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _DEFAULT_FETCH_CONCURRENCY)
+        fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _resolve_fetch_concurrency())
 
         async def _discover_backups_for_node_storage(
             proxmox,
