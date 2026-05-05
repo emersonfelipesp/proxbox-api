@@ -11,6 +11,7 @@ jobs:
     outputs:
       package_name: ${{ steps.meta.outputs.package_name }}
       version: ${{ steps.meta.outputs.version }}
+      should_publish: ${{ steps.meta.outputs.should_publish }}
 
     steps:
       - name: Checkout repository
@@ -48,11 +49,23 @@ jobs:
                   f'Expected project name proxmox-mock-api, got {project_name!r}'
               )
           if event == 'release' and release_tag != f'v{version}':
-              raise SystemExit(
-                  f'Release tag/version mismatch: tag={release_tag!r}, version={version!r}'
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+                  fh.write(
+                      f'package_name={project_name}\n'
+                      f'version={version}\n'
+                      'should_publish=false\n'
+                  )
+              print(
+                  f'Skipping proxmox-mock-api release: '
+                  f'tag={release_tag!r}, version={version!r}'
               )
+              raise SystemExit(0)
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
-              fh.write(f'package_name={project_name}\nversion={version}\n')
+              fh.write(
+                  f'package_name={project_name}\n'
+                  f'version={version}\n'
+                  'should_publish=true\n'
+              )
           PY
 
       - name: Build distribution
@@ -68,6 +81,7 @@ jobs:
 
   publish-testpypi:
     name: publish mock package to TestPyPI
+    if: needs.prepare-release.outputs.should_publish == 'true'
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -103,6 +117,7 @@ jobs:
 
   validate-testpypi:
     name: validate proxmox-mock-api / py${{ matrix.python-version }}
+    if: needs.prepare-release.outputs.should_publish == 'true'
     needs: [prepare-release, publish-testpypi]
     runs-on: ubuntu-latest
     strategy:
@@ -149,7 +164,7 @@ jobs:
 
   publish-docker:
     name: publish proxmox-mock-api Docker image
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' && needs.prepare-release.outputs.should_publish == 'true'
     needs: [prepare-release, validate-testpypi]
     runs-on: ubuntu-latest
     steps:
@@ -183,7 +198,7 @@ jobs:
 
   publish-pypi:
     name: publish mock package to PyPI
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' && needs.prepare-release.outputs.should_publish == 'true'
     needs: [prepare-release, validate-testpypi]
     runs-on: ubuntu-latest
     steps:
