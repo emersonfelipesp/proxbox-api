@@ -943,6 +943,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../ci-e2e-workflows/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI and E2E Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../deployment/" class="md-nav__link">
         
   
@@ -1302,6 +1330,8 @@
 workflow validates packages on TestPyPI first, promotes release candidates on
 PyPI, then publishes the final PyPI release and Docker images only after the
 package is installable.</p>
+<p>For the broader CI job map and NetBox-backed E2E matrix, see
+<a href="../ci-e2e-workflows/">CI and E2E Workflows</a>.</p>
 <h2 id="release-state-machine">Release State Machine<a class="headerlink" href="#release-state-machine" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>flowchart TD
     Start([Choose target release\nX.Y.Z])
@@ -1354,6 +1384,7 @@ package is installable.</p>
 
     Tag-&gt;&gt;WF: vX.Y.ZrcN, release event, or publish_target=pypi
     WF-&gt;&gt;WF: Run candidate checks and pre-publish E2E
+    WF-&gt;&gt;E2E: Wait for NetBox migrations and /api/status/ readiness
     WF-&gt;&gt;PY: Upload package
     WF-&gt;&gt;PY: Reinstall exact package version
     WF-&gt;&gt;DH: Publish raw, nginx, and granian images
@@ -1370,6 +1401,9 @@ package is installable.</p>
   are published.</li>
 <li>Docker image tags use the same version as the PyPI package that passed
   validation.</li>
+<li>Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
+  migrations/search indexing and require <code>/api/status/</code> readiness before
+  configuring tokens or backend endpoints.</li>
 </ul>
 <h2 id="operator-checklist">Operator Checklist<a class="headerlink" href="#operator-checklist" title="Permanent link">&para;</a></h2>
 <ol>

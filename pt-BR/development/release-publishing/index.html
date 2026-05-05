@@ -943,6 +943,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../ci-e2e-workflows/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI and E2E Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../deployment/" class="md-nav__link">
         
   
@@ -1302,6 +1330,8 @@
 <code>proxbox-api</code>. O workflow valida pacotes no TestPyPI primeiro, promove release
 candidates no PyPI, e so publica a release final no PyPI e as imagens Docker
 depois que o pacote esta instalavel.</p>
+<p>Para o mapa completo dos jobs de CI e da matriz E2E com NetBox, veja
+<a href="../ci-e2e-workflows/">Workflows de CI e E2E</a>.</p>
 <h2 id="maquina-de-estados-da-release">Maquina de Estados da Release<a class="headerlink" href="#maquina-de-estados-da-release" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>flowchart TD
     Start([Escolher release alvo\nX.Y.Z])
@@ -1354,6 +1384,7 @@ depois que o pacote esta instalavel.</p>
 
     Tag-&gt;&gt;WF: vX.Y.ZrcN, evento de release, ou publish_target=pypi
     WF-&gt;&gt;WF: Rodar checks da candidata e E2E pre-publicacao
+    WF-&gt;&gt;E2E: Aguardar migracoes do NetBox e /api/status/
     WF-&gt;&gt;PY: Upload do pacote
     WF-&gt;&gt;PY: Reinstalar versao exata do pacote
     WF-&gt;&gt;DH: Publicar imagens raw, nginx e granian
@@ -1370,6 +1401,9 @@ depois que o pacote esta instalavel.</p>
 <li>Publicacao no PyPI precisa passar pela validacao de reinstalacao do pacote
   antes das imagens Docker serem publicadas.</li>
 <li>Tags Docker usam a mesma versao do pacote PyPI que passou na validacao.</li>
+<li>Jobs E2E pre-publicacao e pos-publicacao aguardam ate 20 minutos para o
+  NetBox concluir migracoes/indexacao e exigem <code>/api/status/</code> pronto antes de
+  configurar tokens ou endpoints do backend.</li>
 </ul>
 <h2 id="checklist-operacional">Checklist Operacional<a class="headerlink" href="#checklist-operacional" title="Permanent link">&para;</a></h2>
 <ol>

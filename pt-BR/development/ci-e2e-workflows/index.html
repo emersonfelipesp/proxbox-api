@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="en" class="no-js">
+<html lang="pt" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -10,32 +10,32 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/sync/overwrite-flags/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/ci-e2e-workflows/">
       
       
-        <link rel="prev" href="../reconciliation-architecture/">
+        <link rel="prev" href="../testing/">
       
       
-        <link rel="next" href="../../development/schema-management/">
+        <link rel="next" href="../deployment/">
       
       
         
-          <link rel="alternate" href="./" hreflang="en">
+          <link rel="alternate" href="../../../development/ci-e2e-workflows/" hreflang="en">
         
-          <link rel="alternate" href="../../pt-BR/sync/overwrite-flags/" hreflang="pt-BR">
+          <link rel="alternate" href="./" hreflang="pt-BR">
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Overwrite Flags - proxbox-api</title>
+        <title>CI and E2E Workflows - proxbox-api</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -54,7 +54,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -72,8 +72,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#overwrite-flags" class="md-skip">
-          Skip to content
+        <a href="#workflows-de-ci-e-e2e" class="md-skip">
+          Pular para conteúdo
         </a>
       
     </div>
@@ -87,8 +87,8 @@
   
 
 <header class="md-header md-header--shadow" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="Cabeçalho">
+    <a href="../../" title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Overwrite Flags
+              CI and E2E Workflows
             
           </span>
         </div>
@@ -122,20 +122,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="Select language">
+    <button class="md-header__button md-icon" aria-label="Selecione o idioma">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="./" hreflang="en" class="md-select__link">
+            <a href="../../../development/ci-e2e-workflows/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="../../pt-BR/sync/overwrite-flags/" hreflang="pt-BR" class="md-select__link">
+            <a href="./" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -156,16 +156,16 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="Buscar" placeholder="Buscar" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="Search">
+      <nav class="md-search__options" aria-label="Pesquisar">
         
-        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="Limpar" aria-label="Limpar" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -176,7 +176,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            Initializing search
+            Inicializando busca
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -188,7 +188,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
+        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -222,9 +222,9 @@
 
 
 
-<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+<nav class="md-nav md-nav--primary" aria-label="Navegação" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+    <a href="../../" title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -234,7 +234,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
+      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -254,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -685,8 +685,6 @@
       
   
   
-    
-  
   
   
     
@@ -699,11 +697,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
@@ -724,7 +724,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -742,7 +742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../workflows/" class="md-nav__link">
+      <a href="../../sync/workflows/" class="md-nav__link">
         
   
   
@@ -770,7 +770,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reconciliation-architecture/" class="md-nav__link">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
         
   
   
@@ -778,6 +778,151 @@
     
   
     VM Reconciliation Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/overwrite-flags/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
   
 
     
@@ -814,7 +959,7 @@
   <span class="md-ellipsis">
     
   
-    Overwrite Flags
+    CI and E2E Workflows
   
 
     
@@ -832,7 +977,7 @@
   <span class="md-ellipsis">
     
   
-    Overwrite Flags
+    CI and E2E Workflows
   
 
     
@@ -844,7 +989,7 @@
       
         
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
   
   
   
@@ -853,15 +998,15 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      Índice
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-the-flags-do" class="md-nav__link">
+  <a href="#mapa-dos-workflows" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What the flags do
+        Mapa dos workflows
       
     </span>
   </a>
@@ -869,10 +1014,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#schema" class="md-nav__link">
+  <a href="#fluxo-do-ci" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Schema
+        Fluxo do CI
       
     </span>
   </a>
@@ -880,10 +1025,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-it-reaches-the-routes" class="md-nav__link">
+  <a href="#stack-e2e" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How it reaches the routes
+        Stack E2E
       
     </span>
   </a>
@@ -891,54 +1036,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-it-reaches-the-reconciler" class="md-nav__link">
+  <a href="#validacao-de-release" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How it reaches the reconciler
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#where-the-device-flags-are-enforced" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Where the device flags are enforced
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#plugin-contract" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Plugin contract
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#inheritance-and-resolution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Inheritance and resolution
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related
+        Validacao de release
       
     </span>
   </a>
@@ -954,67 +1055,6 @@
 
               
             
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
-        
-          
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Development
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Development
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
               
                 
   
@@ -1022,91 +1062,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/schema-management/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Schema Management
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/testing/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Testing
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/ci-e2e-workflows/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    CI and E2E Workflows
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/deployment/" class="md-nav__link">
+      <a href="../deployment/" class="md-nav__link">
         
   
   
@@ -1134,7 +1090,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/release-publishing/" class="md-nav__link">
+      <a href="../release-publishing/" class="md-nav__link">
         
   
   
@@ -1162,7 +1118,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/troubleshooting/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -1190,7 +1146,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/contributing/" class="md-nav__link">
+      <a href="../contributing/" class="md-nav__link">
         
   
   
@@ -1218,7 +1174,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/refactoring-summary/" class="md-nav__link">
+      <a href="../refactoring-summary/" class="md-nav__link">
         
   
   
@@ -1246,7 +1202,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/sync-fix-summary/" class="md-nav__link">
+      <a href="../sync-fix-summary/" class="md-nav__link">
         
   
   
@@ -1287,7 +1243,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
   
   
   
@@ -1296,15 +1252,15 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      Índice
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-the-flags-do" class="md-nav__link">
+  <a href="#mapa-dos-workflows" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What the flags do
+        Mapa dos workflows
       
     </span>
   </a>
@@ -1312,10 +1268,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#schema" class="md-nav__link">
+  <a href="#fluxo-do-ci" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Schema
+        Fluxo do CI
       
     </span>
   </a>
@@ -1323,10 +1279,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-it-reaches-the-routes" class="md-nav__link">
+  <a href="#stack-e2e" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How it reaches the routes
+        Stack E2E
       
     </span>
   </a>
@@ -1334,54 +1290,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-it-reaches-the-reconciler" class="md-nav__link">
+  <a href="#validacao-de-release" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How it reaches the reconciler
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#where-the-device-flags-are-enforced" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Where the device flags are enforced
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#plugin-contract" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Plugin contract
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#inheritance-and-resolution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Inheritance and resolution
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related
+        Validacao de release
       
     </span>
   </a>
@@ -1405,7 +1317,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/sync/overwrite-flags.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/development/ci-e2e-workflows.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1413,166 +1325,133 @@
   
 
 
-<h1 id="overwrite-flags">Overwrite Flags<a class="headerlink" href="#overwrite-flags" title="Permanent link">&para;</a></h1>
-<p><code>SyncOverwriteFlags</code> is the per-field gate the netbox-proxbox plugin uses to
-control whether a given Proxmox-derived value will replace an existing NetBox
-value during reconciliation. It is the API-side counterpart of the plugin's
-<code>overwrite_*</code> boolean fields and the per-endpoint Settings tab.</p>
-<h2 id="what-the-flags-do">What the flags do<a class="headerlink" href="#what-the-flags-do" title="Permanent link">&para;</a></h2>
-<p>Each flag toggles whether one NetBox key is included in the <code>patchable_fields</code>
-allowlist passed to <code>rest_reconcile_async</code> / <code>rest_bulk_reconcile_async</code>. When a
-flag is <code>False</code>, the corresponding key is dropped from the allowlist, so the
-PATCH payload sent to NetBox no longer touches that field. New objects are
-always populated with the Proxmox value on first create — flags only gate
-updates to existing objects.</p>
-<p><code>True</code> (the default) preserves the historical always-overwrite behavior. Any
-flag set to <code>None</code> on the plugin side falls back to the global default
-configured on the <code>ProxboxPluginSettings</code> row.</p>
-<h2 id="schema">Schema<a class="headerlink" href="#schema" title="Permanent link">&para;</a></h2>
-<p>The flags live in
-<a href="https://github.com/emersonfelipesp/proxbox-api/blob/main/proxbox_api/schemas/sync.py"><code>proxbox_api/schemas/sync.py</code></a>
-as <code>SyncOverwriteFlags</code>, a <code>ProxboxBaseModel</code>. There are 21 boolean fields
-grouped by NetBox resource:</p>
+<h1 id="workflows-de-ci-e-e2e">Workflows de CI e E2E<a class="headerlink" href="#workflows-de-ci-e-e2e" title="Permanent link">&para;</a></h1>
+<p>Esta pagina documenta a superficie de GitHub Actions para desenvolvedores do
+<code>proxbox-api</code>: validacao rapida, smoke tests de imagens Docker, matriz E2E com
+NetBox e publicacao em etapas.</p>
+<h2 id="mapa-dos-workflows">Mapa dos workflows<a class="headerlink" href="#mapa-dos-workflows" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Group</th>
-<th>Flags</th>
+<th>Workflow</th>
+<th>Gatilho</th>
+<th>Finalidade</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Device</td>
-<td><code>overwrite_device_role</code>, <code>overwrite_device_type</code>, <code>overwrite_device_tags</code>, <code>overwrite_device_status</code>, <code>overwrite_device_description</code>, <code>overwrite_device_custom_fields</code></td>
+<td><code>.github/workflows/ci.yml</code></td>
+<td>Push, pull request, release, dispatch manual</td>
+<td>Roda checagens principais e a matriz E2E Docker com NetBox + Proxmox.</td>
 </tr>
 <tr>
-<td>Virtual Machine</td>
-<td><code>overwrite_vm_role</code>, <code>overwrite_vm_tags</code>, <code>overwrite_vm_description</code>, <code>overwrite_vm_custom_fields</code></td>
+<td><code>.github/workflows/publish-testpypi.yml</code></td>
+<td>Tag de versao, GitHub release, dispatch manual</td>
+<td>Publica versoes imutaveis no TestPyPI, candidatos PyPI, releases finais PyPI, imagens Docker e E2E pos-publicacao.</td>
 </tr>
 <tr>
-<td>Cluster</td>
-<td><code>overwrite_cluster_tags</code>, <code>overwrite_cluster_description</code>, <code>overwrite_cluster_custom_fields</code></td>
+<td><code>.github/workflows/docker-hub-publish.yml</code></td>
+<td>Workflow reutilizavel / dispatch manual</td>
+<td>Constroi e publica variantes raw, nginx e granian da imagem Docker.</td>
 </tr>
 <tr>
-<td>Node Interface</td>
-<td><code>overwrite_node_interface_tags</code>, <code>overwrite_node_interface_custom_fields</code></td>
+<td><code>.github/workflows/release-docker-verify.yml</code></td>
+<td>Release / dispatch manual</td>
+<td>Baixa as tags Docker publicadas e verifica startup dos conteineres.</td>
 </tr>
 <tr>
-<td>Storage</td>
-<td><code>overwrite_storage_tags</code></td>
+<td><code>.github/workflows/docs.yml</code></td>
+<td>Mudancas de docs em main / PR</td>
+<td>Constroi e publica o site MkDocs.</td>
 </tr>
 <tr>
-<td>VM Interface</td>
-<td><code>overwrite_vm_interface_tags</code>, <code>overwrite_vm_interface_custom_fields</code></td>
-</tr>
-<tr>
-<td>IP Address</td>
-<td><code>overwrite_ip_status</code>, <code>overwrite_ip_tags</code>, <code>overwrite_ip_custom_fields</code></td>
+<td><code>.github/workflows/nightly-schema-refresh.yml</code></td>
+<td>Agendamento / dispatch manual</td>
+<td>Atualiza schemas Proxmox gerados e abre PR quando houver mudanca.</td>
 </tr>
 </tbody>
 </table>
-<p>The flag list, order, and default value (<code>True</code>) must stay in lock-step with
-<code>netbox_proxbox.constants.OVERWRITE_FIELDS</code> on the plugin side.</p>
-<h2 id="how-it-reaches-the-routes">How it reaches the routes<a class="headerlink" href="#how-it-reaches-the-routes" title="Permanent link">&para;</a></h2>
-<p>Each sync route accepts the schema as a flattened query group:</p>
-<p>```python
-from typing import Annotated
-from fastapi import Query
-from proxbox_api.schemas.sync import SyncOverwriteFlags</p>
-<p>@router.get("/devices/create/stream")
-async def create_devices_stream(
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
-):
-    ...
-```</p>
-<p>FastAPI flattens the model: the URL <code>?overwrite_device_tags=false</code> is
-equivalent to constructing <code>SyncOverwriteFlags(overwrite_device_tags=False)</code>.</p>
-<p>For VM sync routes, <code>overwrite_vm_role</code>, <code>overwrite_vm_tags</code>,
-<code>overwrite_vm_description</code>, and <code>overwrite_vm_custom_fields</code> are also exposed
-as flat top-level query parameters for backward compatibility. When both are
-present, the flat parameter wins; when only the flat parameter is omitted
-(<code>None</code>), the corresponding field on <code>overwrite_flags</code> is used. Resolution is
-done at the entry of each route via the
-<code>_resolve_vm_overwrites(...)</code> helper in
-<code>proxbox_api/routes/virtualization/virtual_machines/sync_vm.py</code>.</p>
-<p>The DCIM device sync route does <strong>not</strong> expose flat <code>overwrite_device_*</code> query
-parameters — all device flags are driven through the <code>overwrite_flags</code> group.</p>
-<h2 id="how-it-reaches-the-reconciler">How it reaches the reconciler<a class="headerlink" href="#how-it-reaches-the-reconciler" title="Permanent link">&para;</a></h2>
-<p>Service modules (e.g. <code>services/sync/storages.py</code>,
-<code>services/sync/network.py</code>, <code>services/sync/device_ensure.py</code>,
-<code>services/sync/devices.py</code>, <code>services/sync/bridge_interfaces.py</code>) accept
-<code>overwrite_flags: SyncOverwriteFlags | None = None</code>. Each service builds its
-own <code>patchable_fields</code> set — typically all "scalar" identity fields
-unconditionally, plus optional keys gated on the per-resource flag — and
-passes it into the reconciler:</p>
-<p>```python
-patchable: set[str] = {"name", "virtual_machine", "enabled", ...}
-if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_tags:
-    patchable.add("tags")
-if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields:
-    patchable.add("custom_fields")</p>
-<p>await rest_bulk_reconcile_async(
-    nb,
-    "/api/virtualization/interfaces/",
-    payloads=interface_payloads,
-    patchable_fields=frozenset(patchable),
-    ...,
-)
-```</p>
-<p>Setting <code>overwrite_flags=None</code> (or omitting it) keeps every key patchable,
-which preserves the historical always-overwrite semantics required by
-older callers.</p>
-<h2 id="where-the-device-flags-are-enforced">Where the device flags are enforced<a class="headerlink" href="#where-the-device-flags-are-enforced" title="Permanent link">&para;</a></h2>
-<p>The <code>overwrite_device_role</code>, <code>overwrite_device_type</code>, and
-<code>overwrite_device_tags</code> flags are honored on <strong>two</strong> distinct write paths,
-because a single Proxmox-to-NetBox sync can touch a parent <code>Device</code> record
-from either side:</p>
+<h2 id="fluxo-do-ci">Fluxo do CI<a class="headerlink" href="#fluxo-do-ci" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    Push[Push / PR / execucao manual]
+    Core[test\nruff + ty + compile + pytest]
+    Py311[test-py311-floor\ncompile + pytest core]
+    Free[test-free-threaded\ncontinue-on-error]
+    Bind[Docker bind-host smoke\nraw + granian]
+    Setup[setup\ngera matriz E2E]
+    BuildNB[build-netbox-image\nso se pull do registro falhar]
+    E2E[e2e-docker\nmatriz transporte x versao NetBox]
+
+    Push --&gt; Core
+    Push --&gt; Py311
+    Push --&gt; Free
+    Push --&gt; Bind
+    Push --&gt; Setup
+    Setup --&gt; BuildNB
+    Core --&gt; E2E
+    Setup --&gt; E2E
+    BuildNB --&gt; E2E</code></pre>
+<p>Os jobs E2E tentam baixar primeiro a imagem publica do NetBox. Eles so baixam o
+artefato de imagem construido a partir do codigo-fonte quando esse pull falha.</p>
+<h2 id="stack-e2e">Stack E2E<a class="headerlink" href="#stack-e2e" title="Permanent link">&para;</a></h2>
+<p>O <code>ci.yml</code> sobe uma stack real e verifica que o <code>proxbox-api</code> consegue
+autenticar, configurar endpoints do NetBox e rodar testes de sincronizacao em
+todos os transportes suportados.</p>
+<pre class="mermaid"><code>flowchart LR
+    GA[GitHub Actions runner]
+
+    subgraph Stack[Docker network: proxbox-e2e]
+        NB[Container NetBox\nnetbox-proxbox instalado]
+        NGINX[nginx HTTPS opcional]
+        API[Container proxbox-api\ntarget raw, nginx ou granian]
+        PM[Container mock Proxmox\nproxmox-sdk:latest]
+        PG[(PostgreSQL)]
+        RD[(Redis)]
+    end
+
+    GA --&gt; NB
+    GA --&gt; API
+    GA --&gt; PM
+    NB --&gt; PG
+    NB --&gt; RD
+    API --&gt;|REST NetBox| NB
+    API --&gt;|API Proxmox| PM
+    NGINX --&gt; NB</code></pre>
+<p>Regras importantes do E2E:</p>
 <ul>
-<li><strong>Bulk DCIM path</strong> — <code>ensure_proxmox_devices_bulk()</code> in
-  <code>services/sync/device_ensure.py</code> runs during a full cluster/node sync.</li>
-<li><strong>Per-VM path</strong> — <code>_ensure_device()</code> in the same module runs during a
-  single VM sync (and during VM sync streaming) to materialize the VM's
-  parent <code>Device</code> if it is not already in NetBox.</li>
+<li>A prontidao do NetBox aguarda ate 20 minutos por migracoes/indexacao.</li>
+<li><code>/api/status/</code> precisa estar pronto antes de configurar tokens e endpoints.</li>
+<li>Testes Docker com mock Proxmox usam o marker <code>mock_http</code>.</li>
+<li>A passagem em processo com <code>MockBackend</code> roda separadamente com o marker
+  <code>mock_backend</code>.</li>
+<li>Eventos de release rodam modos <code>dev</code> e <code>pypi</code> do <code>netbox-proxbox</code>; CI normal
+  de push/PR usa o modo de desenvolvimento.</li>
 </ul>
-<p>Both paths build their <code>patchable_fields</code> set through the shared helper
-<code>_compute_device_patchable_fields(...)</code>, which is the single source of
-truth for the device allowlist. This guarantees that flipping
-<code>overwrite_device_type=False</code> survives <strong>every</strong> sync mode — issue #342
-was a regression from the per-VM path bypassing the allowlist and
-silently reverting <code>device_type</code> to <code>Proxmox Generic Device</code>.</p>
-<h2 id="plugin-contract">Plugin contract<a class="headerlink" href="#plugin-contract" title="Permanent link">&para;</a></h2>
-<p>The plugin and the API rely on the same flag names being canonical on both
-ends:</p>
-<ul>
-<li>Plugin: <code>netbox_proxbox/constants.py::OVERWRITE_FIELDS</code> (single source of
-  truth on the plugin side)</li>
-<li>API: <code>proxbox_api/schemas/sync.py::SyncOverwriteFlags.model_fields</code></li>
-</ul>
-<p>Adding, removing, or reordering flags must be done on both repos in the same
-release. The cross-repo <code>tests/test_overwrite_flags_contract.py</code> (in both
-projects) compares each side against a committed JSON manifest and fails CI on
-drift.</p>
-<h2 id="inheritance-and-resolution">Inheritance and resolution<a class="headerlink" href="#inheritance-and-resolution" title="Permanent link">&para;</a></h2>
-<p>The plugin resolves the per-endpoint values by combining the global plugin
-settings with the per-<code>ProxmoxEndpoint</code> overrides. The per-endpoint table uses
-<code>NullBooleanField</code>s so each row is tri-state:</p>
-<ul>
-<li><code>True</code> — override: always overwrite for this endpoint</li>
-<li><code>False</code> — override: never overwrite for this endpoint</li>
-<li><code>None</code> — inherit from the global setting</li>
-</ul>
-<p>The plugin's <code>effective_overwrites_for_endpoint(...)</code> flattens the resolved
-booleans into the SSE query string forwarded to proxbox-api, where they
-materialize as <code>SyncOverwriteFlags</code> query parameters.</p>
-<h2 id="related">Related<a class="headerlink" href="#related" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Plugin docs: <code>docs/configuration/sync-overwrite-flags.md</code> (in the
-  netbox-proxbox repo) covers the UI, the Settings tab, and the inheritance
-  model.</li>
-<li>API tests: <code>tests/test_sync_overwrite_flags.py</code> and
-  <code>tests/test_patchable_fields.py</code> lock in the schema contract and the
-  per-service propagation.</li>
-</ul>
+<h2 id="validacao-de-release">Validacao de release<a class="headerlink" href="#validacao-de-release" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Tag as Tag de versao
+    participant WF as publish-testpypi.yml
+    participant TP as TestPyPI
+    participant PY as PyPI
+    participant DH as Docker Hub
+    participant E2E as Stack E2E NetBox
+
+    Tag-&gt;&gt;WF: vX.Y.Z ou vX.Y.Z.postN
+    WF-&gt;&gt;WF: Validar pyproject + uv.lock + tag
+    WF-&gt;&gt;TP: Publicar proxbox-api
+    WF-&gt;&gt;TP: Reinstalar versao exata em Python 3.11, 3.12, 3.13
+    WF-&gt;&gt;WF: Rodar lint, tipos, compile, import, schema e pytest
+
+    Tag-&gt;&gt;WF: vX.Y.ZrcN, release event, ou publish_target=pypi
+    WF-&gt;&gt;E2E: Rodar E2E pre-publicacao com dependencias dev
+    WF-&gt;&gt;PY: Publicar proxbox-api
+    WF-&gt;&gt;PY: Reinstalar pacote exato
+    WF-&gt;&gt;DH: Publicar imagens raw, nginx, granian
+    WF-&gt;&gt;E2E: Rodar E2E pos-publicacao com pacote + imagem publicados</code></pre>
+<p>Uploads de pacote intencionalmente nao usam <code>twine --skip-existing</code>. Se alguma
+validacao falhar depois do upload, publique uma versao fix-forward:
+<code>vX.Y.Z.postN</code> para TestPyPI ou correcoes pos-release, e <code>vX.Y.ZrcN</code> para novas
+tentativas de release candidate no PyPI.</p>
 
 
 
@@ -1596,7 +1475,7 @@ materialize as <code>SyncOverwriteFlags</code> query parameters.</p>
           <button type="button" class="md-top md-icon" data-md-component="top" hidden>
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
-  Back to top
+  Voltar para o topo
 </button>
         
       </main>
@@ -1628,10 +1507,10 @@ materialize as <code>SyncOverwriteFlags</code> query parameters.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado para \u00e1rea de transfer\u00eancia", "clipboard.copy": "Copiar para \u00e1rea de transfer\u00eancia", "search.result.more.one": "mais 1 nesta p\u00e1gina", "search.result.more.other": "# mais nesta p\u00e1gina", "search.result.none": "Nenhum documento encontrado", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Digite para iniciar a busca", "search.result.term.missing": "Ausente", "select.version": "Selecione a vers\u00e3o"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>
