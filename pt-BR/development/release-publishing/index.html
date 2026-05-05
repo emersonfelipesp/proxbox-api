@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="en" class="no-js">
+<html lang="pt" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -10,32 +10,32 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/sync/reconciliation-architecture/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/release-publishing/">
       
       
-        <link rel="prev" href="../workflows/">
+        <link rel="prev" href="../deployment/">
       
       
-        <link rel="next" href="../overwrite-flags/">
+        <link rel="next" href="../troubleshooting/">
       
       
         
-          <link rel="alternate" href="./" hreflang="en">
+          <link rel="alternate" href="../../../development/release-publishing/" hreflang="en">
         
-          <link rel="alternate" href="../../pt-BR/sync/reconciliation-architecture/" hreflang="pt-BR">
+          <link rel="alternate" href="./" hreflang="pt-BR">
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>VM Reconciliation Architecture - proxbox-api</title>
+        <title>Release Publishing - proxbox-api</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -54,7 +54,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -72,8 +72,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#vm-reconciliation-architecture" class="md-skip">
-          Skip to content
+        <a href="#publicacao-de-release" class="md-skip">
+          Pular para conteúdo
         </a>
       
     </div>
@@ -87,8 +87,8 @@
   
 
 <header class="md-header md-header--shadow" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="Cabeçalho">
+    <a href="../../" title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              VM Reconciliation Architecture
+              Release Publishing
             
           </span>
         </div>
@@ -122,20 +122,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="Select language">
+    <button class="md-header__button md-icon" aria-label="Selecione o idioma">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="./" hreflang="en" class="md-select__link">
+            <a href="../../../development/release-publishing/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="../../pt-BR/sync/reconciliation-architecture/" hreflang="pt-BR" class="md-select__link">
+            <a href="./" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -156,16 +156,16 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="Buscar" placeholder="Buscar" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="Search">
+      <nav class="md-search__options" aria-label="Pesquisar">
         
-        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="Limpar" aria-label="Limpar" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -176,7 +176,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            Initializing search
+            Inicializando busca
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -188,7 +188,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
+        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -222,9 +222,9 @@
 
 
 
-<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+<nav class="md-nav md-nav--primary" aria-label="Navegação" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+    <a href="../../" title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -234,7 +234,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
+      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -254,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -685,8 +685,6 @@
       
   
   
-    
-  
   
   
     
@@ -699,11 +697,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
@@ -724,7 +724,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -742,7 +742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../workflows/" class="md-nav__link">
+      <a href="../../sync/workflows/" class="md-nav__link">
         
   
   
@@ -750,6 +750,207 @@
     
   
     Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Reconciliation Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/overwrite-flags/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
   
 
     
@@ -786,7 +987,7 @@
   <span class="md-ellipsis">
     
   
-    VM Reconciliation Architecture
+    Release Publishing
   
 
     
@@ -804,7 +1005,7 @@
   <span class="md-ellipsis">
     
   
-    VM Reconciliation Architecture
+    Release Publishing
   
 
     
@@ -816,7 +1017,7 @@
       
         
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
   
   
   
@@ -825,15 +1026,15 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      Índice
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-this-architecture-exists" class="md-nav__link">
+  <a href="#maquina-de-estados-da-release" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why This Architecture Exists
+        Maquina de Estados da Release
       
     </span>
   </a>
@@ -841,121 +1042,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#execution-phases" class="md-nav__link">
+  <a href="#lanes-do-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Execution Phases
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Execution Phases">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#phase-1-dependency-preflight" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 1: Dependency Preflight
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-2-proxmox-read-snapshot-parallel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 2: Proxmox Read Snapshot (Parallel)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-3-netbox-read-snapshot-in-memory" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 3: NetBox Read Snapshot (In-Memory)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-4-pydantic-reconciliation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 4: Pydantic Reconciliation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-5-sequential-netbox-dispatch-in-batch-windows" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 5: Sequential NetBox Dispatch in Batch Windows
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mermaid-diagrams" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Mermaid Diagrams
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Mermaid Diagrams">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#end-to-end-reconciliation-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        End-to-End Reconciliation Flow
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#parallel-read-sequential-write-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Parallel Read + Sequential Write Model
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operation-semantics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Operation Semantics
+        Lanes do Workflow
       
     </span>
   </a>
@@ -963,10 +1053,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-and-tuning" class="md-nav__link">
+  <a href="#regras-do-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration and Tuning
+        Regras do Workflow
       
     </span>
   </a>
@@ -974,10 +1064,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#benefits" class="md-nav__link">
+  <a href="#checklist-operacional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Benefits
+        Checklist Operacional
       
     </span>
   </a>
@@ -1000,208 +1090,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overwrite-flags/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Overwrite Flags
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
-        
-          
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Development
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Development
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/schema-management/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Schema Management
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/testing/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Testing
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/deployment/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Deployment
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/release-publishing/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Release Publishing
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../development/troubleshooting/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -1229,7 +1118,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/contributing/" class="md-nav__link">
+      <a href="../contributing/" class="md-nav__link">
         
   
   
@@ -1257,7 +1146,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/refactoring-summary/" class="md-nav__link">
+      <a href="../refactoring-summary/" class="md-nav__link">
         
   
   
@@ -1285,7 +1174,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../development/sync-fix-summary/" class="md-nav__link">
+      <a href="../sync-fix-summary/" class="md-nav__link">
         
   
   
@@ -1326,7 +1215,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
   
   
   
@@ -1335,15 +1224,15 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      Índice
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-this-architecture-exists" class="md-nav__link">
+  <a href="#maquina-de-estados-da-release" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why This Architecture Exists
+        Maquina de Estados da Release
       
     </span>
   </a>
@@ -1351,121 +1240,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#execution-phases" class="md-nav__link">
+  <a href="#lanes-do-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Execution Phases
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Execution Phases">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#phase-1-dependency-preflight" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 1: Dependency Preflight
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-2-proxmox-read-snapshot-parallel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 2: Proxmox Read Snapshot (Parallel)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-3-netbox-read-snapshot-in-memory" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 3: NetBox Read Snapshot (In-Memory)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-4-pydantic-reconciliation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 4: Pydantic Reconciliation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-5-sequential-netbox-dispatch-in-batch-windows" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 5: Sequential NetBox Dispatch in Batch Windows
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mermaid-diagrams" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Mermaid Diagrams
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Mermaid Diagrams">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#end-to-end-reconciliation-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        End-to-End Reconciliation Flow
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#parallel-read-sequential-write-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Parallel Read + Sequential Write Model
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operation-semantics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Operation Semantics
+        Lanes do Workflow
       
     </span>
   </a>
@@ -1473,10 +1251,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-and-tuning" class="md-nav__link">
+  <a href="#regras-do-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration and Tuning
+        Regras do Workflow
       
     </span>
   </a>
@@ -1484,10 +1262,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#benefits" class="md-nav__link">
+  <a href="#checklist-operacional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Benefits
+        Checklist Operacional
       
     </span>
   </a>
@@ -1511,7 +1289,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/sync/reconciliation-architecture.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/development/release-publishing.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1519,140 +1297,92 @@
   
 
 
-<h1 id="vm-reconciliation-architecture">VM Reconciliation Architecture<a class="headerlink" href="#vm-reconciliation-architecture" title="Permanent link">&para;</a></h1>
-<p>This page documents the VM full-sync reconciliation architecture used by <code>proxbox-api</code> when VM sync runs in full-update mode (<code>sync_vm_network=false</code>).</p>
-<p>The design goal is to maximize read throughput from Proxmox while keeping NetBox write pressure low and deterministic.</p>
-<h2 id="why-this-architecture-exists">Why This Architecture Exists<a class="headerlink" href="#why-this-architecture-exists" title="Permanent link">&para;</a></h2>
-<p>The old model mixed fetch/reconcile/write per VM and could interleave many NetBox writes while still discovering data.</p>
-<p>The new model separates the workflow into explicit phases:</p>
-<ol>
-<li>Read all required Proxmox VM inputs into memory (parallel).</li>
-<li>Read all required NetBox VM state into memory (single snapshot pass).</li>
-<li>Compare desired vs current with Pydantic-normalized payloads.</li>
-<li>Build a deterministic operation queue (<code>GET</code>, <code>CREATE</code>, <code>UPDATE</code>).</li>
-<li>Dispatch operations sequentially in batch windows controlled by global configuration.</li>
-</ol>
-<p>This keeps NetBox updates controlled for a single shared NetBox instance while still allowing parallel Proxmox data collection.</p>
-<h2 id="execution-phases">Execution Phases<a class="headerlink" href="#execution-phases" title="Permanent link">&para;</a></h2>
-<h3 id="phase-1-dependency-preflight">Phase 1: Dependency Preflight<a class="headerlink" href="#phase-1-dependency-preflight" title="Permanent link">&para;</a></h3>
-<p>Before reconciling VMs, the sync ensures parent dependencies in NetBox:</p>
-<ul>
-<li>Manufacturer</li>
-<li>Device type</li>
-<li>Proxmox node role</li>
-<li>Cluster type</li>
-<li>Cluster</li>
-<li>Site</li>
-<li>Node device</li>
-<li>VM role (QEMU/LXC)</li>
-</ul>
-<p>These are required for deterministic VM payload generation.</p>
-<h3 id="phase-2-proxmox-read-snapshot-parallel">Phase 2: Proxmox Read Snapshot (Parallel)<a class="headerlink" href="#phase-2-proxmox-read-snapshot-parallel" title="Permanent link">&para;</a></h3>
-<p>For each VM candidate, sync prepares an in-memory state object containing:</p>
-<ul>
-<li>Cluster + VM identity</li>
-<li>Proxmox VM resource record</li>
-<li>Proxmox VM config</li>
-<li>Normalized desired NetBox VM payload</li>
-<li>NetBox lookup keys (cluster + <code>cf_proxmox_vm_id</code>)</li>
-</ul>
-<p>Preparation runs with bounded concurrency using <code>asyncio.gather</code> + semaphore.</p>
-<h3 id="phase-3-netbox-read-snapshot-in-memory">Phase 3: NetBox Read Snapshot (In-Memory)<a class="headerlink" href="#phase-3-netbox-read-snapshot-in-memory" title="Permanent link">&para;</a></h3>
-<p>The sync reads all NetBox VMs in paginated batches (<code>limit/offset</code>) and builds an in-memory index keyed by:</p>
-<ul>
-<li><code>(cluster_id, proxmox_vm_id)</code></li>
-</ul>
-<p>This avoids repeated NetBox list/filter calls during per-VM comparison.</p>
-<h3 id="phase-4-pydantic-reconciliation">Phase 4: Pydantic Reconciliation<a class="headerlink" href="#phase-4-pydantic-reconciliation" title="Permanent link">&para;</a></h3>
-<p>For each prepared VM:</p>
-<ol>
-<li>Validate desired payload with <code>NetBoxVirtualMachineCreateBody</code>.</li>
-<li>Normalize current NetBox record with the same schema.</li>
-<li>Compute delta fields.</li>
-</ol>
-<p>Classification result:</p>
-<ul>
-<li><code>GET</code>: Object exists and no delta.</li>
-<li><code>CREATE</code>: Object missing in snapshot index.</li>
-<li><code>UPDATE</code>: Object exists and delta is non-empty.</li>
-</ul>
-<h3 id="phase-5-sequential-netbox-dispatch-in-batch-windows">Phase 5: Sequential NetBox Dispatch in Batch Windows<a class="headerlink" href="#phase-5-sequential-netbox-dispatch-in-batch-windows" title="Permanent link">&para;</a></h3>
-<p>Operations are executed in deterministic queue order.</p>
-<ul>
-<li>Batch window size is read from <code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code>.</li>
-<li>Inside each batch window, writes are still executed one-by-one (sequential).</li>
-<li><code>GET</code> operations are no-op reads from in-memory state.</li>
-<li><code>CREATE</code> operations call NetBox create.</li>
-<li><code>UPDATE</code> operations call NetBox patch by record ID.</li>
-</ul>
-<p>After object reconciliation, VM task-history sync is executed per resolved VM record.</p>
-<h2 id="mermaid-diagrams">Mermaid Diagrams<a class="headerlink" href="#mermaid-diagrams" title="Permanent link">&para;</a></h2>
-<h3 id="end-to-end-reconciliation-flow">End-to-End Reconciliation Flow<a class="headerlink" href="#end-to-end-reconciliation-flow" title="Permanent link">&para;</a></h3>
+<h1 id="publicacao-de-release">Publicacao de Release<a class="headerlink" href="#publicacao-de-release" title="Permanent link">&para;</a></h1>
+<p>Esta pagina documenta o workflow de publicacao em etapas do pacote
+<code>proxbox-api</code>. O workflow valida pacotes no TestPyPI primeiro, promove release
+candidates no PyPI, e so publica a release final no PyPI e as imagens Docker
+depois que o pacote esta instalavel.</p>
+<h2 id="maquina-de-estados-da-release">Maquina de Estados da Release<a class="headerlink" href="#maquina-de-estados-da-release" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>flowchart TD
-    A[Start VM Full-Sync] --&gt; B[Dependency Preflight]
-    B --&gt; C[Prepare VM States from Proxmox in Parallel]
-    C --&gt; D[Load NetBox VM Snapshot in Memory]
-    D --&gt; E[Pydantic Compare Desired vs Current]
-    E --&gt; F[Build Ordered Queue: GET CREATE UPDATE]
-    F --&gt; G[Dispatch Queue in Batch Windows]
-    G --&gt; H[Sequential NetBox Write Execution]
-    H --&gt; I[Sync VM Task History]
-    I --&gt; J[Return Reconciled VM Results]</code></pre>
-<h3 id="parallel-read-sequential-write-model">Parallel Read + Sequential Write Model<a class="headerlink" href="#parallel-read-sequential-write-model" title="Permanent link">&para;</a></h3>
+    Start([Escolher release alvo\nX.Y.Z])
+    Bump[Bump da versao do pacote\npyproject.toml + uv.lock]
+    TagTest[Criar tag vX.Y.Z\nou vX.Y.Z.postN]
+    Prepare[Build do dist\nvalidar tag/versao/uv.lock]
+    TestUpload[Upload para TestPyPI\nsem --skip-existing]
+    TestInstall[Instalar proxbox-api do TestPyPI\nem Python 3.11, 3.12, 3.13]
+    TestChecks[Rodar lint, tipos, compile,\nimport, schema, pytest]
+    TestFailed{Alguma validacao\nTestPyPI falhou?}
+    PostBump[Bump para proximo vX.Y.Z.postN]
+    RCTag[Criar tag candidata PyPI\nvX.Y.ZrcN]
+    RCChecks[Rodar checks da candidata\nantes do upload]
+    RCUpload[Upload vX.Y.ZrcN para PyPI]
+    RCInstall[Instalar rcN do PyPI\nem Python 3.11, 3.12, 3.13]
+    Docker[Publicar imagens Docker\nraw, nginx, granian]
+    E2E[Rodar E2E pos-publicacao\npacote + imagem publicados]
+    RCFailed{RC falhou?}
+    NextRC[Bump para vX.Y.ZrcN+1]
+    FinalTag[Criar ou disparar tag final\nvX.Y.Z]
+    FinalUpload[Upload vX.Y.Z para PyPI]
+    FinalInstall[Instalar final do PyPI]
+    FinalDocker[Publicar imagens Docker finais]
+    FinalE2E[Rodar E2E final pos-publicacao]
+    FinalFailed{Precisa de fix\npos-release?}
+    PostFix[Bump para vX.Y.Z.postN]
+    Done([Release verde])
+
+    Start --&gt; Bump --&gt; TagTest --&gt; Prepare --&gt; TestUpload --&gt; TestInstall --&gt; TestChecks --&gt; TestFailed
+    TestFailed -- sim --&gt; PostBump --&gt; TagTest
+    TestFailed -- nao --&gt; RCTag --&gt; RCChecks --&gt; RCUpload --&gt; RCInstall --&gt; Docker --&gt; E2E --&gt; RCFailed
+    RCFailed -- sim --&gt; NextRC --&gt; RCTag
+    RCFailed -- nao --&gt; FinalTag --&gt; FinalUpload --&gt; FinalInstall --&gt; FinalDocker --&gt; FinalE2E --&gt; FinalFailed
+    FinalFailed -- sim --&gt; PostFix --&gt; TagTest
+    FinalFailed -- nao --&gt; Done</code></pre>
+<h2 id="lanes-do-workflow">Lanes do Workflow<a class="headerlink" href="#lanes-do-workflow" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>sequenceDiagram
-    participant P1 as Proxmox Endpoint A
-    participant P2 as Proxmox Endpoint B
-    participant S as Sync Engine
-    participant N as NetBox API
+    participant Tag as Tag de versao
+    participant WF as publish-testpypi.yml
+    participant TP as TestPyPI
+    participant PY as PyPI
+    participant DH as Docker Hub
+    participant E2E as Stack E2E
 
-    par Parallel Proxmox Reads
-        S-&gt;&gt;P1: Fetch resources/configs
-        P1--&gt;&gt;S: VM data snapshot A
-    and
-        S-&gt;&gt;P2: Fetch resources/configs
-        P2--&gt;&gt;S: VM data snapshot B
-    end
+    Tag-&gt;&gt;WF: vX.Y.Z ou vX.Y.Z.postN
+    WF-&gt;&gt;WF: Validar pyproject + uv.lock + tag
+    WF-&gt;&gt;TP: Upload do pacote
+    WF-&gt;&gt;TP: Reinstalar versao exata do pacote
+    WF-&gt;&gt;WF: Rodar checks locais a partir do codigo
 
-    S-&gt;&gt;N: Fetch NetBox VM pages
-    N--&gt;&gt;S: NetBox in-memory snapshot
-
-    S-&gt;&gt;S: Reconcile with Pydantic
-    S-&gt;&gt;S: Build ordered operations queue
-
-    loop Sequential batch dispatch
-        S-&gt;&gt;N: CREATE or UPDATE (one at a time)
-        N--&gt;&gt;S: Response
-    end</code></pre>
-<h2 id="operation-semantics">Operation Semantics<a class="headerlink" href="#operation-semantics" title="Permanent link">&para;</a></h2>
-<p><code>GET</code></p>
+    Tag-&gt;&gt;WF: vX.Y.ZrcN, evento de release, ou publish_target=pypi
+    WF-&gt;&gt;WF: Rodar checks da candidata e E2E pre-publicacao
+    WF-&gt;&gt;PY: Upload do pacote
+    WF-&gt;&gt;PY: Reinstalar versao exata do pacote
+    WF-&gt;&gt;DH: Publicar imagens raw, nginx e granian
+    WF-&gt;&gt;E2E: Verificar pacote PyPI e imagem Docker publicados</code></pre>
+<h2 id="regras-do-workflow">Regras do Workflow<a class="headerlink" href="#regras-do-workflow" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Means no NetBox write is required.</li>
-<li>Record is reused from in-memory NetBox snapshot.</li>
+<li><code>pyproject.toml</code>, <code>uv.lock</code> e a tag Git precisam descrever a mesma versao.</li>
+<li>Push de tags normais e <code>.postN</code> publica no TestPyPI.</li>
+<li>Push de tags <code>rcN</code>, releases do GitHub, ou dispatch manual com
+  <code>publish_target=pypi</code> publica no PyPI.</li>
+<li>Uploads de pacote intencionalmente nao usam <code>twine --skip-existing</code>; se uma
+  versao foi consumida por qualquer indice, corrija para frente com o proximo
+  <code>.postN</code> ou <code>rcN</code>.</li>
+<li>Publicacao no PyPI precisa passar pela validacao de reinstalacao do pacote
+  antes das imagens Docker serem publicadas.</li>
+<li>Tags Docker usam a mesma versao do pacote PyPI que passou na validacao.</li>
 </ul>
-<p><code>CREATE</code></p>
-<ul>
-<li>Means no matching <code>(cluster_id, proxmox_vm_id)</code> was found.</li>
-<li>NetBox POST is executed once during dispatch.</li>
-</ul>
-<p><code>UPDATE</code></p>
-<ul>
-<li>Means object exists but reconciled payload differs.</li>
-<li>NetBox PATCH includes only changed fields.</li>
-</ul>
-<h2 id="configuration-and-tuning">Configuration and Tuning<a class="headerlink" href="#configuration-and-tuning" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code>: controls concurrent VM preparation/fetch from Proxmox.</li>
-<li><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code>: defines dispatch batch window size.</li>
-</ul>
-<p>Note: batch window size does not imply parallel writes; writes remain sequential to protect NetBox under single-instance operation.</p>
-<h2 id="benefits">Benefits<a class="headerlink" href="#benefits" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Predictable NetBox write load.</li>
-<li>Reduced duplicate or conflicting updates.</li>
-<li>Clear phase boundaries for troubleshooting.</li>
-<li>Better observability of planned vs executed operations.</li>
-<li>Easier future extension for dry-run/export of operation plans.</li>
-</ul>
+<h2 id="checklist-operacional">Checklist Operacional<a class="headerlink" href="#checklist-operacional" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Atualize <code>pyproject.toml</code> e regenere <code>uv.lock</code>.</li>
+<li>Crie a tag <code>vX.Y.Z</code> e deixe o workflow publicar no TestPyPI.</li>
+<li>Se a validacao do TestPyPI falhar depois do upload, atualize para
+   <code>vX.Y.Z.post1</code>, depois <code>post2</code>, ate ficar verde.</li>
+<li>Crie a tag <code>vX.Y.Zrc1</code> para validacao de release candidate no PyPI. Se
+   falhar depois do upload, continue com <code>rc2</code>, <code>rc3</code>, e assim por diante.</li>
+<li>Publique a final <code>vX.Y.Z</code> no PyPI apenas depois de uma lane RC verde.</li>
+<li>Use <code>vX.Y.Z.postN</code> para qualquer fix de codigo ou empacotamento descoberto
+   depois da publicacao final.</li>
+</ol>
 
 
 
@@ -1676,7 +1406,7 @@
           <button type="button" class="md-top md-icon" data-md-component="top" hidden>
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
-  Back to top
+  Voltar para o topo
 </button>
         
       </main>
@@ -1708,10 +1438,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado para \u00e1rea de transfer\u00eancia", "clipboard.copy": "Copiar para \u00e1rea de transfer\u00eancia", "search.result.more.one": "mais 1 nesta p\u00e1gina", "search.result.more.other": "# mais nesta p\u00e1gina", "search.result.none": "Nenhum documento encontrado", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Digite para iniciar a busca", "search.result.term.missing": "Ausente", "select.version": "Selecione a vers\u00e3o"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

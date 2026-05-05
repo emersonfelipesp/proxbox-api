@@ -71,6 +71,13 @@
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/refactoring-summary/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/development/release-publishing/</loc>
+        <lastmod>2026-05-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/release-publishing/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/release-publishing/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/development/schema-management/</loc>
         <lastmod>2026-05-05</lastmod>
         <changefreq>daily</changefreq>
@@ -209,6 +216,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/refactoring-summary/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/refactoring-summary/"/>
+    </url>
+    <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/release-publishing/</loc>
+        <lastmod>2026-05-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/release-publishing/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/development/release-publishing/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/schema-management/</loc>
