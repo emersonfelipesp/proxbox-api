@@ -1523,7 +1523,7 @@ wheels = [
 
 [[package]]
 name = "netbox-sdk"
-version = "0.0.8"
+version = "0.0.8.post1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1532,9 +1532,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/98/bd/4b5c8be845eb880071edae14f04bde5b5c6ccc5cd05078e68ee985e09e09/netbox_sdk-0.0.8.tar.gz", hash = "sha256:b2be1bea5c6f24860d0b1ff2e9deed8a38aa1b6b66e1bb6d8e2623a4cf08050c", size = 2466828, upload-time = "2026-05-04T20:33:20.173Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/da/29a7363035d65528d1013bfb50f743e1779cef51de975cf9bc243c7dd019/netbox_sdk-0.0.8.post1.tar.gz", hash = "sha256:1759cb284c8197dde5c4d4b77e0730470ec733887d64a279054c4c05e7d4af89", size = 2395649, upload-time = "2026-05-05T14:44:13.774Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/89/4b8725dcc58736259f1a458ac714191bff941fed38c2440c449019b77cfa/netbox_sdk-0.0.8-py3-none-any.whl", hash = "sha256:6c27a4490a196e5aecbea5c68e1bf4594304a12cd0b3b7a7d025d97ce47f57d9", size = 2542825, upload-time = "2026-05-04T20:33:18.63Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/50/eb22286eba23e8230e5a233eba38945e95397e4df686207347b14d962e19/netbox_sdk-0.0.8.post1-py3-none-any.whl", hash = "sha256:f13e4ad589dee6b1b9dff30551053e6a89a2101fff67c75ba4d1451524348afa", size = 2463339, upload-time = "2026-05-05T14:44:11.901Z" },
 ]
 
 [[package]]
@@ -1702,7 +1702,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.10.post1"
+version = "0.0.10.post2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1761,7 +1761,7 @@ requires-dist = [
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7.6" },
     { name = "mkdocs-static-i18n", marker = "extra == 'docs'", specifier = ">=1.3.1" },
-    { name = "netbox-sdk", specifier = "==0.0.8" },
+    { name = "netbox-sdk", specifier = "==0.0.8.post1" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
     { name = "proxmox-sdk", specifier = "==0.0.3.post1" },

@@ -86,18 +86,18 @@ def _resolve_int(
     default: int,
     minimum: int,
 ) -> int:
+    raw = os.environ.get(env, "").strip()
+    if raw:
+        try:
+            return max(minimum, int(raw))
+        except ValueError:
+            pass
     if settings is not None:
         try:
             return max(minimum, int(settings.get(key, default)))
         except (TypeError, ValueError):
             pass
-    raw = os.environ.get(env, "").strip()
-    if not raw:
-        return default
-    try:
-        return max(minimum, int(raw))
-    except ValueError:
-        return default
+    return default
 
 
 def _resolve_float(
@@ -108,18 +108,18 @@ def _resolve_float(
     default: float,
     minimum: float,
 ) -> float:
+    raw = os.environ.get(env, "").strip()
+    if raw:
+        try:
+            return max(minimum, float(raw))
+        except ValueError:
+            pass
     if settings is not None:
         try:
             return max(minimum, float(settings.get(key, default)))
         except (TypeError, ValueError):
             pass
-    raw = os.environ.get(env, "").strip()
-    if not raw:
-        return default
-    try:
-        return max(minimum, float(raw))
-    except ValueError:
-        return default
+    return default
 
 
 _netbox_rest_config: NetBoxRestConfig | None = None
