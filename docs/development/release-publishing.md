@@ -5,6 +5,9 @@ workflow validates packages on TestPyPI first, promotes release candidates on
 PyPI, then publishes the final PyPI release and Docker images only after the
 package is installable.
 
+For the broader CI job map and NetBox-backed E2E matrix, see
+[CI and E2E Workflows](ci-e2e-workflows.md).
+
 ## Release State Machine
 
 ```mermaid
@@ -63,6 +66,7 @@ sequenceDiagram
 
     Tag->>WF: vX.Y.ZrcN, release event, or publish_target=pypi
     WF->>WF: Run candidate checks and pre-publish E2E
+    WF->>E2E: Wait for NetBox migrations and /api/status/ readiness
     WF->>PY: Upload package
     WF->>PY: Reinstall exact package version
     WF->>DH: Publish raw, nginx, and granian images
@@ -81,6 +85,9 @@ sequenceDiagram
   are published.
 - Docker image tags use the same version as the PyPI package that passed
   validation.
+- Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
+  migrations/search indexing and require `/api/status/` readiness before
+  configuring tokens or backend endpoints.
 
 ## Operator Checklist
 

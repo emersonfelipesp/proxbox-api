@@ -5,6 +5,9 @@ Esta pagina documenta o workflow de publicacao em etapas do pacote
 candidates no PyPI, e so publica a release final no PyPI e as imagens Docker
 depois que o pacote esta instalavel.
 
+Para o mapa completo dos jobs de CI e da matriz E2E com NetBox, veja
+[Workflows de CI e E2E](ci-e2e-workflows.md).
+
 ## Maquina de Estados da Release
 
 ```mermaid
@@ -63,6 +66,7 @@ sequenceDiagram
 
     Tag->>WF: vX.Y.ZrcN, evento de release, ou publish_target=pypi
     WF->>WF: Rodar checks da candidata e E2E pre-publicacao
+    WF->>E2E: Aguardar migracoes do NetBox e /api/status/
     WF->>PY: Upload do pacote
     WF->>PY: Reinstalar versao exata do pacote
     WF->>DH: Publicar imagens raw, nginx e granian
@@ -81,6 +85,9 @@ sequenceDiagram
 - Publicacao no PyPI precisa passar pela validacao de reinstalacao do pacote
   antes das imagens Docker serem publicadas.
 - Tags Docker usam a mesma versao do pacote PyPI que passou na validacao.
+- Jobs E2E pre-publicacao e pos-publicacao aguardam ate 20 minutos para o
+  NetBox concluir migracoes/indexacao e exigem `/api/status/` pronto antes de
+  configurar tokens ou endpoints do backend.
 
 ## Checklist Operacional
 

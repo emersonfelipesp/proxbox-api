@@ -73,6 +73,7 @@ nav:
   - Development:
       - Schema Management: development/schema-management.md
       - Testing: development/testing.md
+      - CI and E2E Workflows: development/ci-e2e-workflows.md
       - Deployment: development/deployment.md
       - Release Publishing: development/release-publishing.md
       - Troubleshooting: development/troubleshooting.md

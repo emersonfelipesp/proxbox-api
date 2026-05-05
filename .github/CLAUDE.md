@@ -8,7 +8,7 @@ GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.git
 
 | File | Trigger | What it does |
 |------|---------|--------------|
-| `ci.yml` | Push / PR to any branch; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run `tests/` with coverage, then E2E Docker matrix (dev or pypi mode) |
+| `ci.yml` | Push / PR to any branch; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run `tests/` with coverage, then E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes three Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert) |
 | `publish-testpypi.yml` | Version tag push, GitHub Release published, or manual dispatch | Validates release metadata, builds dist, then runs either the TestPyPI lane or the PyPI lane. Normal/post tag pushes publish to TestPyPI; rc tag pushes, releases, and `publish_target=pypi` dispatches publish to PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
@@ -20,12 +20,18 @@ GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.git
 ```
 ci.yml (push/PR — dev mode E2E only)
 ├── test
+├── test-py311-floor
 ├── test-free-threaded (continue-on-error)
+├── docker-bind-smoke  (raw + granian bind-host startup checks)
 ├── setup             (generates E2E matrix)
-└── e2e-docker        (needs: test + setup; matrix of 6 transport combos × netbox_proxbox_mode)
+├── build-netbox-image (only uploads an artifact when the public NetBox image cannot be pulled)
+└── e2e-docker        (needs: test + setup + build-netbox-image; transport × NetBox version matrix)
     - dev mode:  netbox-proxbox from GitHub develop tarball
                  proxbox-api built from local checkout with DEV_OVERRIDES (netbox-sdk + proxmox-sdk from GitHub)
     - pypi mode: netbox-proxbox from PyPI; proxbox-api built from local checkout without overrides
+    - NetBox image handling: each E2E job pulls the public image first and only downloads the source-built artifact when the registry pull fails.
+    - NetBox readiness waits up to 20 minutes for migrations/search indexing, then checks `/api/status/` before creating tokens.
+    - Docker-backed Proxmox E2E uses pytest marker `mock_http`; the separate in-process MockBackend pass uses `mock_backend`.
 
 ci.yml (release event — both dev + pypi modes)
 └── e2e-docker matrix runs both netbox_proxbox_mode=dev and netbox_proxbox_mode=pypi
@@ -37,11 +43,11 @@ publish-testpypi.yml (staged package release)
 │   └── validate-testpypi  (needs: prepare-release + publish-testpypi; installs package from TestPyPI across py3.11/3.12/3.13, then runs local checks)
 └── PyPI lane
     ├── validate-pypi-candidate (needs: prepare-release; local checks across py3.11/3.12/3.13)
-    ├── e2e-pre-publish         (needs: prepare-release; dev deps — proxbox-api local build + DEV_OVERRIDES)
+    ├── e2e-pre-publish         (needs: prepare-release; dev deps — proxbox-api local build + DEV_OVERRIDES; same 20-minute NetBox readiness gate)
     ├── publish-pypi            (needs: prepare-release + validate-pypi-candidate + e2e-pre-publish)
     ├── validate-pypi           (needs: prepare-release + publish-pypi; installs package from PyPI)
     ├── publish-docker          (needs: prepare-release + validate-pypi; calls docker-hub-publish.yml mode=publish)
-    └── e2e-post-publish        (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox)
+    └── e2e-post-publish        (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox; same 20-minute NetBox readiness gate)
 ```
 
 ## E2E Dependency Modes
@@ -69,3 +75,4 @@ All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-ng
 - Release workflows validate that the `pyproject.toml` version matches the Git tag before publishing.
 - Package uploads intentionally do not use `twine --skip-existing`; if an artifact version was consumed, bump to the next `.postN` or `rcN` and publish that immutable version.
 - Do not add secrets to workflow files — use repository secrets (`PYPI_TOKEN`, `DOCKERHUB_TOKEN`, etc.).
+- Keep `docs/development/ci-e2e-workflows.md`, `docs/pt-BR/development/ci-e2e-workflows.md`, and `docs/development/release-publishing.md` aligned with CI workflow changes.
