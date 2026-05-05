@@ -50,3 +50,9 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - Preserve ASCII-only documentation and source text unless a file already requires otherwise.
 - Prefer `ProxboxException` for expected API failures and `logger` for operational messages.
 - When adding new sync behavior, keep WebSocket and SSE payload shapes aligned.
+- For new runtime tunables, prefer a `ProxboxPluginSettings` field on the
+  `netbox-proxbox` side over a fresh `PROXBOX_*` env var. Read it through
+  `proxbox_api.runtime_settings.get_int / get_float / get_bool / get_str`, which
+  resolves env > plugin settings > default with a 5-minute cache. See
+  [top-level `CLAUDE.md` → Environment Variables → Adding a new tunable](../CLAUDE.md)
+  for the full policy and `.env` keep-list.

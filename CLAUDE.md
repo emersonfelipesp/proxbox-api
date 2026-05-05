@@ -128,6 +128,30 @@ Open the nearest scoped guide for the code you are changing.
 
 Most runtime tunables now resolve in order **env var > `ProxboxPluginSettings` (NetBox plugin settings page) > built-in default**, via `proxbox_api/runtime_settings.py`. Setting an env var still works as an override; leaving it unset means the plugin settings page is the authoritative source. The settings cache TTL is 5 minutes, so plugin-side changes take effect without a restart.
 
+### Adding a new tunable
+
+**Configuration policy — prefer DB-backed plugin settings.**
+When adding a new runtime tunable, default to making it a `ProxboxPluginSettings` field
+(NetBox-UI-editable, persisted in the NetBox database) and read it via
+`proxbox_api.runtime_settings.get_int / get_float / get_bool / get_str`, which already
+resolves **env var (override) → `ProxboxPluginSettings` → built-in default** with a
+5-minute settings cache (`proxbox_api/settings_client.py::get_settings`).
+
+Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
+connection exists or is **operator-only infrastructure** that has no business in the UI:
+`PROXBOX_BIND_HOST`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` /
+`PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
+`PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
+`PROXBOX_CORS_EXTRA_ORIGINS`. Anything that controls sync behavior, batching,
+concurrency, caching, or feature toggles belongs in `ProxboxPluginSettings`.
+
+Do **not** invent shadow config layers (parallel JSON/YAML files, ad-hoc dotenv
+sections, module-level constants meant as overrides) to dodge the migration cost.
+If the new field needs the model + migration + form + serializer + template wiring on
+the `netbox-proxbox` side, do all five — the existing fields in
+`netbox_proxbox/models/plugin_settings.py` and migration
+`0037_pluginsettings_runtime_tunables.py` show the pattern.
+
 ### Required in `.env` (process-level, no plugin-settings equivalent)
 
 - `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
