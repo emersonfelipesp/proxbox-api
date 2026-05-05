@@ -91,6 +91,52 @@ def normalize_backend_log_file_path(value: object) -> str:
     return cleaned
 
 
+def _extract_settings_payload(data: object) -> dict[str, object] | None:
+    """Normalize supported NetBox settings API response shapes."""
+    if isinstance(data, list):
+        first = data[0] if data else None
+        return first if isinstance(first, dict) else None
+
+    if not isinstance(data, dict):
+        return None
+
+    if "results" in data:
+        results = data.get("results")
+        if not isinstance(results, list) or not results:
+            return None
+        first = results[0]
+        return first if isinstance(first, dict) else None
+
+    return data
+
+
+def _request_settings_json(
+    *,
+    base_url: str,
+    path: str,
+    auth: str,
+) -> tuple[object | None, int | None]:
+    url = f"{base_url}{path}"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": auth, "Accept": "application/json"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status != 200:
+                return None, resp.status
+            return json.loads(resp.read().decode()), resp.status
+    except urllib.error.HTTPError as exc:
+        return None, exc.code
+    except urllib.error.URLError as exc:
+        logger.warning("Error fetching ProxboxPluginSettings from %s: %s", url, exc)
+        return None, None
+    except json.JSONDecodeError as exc:
+        logger.warning("Invalid JSON fetching ProxboxPluginSettings from %s: %s", url, exc)
+        return None, None
+
+
 def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | None:
     """Fetch ProxboxPluginSettings from NetBox plugin API.
 
@@ -109,27 +155,27 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             logger.warning("NetBox auth header could not be built — token not configured")
             return None
 
-        url = f"{base_url}/api/plugins/proxbox/settings/"
-        req = urllib.request.Request(
-            url,
-            headers={"Authorization": auth, "Accept": "application/json"},
-        )
+        settings = None
+        for path in (
+            "/api/plugins/proxbox/settings/runtime/",
+            "/api/plugins/proxbox/settings/",
+        ):
+            data, status = _request_settings_json(base_url=base_url, path=path, auth=auth)
+            if status is not None and status != 200:
+                if path.endswith("/runtime/") and status == 404:
+                    logger.debug("ProxboxPluginSettings runtime endpoint is not available")
+                else:
+                    logger.warning(
+                        "Failed to fetch ProxboxPluginSettings from %s: HTTP %s",
+                        path,
+                        status,
+                    )
+                continue
+            settings = _extract_settings_payload(data)
+            if settings is not None:
+                break
 
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status != 200:
-                logger.warning(
-                    "Failed to fetch ProxboxPluginSettings: HTTP %s",
-                    resp.status,
-                )
-                return None
-
-            data = json.loads(resp.read().decode())
-
-        if isinstance(data, list) and len(data) > 0:
-            settings = data[0]
-        elif isinstance(data, dict):
-            settings = data
-        else:
+        if settings is None:
             logger.warning("Unexpected ProxboxPluginSettings response format")
             return None
 

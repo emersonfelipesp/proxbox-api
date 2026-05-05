@@ -53,6 +53,106 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["encryption_key"] == "my-plugin-key"
 
 
+def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):
+    import json
+    from unittest.mock import MagicMock
+
+    class _Config:
+        base_url = "https://netbox.local"
+        token_secret = "test-token"
+        token_version = "v1"
+        token_key = None
+
+    class _Client:
+        config = _Config()
+
+    class _Session:
+        client = _Client()
+
+    response_data = {
+        "count": 1,
+        "next": None,
+        "previous": None,
+        "results": [
+            {
+                "backend_log_file_path": "/srv/log/proxbox-api.log",
+                "primary_ip_preference": "ipv6",
+                "netbox_timeout": 240,
+                "netbox_get_cache_max_entries": 8192,
+                "debug_cache": True,
+            }
+        ],
+    }
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.status = 200
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: mock_response)
+
+    settings = settings_client.fetch_settings_from_netbox(_Session())
+    assert settings is not None
+    assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
+    assert settings["primary_ip_preference"] == "ipv6"
+    assert settings["netbox_timeout"] == 240
+    assert settings["netbox_get_cache_max_entries"] == 8192
+    assert settings["debug_cache"] is True
+
+
+def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypatch):
+    import json
+    import urllib.error
+    from unittest.mock import MagicMock
+
+    class _Config:
+        base_url = "https://netbox.local"
+        token_secret = "test-token"
+        token_version = "v1"
+        token_key = None
+
+    class _Client:
+        config = _Config()
+
+    class _Session:
+        client = _Client()
+
+    response_data = {
+        "count": 1,
+        "results": [{"backend_log_file_path": "/tmp/list-fallback.log"}],
+    }
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.status = 200
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+    requested_urls: list[str] = []
+
+    def _urlopen(req, *args, **kwargs):
+        requested_urls.append(req.full_url)
+        if req.full_url.endswith("/settings/runtime/"):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                404,
+                "Not Found",
+                hdrs=None,
+                fp=None,
+            )
+        return mock_response
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+    settings = settings_client.fetch_settings_from_netbox(_Session())
+    assert settings is not None
+    assert settings["backend_log_file_path"] == "/tmp/list-fallback.log"
+    assert requested_urls == [
+        "https://netbox.local/api/plugins/proxbox/settings/runtime/",
+        "https://netbox.local/api/plugins/proxbox/settings/",
+    ]
+
+
 def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path(monkeypatch):
     import json
     from unittest.mock import MagicMock
