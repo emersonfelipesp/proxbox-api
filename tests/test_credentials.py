@@ -2,9 +2,32 @@
 
 from __future__ import annotations
 
+import multiprocessing
+
 import pytest
 
 import proxbox_api.credentials as creds_mod
+
+
+def _recursive_settings_lookup_worker(queue: multiprocessing.Queue) -> None:
+    """Exercise settings lookup re-entering credential decryption in a child process."""
+    import os
+
+    import proxbox_api.credentials as child_creds
+    from proxbox_api import settings_client
+    from proxbox_api.app import netbox_session as netbox_session_mod
+
+    child_creds.reset_encryption_cache()
+    settings_client.invalidate_settings_cache()
+    settings_client._FETCHING_SETTINGS = False
+    os.environ.pop("PROXBOX_ENCRYPTION_KEY", None)
+
+    def _raw_session_requiring_decryption() -> None:
+        child_creds.decrypt_value("stored-plaintext-token")
+        return None
+
+    netbox_session_mod.get_raw_netbox_session = _raw_session_requiring_decryption
+    queue.put(child_creds.is_encryption_enabled())
 
 
 @pytest.fixture(autouse=True)
@@ -195,3 +218,25 @@ def test_encryption_key_is_cached_after_first_call(monkeypatch):
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "different-key")
     second = creds_mod._get_encryption_key()
     assert first is second
+
+
+def test_settings_lookup_can_reenter_decryption_without_deadlock():
+    """Missing env key must not deadlock when plugin settings lookup decrypts tokens."""
+    context = multiprocessing.get_context("fork")
+    queue = context.Queue()
+    process = context.Process(
+        target=_recursive_settings_lookup_worker,
+        args=(queue,),
+        daemon=True,
+    )
+
+    process.start()
+    process.join(timeout=3)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=3)
+        pytest.fail("encryption key lookup deadlocked during recursive settings lookup")
+
+    assert process.exitcode == 0
+    assert queue.get(timeout=1) is False

@@ -101,10 +101,18 @@ def _get_encryption_key() -> bytes | None:
     with _KEY_LOCK:
         if _ENCRYPTION_KEY is not None:
             return _ENCRYPTION_KEY
-        raw_key = _resolve_raw_key()
-        if not raw_key:
-            return None
-        _ENCRYPTION_KEY = hashlib.sha256(raw_key.encode()).digest()
+
+    # Do not hold _KEY_LOCK while resolving plugin settings. Settings lookup may
+    # need to build a NetBox session, which can decrypt stored endpoint tokens and
+    # re-enter this function before the first lookup completes.
+    raw_key = _resolve_raw_key()
+    if not raw_key:
+        return None
+
+    derived_key = hashlib.sha256(raw_key.encode()).digest()
+    with _KEY_LOCK:
+        if _ENCRYPTION_KEY is None:
+            _ENCRYPTION_KEY = derived_key
         return _ENCRYPTION_KEY
 
 
