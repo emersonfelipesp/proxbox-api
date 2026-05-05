@@ -42,6 +42,11 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Required since v0.0.10: proxbox-api refuses to start without an
+  # encryption key (or PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS=1). Use a
+  # constant CI-only key so smoke containers go through the same code
+  # path operators use in production.
+  PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
 
 jobs:
   # Sequential local test (manual); no registry login or push.
@@ -143,6 +148,7 @@ jobs:
       - name: Run tests in raw image
         run: |
           docker run --rm \
+            -e PROXBOX_ENCRYPTION_KEY \
             -w /workspace \
             -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
             -v "${{ github.workspace }}:/workspace" \
@@ -156,6 +162,7 @@ jobs:
           docker run -d --name proxbox-smoke-raw \
             -p 127.0.0.1:18080:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-raw-pre
           for i in $(seq 1 40); do
             if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then
@@ -184,6 +191,7 @@ jobs:
       - name: Run tests in nginx image
         run: |
           docker run --rm \
+            -e PROXBOX_ENCRYPTION_KEY \
             -w /workspace \
             -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
             -v "${{ github.workspace }}:/workspace" \
@@ -197,6 +205,7 @@ jobs:
           docker run -d --name proxbox-smoke-nginx \
             -p 127.0.0.1:18443:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-nginx-pre
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then
@@ -225,6 +234,7 @@ jobs:
       - name: Run tests in granian image
         run: |
           docker run --rm \
+            -e PROXBOX_ENCRYPTION_KEY \
             -w /workspace \
             -v /tmp/docker-tests.sh:/tmp/docker-tests.sh \
             -v "${{ github.workspace }}:/workspace" \
@@ -238,6 +248,7 @@ jobs:
           docker run -d --name proxbox-smoke-granian \
             -p 127.0.0.1:18444:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-granian-pre
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18444/ >/dev/null 2>&1; then
@@ -340,6 +351,7 @@ jobs:
           docker run -d --name proxbox-smoke-raw \
             -p 127.0.0.1:18080:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-raw-pre
           for i in $(seq 1 40); do
             if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then
@@ -375,6 +387,7 @@ jobs:
             docker run -d --name "$NAME" \
               -p 127.0.0.1:18080:8000 \
               -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+              -e PROXBOX_ENCRYPTION_KEY \
               emersonfelipesp/proxbox-api:"$TAG"
             ok=0
             for i in $(seq 1 40); do
@@ -481,6 +494,7 @@ jobs:
           docker run -d --name proxbox-smoke-nginx \
             -p 127.0.0.1:18443:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-nginx-pre
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then
@@ -516,6 +530,7 @@ jobs:
             docker run -d --name "$NAME" \
               -p 127.0.0.1:18443:8000 \
               -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+              -e PROXBOX_ENCRYPTION_KEY \
               emersonfelipesp/proxbox-api:"$TAG"
             ok=0
             for i in $(seq 1 40); do
@@ -622,6 +637,7 @@ jobs:
           docker run -d --name proxbox-smoke-granian \
             -p 127.0.0.1:18444:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}-granian-pre
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18444/ >/dev/null 2>&1; then
@@ -657,6 +673,7 @@ jobs:
             docker run -d --name "$NAME" \
               -p 127.0.0.1:18444:8000 \
               -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+              -e PROXBOX_ENCRYPTION_KEY \
               emersonfelipesp/proxbox-api:"$TAG"
             ok=0
             for i in $(seq 1 40); do
