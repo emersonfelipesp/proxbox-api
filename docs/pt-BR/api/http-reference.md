@@ -84,6 +84,17 @@ Regras de validacao:
 - `GET /proxmox/nodes/{node}/qemu`
 - `GET /proxmox/replication`
 
+### Alta Disponibilidade (somente leitura)
+
+Endpoints agregados entre todos os clusters Proxmox configurados. Atendem a aba HA na pagina de detalhe da VM e a pagina de HA do cluster adicionadas pelo `netbox-proxbox` para a [issue #243](https://github.com/emersonfelipesp/netbox-proxbox/issues/243). Mutacoes (incluir/remover recurso, migrar/realocar, CRUD de grupos) ficam fora deste escopo e podem entrar em uma release seguinte.
+
+- `GET /proxmox/cluster/ha/status` - Linhas por servico do CRM/LRM vindas de `/cluster/ha/status/current`, mais entradas de quorum/master.
+- `GET /proxmox/cluster/ha/resources` - Recursos HA configurados, mesclados com o estado atual (node, CRM state, request state).
+- `GET /proxmox/cluster/ha/resources/by-vm/{vmid}` - Conveniencia para uma VM/CT; tenta `vm:{vmid}` e cai para `ct:{vmid}`. Retorna `null` (nao 404) quando o guest nao esta sob HA, para que a aba do NetBox renderize estado vazio.
+- `GET /proxmox/cluster/ha/groups` - Lista de grupos HA com detalhe mesclado (nodes, restricted, nofailback).
+- `GET /proxmox/cluster/ha/groups/{group}` - Detalhe de um grupo unico; retorna `null` quando nenhum cluster possui o grupo.
+- `GET /proxmox/cluster/ha/summary` - Envelope unico (`{status, groups, resources}`) composto em paralelo via `asyncio.gather`. Usado pela pagina HA do cluster para que cada render gere apenas um round-trip.
+
 ### Helpers do viewer e do contrato gerado
 
 - `POST /proxmox/viewer/generate`
