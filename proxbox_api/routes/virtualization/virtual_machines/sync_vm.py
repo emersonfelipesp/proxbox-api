@@ -40,7 +40,11 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
 from proxbox_api.schemas.sync import SyncOverwriteFlags
-from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
+from proxbox_api.services.proxmox_helpers import (
+    get_qemu_guest_agent_hostname,
+    get_qemu_guest_agent_network_interfaces,
+    sanitize_dns_hostname,
+)
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -112,6 +116,38 @@ class _NetBoxVMOperation:
     prepared: _PreparedVMState
     existing_record: dict[str, object] | None = None
     patch_payload: dict[str, object] = field(default_factory=dict)
+
+
+async def _resolve_vm_dns_name(
+    *,
+    proxmox_session: object | None,
+    node: str | None,
+    vmid: object,
+    vm_type: object,
+    vm_config: dict[str, object] | None,
+) -> str | None:
+    """Resolve the guest hostname to use as IPAM `dns_name` for a VM.
+
+    LXC: read `hostname` from VM config (already in `vm_config`).
+    QEMU: query the guest agent via `get_qemu_guest_agent_hostname`.
+    Returns a sanitized hostname or None when unavailable.
+    """
+    if vm_type == "lxc":
+        if isinstance(vm_config, dict):
+            return sanitize_dns_hostname(vm_config.get("hostname"))
+        return None
+
+    if vm_type != "qemu" or proxmox_session is None or not node or vmid is None:
+        return None
+
+    if isinstance(vm_config, dict) and not vm_config.get("agent"):
+        return None
+
+    try:
+        return await get_qemu_guest_agent_hostname(proxmox_session, node, int(vmid))
+    except Exception as exc:
+        logger.debug("VM dns_name resolution failed for node=%s vmid=%s: %s", node, vmid, exc)
+        return None
 
 
 def _normalize_current_virtual_machine_payload(record: dict[str, object]) -> dict[str, object]:
@@ -601,6 +637,7 @@ async def _create_vm_interface_parallel(
     primary_ip_preference: str = "ipv4",
     device: dict | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
+    dns_name: str | None = None,
 ) -> dict:
     """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
 
@@ -736,6 +773,7 @@ async def _create_vm_interface_parallel(
         create_ip=True,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        dns_name=dns_name,
     )
     if ip_results:
         first_ip_id, first_ip = ip_results[0]
@@ -1810,6 +1848,21 @@ async def create_virtual_machines(  # noqa: C901
 
             vm_networks = _parse_vm_networks(vm_config)
 
+            vm_dns_name = await _resolve_vm_dns_name(
+                proxmox_session=next(
+                    (
+                        px
+                        for px, cluster in zip(pxs, cluster_status)
+                        if getattr(cluster, "name", None) == cluster_name
+                    ),
+                    None,
+                ),
+                node=str(resource.get("node") or "") or None,
+                vmid=resource.get("vmid"),
+                vm_type=vm_type,
+                vm_config=vm_config,
+            )
+
             if vm_networks:
                 interface_tasks = []
                 for network in vm_networks:
@@ -1843,6 +1896,7 @@ async def create_virtual_machines(  # noqa: C901
                                 now=now,
                                 device=device,
                                 overwrite_flags=overwrite_flags,
+                                dns_name=vm_dns_name,
                             )
                         )
 
@@ -2640,6 +2694,14 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             if normalized_mac(iface.get("mac_address"))
         }
 
+        vm_dns_name = await _resolve_vm_dns_name(
+            proxmox_session=proxmox_session,
+            node=resource_node or None,
+            vmid=vmid,
+            vm_type=vm_type,
+            vm_config=vm_config,
+        )
+
         vm_networks = _parse_vm_networks(vm_config)
         ip_payloads: list[dict] = []
         first_ips: list[dict] = []  # Track first IP per VM
@@ -2729,6 +2791,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 interface_id,
                                 tag_refs,
                                 now,
+                                dns_name=vm_dns_name,
                             )
                             ip_payloads.append(payload)
 

@@ -354,6 +354,7 @@ class NetBoxIpAddressSyncState(BaseModel):
     assigned_object_type: str | None = None
     assigned_object_id: int | None = None
     status: str = "active"
+    dns_name: str = ""
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
@@ -367,6 +368,16 @@ class NetBoxIpAddressSyncState(BaseModel):
     def normalize_status(cls, value: object) -> str:
         text = str(_status_value(value) or "active").strip().lower()
         return text or "active"
+
+    @field_validator("dns_name", mode="before")
+    @classmethod
+    def normalize_dns_name(cls, value: object) -> str:
+        if value in (None, ""):
+            return ""
+        text = str(value).strip().rstrip(".").lower()
+        if not text or text == "localhost" or text.startswith("localhost."):
+            return ""
+        return text[:255]
 
     @field_validator("tags", mode="before")
     @classmethod

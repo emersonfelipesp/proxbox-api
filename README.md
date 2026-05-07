@@ -71,6 +71,13 @@ docker run -d -p 8000:8000 proxbox-api:raw
 
 **nginx** terminates HTTPS on `PORT` (default **8000**) using certificates from [mkcert](https://github.com/FiloSottile/mkcert) and proxies to **uvicorn** on `127.0.0.1:8001`. **supervisord** manages both processes. The nginx config disables proxy buffering so chunked / SSE responses flow through unmodified.
 
+Plain HTTP requests to the TLS port return a structured JSON `400` body
+(`{"error":"plain_http_on_https_port", ...}`) instead of nginx's stock 400 page,
+so clients can detect the misconfiguration. When wiring this image into the
+NetBox `netbox-proxbox` plugin (>= 0.0.15), set **Use HTTPS** ✓ and (if using
+the bundled mkcert cert) **Verify SSL** ✗ on the FastAPI endpoint —
+[netbox-proxbox#352](https://github.com/emersonfelipesp/netbox-proxbox/issues/352).
+
 ```bash
 docker pull emersonfelipesp/proxbox-api:latest-nginx
 docker run -d -p 8443:8000 --name proxbox-api-nginx \

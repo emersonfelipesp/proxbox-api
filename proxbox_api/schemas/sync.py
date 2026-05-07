@@ -208,3 +208,11 @@ class SyncOverwriteFlags(ProxboxBaseModel):
             "that already have non-empty custom_fields."
         ),
     )
+    overwrite_ip_address_dns_name: bool = Field(
+        default=True,
+        title="Overwrite IP Address DNS Name",
+        description=(
+            "When false, dns_name is not patched on existing NetBox IP address records, "
+            "preserving any value the operator manually set in NetBox."
+        ),
+    )

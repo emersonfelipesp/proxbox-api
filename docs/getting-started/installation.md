@@ -45,6 +45,25 @@ Service URL:
 
 - <https://127.0.0.1:8443> (self-signed, trusted on the container host)
 
+#### Connecting netbox-proxbox to the nginx image
+
+The nginx image is HTTPS-only — plain HTTP requests to the TLS port return a
+JSON `400` body with `{"error":"plain_http_on_https_port", ...}` (rendered from
+nginx's internal `497` code). When configuring the **FastAPI Endpoint** in the
+NetBox `netbox-proxbox` plugin, set:
+
+| Field | Value |
+|-------|-------|
+| **Use HTTPS** | ✓ enabled |
+| **Verify SSL** | ✗ disabled (when using the bundled mkcert certificate) |
+| **Port** | the host port mapped to container `8000` (typically `8800` or `8443`) |
+
+The `Use HTTPS` and `Verify SSL` toggles are independent in
+`netbox-proxbox >= 0.0.15` — see
+[issue #352](https://github.com/emersonfelipesp/netbox-proxbox/issues/352) for
+context. Earlier plugin releases couple the two flags, which makes the
+nginx-image + self-signed-cert combination unreachable.
+
 ### Granian image — HTTPS with mkcert (no nginx)
 
 [Granian](https://github.com/emmett-framework/granian) is a Rust-based ASGI server with native TLS and HTTP/2. A single process handles everything — no nginx or supervisord required.

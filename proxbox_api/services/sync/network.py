@@ -233,6 +233,7 @@ def build_vm_interface_ip_payload(
     interface_id: int,
     tag_refs: list[dict],
     now: datetime,
+    dns_name: str | None = None,
 ) -> dict:
     """Build a VM interface IP payload dict for bulk operations (no NetBox writes).
 
@@ -241,6 +242,7 @@ def build_vm_interface_ip_payload(
         interface_id: Interface ID
         tag_refs: List of tag references
         now: Current datetime for custom fields
+        dns_name: Guest hostname to set as IPAM dns_name; empty/None becomes ""
 
     Returns:
         Payload dict for bulk reconciliation
@@ -250,6 +252,7 @@ def build_vm_interface_ip_payload(
         "assigned_object_type": "virtualization.vminterface",
         "assigned_object_id": interface_id,
         "status": "active",
+        "dns_name": dns_name or "",
         "tags": tag_refs,
         "custom_fields": {"proxmox_last_updated": now.isoformat()},
     }
@@ -528,7 +531,9 @@ async def bulk_reconcile_vm_interface_ips(
     # time; status/tags/custom_fields are safe to update, gated by the
     # per-field overwrite_ip_* flags.
     if overwrite_flags is None:
-        patchable_fields: frozenset[str] = frozenset({"status", "tags", "custom_fields"})
+        patchable_fields: frozenset[str] = frozenset(
+            {"status", "tags", "custom_fields", "dns_name"}
+        )
     else:
         gated: set[str] = set()
         if overwrite_flags.overwrite_ip_status:
@@ -537,6 +542,8 @@ async def bulk_reconcile_vm_interface_ips(
             gated.add("tags")
         if overwrite_flags.overwrite_ip_custom_fields:
             gated.add("custom_fields")
+        if overwrite_flags.overwrite_ip_address_dns_name:
+            gated.add("dns_name")
         patchable_fields = frozenset(gated)
 
     result = None
@@ -552,6 +559,7 @@ async def bulk_reconcile_vm_interface_ips(
                 "assigned_object_type": record.get("assigned_object_type"),
                 "assigned_object_id": record.get("assigned_object_id"),
                 "status": record.get("status"),
+                "dns_name": record.get("dns_name"),
                 "tags": record.get("tags"),
             },
             patchable_fields=patchable_fields,
@@ -649,6 +657,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
     ignore_ipv6_link_local: bool = True,
     primary_ip_preference: str = "ipv4",
     tag_slug: str = "proxbox",
+    dns_name: str | None = None,
 ) -> list[tuple[int | None, str]]:
     """Create or update ALL IPs attached to a VM interface, then clean up stale ones.
 
@@ -691,6 +700,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
                     "assigned_object_type": "virtualization.vminterface",
                     "assigned_object_id": interface_id,
                     "status": "active",
+                    "dns_name": dns_name or "",
                     "tags": tag_refs,
                     "custom_fields": {"proxmox_last_updated": now.isoformat()},
                 },
@@ -700,6 +710,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
                     "assigned_object_type": record.get("assigned_object_type"),
                     "assigned_object_id": record.get("assigned_object_id"),
                     "status": record.get("status"),
+                    "dns_name": record.get("dns_name"),
                     "tags": record.get("tags"),
                 },
             )
@@ -747,6 +758,7 @@ async def sync_vm_interface_and_ip(
     primary_ip_preference: str = "ipv4",
     now: datetime | None = None,
     device: dict | None = None,
+    dns_name: str | None = None,
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -810,6 +822,7 @@ async def sync_vm_interface_and_ip(
         create_ip=create_ip,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        dns_name=dns_name,
     )
     if ip_results:
         first_ip_id, first_ip = ip_results[0]

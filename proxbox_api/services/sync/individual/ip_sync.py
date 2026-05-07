@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxIpAddressSyncState
-from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
+from proxbox_api.services.proxmox_helpers import (
+    get_qemu_guest_agent_hostname,
+    get_qemu_guest_agent_network_interfaces,
+    get_vm_config,
+    sanitize_dns_hostname,
+)
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.helpers import (
     build_ip_lookup_key,
@@ -15,6 +20,22 @@ from proxbox_api.services.sync.individual.helpers import (
     get_serialized_first_record,
     resolve_guest_interface_by_ip,
 )
+
+
+def _resolve_dns_name(px: object, node: str, vm_type: str, vmid: int) -> str | None:
+    if vm_type == "lxc":
+        try:
+            lxc_config = get_vm_config(px, node, "lxc", vmid)
+            config_dict = lxc_config.model_dump(by_alias=True, exclude_none=True)
+            return sanitize_dns_hostname(config_dict.get("hostname"))
+        except Exception:
+            return None
+    if vm_type == "qemu":
+        try:
+            return get_qemu_guest_agent_hostname(px, node, vmid)
+        except Exception:
+            return None
+    return None
 
 
 async def _resolve_interface_id(
@@ -106,6 +127,8 @@ async def sync_ip_individual(
     resolved_interface = interface_name or (
         resolve_guest_interface_by_ip(guest_interfaces, ip_address) if guest_interfaces else None
     )
+
+    dns_name = _resolve_dns_name(px, node, vm_type, vmid)
 
     proxmox_resource: dict[str, object] = {
         "vmid": vmid,
@@ -200,6 +223,7 @@ async def sync_ip_individual(
         ip_payload: dict[str, object] = {
             "address": ip_address,
             "status": "active",
+            "dns_name": dns_name or "",
             "tags": tag_refs,
             "custom_fields": {"proxmox_last_updated": now.isoformat()},
         }
@@ -224,6 +248,7 @@ async def sync_ip_individual(
                 "assigned_object_type": record.get("assigned_object_type"),
                 "assigned_object_id": record.get("assigned_object_id"),
                 "status": record.get("status"),
+                "dns_name": record.get("dns_name"),
                 "tags": record.get("tags"),
             },
         )

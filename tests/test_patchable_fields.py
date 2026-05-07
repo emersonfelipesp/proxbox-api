@@ -156,7 +156,7 @@ async def test_vm_interface_ips_default_includes_status_tags_custom_fields(
         overwrite_flags=SyncOverwriteFlags(),
     )
 
-    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields"})
+    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields", "dns_name"})
 
 
 @pytest.mark.asyncio
@@ -166,6 +166,7 @@ async def test_vm_interface_ips_default_includes_status_tags_custom_fields(
         ("overwrite_ip_status", "status"),
         ("overwrite_ip_tags", "tags"),
         ("overwrite_ip_custom_fields", "custom_fields"),
+        ("overwrite_ip_address_dns_name", "dns_name"),
     ],
 )
 async def test_vm_interface_ips_drops_key_when_flag_disabled(
@@ -186,7 +187,7 @@ async def test_vm_interface_ips_drops_key_when_flag_disabled(
     )
 
     assert missing_key not in capture.patchable_fields
-    expected_remaining = {"status", "tags", "custom_fields"} - {missing_key}
+    expected_remaining = {"status", "tags", "custom_fields", "dns_name"} - {missing_key}
     assert expected_remaining.issubset(capture.patchable_fields)
 
 
@@ -206,7 +207,7 @@ async def test_vm_interface_ips_legacy_none_keeps_all_three(
         overwrite_flags=None,
     )
 
-    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields"})
+    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields", "dns_name"})
 
 
 # ---------------------------------------------------------------------------
