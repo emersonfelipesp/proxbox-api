@@ -10,6 +10,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
+from proxbox_api.services.proxmox_helpers import GuestAgentFetchResult
 
 
 def _vm_sync_inputs(vm_config: dict):
@@ -176,18 +177,21 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
 
     async def _fake_guest_ifaces_with_ip(*args, **kwargs):
-        return [
-            {
-                "name": "ens18",
-                "mac_address": "AA:BB:CC:DD:EE:FF",
-                "ip_addresses": [
-                    {"ip_address": "10.0.0.50", "prefix": 24, "ip_address_type": "ipv4"}
-                ],
-            }
-        ]
+        return GuestAgentFetchResult(
+            interfaces=[
+                {
+                    "name": "ens18",
+                    "mac_address": "AA:BB:CC:DD:EE:FF",
+                    "ip_addresses": [
+                        {"ip_address": "10.0.0.50", "prefix": 24, "ip_address_type": "ipv4"}
+                    ],
+                }
+            ],
+            diagnostic=None,
+        )
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
         _fake_guest_ifaces_with_ip,
     )
 
@@ -222,10 +226,13 @@ def test_vm_sync_uses_guest_agent_interface_name_by_default(monkeypatch):
     )
 
     async def _fake_guest_ifaces_no_ip(*args, **kwargs):
-        return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
+        return GuestAgentFetchResult(
+            interfaces=[{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}],
+            diagnostic=None,
+        )
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
         _fake_guest_ifaces_no_ip,
     )
 
@@ -256,10 +263,10 @@ def test_vm_sync_falls_back_to_config_when_guest_agent_unavailable(monkeypatch):
 
     async def _fake_guest_helper(*args, **kwargs):
         helper_calls["count"] += 1
-        return []
+        return GuestAgentFetchResult(interfaces=[], diagnostic=None)
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
         _fake_guest_helper,
     )
 
@@ -295,10 +302,13 @@ def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
     )
 
     async def _fake_guest_ifaces_no_ip_2(*args, **kwargs):
-        return [{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}]
+        return GuestAgentFetchResult(
+            interfaces=[{"name": "ens18", "mac_address": "AA:BB:CC:DD:EE:FF", "ip_addresses": []}],
+            diagnostic=None,
+        )
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
         _fake_guest_ifaces_no_ip_2,
     )
 
@@ -371,7 +381,7 @@ def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
         raise AssertionError("should not be called")
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
         _should_not_be_called,
     )
 
@@ -441,19 +451,22 @@ def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
     ip_payloads: list[dict] = []
 
     async def _fake_guest_fe80(*args, **kwargs):
-        return [
-            {
-                "name": "ens18",
-                "mac_address": "AA:BB:CC:DD:EE:FF",
-                "ip_addresses": [
-                    {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
-                ],
-            }
-        ]
+        return GuestAgentFetchResult(
+            interfaces=[
+                {
+                    "name": "ens18",
+                    "mac_address": "AA:BB:CC:DD:EE:FF",
+                    "ip_addresses": [
+                        {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
+                    ],
+                }
+            ],
+            diagnostic=None,
+        )
 
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
         _fake_guest_fe80,
     )
 
@@ -482,19 +495,22 @@ def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
     ip_payloads: list[dict] = []
 
     async def _fake_guest_fe80(*args, **kwargs):
-        return [
-            {
-                "name": "ens18",
-                "mac_address": "AA:BB:CC:DD:EE:FF",
-                "ip_addresses": [
-                    {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
-                ],
-            }
-        ]
+        return GuestAgentFetchResult(
+            interfaces=[
+                {
+                    "name": "ens18",
+                    "mac_address": "AA:BB:CC:DD:EE:FF",
+                    "ip_addresses": [
+                        {"ip_address": "fe80::1", "prefix": 64, "ip_address_type": "ipv6"}
+                    ],
+                }
+            ],
+            diagnostic=None,
+        )
 
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
         _fake_guest_fe80,
     )
 
