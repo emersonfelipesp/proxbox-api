@@ -156,7 +156,7 @@ async def test_vm_interface_ips_default_includes_status_tags_custom_fields(
         overwrite_flags=SyncOverwriteFlags(),
     )
 
-    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields"})
+    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields", "dns_name"})
 
 
 @pytest.mark.asyncio
@@ -166,6 +166,7 @@ async def test_vm_interface_ips_default_includes_status_tags_custom_fields(
         ("overwrite_ip_status", "status"),
         ("overwrite_ip_tags", "tags"),
         ("overwrite_ip_custom_fields", "custom_fields"),
+        ("overwrite_ip_address_dns_name", "dns_name"),
     ],
 )
 async def test_vm_interface_ips_drops_key_when_flag_disabled(
@@ -186,7 +187,7 @@ async def test_vm_interface_ips_drops_key_when_flag_disabled(
     )
 
     assert missing_key not in capture.patchable_fields
-    expected_remaining = {"status", "tags", "custom_fields"} - {missing_key}
+    expected_remaining = {"status", "tags", "custom_fields", "dns_name"} - {missing_key}
     assert expected_remaining.issubset(capture.patchable_fields)
 
 
@@ -206,7 +207,7 @@ async def test_vm_interface_ips_legacy_none_keeps_all_three(
         overwrite_flags=None,
     )
 
-    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields"})
+    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields", "dns_name"})
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +341,8 @@ def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
         "name",
         "cluster",
         "device",
+        "site",
+        "tenant",
         "vcpus",
         "memory",
         "disk",
@@ -371,6 +374,19 @@ def test_vm_patchable_legacy_none_flags_keeps_all_keys() -> None:
         "description",
         "custom_fields",
     }.issubset(fields)
+
+
+def test_vm_patchable_drops_vm_type_when_netbox_lacks_native_type_field() -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    fields = _compute_vm_patchable_fields(
+        SyncOverwriteFlags(),
+        supports_virtual_machine_type_field=False,
+    )
+
+    assert "virtual_machine_type" not in fields
+    assert "role" in fields
+    assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
 
 
 @pytest.mark.parametrize(

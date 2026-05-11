@@ -9,6 +9,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
     BulkReconcilePhase,
     rest_bulk_reconcile_phases_async,
+    rest_first_async,
     rest_list_async,
     rest_reconcile_async,
 )
@@ -42,6 +43,82 @@ def _relation_id_or_none(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _relation_text_or_none(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _placement_raw_value(source: object | None, key: str) -> object:
+    if source is None:
+        return None
+    if isinstance(source, dict):
+        return source.get(key)
+    return getattr(source, key, None)
+
+
+def placement_from_source(source: object | None) -> dict[str, object | None]:
+    """Extract endpoint placement metadata from a session, schema, dict, or nested relation."""
+
+    placement: dict[str, object | None] = {}
+    for prefix in ("site", "tenant"):
+        nested = _placement_raw_value(source, prefix)
+        nested_id = nested_slug = nested_name = None
+        if isinstance(nested, dict):
+            nested_id = nested.get("id")
+            nested_slug = nested.get("slug")
+            nested_name = nested.get("name") or nested.get("display")
+        elif nested is not None:
+            nested_id = getattr(nested, "id", None)
+            nested_slug = getattr(nested, "slug", None)
+            nested_name = getattr(nested, "name", None) or getattr(nested, "display", None)
+
+        placement[f"{prefix}_id"] = _relation_id_or_none(
+            _placement_raw_value(source, f"{prefix}_id") or nested_id
+        )
+        placement[f"{prefix}_slug"] = _relation_text_or_none(
+            _placement_raw_value(source, f"{prefix}_slug") or nested_slug
+        )
+        placement[f"{prefix}_name"] = _relation_text_or_none(
+            _placement_raw_value(source, f"{prefix}_name") or nested_name
+        )
+    return placement
+
+
+def _has_configured_relation(placement: dict[str, object | None], prefix: str) -> bool:
+    return any(
+        placement.get(f"{prefix}_{field}") not in (None, "")
+        for field in ("id", "slug", "name")
+    )
+
+
+async def _lookup_relation_record(
+    nb: object,
+    path: str,
+    *,
+    prefix: str,
+    placement: dict[str, object | None],
+) -> NetBoxRecord:
+    attempts: list[tuple[str, object]] = []
+    relation_id = _relation_id_or_none(placement.get(f"{prefix}_id"))
+    if relation_id is not None:
+        attempts.append(("id", relation_id))
+    for field in ("slug", "name"):
+        value = _relation_text_or_none(placement.get(f"{prefix}_{field}"))
+        if value:
+            attempts.append((field, value))
+
+    for field, value in attempts:
+        record = await rest_first_async(nb, path, query={field: value, "limit": 2})
+        if record is not None:
+            return record
+
+    details = ", ".join(f"{field}={value!r}" for field, value in attempts) or "no lookup data"
+    raise ProxboxException(
+        message=f"Configured NetBox {prefix} was not found",
+        detail=f"Could not resolve {prefix} for Proxmox endpoint placement ({details}).",
+    )
 
 
 def _record_has_tag(record: object, tag_slug: str) -> bool:
@@ -130,14 +207,22 @@ def _cluster_payload(
     cluster_type_id: int | None,
     mode: str,
     tag_refs: list[dict[str, object]],
+    site_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "name": cluster_name,
         "type": cluster_type_id,
         "description": f"Proxmox {mode} cluster.",
         "tags": tag_refs,
         "custom_fields": _last_updated_cf(),
     }
+    if site_id is not None:
+        payload["scope_type"] = "dcim.site"
+        payload["scope_id"] = site_id
+    if tenant_id is not None:
+        payload["tenant"] = tenant_id
+    return payload
 
 
 def _manufacturer_payload(tag_refs: list[dict[str, object]]) -> dict[str, object]:
@@ -254,12 +339,14 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         return {}
 
     cluster_modes: dict[str, str] = {}
+    cluster_placements: dict[str, dict[str, object | None]] = {}
     node_names: list[str] = []
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
         cluster_mode = str(getattr(cluster_status, "mode", "") or "").strip().lower() or "cluster"
         if cluster_name:
             cluster_modes[cluster_name] = cluster_mode
+            cluster_placements[cluster_name] = placement_from_source(cluster_status)
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()
             if node_name:
@@ -267,6 +354,12 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
 
     if not cluster_modes and not node_names:
         return {}
+
+    default_site_cluster_names = [
+        cluster_name
+        for cluster_name in sorted(cluster_modes)
+        if not _has_configured_relation(cluster_placements.get(cluster_name, {}), "site")
+    ]
 
     phase_results = await rest_bulk_reconcile_phases_async(
         nb,
@@ -319,7 +412,8 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                 name="sites",
                 path="/api/dcim/sites/",
                 payloads=[
-                    _site_payload(cluster_name, tag_refs) for cluster_name in sorted(cluster_modes)
+                    _site_payload(cluster_name, tag_refs)
+                    for cluster_name in default_site_cluster_names
                 ],
                 lookup_fields=["slug"],
                 schema=NetBoxSiteSyncState,
@@ -346,6 +440,24 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         phase_results["device_roles"].records[0] if phase_results["device_roles"].records else None
     )
     site_by_slug = {str(record.get("slug")): record for record in phase_results["sites"].records}
+    site_by_cluster_name: dict[str, NetBoxRecord] = {}
+    tenant_by_cluster_name: dict[str, NetBoxRecord] = {}
+    for cluster_name in sorted(cluster_modes):
+        placement = cluster_placements.get(cluster_name, {})
+        site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
+        site_record = site_by_slug.get(site_slug)
+        if site_record is None:
+            site_record = await _ensure_site(
+                nb,
+                cluster_name=cluster_name,
+                tag_refs=tag_refs,
+                placement=placement,
+            )
+        site_by_cluster_name[cluster_name] = site_record
+
+        tenant_record = await _resolve_tenant(nb, placement=placement)
+        if tenant_record is not None:
+            tenant_by_cluster_name[cluster_name] = tenant_record
 
     # Cluster reconcile honors per-field cluster overwrite flags. name/type are
     # always patchable (they identify the cluster and its mode); description,
@@ -353,6 +465,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
     # flags are supplied (None), all five keys are patchable, preserving the
     # historical always-overwrite behavior.
     _cluster_patchable: set[str] = {"name", "type"}
+    _cluster_patchable.update({"scope_type", "scope_id", "tenant"})
     if overwrite_flags is None or overwrite_flags.overwrite_cluster_description:
         _cluster_patchable.add("description")
     if overwrite_flags is None or overwrite_flags.overwrite_cluster_tags:
@@ -376,6 +489,12 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                         ),
                         mode=cluster_modes[cluster_name],
                         tag_refs=tag_refs,
+                        site_id=_relation_id_or_none(
+                            getattr(site_by_cluster_name.get(cluster_name), "id", None)
+                        ),
+                        tenant_id=_relation_id_or_none(
+                            getattr(tenant_by_cluster_name.get(cluster_name), "id", None)
+                        ),
                     )
                     for cluster_name in sorted(cluster_modes)
                 ],
@@ -385,6 +504,11 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "type": _relation_id_or_none(record.get("type")),
+                    "tenant": _relation_id_or_none(record.get("tenant")),
+                    "scope_type": record.get("scope_type"),
+                    "scope_id": _relation_id_or_none(
+                        record.get("scope_id") or record.get("scope")
+                    ),
                     "description": record.get("description"),
                     "tags": record.get("tags"),
                     "custom_fields": record.get("custom_fields"),
@@ -425,9 +549,8 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
     device_payloads: list[dict[str, object]] = []
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
-        site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
         cluster_record = cluster_by_name.get(cluster_name)
-        site_record = site_by_slug.get(site_slug)
+        site_record = site_by_cluster_name.get(cluster_name)
         desired_site_id = _relation_id_or_none(getattr(site_record, "id", None))
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()
@@ -517,22 +640,28 @@ async def _ensure_cluster(
     cluster_type_id: int | None,
     mode: str,
     tag_refs: list[dict[str, object]],
+    site_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> NetBoxRecord:
     return await rest_reconcile_async(
         nb,
         "/api/virtualization/clusters/",
         lookup={"name": cluster_name},
-        payload={
-            "name": cluster_name,
-            "type": cluster_type_id,
-            "description": f"Proxmox {mode} cluster.",
-            "tags": tag_refs,
-            "custom_fields": _last_updated_cf(),
-        },
+        payload=_cluster_payload(
+            cluster_name,
+            cluster_type_id=cluster_type_id,
+            mode=mode,
+            tag_refs=tag_refs,
+            site_id=site_id,
+            tenant_id=tenant_id,
+        ),
         schema=NetBoxClusterSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
-            "type": record.get("type"),
+            "type": _relation_id_or_none(record.get("type")),
+            "tenant": _relation_id_or_none(record.get("tenant")),
+            "scope_type": record.get("scope_type"),
+            "scope_id": _relation_id_or_none(record.get("scope_id") or record.get("scope")),
             "description": record.get("description"),
             "tags": record.get("tags"),
             "custom_fields": record.get("custom_fields"),
@@ -613,8 +742,21 @@ async def _ensure_device_role(nb: object, *, tag_refs: list[dict[str, object]]) 
 
 
 async def _ensure_site(
-    nb: object, *, cluster_name: str, tag_refs: list[dict[str, object]]
+    nb: object,
+    *,
+    cluster_name: str,
+    tag_refs: list[dict[str, object]],
+    placement: object | None = None,
 ) -> NetBoxRecord:
+    placement_data = placement_from_source(placement)
+    if _has_configured_relation(placement_data, "site"):
+        return await _lookup_relation_record(
+            nb,
+            "/api/dcim/sites/",
+            prefix="site",
+            placement=placement_data,
+        )
+
     site_name = f"Proxmox Default Site - {cluster_name}"
     site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
     return await rest_reconcile_async(
@@ -636,6 +778,22 @@ async def _ensure_site(
             "tags": record.get("tags"),
             "custom_fields": record.get("custom_fields"),
         },
+    )
+
+
+async def _resolve_tenant(
+    nb: object,
+    *,
+    placement: object | None = None,
+) -> NetBoxRecord | None:
+    placement_data = placement_from_source(placement)
+    if not _has_configured_relation(placement_data, "tenant"):
+        return None
+    return await _lookup_relation_record(
+        nb,
+        "/api/tenancy/tenants/",
+        prefix="tenant",
+        placement=placement_data,
     )
 
 

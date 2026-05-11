@@ -217,6 +217,112 @@ async def get_qemu_guest_agent_network_interfaces(
         return []
 
 
+def sanitize_dns_hostname(value: object) -> str | None:
+    """Normalize a guest hostname into a NetBox-acceptable dns_name.
+
+    Returns None when the value is empty or matches the localhost family.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value).strip().rstrip(".").lower()
+    if not text:
+        return None
+    if text == "localhost" or text.startswith("localhost."):
+        return None
+    return text[:255]
+
+
+def _extract_hostname_from_payload(payload: object) -> str | None:
+    """Pull a hostname out of an `agent/get-host-name` response shape."""
+    candidates: list[object] = []
+    if isinstance(payload, dict):
+        result = payload.get("result")
+        if isinstance(result, dict):
+            candidates.extend(
+                [result.get("host-name"), result.get("hostname"), result.get("host_name")]
+            )
+        candidates.extend(
+            [payload.get("host-name"), payload.get("hostname"), payload.get("host_name")]
+        )
+    elif isinstance(payload, str):
+        candidates.append(payload)
+    for candidate in candidates:
+        cleaned = sanitize_dns_hostname(candidate)
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _extract_hostname_from_interfaces(interfaces: object) -> str | None:
+    """Best-effort hostname/FQDN scan of normalized guest-agent interfaces."""
+    if not isinstance(interfaces, list):
+        return None
+    best: str | None = None
+    for item in interfaces:
+        if not isinstance(item, dict):
+            continue
+        for key in ("fqdn", "hostname", "host-name", "host_name"):
+            cleaned = sanitize_dns_hostname(item.get(key))
+            if cleaned and (best is None or len(cleaned) > len(best)):
+                best = cleaned
+    return best
+
+
+@_dual_mode
+async def get_qemu_guest_agent_hostname(
+    session: ProxmoxSession,
+    node: str,
+    vmid: int,
+) -> str | None:
+    """Return the guest-reported hostname or None when unavailable.
+
+    Tries `agent/get-host-name` first (with the same dual-call fallback used
+    by `get_qemu_guest_agent_network_interfaces`), then falls back to scanning
+    the normalized network-interfaces payload for an FQDN/hostname-like
+    field. Returns None on any failure so callers can stay terse.
+    """
+    try:
+        payload: object | None = None
+        try:
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).agent("get-host-name").get()
+            )
+        except Exception as primary_error:
+            logger.debug(
+                "Primary guest-agent hostname call failed for node=%s vmid=%s: %s",
+                node,
+                vmid,
+                primary_error,
+            )
+            try:
+                payload = await resolve_async(
+                    session.session.nodes(node).qemu(vmid).agent.get(command="get-host-name")
+                )
+            except Exception as fallback_error:
+                logger.debug(
+                    "Fallback guest-agent hostname call failed for node=%s vmid=%s: %s",
+                    node,
+                    vmid,
+                    fallback_error,
+                )
+                payload = None
+
+        hostname = _extract_hostname_from_payload(payload) if payload is not None else None
+        if hostname:
+            return hostname
+
+        interfaces = await get_qemu_guest_agent_network_interfaces(session, node, vmid)
+        return _extract_hostname_from_interfaces(interfaces)
+    except Exception as error:
+        logger.warning(
+            "Unable to resolve guest-agent hostname for node=%s vmid=%s: %s",
+            node,
+            vmid,
+            error,
+        )
+        return None
+
+
 @_dual_mode
 async def get_storage_list(
     session: ProxmoxSession,

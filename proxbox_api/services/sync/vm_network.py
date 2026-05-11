@@ -80,6 +80,7 @@ async def sync_vm_interfaces(  # noqa: C901
     primary_ip_preference: str = "ipv4",
     now: datetime | None = None,
     device: dict | None = None,
+    dns_name: str | None = None,
 ) -> tuple[list[dict[str, object]], int | None]:
     """Synchronize VM interfaces and IP addresses.
 
@@ -246,6 +247,7 @@ async def sync_vm_interfaces(  # noqa: C901
                 now=now,
                 create_ip=True,
                 primary_ip_preference=primary_ip_preference,
+                dns_name=dns_name,
             )
             if ip_results and first_ip_id is None:
                 first_ip_id = ip_results[0][0]

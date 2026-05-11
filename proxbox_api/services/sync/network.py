@@ -28,6 +28,15 @@ from proxbox_api.services.sync.vm_helpers import (
 )
 
 
+def _relation_id_or_none(value: object) -> int | None:
+    if isinstance(value, dict):
+        value = value.get("id")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 async def sync_node_interface_and_ip(
     nb,
     device: dict,
@@ -168,6 +177,9 @@ def build_vlan_payload(
     vlan_tag: int,
     tag_refs: list[dict],
     now: datetime,
+    *,
+    site_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> dict:
     """Build a VLAN payload dict for bulk operations (no NetBox writes).
 
@@ -179,13 +191,18 @@ def build_vlan_payload(
     Returns:
         Payload dict for bulk reconciliation
     """
-    return {
+    payload: dict[str, object] = {
         "vid": vlan_tag,
         "name": f"VLAN {vlan_tag}",
         "status": "active",
         "tags": tag_refs,
         "custom_fields": {"proxmox_last_updated": now.isoformat()},
     }
+    if site_id is not None:
+        payload["site"] = site_id
+    if tenant_id is not None:
+        payload["tenant"] = tenant_id
+    return payload
 
 
 def build_vm_interface_payload(
@@ -233,6 +250,7 @@ def build_vm_interface_ip_payload(
     interface_id: int,
     tag_refs: list[dict],
     now: datetime,
+    dns_name: str | None = None,
 ) -> dict:
     """Build a VM interface IP payload dict for bulk operations (no NetBox writes).
 
@@ -241,6 +259,7 @@ def build_vm_interface_ip_payload(
         interface_id: Interface ID
         tag_refs: List of tag references
         now: Current datetime for custom fields
+        dns_name: Guest hostname to set as IPAM dns_name; empty/None becomes ""
 
     Returns:
         Payload dict for bulk reconciliation
@@ -250,6 +269,7 @@ def build_vm_interface_ip_payload(
         "assigned_object_type": "virtualization.vminterface",
         "assigned_object_id": interface_id,
         "status": "active",
+        "dns_name": dns_name or "",
         "tags": tag_refs,
         "custom_fields": {"proxmox_last_updated": now.isoformat()},
     }
@@ -401,31 +421,33 @@ async def _reconcile_vm_interface_record(
 async def bulk_reconcile_vlans(
     nb,
     vlan_payloads: list[dict],
-) -> dict[int, int]:
-    """Perform bulk reconciliation of VLAN payloads. Returns mapping of vid → NetBox ID.
+) -> dict[object, int]:
+    """Perform bulk reconciliation of VLAN payloads. Returns mapping of VLAN lookup key → NetBox ID.
 
     Args:
         nb: NetBox session
         vlan_payloads: List of VLAN payload dicts
 
     Returns:
-        Dict mapping VLAN vid to NetBox ID
+        Dict mapping VLAN vid and (vid, site_id, tenant_id) to NetBox ID
     """
     if not vlan_payloads:
         return {}
 
-    vlan_vid_to_id = {}
+    vlan_vid_to_id: dict[object, int] = {}
     try:
         result = await rest_bulk_reconcile_async(
             nb,
             "/api/ipam/vlans/",
             payloads=vlan_payloads,
-            lookup_fields=["vid"],
+            lookup_fields=["vid", "site", "tenant"],
             schema=NetBoxVlanSyncState,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
                 "name": record.get("name"),
                 "status": record.get("status"),
+                "site": record.get("site"),
+                "tenant": record.get("tenant"),
                 "tags": record.get("tags"),
                 "custom_fields": record.get("custom_fields"),
             },
@@ -433,8 +455,13 @@ async def bulk_reconcile_vlans(
         # Build mapping of vid → ID from returned records
         for record in result.records:
             vid = record.get("vid")
-            if vid:
-                vlan_vid_to_id[vid] = record.get("id")
+            vlan_id = _relation_id_or_none(record.get("id"))
+            if vid and vlan_id is not None:
+                normalized_vid = int(vid)
+                site_id = _relation_id_or_none(record.get("site"))
+                tenant_id = _relation_id_or_none(record.get("tenant"))
+                vlan_vid_to_id[(normalized_vid, site_id, tenant_id)] = vlan_id
+                vlan_vid_to_id.setdefault(normalized_vid, vlan_id)
     except Exception as e:
         logger.error("Error during bulk VLAN reconciliation: %s", e)
     return vlan_vid_to_id
@@ -528,7 +555,9 @@ async def bulk_reconcile_vm_interface_ips(
     # time; status/tags/custom_fields are safe to update, gated by the
     # per-field overwrite_ip_* flags.
     if overwrite_flags is None:
-        patchable_fields: frozenset[str] = frozenset({"status", "tags", "custom_fields"})
+        patchable_fields: frozenset[str] = frozenset(
+            {"status", "tags", "custom_fields", "dns_name"}
+        )
     else:
         gated: set[str] = set()
         if overwrite_flags.overwrite_ip_status:
@@ -537,6 +566,8 @@ async def bulk_reconcile_vm_interface_ips(
             gated.add("tags")
         if overwrite_flags.overwrite_ip_custom_fields:
             gated.add("custom_fields")
+        if overwrite_flags.overwrite_ip_address_dns_name:
+            gated.add("dns_name")
         patchable_fields = frozenset(gated)
 
     result = None
@@ -552,6 +583,7 @@ async def bulk_reconcile_vm_interface_ips(
                 "assigned_object_type": record.get("assigned_object_type"),
                 "assigned_object_id": record.get("assigned_object_id"),
                 "status": record.get("status"),
+                "dns_name": record.get("dns_name"),
                 "tags": record.get("tags"),
             },
             patchable_fields=patchable_fields,
@@ -649,6 +681,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
     ignore_ipv6_link_local: bool = True,
     primary_ip_preference: str = "ipv4",
     tag_slug: str = "proxbox",
+    dns_name: str | None = None,
 ) -> list[tuple[int | None, str]]:
     """Create or update ALL IPs attached to a VM interface, then clean up stale ones.
 
@@ -691,6 +724,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
                     "assigned_object_type": "virtualization.vminterface",
                     "assigned_object_id": interface_id,
                     "status": "active",
+                    "dns_name": dns_name or "",
                     "tags": tag_refs,
                     "custom_fields": {"proxmox_last_updated": now.isoformat()},
                 },
@@ -700,6 +734,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
                     "assigned_object_type": record.get("assigned_object_type"),
                     "assigned_object_id": record.get("assigned_object_id"),
                     "status": record.get("status"),
+                    "dns_name": record.get("dns_name"),
                     "tags": record.get("tags"),
                 },
             )
@@ -747,6 +782,7 @@ async def sync_vm_interface_and_ip(
     primary_ip_preference: str = "ipv4",
     now: datetime | None = None,
     device: dict | None = None,
+    dns_name: str | None = None,
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -810,6 +846,7 @@ async def sync_vm_interface_and_ip(
         create_ip=create_ip,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        dns_name=dns_name,
     )
     if ip_results:
         first_ip_id, first_ip = ip_results[0]

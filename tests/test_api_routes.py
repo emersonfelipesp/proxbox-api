@@ -328,6 +328,12 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
         "port": 8006,
         "username": "root@pam",
         "verify_ssl": False,
+        "site_id": None,
+        "site_slug": None,
+        "site_name": None,
+        "tenant_id": None,
+        "tenant_slug": None,
+        "tenant_name": None,
     }
 
     listed = asyncio.run(get_proxmox_endpoints(db_session))
@@ -357,6 +363,12 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
         "port": 8006,
         "username": "root@pam",
         "verify_ssl": True,
+        "site_id": None,
+        "site_slug": None,
+        "site_name": None,
+        "tenant_id": None,
+        "tenant_slug": None,
+        "tenant_name": None,
     }
 
     deleted = asyncio.run(delete_proxmox_endpoint(endpoint_id, db_session))

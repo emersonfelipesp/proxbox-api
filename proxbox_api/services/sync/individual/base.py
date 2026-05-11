@@ -96,6 +96,8 @@ class BaseIndividualSyncService:
             _ensure_cluster_type,
         )
 
+        site = await self._get_or_create_site(cluster_name)
+        tenant = await self._get_or_create_tenant()
         cluster_type = await _ensure_cluster_type(
             self.nb,
             mode=mode,
@@ -107,6 +109,8 @@ class BaseIndividualSyncService:
             cluster_type_id=getattr(cluster_type, "id", None),
             mode=mode,
             tag_refs=self.tag_refs,
+            site_id=getattr(site, "id", None),
+            tenant_id=getattr(tenant, "id", None),
         )
         return cluster
 
@@ -208,7 +212,14 @@ class BaseIndividualSyncService:
             self.nb,
             cluster_name=cluster_name,
             tag_refs=self.tag_refs,
+            placement=self.px,
         )
+
+    async def _get_or_create_tenant(self) -> object | None:
+        """Resolve the configured tenant for this Proxmox endpoint, if any."""
+        from proxbox_api.services.sync.device_ensure import _resolve_tenant
+
+        return await _resolve_tenant(self.nb, placement=self.px)
 
     async def _get_or_create_device(
         self,

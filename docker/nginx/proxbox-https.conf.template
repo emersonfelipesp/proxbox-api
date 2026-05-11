@@ -4,6 +4,17 @@ server {
     ssl_certificate __CERT__;
     ssl_certificate_key __KEY__;
 
+    # nginx returns code 497 when a plain HTTP request hits the TLS listener.
+    # Translate that into a structured JSON error so clients (notably the
+    # netbox-proxbox plugin) can detect the misconfiguration and prompt the
+    # operator to enable HTTPS instead of showing a bare "400 Bad Request".
+    # See: https://github.com/emersonfelipesp/netbox-proxbox/issues/352
+    error_page 497 = @http_to_https_help;
+    location @http_to_https_help {
+        default_type application/json;
+        return 400 '{"error":"plain_http_on_https_port","detail":"This proxbox-api image only accepts HTTPS. Configure the FastAPI endpoint to use HTTPS (and disable cert verification if using the bundled mkcert cert)."}';
+    }
+
     location / {
         proxy_pass http://127.0.0.1:8001;
         proxy_http_version 1.1;

@@ -20,6 +20,8 @@ def build_netbox_virtual_machine_payload(
     device_id: int | None,
     role_id: int | None,
     tag_ids: list[int],
+    site_id: int | None = None,
+    tenant_id: int | None = None,
     virtual_machine_type_id: int | None = None,
     last_updated: datetime | None = None,
     cluster_name: str | None = None,
@@ -32,6 +34,8 @@ def build_netbox_virtual_machine_payload(
         proxmox_config: Proxmox VM config data as model or dict.
         cluster_id: NetBox cluster ID.
         device_id: Optional NetBox device ID for physical host.
+        site_id: Optional NetBox site ID for VM placement.
+        tenant_id: Optional NetBox tenant ID for VM placement.
         role_id: Optional NetBox VM role ID.
         tag_ids: List of NetBox tag IDs to apply.
         virtual_machine_type_id: Optional NetBox VirtualMachineType ID (NetBox v4.6+).
@@ -48,6 +52,8 @@ def build_netbox_virtual_machine_payload(
         config=proxmox_config,
         cluster_id=cluster_id,
         device_id=device_id,
+        site_id=site_id,
+        tenant_id=tenant_id,
         role_id=role_id,
         tag_ids=tag_ids,
         virtual_machine_type_id=virtual_machine_type_id,
