@@ -1435,7 +1435,7 @@ configured on the <code>ProxboxPluginSettings</code> row.</p>
 <h2 id="schema">Schema<a class="headerlink" href="#schema" title="Permanent link">&para;</a></h2>
 <p>The flags live in
 <a href="https://github.com/emersonfelipesp/proxbox-api/blob/main/proxbox_api/schemas/sync.py"><code>proxbox_api/schemas/sync.py</code></a>
-as <code>SyncOverwriteFlags</code>, a <code>ProxboxBaseModel</code>. There are 21 boolean fields
+as <code>SyncOverwriteFlags</code>, a <code>ProxboxBaseModel</code>. There are 23 boolean fields
 grouped by NetBox resource:</p>
 <table>
 <thead>
@@ -1451,7 +1451,7 @@ grouped by NetBox resource:</p>
 </tr>
 <tr>
 <td>Virtual Machine</td>
-<td><code>overwrite_vm_role</code>, <code>overwrite_vm_tags</code>, <code>overwrite_vm_description</code>, <code>overwrite_vm_custom_fields</code></td>
+<td><code>overwrite_vm_role</code>, <code>overwrite_vm_type</code>, <code>overwrite_vm_tags</code>, <code>overwrite_vm_description</code>, <code>overwrite_vm_custom_fields</code></td>
 </tr>
 <tr>
 <td>Cluster</td>
@@ -1471,7 +1471,7 @@ grouped by NetBox resource:</p>
 </tr>
 <tr>
 <td>IP Address</td>
-<td><code>overwrite_ip_status</code>, <code>overwrite_ip_tags</code>, <code>overwrite_ip_custom_fields</code></td>
+<td><code>overwrite_ip_status</code>, <code>overwrite_ip_tags</code>, <code>overwrite_ip_custom_fields</code>, <code>overwrite_ip_address_dns_name</code></td>
 </tr>
 </tbody>
 </table>
@@ -1480,27 +1480,32 @@ grouped by NetBox resource:</p>
 <h2 id="how-it-reaches-the-routes">How it reaches the routes<a class="headerlink" href="#how-it-reaches-the-routes" title="Permanent link">&para;</a></h2>
 <p>Each sync route accepts the schema as a flattened query group:</p>
 <p>```python
-from typing import Annotated
-from fastapi import Query
+from proxbox_api.dependencies import ResolvedSyncOverwriteFlagsDep
 from proxbox_api.schemas.sync import SyncOverwriteFlags</p>
 <p>@router.get("/devices/create/stream")
 async def create_devices_stream(
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     ...
 ```</p>
 <p>FastAPI flattens the model: the URL <code>?overwrite_device_tags=false</code> is
-equivalent to constructing <code>SyncOverwriteFlags(overwrite_device_tags=False)</code>.</p>
-<p>For VM sync routes, <code>overwrite_vm_role</code>, <code>overwrite_vm_tags</code>,
-<code>overwrite_vm_description</code>, and <code>overwrite_vm_custom_fields</code> are also exposed
-as flat top-level query parameters for backward compatibility. When both are
-present, the flat parameter wins; when only the flat parameter is omitted
+equivalent to constructing <code>SyncOverwriteFlags(overwrite_device_tags=False)</code>.
+Routes also pass the bound model through the shared
+<code>resolved_sync_overwrite_flags</code> dependency, which re-reads the raw query string
+and makes any canonical flat <code>overwrite_*</code> key authoritative. This guards the
+plugin/backend contract against FastAPI/Pydantic query-model behavior changes.</p>
+<p>For VM sync routes, <code>overwrite_vm_role</code>, <code>overwrite_vm_type</code>,
+<code>overwrite_vm_tags</code>, <code>overwrite_vm_description</code>, and
+<code>overwrite_vm_custom_fields</code> are also exposed as explicit flat top-level query
+parameters for backward compatibility. When both are present, the flat
+parameter wins; when only the flat parameter is omitted
 (<code>None</code>), the corresponding field on <code>overwrite_flags</code> is used. Resolution is
 done at the entry of each route via the
 <code>_resolve_vm_overwrites(...)</code> helper in
 <code>proxbox_api/routes/virtualization/virtual_machines/sync_vm.py</code>.</p>
-<p>The DCIM device sync route does <strong>not</strong> expose flat <code>overwrite_device_*</code> query
-parameters — all device flags are driven through the <code>overwrite_flags</code> group.</p>
+<p>The DCIM device sync route accepts the same canonical flat query shape. For
+example, <code>/dcim/devices/create/stream?overwrite_device_role=false</code> must result
+in <code>role</code> being omitted from existing-device PATCH payloads.</p>
 <h2 id="how-it-reaches-the-reconciler">How it reaches the reconciler<a class="headerlink" href="#how-it-reaches-the-reconciler" title="Permanent link">&para;</a></h2>
 <p>Service modules (e.g. <code>services/sync/storages.py</code>,
 <code>services/sync/network.py</code>, <code>services/sync/device_ensure.py</code>,
