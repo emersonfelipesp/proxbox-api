@@ -88,8 +88,7 @@ def placement_from_source(source: object | None) -> dict[str, object | None]:
 
 def _has_configured_relation(placement: dict[str, object | None], prefix: str) -> bool:
     return any(
-        placement.get(f"{prefix}_{field}") not in (None, "")
-        for field in ("id", "slug", "name")
+        placement.get(f"{prefix}_{field}") not in (None, "") for field in ("id", "slug", "name")
     )
 
 
@@ -506,9 +505,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                     "type": _relation_id_or_none(record.get("type")),
                     "tenant": _relation_id_or_none(record.get("tenant")),
                     "scope_type": record.get("scope_type"),
-                    "scope_id": _relation_id_or_none(
-                        record.get("scope_id") or record.get("scope")
-                    ),
+                    "scope_id": _relation_id_or_none(record.get("scope_id") or record.get("scope")),
                     "description": record.get("description"),
                     "tags": record.get("tags"),
                     "custom_fields": record.get("custom_fields"),

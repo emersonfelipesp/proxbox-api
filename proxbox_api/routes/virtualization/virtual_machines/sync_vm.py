@@ -1248,11 +1248,7 @@ async def create_virtual_machines(  # noqa: C901
 
         for cluster_name, vm_resources in resources_by_cluster.items():
             cluster_state = next(
-                (
-                    state
-                    for state in cluster_status
-                    if getattr(state, "name", None) == cluster_name
-                ),
+                (state for state in cluster_status if getattr(state, "name", None) == cluster_name),
                 None,
             )
             cluster_mode = getattr(cluster_state, "mode", None) or "cluster"

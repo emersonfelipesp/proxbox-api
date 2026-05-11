@@ -330,13 +330,20 @@ async def test_sync_cluster_individual_reports_updated_when_record_exists(monkey
     async def _fake_rest_reconcile_async(*args, **kwargs):
         return FakeRecord(kwargs["payload"], record_id=1)
 
+    async def _fake_get_or_create_cluster(self, cluster_name, mode="cluster"):
+        return SimpleNamespace(id=1, serialize=lambda: {"id": 1})
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.cluster_sync.rest_reconcile_async",
+        "proxbox_api.netbox_rest.rest_reconcile_async",
         _fake_rest_reconcile_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.base.BaseIndividualSyncService._get_or_create_cluster",
+        _fake_get_or_create_cluster,
     )
 
     result = await sync_cluster_individual(
