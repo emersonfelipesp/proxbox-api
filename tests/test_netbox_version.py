@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from proxbox_api.netbox_version import detect_netbox_version, parse_netbox_version
-from proxbox_api.services.sync.vm_create import ensure_vm_type
+from proxbox_api.services.sync.vm_create import (
+    create_or_update_virtual_machine,
+    ensure_vm_type,
+)
 
 
 class _StatusResponse:
@@ -89,3 +92,146 @@ async def test_ensure_vm_type_reconciles_virtual_machine_type_on_netbox_46(monke
     assert getattr(result, "id") == 18
     assert captured["args"][1] == "/api/virtualization/virtual-machine-types/"
     assert captured["kwargs"]["lookup"] == {"slug": "qemu-virtual-machine"}
+
+
+@pytest.mark.asyncio
+async def test_create_or_update_vm_uses_legacy_vm_type_payload_before_netbox_46(
+    monkeypatch,
+) -> None:
+    nb = _netbox_api("4.5.9")
+    captured: dict[str, object] = {}
+
+    async def _fake_reconcile(*args: object, **kwargs: object) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"id": 101}
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.rest_reconcile_async",
+        _fake_reconcile,
+    )
+
+    await create_or_update_virtual_machine(
+        nb,
+        proxmox_resource={
+            "vmid": 101,
+            "name": "vm-101",
+            "node": "pve01",
+            "type": "qemu",
+            "status": "running",
+            "maxcpu": 2,
+            "maxmem": 2 * 1024 * 1024 * 1024,
+            "maxdisk": 0,
+        },
+        proxmox_config={},
+        cluster_id=1,
+        device_id=2,
+        role_id=3,
+        tag_id=7,
+        tag_refs=[{"id": 7}],
+        cluster_name="cluster-a",
+        virtual_machine_type_id=None,
+    )
+
+    kwargs = captured["kwargs"]
+    payload = kwargs["payload"]
+    assert payload["role"] == 3
+    assert "virtual_machine_type" not in payload
+    assert payload["custom_fields"]["proxmox_vm_type"] == "qemu"
+    assert "virtual_machine_type" not in kwargs["patchable_fields"]
+    assert nb.client.calls == [("GET", "/api/status/")]
+
+
+@pytest.mark.asyncio
+async def test_create_or_update_vm_ignores_stale_vm_type_id_before_netbox_46(
+    monkeypatch,
+) -> None:
+    nb = _netbox_api("4.5.9")
+    captured: dict[str, object] = {}
+
+    async def _fake_reconcile(*args: object, **kwargs: object) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"id": 103}
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.rest_reconcile_async",
+        _fake_reconcile,
+    )
+
+    await create_or_update_virtual_machine(
+        nb,
+        proxmox_resource={
+            "vmid": 103,
+            "name": "vm-103",
+            "node": "pve01",
+            "type": "qemu",
+            "status": "running",
+            "maxcpu": 2,
+            "maxmem": 2 * 1024 * 1024 * 1024,
+            "maxdisk": 0,
+        },
+        proxmox_config={},
+        cluster_id=1,
+        device_id=2,
+        role_id=3,
+        tag_id=7,
+        tag_refs=[{"id": 7}],
+        cluster_name="cluster-a",
+        virtual_machine_type_id=18,
+    )
+
+    payload = captured["kwargs"]["payload"]
+    assert payload["role"] == 3
+    assert "virtual_machine_type" not in payload
+    assert payload["custom_fields"]["proxmox_vm_type"] == "qemu"
+    assert "virtual_machine_type" not in captured["kwargs"]["patchable_fields"]
+    assert nb.client.calls == [("GET", "/api/status/")]
+
+
+@pytest.mark.asyncio
+async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
+    monkeypatch,
+) -> None:
+    nb = _netbox_api("4.6.0")
+    captured: dict[str, object] = {}
+
+    async def _fake_reconcile(*args: object, **kwargs: object) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"id": 102}
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.rest_reconcile_async",
+        _fake_reconcile,
+    )
+
+    await create_or_update_virtual_machine(
+        nb,
+        proxmox_resource={
+            "vmid": 102,
+            "name": "vm-102",
+            "node": "pve01",
+            "type": "lxc",
+            "status": "running",
+            "maxcpu": 2,
+            "maxmem": 1024 * 1024 * 1024,
+            "maxdisk": 0,
+        },
+        proxmox_config={},
+        cluster_id=1,
+        device_id=2,
+        role_id=3,
+        tag_id=7,
+        tag_refs=[{"id": 7}],
+        cluster_name="cluster-a",
+        virtual_machine_type_id=18,
+    )
+
+    kwargs = captured["kwargs"]
+    payload = kwargs["payload"]
+    assert payload["virtual_machine_type"] == 18
+    assert "role" not in payload
+    assert payload["custom_fields"]["proxmox_vm_type"] == "lxc"
+    assert "virtual_machine_type" in kwargs["patchable_fields"]
+    assert nb.client.calls == [("GET", "/api/status/")]
