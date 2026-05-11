@@ -37,15 +37,32 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
     connect_timeout: int | None = Field(default=None, ge=1, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
+    site_id: int | None = None
+    site_slug: str | None = None
+    site_name: str | None = None
+    tenant_id: int | None = None
+    tenant_slug: str | None = None
+    tenant_name: str | None = None
 
-    @field_validator("name", "ip_address", "domain", "user", "password", mode="before")
+    @field_validator(
+        "name",
+        "ip_address",
+        "domain",
+        "user",
+        "password",
+        "site_slug",
+        "site_name",
+        "tenant_slug",
+        "tenant_name",
+        mode="before",
+    )
     @classmethod
     def normalize_optional_text(cls, value: object) -> str | None:
         return _normalize_text(value)
 
-    @field_validator("http_port", mode="before")
+    @field_validator("http_port", "site_id", "tenant_id", mode="before")
     @classmethod
-    def normalize_http_port(cls, value: object) -> int | None:
+    def normalize_optional_int(cls, value: object) -> int | None:
         return _normalize_int(value)
 
     @field_validator("ssl", mode="before")
@@ -219,6 +236,12 @@ class ClusterStatusSchema(BaseClusterStatusSchema):
     quorate: bool
     version: int
     mode: str
+    site_id: int | None = None
+    site_slug: str | None = None
+    site_name: str | None = None
+    tenant_id: int | None = None
+    tenant_slug: str | None = None
+    tenant_name: str | None = None
     node_list: list[ClusterNodeStatusSchema] | None = None
 
 

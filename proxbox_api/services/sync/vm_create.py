@@ -25,12 +25,16 @@ from proxbox_api.services.sync.devices import (
     _ensure_device_type,
     _ensure_manufacturer,
     _ensure_site,
+    _resolve_tenant,
 )
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
-from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+from proxbox_api.services.sync.vm_helpers import (
+    _compute_vm_patchable_fields,
+    normalize_current_virtual_machine_payload,
+)
 
 
 async def ensure_vm_dependencies(
@@ -60,26 +64,36 @@ async def ensure_vm_dependencies(
         ProxboxException: If dependency creation fails
     """
     try:
-        cluster_mode = next(
+        cluster_state = next(
             (
-                cluster_state.mode
-                for cluster_state in cluster_status
-                if getattr(cluster_state, "name", None) == cluster_name
+                state
+                for state in cluster_status
+                if getattr(state, "name", None) == cluster_name
             ),
-            "cluster",
+            None,
         )
+        cluster_mode = getattr(cluster_state, "mode", None) or "cluster"
 
         cluster_type = await _ensure_cluster_type(
             netbox_session,
             mode=cluster_mode,
             tag_refs=tag_refs,
         )
+        site = await _ensure_site(
+            netbox_session,
+            cluster_name=cluster_name,
+            tag_refs=tag_refs,
+            placement=cluster_state,
+        )
+        tenant = await _resolve_tenant(netbox_session, placement=cluster_state)
         cluster = await _ensure_cluster(
             netbox_session,
             cluster_name=cluster_name,
             cluster_type_id=getattr(cluster_type, "id", None),
             mode=cluster_mode,
             tag_refs=tag_refs,
+            site_id=getattr(site, "id", None),
+            tenant_id=getattr(tenant, "id", None),
         )
         manufacturer = await _ensure_manufacturer(
             netbox_session,
@@ -92,11 +106,6 @@ async def ensure_vm_dependencies(
         )
         device_role = await _ensure_proxmox_node_role(
             netbox_session,
-            tag_refs=tag_refs,
-        )
-        site = await _ensure_site(
-            netbox_session,
-            cluster_name=cluster_name,
             tag_refs=tag_refs,
         )
         device = await _ensure_device(
@@ -225,6 +234,8 @@ async def create_or_update_virtual_machine(
     tag_refs: list[dict[str, object]],
     cluster_name: str | None = None,
     virtual_machine_type_id: int | None = None,
+    site_id: int | None = None,
+    tenant_id: int | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Create or update a virtual machine in NetBox.
@@ -268,14 +279,22 @@ async def create_or_update_virtual_machine(
             python_exception=str(exc),
         )
 
+    netbox_version = await detect_netbox_version(netbox_session)
+    supports_vm_type = supports_virtual_machine_type(netbox_version)
+    resolved_virtual_machine_type_id = (
+        virtual_machine_type_id if supports_vm_type else None
+    )
+
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource=proxmox_resource,
         proxmox_config=proxmox_config,
         cluster_id=cluster_id,
         device_id=device_id,
-        role_id=None if virtual_machine_type_id is not None else role_id,
+        role_id=None if resolved_virtual_machine_type_id is not None else role_id,
         tag_ids=[tag_id],
-        virtual_machine_type_id=virtual_machine_type_id,
+        site_id=site_id,
+        tenant_id=tenant_id,
+        virtual_machine_type_id=resolved_virtual_machine_type_id,
         last_updated=now,
         cluster_name=cluster_name,
     )
@@ -289,21 +308,16 @@ async def create_or_update_virtual_machine(
         },
         payload=payload,
         schema=NetBoxVirtualMachineCreateBody,
-        patchable_fields=frozenset(_compute_vm_patchable_fields(overwrite_flags)),
-        current_normalizer=lambda record: {
-            "name": record.get("name"),
-            "status": record.get("status"),
-            "cluster": record.get("cluster"),
-            "device": record.get("device"),
-            "virtual_machine_type": record.get("virtual_machine_type"),
-            "role": record.get("role"),
-            "vcpus": record.get("vcpus"),
-            "memory": record.get("memory"),
-            "disk": record.get("disk"),
-            "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
-            "description": record.get("description"),
-        },
+        patchable_fields=frozenset(
+            _compute_vm_patchable_fields(
+                overwrite_flags,
+                supports_virtual_machine_type_field=supports_vm_type,
+            )
+        ),
+        current_normalizer=lambda record: normalize_current_virtual_machine_payload(
+            record,
+            supports_virtual_machine_type_field=supports_vm_type,
+        ),
     )
 
     logger.debug("Created/updated virtual machine: %s", virtual_machine)

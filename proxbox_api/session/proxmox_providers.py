@@ -199,6 +199,28 @@ def _netbox_field(endpoint: object, field: str, default: object = None) -> objec
     return getattr(endpoint, field, default)
 
 
+def _relation_metadata(endpoint: object, prefix: str) -> dict[str, object | None]:
+    nested = _netbox_field(endpoint, prefix)
+    nested_id = nested_slug = nested_name = None
+    if isinstance(nested, dict):
+        nested_id = nested.get("id")
+        nested_slug = nested.get("slug")
+        nested_name = nested.get("name") or nested.get("display")
+    elif nested is not None:
+        nested_id = getattr(nested, "id", None)
+        nested_slug = getattr(nested, "slug", None)
+        nested_name = getattr(nested, "name", None) or getattr(nested, "display", None)
+
+    direct_id = _netbox_field(endpoint, f"{prefix}_id", None)
+    direct_slug = _netbox_field(endpoint, f"{prefix}_slug", None)
+    direct_name = _netbox_field(endpoint, f"{prefix}_name", None)
+    return {
+        f"{prefix}_id": direct_id if direct_id is not None else nested_id,
+        f"{prefix}_slug": direct_slug if direct_slug is not None else nested_slug,
+        f"{prefix}_name": direct_name if direct_name is not None else nested_name,
+    }
+
+
 def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
     return ProxmoxSessionSchema(
         name=endpoint.name,
@@ -215,6 +237,12 @@ def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
         timeout=endpoint.timeout,
         max_retries=endpoint.max_retries,
         retry_backoff=float(endpoint.retry_backoff) if endpoint.retry_backoff is not None else None,
+        site_id=endpoint.site_id,
+        site_slug=endpoint.site_slug,
+        site_name=endpoint.site_name,
+        tenant_id=endpoint.tenant_id,
+        tenant_slug=endpoint.tenant_slug,
+        tenant_name=endpoint.tenant_name,
     )
 
 
@@ -256,6 +284,8 @@ def _parse_netbox_endpoint(
         retry_backoff=float(raw_retry_backoff)
         if raw_retry_backoff is not None
         else settings.get("proxmox_retry_backoff"),  # type: ignore[arg-type]
+        **_relation_metadata(endpoint, "site"),
+        **_relation_metadata(endpoint, "tenant"),
     )
 
 

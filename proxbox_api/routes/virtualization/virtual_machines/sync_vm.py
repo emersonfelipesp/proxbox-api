@@ -23,6 +23,7 @@ from proxbox_api.netbox_rest import (
     rest_patch_async,
     rest_reconcile_async,
 )
+from proxbox_api.netbox_version import detect_netbox_version, supports_virtual_machine_type
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualDiskSyncState,
@@ -52,6 +53,7 @@ from proxbox_api.services.sync.devices import (
     _ensure_device_type,
     _ensure_manufacturer,
     _ensure_site,
+    _resolve_tenant,
 )
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
@@ -73,6 +75,7 @@ from proxbox_api.services.sync.virtual_machines import (
 from proxbox_api.services.sync.vm_create import ensure_vm_type
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
+    normalize_current_virtual_machine_payload,
     normalized_mac,
     parse_comma_separated_ints,
     parse_key_value_string,
@@ -150,23 +153,17 @@ async def _resolve_vm_dns_name(
         return None
 
 
-def _normalize_current_virtual_machine_payload(record: dict[str, object]) -> dict[str, object]:
+def _normalize_current_virtual_machine_payload(
+    record: dict[str, object],
+    *,
+    supports_virtual_machine_type_field: bool = True,
+) -> dict[str, object]:
     """Normalize NetBox VM record for Pydantic diff comparison."""
 
-    return {
-        "name": record.get("name"),
-        "status": record.get("status"),
-        "cluster": record.get("cluster"),
-        "device": record.get("device"),
-        "role": record.get("role"),
-        "virtual_machine_type": record.get("virtual_machine_type"),
-        "vcpus": record.get("vcpus"),
-        "memory": record.get("memory"),
-        "disk": record.get("disk"),
-        "tags": record.get("tags"),
-        "custom_fields": record.get("custom_fields"),
-        "description": record.get("description"),
-    }
+    return normalize_current_virtual_machine_payload(
+        record,
+        supports_virtual_machine_type_field=supports_virtual_machine_type_field,
+    )
 
 
 def _extract_cluster_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, int] | None:
@@ -264,6 +261,7 @@ def _build_vm_operation_queue(
     overwrite_vm_tags: bool = True,
     overwrite_vm_description: bool = True,
     overwrite_vm_custom_fields: bool = True,
+    supports_virtual_machine_type_field: bool = True,
 ) -> list[_NetBoxVMOperation]:
     """Classify desired VM state into GET/CREATE/UPDATE operations using Pydantic."""
 
@@ -289,8 +287,13 @@ def _build_vm_operation_queue(
 
         desired_state = NetBoxVirtualMachineCreateBody.model_validate(prepared.desired_payload)
         desired_payload = desired_state.model_dump(exclude_none=True, by_alias=True)
+        if not supports_virtual_machine_type_field:
+            desired_payload.pop("virtual_machine_type", None)
         current_state = NetBoxVirtualMachineCreateBody.model_validate(
-            _normalize_current_virtual_machine_payload(existing_record)
+            _normalize_current_virtual_machine_payload(
+                existing_record,
+                supports_virtual_machine_type_field=supports_virtual_machine_type_field,
+            )
         )
         current_payload = current_state.model_dump(exclude_none=True, by_alias=True)
 
@@ -1123,7 +1126,15 @@ async def create_virtual_machines(  # noqa: C901
             "overwrite_vm_custom_fields": overwrite_vm_custom_fields,
         }
     )
-    vm_patchable_fields = frozenset(_compute_vm_patchable_fields(effective_vm_overwrite_flags))
+    nb = netbox_session
+    netbox_version = await detect_netbox_version(nb)
+    supports_vm_type = supports_virtual_machine_type(netbox_version)
+    vm_patchable_fields = frozenset(
+        _compute_vm_patchable_fields(
+            effective_vm_overwrite_flags,
+            supports_virtual_machine_type_field=supports_vm_type,
+        )
+    )
 
     filtered_cluster_resources = cluster_resources
     bridge: WebSocketSSEBridge | None = (
@@ -1138,8 +1149,6 @@ async def create_virtual_machines(  # noqa: C901
                 cluster_resources=cluster_resources,
                 netbox_vm_ids=vm_ids,
             )
-
-    nb = netbox_session
 
     # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link.
     proxmox_url_by_cluster: dict[str, str] = {}
@@ -1238,31 +1247,41 @@ async def create_virtual_machines(  # noqa: C901
         vm_types: set[str] = set()
 
         for cluster_name, vm_resources in resources_by_cluster.items():
-            cluster_mode = next(
+            cluster_state = next(
                 (
-                    cluster_state.mode
-                    for cluster_state in cluster_status
-                    if getattr(cluster_state, "name", None) == cluster_name
+                    state
+                    for state in cluster_status
+                    if getattr(state, "name", None) == cluster_name
                 ),
-                "cluster",
+                None,
             )
+            cluster_mode = getattr(cluster_state, "mode", None) or "cluster"
             cluster_type = await _ensure_cluster_type(
                 nb,
                 mode=cluster_mode,
                 tag_refs=tag_refs,
             )
+            site = await _ensure_site(
+                nb,
+                cluster_name=cluster_name,
+                tag_refs=tag_refs,
+                placement=cluster_state,
+            )
+            tenant = await _resolve_tenant(nb, placement=cluster_state)
             cluster = await _ensure_cluster(
                 nb,
                 cluster_name=cluster_name,
                 cluster_type_id=getattr(cluster_type, "id", None),
                 mode=cluster_mode,
                 tag_refs=tag_refs,
+                site_id=getattr(site, "id", None),
+                tenant_id=getattr(tenant, "id", None),
             )
-            site = await _ensure_site(nb, cluster_name=cluster_name, tag_refs=tag_refs)
 
             cluster_dependency_cache[cluster_name] = {
                 "cluster": cluster,
                 "site": site,
+                "tenant": tenant,
                 "device_type": device_type,
                 "device_role": device_role,
             }
@@ -1324,13 +1343,14 @@ async def create_virtual_machines(  # noqa: C901
             if not isinstance(role, BaseException):
                 vm_role_cache[vt] = role
 
-        type_results = await asyncio.gather(
-            *[ensure_vm_type(nb, vt, tag_refs) for vt in sorted_vm_types],
-            return_exceptions=True,
-        )
-        for vt, result in zip(sorted_vm_types, type_results):
-            if result is not None and not isinstance(result, BaseException):
-                vm_type_cache[vt] = result
+        if supports_vm_type:
+            type_results = await asyncio.gather(
+                *[ensure_vm_type(nb, vt, tag_refs) for vt in sorted_vm_types],
+                return_exceptions=True,
+            )
+            for vt, result in zip(sorted_vm_types, type_results):
+                if result is not None and not isinstance(result, BaseException):
+                    vm_type_cache[vt] = result
 
     try:
         storage_records = await rest_list_async(nb, "/api/plugins/proxbox/storage/")
@@ -1349,6 +1369,8 @@ async def create_virtual_machines(  # noqa: C901
         )
 
     async def _get_vm_type(vm_type_key: str) -> object | None:
+        if not supports_vm_type:
+            return None
         if vm_type_key not in vm_type_cache and vm_type_key in VM_TYPE_MAPPINGS:
             result = await ensure_vm_type(nb, vm_type_key, tag_refs)
             if result is not None:
@@ -1435,6 +1457,8 @@ async def create_virtual_machines(  # noqa: C901
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
+            tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
             virtual_machine_type_id=vm_type_id,
             last_updated=now,
             cluster_name=str(cluster_name),
@@ -1504,6 +1528,7 @@ async def create_virtual_machines(  # noqa: C901
             overwrite_vm_tags=overwrite_vm_tags,
             overwrite_vm_description=overwrite_vm_description,
             overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+            supports_virtual_machine_type_field=supports_vm_type,
         )
 
         operation_counts: dict[str, int] = {"GET": 0, "CREATE": 0, "UPDATE": 0}
@@ -1754,6 +1779,8 @@ async def create_virtual_machines(  # noqa: C901
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
+            tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
             virtual_machine_type_id=vm_type_id,
             last_updated=now,
             cluster_name=str(cluster_name),
@@ -1779,20 +1806,10 @@ async def create_virtual_machines(  # noqa: C901
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=vm_patchable_fields,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "status": record.get("status"),
-                "cluster": record.get("cluster"),
-                "device": record.get("device"),
-                "virtual_machine_type": record.get("virtual_machine_type"),
-                "role": record.get("role"),
-                "vcpus": record.get("vcpus"),
-                "memory": record.get("memory"),
-                "disk": record.get("disk"),
-                "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
-                "description": record.get("description"),
-            },
+            current_normalizer=lambda record: _normalize_current_virtual_machine_payload(
+                record,
+                supports_virtual_machine_type_field=supports_vm_type,
+            ),
         )
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)
@@ -2319,6 +2336,8 @@ async def create_only_vm_interfaces(  # noqa: C901
                         "config_dict": config_dict,
                         "guest_iface": guest_iface,
                         "vm_name": vm_name,
+                        "site_id": _relation_id(netbox_vm.get("site")),
+                        "tenant_id": _relation_id(netbox_vm.get("tenant")),
                     }
                     interface_payloads.append(payload)
                 except Exception as exc:
@@ -2364,7 +2383,7 @@ async def create_only_vm_interfaces(  # noqa: C901
     # Collect all interface payloads and metadata from all VMs
     all_interface_payloads: list[dict] = []
     all_interface_info: dict = {}
-    all_vlan_tags: dict[int, list[dict]] = {}  # tag → [payload_list]
+    all_vlan_tags: dict[tuple[int, int | None, int | None], list[dict]] = {}
 
     try:
         for cluster in cluster_resources:
@@ -2383,8 +2402,15 @@ async def create_only_vm_interfaces(  # noqa: C901
                         if vlan_tag:
                             try:
                                 vid = int(vlan_tag)
-                                if vid not in all_vlan_tags:
-                                    all_vlan_tags[vid] = []
+                                site_id = info.get("site_id")
+                                tenant_id = info.get("tenant_id")
+                                vlan_key = (
+                                    vid,
+                                    site_id if isinstance(site_id, int) else None,
+                                    tenant_id if isinstance(tenant_id, int) else None,
+                                )
+                                if vlan_key not in all_vlan_tags:
+                                    all_vlan_tags[vlan_key] = []
                             except (ValueError, TypeError):
                                 pass
     except Exception as exc:
@@ -2401,7 +2427,16 @@ async def create_only_vm_interfaces(  # noqa: C901
                 bulk_reconcile_vlans,
             )
 
-            vlan_payloads = [build_vlan_payload(vid, tag_refs, now) for vid in all_vlan_tags.keys()]
+            vlan_payloads = [
+                build_vlan_payload(
+                    vid,
+                    tag_refs,
+                    now,
+                    site_id=site_id,
+                    tenant_id=tenant_id,
+                )
+                for vid, site_id, tenant_id in all_vlan_tags.keys()
+            ]
             vlan_vid_to_id = await bulk_reconcile_vlans(nb, vlan_payloads)
             logger.info(
                 "Bulk VLAN reconciliation completed: %d VLANs processed", len(vlan_payloads)
@@ -2415,8 +2450,16 @@ async def create_only_vm_interfaces(  # noqa: C901
         if vlan_tag:
             try:
                 vid = int(vlan_tag)
-                if vid in vlan_vid_to_id:
-                    info["payload"]["untagged_vlan"] = vlan_vid_to_id[vid]
+                site_id = info.get("site_id")
+                tenant_id = info.get("tenant_id")
+                vlan_key = (
+                    vid,
+                    site_id if isinstance(site_id, int) else None,
+                    tenant_id if isinstance(tenant_id, int) else None,
+                )
+                vlan_id = vlan_vid_to_id.get(vlan_key) or vlan_vid_to_id.get(vid)
+                if vlan_id is not None:
+                    info["payload"]["untagged_vlan"] = vlan_id
                     info["payload"]["mode"] = "access"
             except (ValueError, TypeError):
                 pass
