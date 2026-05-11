@@ -1131,6 +1131,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#erros-de-certificado-self-signed-do-netbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Erros de certificado self-signed do NetBox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#falhas-de-conexao-com-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1395,6 +1406,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#erros-de-certificado-self-signed-do-netbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Erros de certificado self-signed do NetBox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#falhas-de-conexao-com-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1557,6 +1579,16 @@
 <li>Verifique o dominio do endpoint NetBox.</li>
 <li>Confirme que a origem do frontend esta na allowlist de CORS.</li>
 <li>Confirme que os requests usam o host e a porta esperados.</li>
+</ul>
+<h2 id="erros-de-certificado-self-signed-do-netbox">Erros de certificado self-signed do NetBox<a class="headerlink" href="#erros-de-certificado-self-signed-do-netbox" title="Permanent link">&para;</a></h2>
+<p>Sintoma:</p>
+<ul>
+<li>Os logs mostram <code>certificate verify failed</code> ao buscar <code>ProxboxPluginSettings</code> ou outros dados da API NetBox.</li>
+</ul>
+<p>Resolucao:</p>
+<ul>
+<li>Em producao, instale um certificado confiavel para o runtime do proxbox-api.</li>
+<li>Em labs ou ambientes privados, defina <code>verify_ssl</code> como <code>false</code> no endpoint NetBox armazenado. Isso desabilita a verificacao de certificado para chamadas normais ao NetBox e tambem para buscas de plugin settings/runtime settings.</li>
 </ul>
 <h2 id="falhas-de-conexao-com-proxmox">Falhas de conexao com Proxmox<a class="headerlink" href="#falhas-de-conexao-com-proxmox" title="Permanent link">&para;</a></h2>
 <p>Sintoma:</p>

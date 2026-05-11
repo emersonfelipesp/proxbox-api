@@ -1131,6 +1131,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#netbox-self-signed-certificate-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBox self-signed certificate errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#netbox-cache-issues" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1445,6 +1456,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#netbox-self-signed-certificate-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBox self-signed certificate errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#netbox-cache-issues" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1657,6 +1679,16 @@
 <li>Ensure NetBox endpoint domain is set correctly.</li>
 <li>Confirm frontend origin is included in app CORS origin list.</li>
 <li>Confirm requests target expected API host and port.</li>
+</ul>
+<h2 id="netbox-self-signed-certificate-errors">NetBox self-signed certificate errors<a class="headerlink" href="#netbox-self-signed-certificate-errors" title="Permanent link">&para;</a></h2>
+<p>Symptom:</p>
+<ul>
+<li>Logs show <code>certificate verify failed</code> while fetching <code>ProxboxPluginSettings</code> or other NetBox API data.</li>
+</ul>
+<p>Resolution:</p>
+<ul>
+<li>For production, install a certificate trusted by the proxbox-api runtime.</li>
+<li>For private lab deployments, set the stored NetBox endpoint <code>verify_ssl</code> field to <code>false</code>. This disables certificate verification for both normal NetBox API calls and plugin-settings/runtime-settings fetches.</li>
 </ul>
 <h2 id="netbox-cache-issues">NetBox Cache Issues<a class="headerlink" href="#netbox-cache-issues" title="Permanent link">&para;</a></h2>
 <h3 id="stale-data-after-sync">Stale data after sync<a class="headerlink" href="#stale-data-after-sync" title="Permanent link">&para;</a></h3>
