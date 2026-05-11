@@ -65,11 +65,7 @@ async def ensure_vm_dependencies(
     """
     try:
         cluster_state = next(
-            (
-                state
-                for state in cluster_status
-                if getattr(state, "name", None) == cluster_name
-            ),
+            (state for state in cluster_status if getattr(state, "name", None) == cluster_name),
             None,
         )
         cluster_mode = getattr(cluster_state, "mode", None) or "cluster"
@@ -281,9 +277,7 @@ async def create_or_update_virtual_machine(
 
     netbox_version = await detect_netbox_version(netbox_session)
     supports_vm_type = supports_virtual_machine_type(netbox_version)
-    resolved_virtual_machine_type_id = (
-        virtual_machine_type_id if supports_vm_type else None
-    )
+    resolved_virtual_machine_type_id = virtual_machine_type_id if supports_vm_type else None
 
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource=proxmox_resource,

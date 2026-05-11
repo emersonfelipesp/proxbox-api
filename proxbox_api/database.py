@@ -249,7 +249,7 @@ class ApiKey(SQLModel, table=True):
         return False
 
 
-def _migrate_proxmox_endpoint_columns() -> None:
+def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
     table = ProxmoxEndpoint.__tablename__
     try:
         insp = inspect(engine)
