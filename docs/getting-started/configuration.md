@@ -24,6 +24,7 @@ The stored model now includes:
 - `token_version`: `v1` or `v2`
 - `token_key`: required for token v2, ignored for token v1
 - `token`: the token secret
+- `verify_ssl`: controls TLS certificate verification for all outbound NetBox HTTPS calls, including `ProxboxPluginSettings` runtime-settings fetches. Set this to `false` only for lab or private deployments that use self-signed certificates.
 
 ### NetBox token v1 example
 
@@ -102,6 +103,7 @@ Authentication rules for create and update:
 ## Runtime Session Behavior
 
 - NetBox sessions are derived from the single stored NetBox endpoint.
+- The NetBox endpoint `verify_ssl` value is reused by plugin-settings fetches, so self-signed NetBox certificates work consistently when verification is disabled.
 - Proxmox sessions default to local database endpoint records.
 - Legacy source mode (`source=netbox`) is still supported in Proxmox session dependency behavior.
 

@@ -24,6 +24,7 @@ O modelo armazenado agora inclui:
 - `token_version`: `v1` ou `v2`
 - `token_key`: necessario para token v2, ignorado no token v1
 - `token`: o segredo do token
+- `verify_ssl`: controla a verificacao do certificado TLS em todas as chamadas HTTPS ao NetBox, incluindo buscas de runtime settings em `ProxboxPluginSettings`. Use `false` apenas em labs ou ambientes privados com certificados self-signed.
 
 ### Exemplo de token NetBox v1
 
@@ -102,6 +103,7 @@ Regras de autenticacao para create/update:
 ## Comportamento de sessoes em runtime
 
 - A sessao NetBox e derivada do endpoint NetBox armazenado.
+- O valor `verify_ssl` do endpoint NetBox tambem e usado nas buscas de plugin settings, entao certificados self-signed funcionam de forma consistente quando a verificacao esta desabilitada.
 - As sessoes Proxmox usam por padrao registros de endpoint do banco local.
 - O modo legado (`source=netbox`) continua suportado na dependencia de sessoes Proxmox.
 
