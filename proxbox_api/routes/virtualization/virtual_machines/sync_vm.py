@@ -5,14 +5,18 @@ import asyncio
 import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Annotated, Literal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
 from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
-from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.dependencies import (
+    NetBoxSessionDep,
+    ProxboxTagDep,
+    ResolvedSyncOverwriteFlagsDep,
+)
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import VirtualMachine
@@ -1077,7 +1081,7 @@ async def create_virtual_machines(  # noqa: C901
             "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
         ),
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -3057,7 +3061,7 @@ async def create_virtual_machine_by_netbox_id(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     return await _create_virtual_machine_by_netbox_id(
         netbox_vm_id=netbox_vm_id,
@@ -3161,7 +3165,7 @@ async def create_virtual_machines_stream(
             "Use when a dedicated network-sync stage follows immediately after."
         ),
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     (
         overwrite_vm_role,
@@ -3392,7 +3396,7 @@ async def create_virtual_machine_by_netbox_id_stream(
             "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
         ),
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     (
         overwrite_vm_role,

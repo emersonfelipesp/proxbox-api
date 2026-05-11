@@ -1,10 +1,14 @@
 """Individual VM sync routes."""
 
-from typing import Annotated, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Query
 
-from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.dependencies import (
+    NetBoxSessionDep,
+    ProxboxTagDep,
+    ResolvedSyncOverwriteFlagsDep,
+)
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
 from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
@@ -25,7 +29,7 @@ async def sync_vm(
     dry_run: bool = Query(
         default=False, title="Dry Run", description="If true, don't make changes"
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Sync a single virtual machine from Proxmox to NetBox."""
     px = resolve_proxmox_session(pxs, cluster_name)
@@ -46,7 +50,7 @@ async def sync_vm_by_path(
     type: Literal["qemu", "lxc"],
     vmid: int,
     dry_run: bool = Query(default=False),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Sync a single VM using path parameters."""
     px = resolve_proxmox_session(pxs, cluster_name)

@@ -5,6 +5,8 @@ on the netbox-proxbox plugin side. Any addition, removal, or reordering must be
 applied on both sides; the order is also the order rendered in the plugin UI.
 """
 
+from collections.abc import Mapping
+
 from pydantic import Field
 
 from proxbox_api.schemas._base import ProxboxBaseModel
@@ -216,3 +218,20 @@ class SyncOverwriteFlags(ProxboxBaseModel):
             "preserving any value the operator manually set in NetBox."
         ),
     )
+
+
+def overwrite_flags_from_query_params(
+    query_params: Mapping[str, object],
+    base: SyncOverwriteFlags | None = None,
+) -> SyncOverwriteFlags:
+    """Resolve canonical overwrite flags from raw flat query parameters.
+
+    FastAPI's ``Annotated[SyncOverwriteFlags, Query()]`` support has changed
+    across framework/Pydantic releases. The plugin sends a flat query string, so
+    make those raw keys authoritative whenever they are present.
+    """
+    resolved = (base or SyncOverwriteFlags()).model_dump()
+    for name in SyncOverwriteFlags.model_fields:
+        if name in query_params:
+            resolved[name] = query_params[name]
+    return SyncOverwriteFlags(**resolved)

@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from proxbox_api.dependencies import ProxboxTagDep
+from proxbox_api.dependencies import ProxboxTagDep, ResolvedSyncOverwriteFlagsDep
 from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload, rest_patch_async, rest_reconcile_async
@@ -53,7 +53,7 @@ async def create_devices_stream(
         title="Max Fetch Concurrency",
         description="Accepted for API consistency; device sync does not use fetch concurrency.",
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Stream device synchronization progress as SSE events.
 

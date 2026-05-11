@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.dependencies import (
+    NetBoxSessionDep,
+    ProxboxTagDep,
+    ResolvedSyncOverwriteFlagsDep,
+)
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.routes.dcim import create_all_device_interfaces
@@ -69,7 +72,7 @@ async def full_update_sync(  # noqa: C901
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
 ) -> dict:
     sync_nodes: list = []
@@ -354,7 +357,7 @@ async def full_update_sync_stream(  # noqa: C901
     cluster_resources: ClusterResourcesDep,
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
 ) -> StreamingResponse:
     async def event_stream():  # noqa: C901
