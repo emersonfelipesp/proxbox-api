@@ -246,6 +246,28 @@ See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaul
 - `GET /full-update` - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.
 - `GET /full-update/stream` - SSE streaming variant.
 
+## Sync State Probe
+
+- `GET /sync/active` - Returns `{ active, started_at, id, kind, runs }` reporting whether this API replica currently has a `/full-update` or `/full-update/stream` request in flight. Use this to fast-fail a cron / single-exec invocation when a sync is already running.
+
+The registry is **process-local and memory-only**, so the probe answers for the worker that handles the request. With multiple uvicorn workers, callers may see disagreeing answers across workers; treat the response as advisory and keep the scheduling interval larger than the typical sync duration. The endpoint is covered by the standard `X-Proxbox-API-Key` middleware.
+
+Response shape:
+
+```json
+{
+  "active": true,
+  "started_at": "2026-05-12T17:53:28.122Z",
+  "id": "9b6c0408-...",
+  "kind": "full-update",
+  "runs": [
+    { "id": "9b6c0408-...", "kind": "full-update", "started_at": "2026-05-12T17:53:28.122Z" }
+  ]
+}
+```
+
+`started_at` / `id` / `kind` report the oldest in-flight run (FIFO). `runs` lists every registered run on the local replica for diagnostics.
+
 ## WebSocket
 
 - `GET /` - Basic counter WebSocket for connectivity checks.

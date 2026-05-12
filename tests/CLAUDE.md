@@ -46,6 +46,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_streaming_detailed_messages.py` | Detailed-message streaming payload shape |
 | `test_structured_logging.py` | `SyncPhaseLogger` operation phase logging |
 | `test_stub_routes.py` | HTTP 501 stub endpoints for unimplemented operations |
+| `test_sync_active.py` | `GET /sync/active` soft probe + `sync_state` registry lifecycle (issue #71) |
 | `test_sync_error_handling.py` | `@with_retry` decorator and domain error wrapping |
 | `test_sync_overwrite_flags.py` | Behavior of `SyncOverwriteFlags` propagation through the sync pipeline |
 | `test_task_history_sync.py` | Task history sync workflow |
