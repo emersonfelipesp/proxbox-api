@@ -6,22 +6,24 @@ from datetime import datetime, timezone
 
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.services.netbox_writers import upsert_cluster, upsert_cluster_type
+from proxbox_api.services.run_session import SyncContext
+from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
 
 
 async def sync_cluster_individual(
-    nb: object,
-    px: object,
-    tag: object,
+    ctx: SyncContext,
     cluster_name: str,
+    *,
     dry_run: bool = False,
 ) -> dict:
     """Sync a single Cluster from Proxmox to NetBox.
 
     Args:
-        nb: NetBox async session.
-        px: Single Proxmox session.
-        tag: ProxboxTagDep object.
-        cluster_name: Name of the cluster to sync.
+        ctx: Per-run :class:`SyncContext` carrying the NetBox session,
+            the Proxmox sessions list, the Proxbox tag, the plugin
+            settings, and the per-run identifier.
+        cluster_name: Name of the cluster to sync. Used to resolve the
+            matching Proxmox session from ``ctx.px_sessions``.
         dry_run: If True, return what would be synced without making changes.
 
     Returns:
@@ -31,19 +33,31 @@ async def sync_cluster_individual(
     """
     from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 
-    service = BaseIndividualSyncService(nb, px, tag)
-    tag_refs = service.tag_refs
     now = datetime.now(timezone.utc)
-
     proxmox_resource: dict[str, object] = {
         "name": cluster_name,
         "mode": "cluster",
         "proxmox_last_updated": now.isoformat(),
     }
 
+    px = resolve_proxmox_session(ctx.px_sessions, cluster_name)
+    if px is None:
+        return {
+            "object_type": "cluster",
+            "action": "error",
+            "proxmox_resource": proxmox_resource,
+            "netbox_object": None,
+            "dry_run": dry_run,
+            "dependencies_synced": [],
+            "error": f"No Proxmox session found for cluster: {cluster_name}",
+        }
+
+    service = BaseIndividualSyncService(ctx.nb, px, ctx.tag)
+    tag_refs = service.tag_refs
+
     if dry_run:
         existing = await rest_list_async(
-            nb,
+            ctx.nb,
             "/api/virtualization/clusters/",
             query={"name": cluster_name},
         )
@@ -62,12 +76,12 @@ async def sync_cluster_individual(
 
     try:
         cluster_type_result = await upsert_cluster_type(
-            nb,
+            ctx.nb,
             mode="cluster",
             tag_refs=tag_refs,
         )
         cluster_result = await upsert_cluster(
-            nb,
+            ctx.nb,
             cluster_name=cluster_name,
             cluster_type_id=getattr(cluster_type_result.record, "id", None),
             mode="cluster",
