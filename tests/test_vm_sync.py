@@ -221,3 +221,85 @@ def test_virtual_machine_interface_state_accepts_choice_object_type():
     )
 
     assert state.type == "bridge"
+
+
+def test_build_payload_applies_description_metadata_when_enabled(monkeypatch):
+    """End-to-end: ``parse_description_metadata=True`` plus a fenced JSON block
+    on the Proxmox VM description applies the parsed PKs to the resulting body
+    and strips the metadata block from the written description."""
+
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.normalize.resolve_netbox_schema_contract",
+        lambda: {"source": "cache", "openapi": {"paths": {}}},
+    )
+
+    description = 'Production database VM.\n```netbox-metadata\n{"tenant": 13, "site": 4}\n```\n'
+
+    payload = build_netbox_virtual_machine_payload(
+        proxmox_resource=PROXMOX_VM_RESOURCE,
+        proxmox_config={**PROXMOX_VM_CONFIG, "description": description},
+        cluster_id=11,
+        device_id=None,
+        role_id=None,
+        tag_ids=[7],
+        parse_description_metadata=True,
+    )
+
+    assert payload["tenant"] == 13
+    assert payload["site"] == 4
+    assert "netbox-metadata" not in payload["description"]
+    assert "Production database VM." in payload["description"]
+
+
+def test_build_payload_ignores_metadata_when_flag_off(monkeypatch):
+    """When the toggle is off, fenced metadata is silently ignored and the
+    description preserves the existing fallback."""
+
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.normalize.resolve_netbox_schema_contract",
+        lambda: {"source": "cache", "openapi": {"paths": {}}},
+    )
+
+    description = '```netbox-metadata\n{"tenant": 13}\n```'
+
+    payload = build_netbox_virtual_machine_payload(
+        proxmox_resource=PROXMOX_VM_RESOURCE,
+        proxmox_config={**PROXMOX_VM_CONFIG, "description": description},
+        cluster_id=11,
+        device_id=None,
+        role_id=None,
+        tag_ids=[7],
+        parse_description_metadata=False,
+    )
+
+    assert payload.get("tenant") in (None, 0) or "tenant" not in payload
+    assert payload["description"] == "Synced from Proxmox node pve01"
+
+
+def test_build_payload_respects_overwrite_vm_role_when_off(monkeypatch):
+    """Metadata key ``role`` is dropped when ``overwrite_vm_role=False``; other
+    keys (``tenant``) still apply because no per-field flag gates them."""
+
+    from proxbox_api.schemas.sync import SyncOverwriteFlags
+
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.normalize.resolve_netbox_schema_contract",
+        lambda: {"source": "cache", "openapi": {"paths": {}}},
+    )
+
+    overwrite_flags = SyncOverwriteFlags(overwrite_vm_role=False)
+    description = '```netbox-metadata\n{"role": 5, "tenant": 13}\n```'
+
+    payload = build_netbox_virtual_machine_payload(
+        proxmox_resource=PROXMOX_VM_RESOURCE,
+        proxmox_config={**PROXMOX_VM_CONFIG, "description": description},
+        cluster_id=11,
+        device_id=None,
+        role_id=99,  # fallback from regular resolution
+        tag_ids=[7],
+        parse_description_metadata=True,
+        overwrite_flags=overwrite_flags,
+    )
+
+    assert payload["role"] == 99
+    assert payload["tenant"] == 13

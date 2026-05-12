@@ -1141,8 +1141,80 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             return 0
         return sum(max(int(getattr(disk, "size", 0) or 0), 0) for disk in disks)
 
-    def as_netbox_create_body(self) -> NetBoxVirtualMachineCreateBody:
-        """Return validated NetBox virtual machine create body."""
+    def _resolve_description_metadata(
+        self,
+        *,
+        overwrite_flags: object | None,
+    ) -> tuple[dict[str, int], str]:
+        """Parse and apply opt-in ``netbox-metadata`` JSON from the VM description.
+
+        Returns ``(applied_known_overrides, description_text)``. Logs applied,
+        gated, and unknown keys so operators can see why an override didn't
+        land without scanning the full sync output.
+        """
+        from proxbox_api.logger import logger
+        from proxbox_api.proxmox_to_netbox.description_metadata import (
+            filter_metadata_by_overwrite_flags,
+            parse_netbox_metadata,
+            strip_netbox_metadata,
+        )
+
+        default_description = f"Synced from Proxmox node {self.resource.node}"
+        raw_description = (
+            self.config.model_extra.get("description")
+            if isinstance(self.config.model_extra, dict)
+            else None
+        )
+        if not isinstance(raw_description, str):
+            return {}, default_description
+
+        parsed = parse_netbox_metadata(raw_description)
+        applied, dropped = filter_metadata_by_overwrite_flags(
+            parsed, overwrite_flags, object_kind="vm"
+        )
+        known_fields = set(NetBoxVirtualMachineCreateBody.model_fields)
+        applied_known = {k: v for k, v in applied.items() if k in known_fields}
+        unknown = sorted(set(applied) - known_fields)
+        stripped = strip_netbox_metadata(raw_description)
+        description_text = stripped or default_description
+
+        if applied_known:
+            logger.info(
+                "netbox-metadata applied to vm %s: %s",
+                self.resource.name,
+                sorted(applied_known),
+            )
+        if unknown:
+            logger.warning(
+                "netbox-metadata unknown keys dropped on vm %s: %s",
+                self.resource.name,
+                unknown,
+            )
+        if dropped:
+            logger.info(
+                "netbox-metadata keys gated off by overwrite flags on vm %s: %s",
+                self.resource.name,
+                dropped,
+            )
+        return applied_known, description_text
+
+    def as_netbox_create_body(
+        self,
+        *,
+        parse_description_metadata: bool = False,
+        overwrite_flags: object | None = None,
+    ) -> NetBoxVirtualMachineCreateBody:
+        """Return validated NetBox virtual machine create body.
+
+        When ``parse_description_metadata`` is true, the Proxmox VM
+        ``description`` is scanned for a ``netbox-metadata`` JSON block whose
+        positive-integer PK values override the resolved foreign keys on the
+        create body (see issue #366). Keys whose matching ``overwrite_vm_<key>``
+        flag is off are dropped; unknown keys are dropped with a warning log
+        because ``NetBoxVirtualMachineCreateBody`` is ``extra="forbid"``. The
+        block is stripped from the description that is actually written to
+        NetBox so the JSON noise does not leak into the rendered UI.
+        """
 
         # NetBox stores ``virtualmachine.disk`` in a 32-bit ``PositiveIntegerField``
         # (max 2_147_483_647). Clamp defensively so a future bytes-vs-MiB
@@ -1161,7 +1233,15 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             )
             disk_value = _NETBOX_DISK_MAX
 
-        return NetBoxVirtualMachineCreateBody(
+        if parse_description_metadata:
+            applied_known, description_text = self._resolve_description_metadata(
+                overwrite_flags=overwrite_flags,
+            )
+        else:
+            applied_known = {}
+            description_text = f"Synced from Proxmox node {self.resource.node}"
+
+        body_kwargs: dict[str, object] = dict(
             name=self.resource.name,
             status=self.resource.status,
             cluster=self.cluster_id,
@@ -1175,5 +1255,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             disk=disk_value,
             tags=[tag for tag in self.tag_ids if int(tag) > 0],
             custom_fields=self.vm_custom_fields,
-            description=f"Synced from Proxmox node {self.resource.node}",
+            description=description_text,
         )
+        body_kwargs.update(applied_known)
+        return NetBoxVirtualMachineCreateBody(**body_kwargs)
