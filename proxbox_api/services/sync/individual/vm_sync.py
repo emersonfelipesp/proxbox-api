@@ -13,6 +13,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.name_collision import resolve_unique_vm_name
 from proxbox_api.services.proxmox_helpers import (
     get_vm_config_individual,
     get_vm_resource_individual,
@@ -47,6 +48,71 @@ def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return False
+
+
+async def _apply_name_collision_resolution(
+    nb: object,
+    *,
+    cluster_id: int,
+    cluster_name: str,
+    vmid: int,
+    netbox_vm_payload: dict,
+) -> None:
+    """Resolve VM name collisions in-place on `netbox_vm_payload`.
+
+    Fetches existing VMs in the NetBox cluster, builds the used-name set and
+    vmid lookup, strips this VM's current name to keep idempotency, then
+    delegates to `resolve_unique_vm_name` and updates the payload's `name`
+    when a rename is needed.
+    """
+    cluster_vms = await rest_list_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        query={"cluster_id": cluster_id, "limit": 0},
+    )
+    used_names_in_cluster: set[str] = set()
+    existing_vm_by_vmid: dict[int, dict] = {}
+    for vm in cluster_vms or []:
+        vm_dict = vm if isinstance(vm, dict) else getattr(vm, "__dict__", {})
+        vm_name = vm_dict.get("name") if isinstance(vm_dict, dict) else None
+        if isinstance(vm_name, str) and vm_name:
+            used_names_in_cluster.add(vm_name)
+        cf = vm_dict.get("custom_fields") if isinstance(vm_dict, dict) else None
+        if isinstance(cf, dict):
+            try:
+                raw_vmid = int(str(cf.get("proxmox_vm_id") or 0).strip())
+            except (TypeError, ValueError):
+                raw_vmid = 0
+            if raw_vmid:
+                existing_vm_by_vmid[raw_vmid] = vm_dict
+    if existing_vm_by_vmid.get(vmid):
+        current_name = existing_vm_by_vmid[vmid].get("name")
+        if isinstance(current_name, str):
+            used_names_in_cluster.discard(current_name)
+
+    candidate_name = str(netbox_vm_payload.get("name") or "")
+    if not candidate_name:
+        return
+    resolution = await resolve_unique_vm_name(
+        nb,
+        netbox_cluster_id=cluster_id,
+        proxmox_cluster_name=cluster_name,
+        candidate=candidate_name,
+        proxmox_vmid=vmid,
+        used_names_in_cluster=used_names_in_cluster,
+        existing_vm_by_vmid=existing_vm_by_vmid,
+    )
+    if resolution.resolved_name != candidate_name:
+        logger.info(
+            "name_collision (individual): cluster=%s vmid=%s %r -> %r (suffix=%s, operator=%s)",
+            cluster_name,
+            vmid,
+            resolution.original_name,
+            resolution.resolved_name,
+            resolution.suffix_index,
+            resolution.operator_renamed,
+        )
+        netbox_vm_payload["name"] = resolution.resolved_name
 
 
 def _build_netbox_vm_payload(
@@ -270,6 +336,14 @@ async def sync_vm_individual(
             cluster_name=cluster_name,
             proxmox_url=px_url,
             virtual_machine_type_id=vm_type_id,
+        )
+
+        await _apply_name_collision_resolution(
+            nb,
+            cluster_id=cluster_id,
+            cluster_name=cluster_name,
+            vmid=vmid,
+            netbox_vm_payload=netbox_vm_payload,
         )
 
         virtual_machine = await rest_reconcile_async(
