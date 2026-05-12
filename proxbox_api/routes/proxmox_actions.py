@@ -1,7 +1,8 @@
 """Operational verb routes (start / stop / snapshot / migrate).
 
 Issue #376. Sub-PR B introduced the gate stub; sub-PR C wired the
-``start`` verb; sub-PR D wires ``stop``; sub-PRs E–F wire the rest.
+``start`` verb; sub-PR D wires ``stop``; sub-PR E wires ``snapshot``;
+sub-PR F wires the rest.
 The 403 ``allow_writes`` gate at the top of every handler is the
 load-bearing trust boundary described in ``operational-verbs.md`` §2.3
 layer 3 — it must remain in place after every verb is wired.
@@ -32,10 +33,12 @@ always pass it once the backend-proxy view is wired in sub-PR G.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Body, Header, Query, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
@@ -45,7 +48,12 @@ from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox import ProxmoxSession
 from proxbox_api.session.proxmox_providers import _parse_db_endpoint
 from proxbox_api.services.idempotency import CacheKey, get_idempotency_cache
-from proxbox_api.services.proxmox_helpers import get_vm_status, start_vm, stop_vm
+from proxbox_api.services.proxmox_helpers import (
+    create_vm_snapshot,
+    get_vm_status,
+    start_vm,
+    stop_vm,
+)
 from proxbox_api.services.verb_dispatch import (
     build_journal_comments,
     build_success_response,
@@ -401,6 +409,131 @@ async def _dispatch_stop(
     )
 
 
+class SnapshotRequest(BaseModel):
+    """Optional request body for the snapshot verb.
+
+    Both fields are optional. When ``snapname`` is omitted, the route
+    generates a deterministic default (``proxbox-{idempotency_key[:8]}``
+    if an ``Idempotency-Key`` is supplied, else ``proxbox-{utc-stamp}``)
+    per ``operational-verbs.md`` §13.
+    """
+
+    snapname: str | None = None
+    description: str | None = None
+
+
+def _default_snapname(idempotency_key: str | None) -> str:
+    """Generate a default snapshot name per §13.
+
+    Proxmox snapshot names must match ``[A-Za-z][A-Za-z0-9_-]*``, so the
+    UTC timestamp fallback uses a compact form free of ``:``/``.``.
+    """
+    if idempotency_key:
+        return f"proxbox-{idempotency_key[:8]}"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"proxbox-{stamp}"
+
+
+async def _dispatch_snapshot(
+    *,
+    endpoint: ProxmoxEndpoint,
+    vm_type: VmType,
+    vmid: int,
+    nb: object,
+    idempotency_key: str | None,
+    actor: str,
+    snapname: str | None,
+    description: str | None,
+) -> JSONResponse:
+    """Execute the snapshot verb: resolve node, dispatch, audit.
+
+    Snapshot is "always dispatched" (§4.2): no state-based no-op
+    pre-flight. The operator initiating the click is assumed to know
+    they are creating a new snapshot. Idempotency-Key (§4) still
+    deduplicates two clicks within the cache window.
+    """
+    endpoint_id = endpoint.id
+    assert endpoint_id is not None
+
+    cache = get_idempotency_cache()
+    cache_key: CacheKey | None = None
+    if idempotency_key:
+        cache_key = CacheKey(
+            endpoint_id=endpoint_id, verb="snapshot", vmid=vmid, key=idempotency_key
+        )
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except ProxboxException as error:
+        logger.warning("Failed to open Proxmox session for endpoint=%s: %s", endpoint_id, error)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "proxmox_session_unreachable",
+                "detail": str(error),
+                "endpoint_id": endpoint_id,
+            },
+        )
+
+    node_or_error = await resolve_proxmox_node(proxmox, vm_type, vmid)
+    if isinstance(node_or_error, JSONResponse):
+        return node_or_error
+    node: str = node_or_error
+
+    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    dispatched_at = utcnow_iso()
+
+    effective_snapname = snapname or _default_snapname(idempotency_key)
+
+    try:
+        upid = await create_vm_snapshot(
+            proxmox, node, vm_type, vmid, effective_snapname, description
+        )
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="snapshot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_dispatch_failed",
+            extra={"snapname": effective_snapname},
+        )
+
+    return await _audit_and_respond(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="snapshot",
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
+        result="ok",
+        kind="info",
+        proxmox_task_upid=upid,
+        error_detail=None,
+        extra={"snapname": effective_snapname},
+    )
+
+
 async def _audit_and_respond(
     *,
     nb: object,
@@ -420,12 +553,15 @@ async def _audit_and_respond(
     error_detail: str | None,
     http_status: int = status.HTTP_200_OK,
     reason: str | None = None,
+    extra: dict[str, object] | None = None,
 ) -> JSONResponse:
     """Write the journal entry, cache the response, return JSONResponse.
 
     Centralises the §6 + §7.3 + §4 cache contracts so the dispatch flow
     above stays readable. ``http_status``/``reason`` are passed only on
     error paths; the success / no-op paths use the §7.3 shape verbatim.
+    ``extra`` carries verb-specific fields (e.g. snapshot's ``snapname``)
+    that the §7.3 base shape doesn't model.
     """
     comments = build_journal_comments(
         verb=verb,
@@ -466,6 +602,9 @@ async def _audit_and_respond(
         body["reason"] = reason
     if error_detail is not None and http_status >= 400:
         body["detail"] = error_detail
+    if extra:
+        for key, value in extra.items():
+            body.setdefault(key, value)
 
     # Cache only the body, not the HTTP status — but only when the
     # caller supplied an Idempotency-Key. The §4 contract reuses the
@@ -558,6 +697,42 @@ async def _handle_stop(
     )
 
 
+async def _handle_snapshot(
+    vm_type: VmType,
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None,
+    idempotency_key: str | None,
+    actor: str,
+    body: SnapshotRequest | None,
+) -> JSONResponse:
+    gated = await _gate(session, endpoint_id)
+    if isinstance(gated, JSONResponse):
+        return gated
+    try:
+        nb_session = await get_netbox_async_session(database_session=session)
+    except ProxboxException as error:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "netbox_session_unavailable",
+                "detail": str(error),
+            },
+        )
+    snapname = body.snapname if body is not None else None
+    description = body.description if body is not None else None
+    return await _dispatch_snapshot(
+        endpoint=gated,
+        vm_type=vm_type,
+        vmid=vmid,
+        nb=nb_session,
+        idempotency_key=idempotency_key,
+        actor=actor,
+        snapname=snapname,
+        description=description,
+    )
+
+
 async def _handle_stub(
     verb: Verb,
     vm_type: VmType,
@@ -633,8 +808,13 @@ async def snapshot_qemu(
     vmid: int,
     session: SessionDep,
     endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+    body: SnapshotRequest | None = Body(default=None),
 ) -> JSONResponse:
-    return await _handle_stub("snapshot", "qemu", vmid, session, endpoint_id)
+    return await _handle_snapshot(
+        "qemu", vmid, session, endpoint_id, idempotency_key, _actor_label(actor), body
+    )
 
 
 @router.post("/lxc/{vmid}/snapshot")
@@ -642,8 +822,13 @@ async def snapshot_lxc(
     vmid: int,
     session: SessionDep,
     endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+    body: SnapshotRequest | None = Body(default=None),
 ) -> JSONResponse:
-    return await _handle_stub("snapshot", "lxc", vmid, session, endpoint_id)
+    return await _handle_snapshot(
+        "lxc", vmid, session, endpoint_id, idempotency_key, _actor_label(actor), body
+    )
 
 
 @router.post("/qemu/{vmid}/migrate")

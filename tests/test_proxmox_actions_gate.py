@@ -39,8 +39,6 @@ VERB_PATHS = [
 # Verbs still on the sub-PR B 501 stub. As sub-PRs C–F land, their paths move
 # off this list (their own test modules cover the wired dispatch path).
 STUB_VERB_PATHS = [
-    ("/proxmox/qemu/100/snapshot"),
-    ("/proxmox/lxc/100/snapshot"),
     ("/proxmox/qemu/100/migrate"),
     ("/proxmox/lxc/100/migrate"),
 ]

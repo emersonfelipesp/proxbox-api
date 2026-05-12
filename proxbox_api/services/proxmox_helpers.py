@@ -791,6 +791,58 @@ async def stop_vm(
         )
 
 
+@_dual_mode
+async def create_vm_snapshot(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    snapname: str,
+    description: str | None = None,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/{vm_type}/{vmid}/snapshot``.
+
+    Returns the Proxmox task ``UPID`` string. ``ProxmoxAPIError`` is
+    raised on timeout / connection failure per the existing convention.
+    """
+    body: dict[str, object] = {"snapname": snapname}
+    if description is not None:
+        body["description"] = description
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).snapshot.post(**body)
+            )
+        elif vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).snapshot.post(**body)
+            )
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, str):
+                return data
+        return str(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox VM snapshot request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM snapshot", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM snapshot",
+            original_error=error,
+        )
+
+
 def dump_models(items: list[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 
