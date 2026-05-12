@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from contextlib import nullcontext
+from typing import Annotated
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.app.sync_state import (
@@ -70,7 +72,7 @@ def _result_count(value) -> int:
 
 
 @full_update_router.get("/full-update")
-async def full_update_sync(  # noqa: C901
+async def full_update_sync(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -79,6 +81,70 @@ async def full_update_sync(  # noqa: C901
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
+    netbox_branch_schema_id: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional netbox-branching schema_id (X-NetBox-Branch). When set, all "
+                "NetBox writes performed by this sync run carry the header so changes "
+                "land on the branch rather than main."
+            ),
+        ),
+    ] = None,
+) -> dict:
+    return await _full_update_sync_run(
+        netbox_session=netbox_session,
+        pxs=pxs,
+        cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
+        custom_fields=custom_fields,
+        tag=tag,
+        overwrite_flags=overwrite_flags,
+        fetch_max_concurrency=fetch_max_concurrency,
+        netbox_branch_schema_id=netbox_branch_schema_id,
+    )
+
+
+async def _full_update_sync_run(
+    *,
+    netbox_session,
+    pxs,
+    cluster_status,
+    cluster_resources,
+    custom_fields,
+    tag,
+    overwrite_flags: SyncOverwriteFlags,
+    fetch_max_concurrency: int | None,
+    netbox_branch_schema_id: str | None,
+) -> dict:
+    branch_scope = (
+        netbox_session.activate_branch(netbox_branch_schema_id)
+        if netbox_branch_schema_id
+        else nullcontext()
+    )
+    with branch_scope:
+        return await _full_update_sync_impl(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=custom_fields,
+            tag=tag,
+            overwrite_flags=overwrite_flags,
+            fetch_max_concurrency=fetch_max_concurrency,
+        )
+
+
+async def _full_update_sync_impl(  # noqa: C901
+    *,
+    netbox_session,
+    pxs,
+    cluster_status,
+    cluster_resources,
+    custom_fields,
+    tag,
+    overwrite_flags: SyncOverwriteFlags,
+    fetch_max_concurrency: int | None,
 ) -> dict:
     sync_nodes: list = []
     sync_storage: list = []
@@ -369,6 +435,16 @@ async def full_update_sync_stream(  # noqa: C901
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
+    netbox_branch_schema_id: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional netbox-branching schema_id (X-NetBox-Branch). When set, all "
+                "NetBox writes performed by this sync stream carry the header so changes "
+                "land on the branch rather than main."
+            ),
+        ),
+    ] = None,
 ) -> StreamingResponse:
     bootstrap_status_obj = getattr(request.app.state, "bootstrap_status", None)
     bootstrap_payload: dict[str, object]
@@ -1069,8 +1145,18 @@ async def full_update_sync_stream(  # noqa: C901
                     },
                 )
 
+    async def branched_stream():
+        branch_scope = (
+            netbox_session.activate_branch(netbox_branch_schema_id)
+            if netbox_branch_schema_id
+            else nullcontext()
+        )
+        with branch_scope:
+            async for frame in event_stream():
+                yield frame
+
     return StreamingResponse(
-        event_stream(),
+        branched_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
