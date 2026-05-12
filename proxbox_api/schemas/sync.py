@@ -268,3 +268,30 @@ def behavior_flags_from_query_params(
         if name in query_params:
             resolved[name] = query_params[name]
     return SyncBehaviorFlags(**resolved)
+
+
+class ActiveSyncRun(ProxboxBaseModel):
+    """Diagnostic entry for one in-flight sync run."""
+
+    id: str = Field(description="Operation ID assigned when the sync started.")
+    kind: str = Field(description="Sync flavour, e.g. 'full-update'.")
+    started_at: str = Field(description="ISO-8601 UTC timestamp of registration.")
+
+
+class SyncActiveResponse(ProxboxBaseModel):
+    """Response shape for ``GET /sync/active``.
+
+    ``active`` is the oldest currently-running sync (FIFO). ``runs`` lists every
+    in-flight registration for the local API replica (the registry is
+    process-local, so this is a soft probe — see the ``sync_state`` module).
+    """
+
+    active: bool = Field(description="True when a sync is currently registered.")
+    started_at: str | None = Field(
+        default=None, description="Start timestamp of the oldest active run."
+    )
+    id: str | None = Field(default=None, description="Operation ID of the oldest active run.")
+    kind: str | None = Field(default=None, description="Kind of the oldest active run.")
+    runs: list[ActiveSyncRun] = Field(
+        default_factory=list, description="All in-flight runs on this API replica."
+    )

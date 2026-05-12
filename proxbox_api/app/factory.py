@@ -41,6 +41,7 @@ from proxbox_api.routes.proxmox.ha import router as px_ha_router
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
+from proxbox_api.routes.sync.active import router as sync_active_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
@@ -402,5 +403,6 @@ def create_app() -> FastAPI:
     app.include_router(
         sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
     )
+    app.include_router(sync_active_router)
 
     return app
