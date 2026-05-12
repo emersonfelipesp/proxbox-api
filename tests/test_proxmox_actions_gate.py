@@ -36,6 +36,17 @@ VERB_PATHS = [
     ("/proxmox/lxc/100/migrate"),
 ]
 
+# Verbs still on the sub-PR B 501 stub. As sub-PRs C–F land, their paths move
+# off this list (their own test modules cover the wired dispatch path).
+STUB_VERB_PATHS = [
+    ("/proxmox/qemu/100/stop"),
+    ("/proxmox/lxc/100/stop"),
+    ("/proxmox/qemu/100/snapshot"),
+    ("/proxmox/lxc/100/snapshot"),
+    ("/proxmox/qemu/100/migrate"),
+    ("/proxmox/lxc/100/migrate"),
+]
+
 
 @pytest.fixture
 def client(tmp_path: Path):
@@ -117,7 +128,7 @@ def test_endpoint_with_writes_disabled_returns_403(client: TestClient, path: str
     assert body["endpoint_id"] == endpoint_id
 
 
-@pytest.mark.parametrize("path", VERB_PATHS)
+@pytest.mark.parametrize("path", STUB_VERB_PATHS)
 def test_endpoint_with_writes_enabled_falls_through_to_not_implemented(
     client: TestClient, path: str
 ):
