@@ -235,3 +235,36 @@ def overwrite_flags_from_query_params(
         if name in query_params:
             resolved[name] = query_params[name]
     return SyncOverwriteFlags(**resolved)
+
+
+class SyncBehaviorFlags(ProxboxBaseModel):
+    """Opt-in sync behavior toggles forwarded from the netbox-proxbox plugin.
+
+    Separate from ``SyncOverwriteFlags`` so the per-field overwrite contract
+    (`netbox_proxbox.constants.OVERWRITE_FIELDS`) stays scoped to overwrite
+    semantics. These flags govern other opt-in synchronization behaviors.
+    """
+
+    parse_description_metadata: bool = Field(
+        default=False,
+        title="Parse Description Metadata",
+        description=(
+            "When true, the sync reads Proxmox descriptions for a fenced "
+            "``netbox-metadata`` JSON block (e.g. ``{\"tenant\": 13, \"site\": 4}``) "
+            "and applies the resulting NetBox PK overrides to the synced object. "
+            "When false, the Proxmox description is ignored exactly as it was "
+            "before this feature shipped."
+        ),
+    )
+
+
+def behavior_flags_from_query_params(
+    query_params: Mapping[str, object],
+    base: SyncBehaviorFlags | None = None,
+) -> SyncBehaviorFlags:
+    """Resolve canonical behavior flags from raw flat query parameters."""
+    resolved = (base or SyncBehaviorFlags()).model_dump()
+    for name in SyncBehaviorFlags.model_fields:
+        if name in query_params:
+            resolved[name] = query_params[name]
+    return SyncBehaviorFlags(**resolved)

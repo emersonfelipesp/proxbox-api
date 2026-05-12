@@ -15,6 +15,7 @@ from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
 from proxbox_api.dependencies import (
     NetBoxSessionDep,
     ProxboxTagDep,
+    ResolvedSyncBehaviorFlagsDep,
     ResolvedSyncOverwriteFlagsDep,
 )
 from proxbox_api.exception import ProxboxException
@@ -44,7 +45,7 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
     resolve_vm_sync_concurrency,
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
-from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import (
     fetch_qemu_guest_agent_network_interfaces,
     get_qemu_guest_agent_hostname,
@@ -1101,6 +1102,7 @@ async def create_virtual_machines(  # noqa: C901
         ),
     ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
+    behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -1482,6 +1484,8 @@ async def create_virtual_machines(  # noqa: C901
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
+            parse_description_metadata=behavior_flags.parse_description_metadata,
+            overwrite_flags=effective_vm_overwrite_flags,
         )
         lookup = {
             "cf_proxmox_vm_id": int(resource.get("vmid")),
@@ -1804,6 +1808,8 @@ async def create_virtual_machines(  # noqa: C901
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
+            parse_description_metadata=behavior_flags.parse_description_metadata,
+            overwrite_flags=effective_vm_overwrite_flags,
         )
 
         if bridge:
