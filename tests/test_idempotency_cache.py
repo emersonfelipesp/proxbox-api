@@ -17,9 +17,9 @@ import asyncio
 import pytest
 
 from proxbox_api.services.idempotency import (
+    TTL_SECONDS,
     CacheKey,
     IdempotencyCache,
-    TTL_SECONDS,
     get_idempotency_cache,
 )
 
@@ -101,18 +101,8 @@ async def test_singleton_returns_same_instance():
 
 
 async def test_clear_evicts_all_entries(cache: IdempotencyCache):
-    await cache.store(
-        CacheKey(endpoint_id=1, verb="start", vmid=100, key="a"), {"x": 1}
-    )
-    await cache.store(
-        CacheKey(endpoint_id=1, verb="stop", vmid=100, key="b"), {"x": 2}
-    )
+    await cache.store(CacheKey(endpoint_id=1, verb="start", vmid=100, key="a"), {"x": 1})
+    await cache.store(CacheKey(endpoint_id=1, verb="stop", vmid=100, key="b"), {"x": 2})
     await cache.clear()
-    assert (
-        await cache.get(CacheKey(endpoint_id=1, verb="start", vmid=100, key="a"))
-        is None
-    )
-    assert (
-        await cache.get(CacheKey(endpoint_id=1, verb="stop", vmid=100, key="b"))
-        is None
-    )
+    assert await cache.get(CacheKey(endpoint_id=1, verb="start", vmid=100, key="a")) is None
+    assert await cache.get(CacheKey(endpoint_id=1, verb="stop", vmid=100, key="b")) is None

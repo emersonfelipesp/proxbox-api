@@ -24,7 +24,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api.database import ApiKey, ProxmoxEndpoint, get_async_session, get_session
 from proxbox_api.main import app
 
-
 VERB_PATHS = [
     ("/proxmox/qemu/100/start"),
     ("/proxmox/lxc/100/start"),
@@ -51,18 +50,12 @@ STUB_VERB_PATHS = [
 @pytest.fixture
 def client(tmp_path: Path):
     sqlite_file = tmp_path / "test.db"
-    engine = create_engine(
-        f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine(f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
 
     async_url = str(engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    async_engine = create_async_engine(
-        async_url, connect_args={"check_same_thread": False}
-    )
-    session_factory = async_sessionmaker(
-        async_engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
     def _override_get_session():
         with Session(engine) as session:

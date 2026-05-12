@@ -32,14 +32,15 @@ def _compute_vm_patchable_fields(
         overwrite_flags is None or overwrite_flags.overwrite_vm_type
     ):
         fields.add("virtual_machine_type")
-    if overwrite_flags is None or overwrite_flags.overwrite_vm_role:
-        fields.add("role")
+    # ``role`` and ``custom_fields`` are always patchable: per-VM lock is
+    # enforced by the snapshot decision in the payload, and the snapshot
+    # custom field itself must always be writable.
+    fields.add("role")
+    fields.add("custom_fields")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_tags:
         fields.add("tags")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_description:
         fields.add("description")
-    if overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields:
-        fields.add("custom_fields")
     return fields
 
 

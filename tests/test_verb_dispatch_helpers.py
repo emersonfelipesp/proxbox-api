@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import ProxmoxAPIError
@@ -135,9 +134,7 @@ async def test_resolve_proxmox_node_returns_node_on_match():
             ]
         ),
     ):
-        node = await verb_dispatch.resolve_proxmox_node(
-            session=object(), vm_type="qemu", vmid=101
-        )
+        node = await verb_dispatch.resolve_proxmox_node(session=object(), vm_type="qemu", vmid=101)
     assert node == "pve-node-01"
 
 
@@ -188,9 +185,7 @@ async def test_resolve_netbox_vm_id_returns_none_when_missing():
 
 async def test_write_verb_journal_entry_posts_payload():
     create_mock = AsyncMock(return_value={"id": 789, "url": "/api/extras/journal-entries/789/"})
-    with patch(
-        "proxbox_api.services.verb_dispatch.rest_create_async", new=create_mock
-    ):
+    with patch("proxbox_api.services.verb_dispatch.rest_create_async", new=create_mock):
         entry = await verb_dispatch.write_verb_journal_entry(
             nb=object(),
             netbox_vm_id=42,

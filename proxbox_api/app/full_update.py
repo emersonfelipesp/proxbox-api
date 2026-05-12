@@ -8,7 +8,7 @@ import uuid
 from contextlib import nullcontext
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import (

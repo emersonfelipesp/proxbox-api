@@ -70,6 +70,12 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
 )
+from proxbox_api.services.sync.role_resolution import (
+    LAST_SYNCED_ROLE_CUSTOM_FIELD,
+    compute_role_snapshot_decision,
+    extract_snapshot_id,
+    resolve_default_role_id,
+)
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -118,6 +124,7 @@ class _PreparedVMState:
     lookup: dict[str, object]
     now: datetime
     vm_type: str
+    desired_role_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -422,8 +429,6 @@ def _build_vm_operation_queue(
             if current_payload.get(field_name) != desired_value
         }
 
-        if not overwrite_vm_role and _relation_id(existing_record.get("role")) is not None:
-            patch_payload.pop("role", None)
         if (
             not overwrite_vm_type
             and _relation_id(existing_record.get("virtual_machine_type")) is not None
@@ -452,6 +457,37 @@ def _build_vm_operation_queue(
                 patch_payload.pop("tags", None)
             else:
                 patch_payload["tags"] = merged
+
+        existing_role_id = _relation_id(existing_record.get("role"))
+        existing_snapshot_id = extract_snapshot_id(existing_record)
+        decision = compute_role_snapshot_decision(
+            existing_role_id=existing_role_id,
+            existing_snapshot_id=existing_snapshot_id,
+            desired_role_id=prepared.desired_role_id,
+            overwrite_vm_role=overwrite_vm_role,
+        )
+        if decision.write_role:
+            patch_payload["role"] = decision.role_value
+        else:
+            patch_payload.pop("role", None)
+
+        cf_payload = patch_payload.get("custom_fields")
+        if not isinstance(cf_payload, dict):
+            cf_payload = None
+        if decision.write_snapshot:
+            cf_payload = dict(cf_payload) if cf_payload else {}
+            cf_payload[LAST_SYNCED_ROLE_CUSTOM_FIELD] = decision.snapshot_value
+            patch_payload["custom_fields"] = cf_payload
+        elif isinstance(cf_payload, dict) and LAST_SYNCED_ROLE_CUSTOM_FIELD in cf_payload:
+            trimmed = {
+                key: value
+                for key, value in cf_payload.items()
+                if key != LAST_SYNCED_ROLE_CUSTOM_FIELD
+            }
+            if trimmed:
+                patch_payload["custom_fields"] = trimmed
+            else:
+                patch_payload.pop("custom_fields", None)
 
         if patch_payload:
             operation_queue.append(
@@ -1564,13 +1600,21 @@ async def create_virtual_machines(  # noqa: C901
         vm_type_obj = await _get_vm_type(vm_type_key)
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
 
+        cluster_id_int = int(getattr(cluster, "id", 0) or 0)
+        desired_role_id = await resolve_default_role_id(
+            nb,
+            vm_type=vm_type_key,
+            node_name=node_name,
+            cluster_id=cluster_id_int or None,
+        )
+
         now = datetime.now(timezone.utc)
         desired_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
-            cluster_id=int(getattr(cluster, "id", 0) or 0),
+            cluster_id=cluster_id_int,
             device_id=int(getattr(device, "id", 0) or 0),
-            role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
+            role_id=desired_role_id,
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
             site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
@@ -1579,9 +1623,15 @@ async def create_virtual_machines(  # noqa: C901
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
         )
+        if desired_role_id is not None:
+            cf_block = desired_payload.get("custom_fields")
+            if not isinstance(cf_block, dict):
+                cf_block = {}
+            cf_block[LAST_SYNCED_ROLE_CUSTOM_FIELD] = desired_role_id
+            desired_payload["custom_fields"] = cf_block
         lookup = {
             "cf_proxmox_vm_id": int(resource.get("vmid")),
-            "cluster_id": int(getattr(cluster, "id", 0) or 0),
+            "cluster_id": cluster_id_int,
         }
 
         return _PreparedVMState(
@@ -1593,6 +1643,7 @@ async def create_virtual_machines(  # noqa: C901
             lookup=lookup,
             now=now,
             vm_type=vm_type,
+            desired_role_id=desired_role_id,
         )
 
     async def _run_full_update_vm_batch() -> list[dict[str, object]]:  # noqa: C901
@@ -1887,13 +1938,21 @@ async def create_virtual_machines(  # noqa: C901
                 python_exception=f"Error: {str(error)}",
             )
 
+        cluster_id_int = int(getattr(cluster, "id", 0) or 0)
+        desired_role_id = await resolve_default_role_id(
+            nb,
+            vm_type=vm_type_key,
+            node_name=node_name,
+            cluster_id=cluster_id_int or None,
+        )
+
         now = datetime.now(timezone.utc)
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
-            cluster_id=int(getattr(cluster, "id", 0) or 0),
+            cluster_id=cluster_id_int,
             device_id=int(getattr(device, "id", 0) or 0),
-            role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
+            role_id=desired_role_id,
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
             site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
@@ -1902,6 +1961,59 @@ async def create_virtual_machines(  # noqa: C901
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
         )
+
+        vm_lookup = {
+            "cf_proxmox_vm_id": int(resource.get("vmid")),
+            "cluster_id": cluster_id_int,
+        }
+        try:
+            existing_vm_record = await rest_first_async(
+                nb,
+                "/api/virtualization/virtual-machines/",
+                query={**vm_lookup, "limit": 2},
+            )
+        except Exception as exc:
+            logger.debug(
+                "VM prefetch for role-snapshot decision failed (vmid=%s): %s",
+                resource.get("vmid"),
+                exc,
+            )
+            existing_vm_record = None
+        existing_vm_dict = _to_mapping(existing_vm_record) if existing_vm_record else None
+
+        decision = compute_role_snapshot_decision(
+            existing_role_id=_relation_id(existing_vm_dict.get("role"))
+            if existing_vm_dict
+            else None,
+            existing_snapshot_id=extract_snapshot_id(existing_vm_dict)
+            if existing_vm_dict
+            else None,
+            desired_role_id=desired_role_id,
+            overwrite_vm_role=overwrite_vm_role,
+        )
+
+        if decision.write_role:
+            netbox_vm_payload["role"] = decision.role_value
+        else:
+            netbox_vm_payload.pop("role", None)
+
+        cf_block = netbox_vm_payload.get("custom_fields")
+        if not isinstance(cf_block, dict):
+            cf_block = None
+        if decision.write_snapshot:
+            cf_block = dict(cf_block) if cf_block else {}
+            cf_block[LAST_SYNCED_ROLE_CUSTOM_FIELD] = decision.snapshot_value
+            netbox_vm_payload["custom_fields"] = cf_block
+        elif isinstance(cf_block, dict) and LAST_SYNCED_ROLE_CUSTOM_FIELD in cf_block:
+            trimmed = {
+                key: value
+                for key, value in cf_block.items()
+                if key != LAST_SYNCED_ROLE_CUSTOM_FIELD
+            }
+            if trimmed:
+                netbox_vm_payload["custom_fields"] = trimmed
+            else:
+                netbox_vm_payload.pop("custom_fields", None)
 
         if bridge:
             await bridge.emit_substep(
@@ -1915,10 +2027,7 @@ async def create_virtual_machines(  # noqa: C901
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            lookup={
-                "cf_proxmox_vm_id": int(resource.get("vmid")),
-                "cluster_id": int(getattr(cluster, "id", 0) or 0),
-            },
+            lookup=vm_lookup,
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=vm_patchable_fields,

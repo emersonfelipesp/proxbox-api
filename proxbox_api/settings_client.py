@@ -27,6 +27,29 @@ _SETTINGS_CACHE_TTL: float = 300.0  # 5 minutes
 _FETCHING_SETTINGS: bool = False  # reentrance guard against credential-decryption recursion
 
 
+def _coerce_role_id(value: object) -> int | None:
+    """Coerce a NetBox FK field response into an int id, or None.
+
+    The plugin REST serializer renders ForeignKey fields as nested objects (e.g.
+    ``{"id": 5, ...}``), and the runtime endpoint may collapse them to raw ints
+    or omit them entirely. None / empty values resolve to None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        raw = value.get("id")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_cidr_list(text: str | None) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     """Parse newline-separated CIDR ranges into a list of IPNetwork objects."""
     if not text:
@@ -76,6 +99,8 @@ def get_default_settings() -> ProxboxSettingsDict:
         "proxmox_timeout": 5,
         "proxmox_max_retries": 0,
         "proxmox_retry_backoff": 0.5,
+        "default_role_qemu_id": None,
+        "default_role_lxc_id": None,
     }
 
 
@@ -231,6 +256,8 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "proxmox_timeout": int(settings.get("proxmox_timeout", 5)),
             "proxmox_max_retries": int(settings.get("proxmox_max_retries", 0)),
             "proxmox_retry_backoff": float(settings.get("proxmox_retry_backoff", 0.5)),
+            "default_role_qemu_id": _coerce_role_id(settings.get("default_role_qemu")),
+            "default_role_lxc_id": _coerce_role_id(settings.get("default_role_lxc")),
         }
 
     except urllib.error.URLError as exc:

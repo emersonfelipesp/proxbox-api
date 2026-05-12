@@ -284,7 +284,7 @@ async def create_or_update_virtual_machine(
         proxmox_config=proxmox_config,
         cluster_id=cluster_id,
         device_id=device_id,
-        role_id=None if resolved_virtual_machine_type_id is not None else role_id,
+        role_id=role_id,
         tag_ids=[tag_id],
         site_id=site_id,
         tenant_id=tenant_id,

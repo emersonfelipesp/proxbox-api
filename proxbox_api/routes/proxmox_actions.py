@@ -41,9 +41,6 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
-from proxbox_api.session.netbox import get_netbox_async_session
-from proxbox_api.session.proxmox import ProxmoxSession
-from proxbox_api.session.proxmox_providers import _parse_db_endpoint
 from proxbox_api.services.idempotency import CacheKey, get_idempotency_cache
 from proxbox_api.services.proxmox_helpers import get_vm_status, start_vm
 from proxbox_api.services.verb_dispatch import (
@@ -54,6 +51,9 @@ from proxbox_api.services.verb_dispatch import (
     utcnow_iso,
     write_verb_journal_entry,
 )
+from proxbox_api.session.netbox import get_netbox_async_session
+from proxbox_api.session.proxmox import ProxmoxSession
+from proxbox_api.session.proxmox_providers import _parse_db_endpoint
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
@@ -62,9 +62,7 @@ VmType = Literal["qemu", "lxc"]
 Verb = Literal["start", "stop", "snapshot", "migrate"]
 
 
-async def _gate(
-    session: SessionDep, endpoint_id: int | None
-) -> JSONResponse | ProxmoxEndpoint:
+async def _gate(session: SessionDep, endpoint_id: int | None) -> JSONResponse | ProxmoxEndpoint:
     """Resolve the target endpoint and enforce ``allow_writes``."""
     if endpoint_id is None:
         return JSONResponse(
@@ -143,9 +141,7 @@ async def _dispatch_start(
     cache = get_idempotency_cache()
     cache_key: CacheKey | None = None
     if idempotency_key:
-        cache_key = CacheKey(
-            endpoint_id=endpoint_id, verb="start", vmid=vmid, key=idempotency_key
-        )
+        cache_key = CacheKey(endpoint_id=endpoint_id, verb="start", vmid=vmid, key=idempotency_key)
         cached = await cache.get(cache_key)
         if cached is not None:
             return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
