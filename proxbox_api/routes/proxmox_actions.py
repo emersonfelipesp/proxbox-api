@@ -26,10 +26,10 @@ from typing import Literal
 
 from fastapi import APIRouter, Query, status
 from fastapi.responses import JSONResponse
-from sqlmodel import select
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
 
@@ -61,10 +61,7 @@ async def _gate(
             },
         )
 
-    result = await session.exec(
-        select(ProxmoxEndpoint).where(ProxmoxEndpoint.id == endpoint_id)
-    )
-    endpoint = result.first() if hasattr(result, "first") else None
+    endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
     if endpoint is None:
         return JSONResponse(
             status_code=status.HTTP_403_FORBIDDEN,
