@@ -680,16 +680,12 @@ async def get_vm_status(
             payload = await resolve_async(
                 session.session.nodes(node).lxc(vmid).status.current.get()
             )
-            return generated_models.GetNodesNodeLxcVmidStatusCurrentResponse.model_validate(
-                payload
-            )
+            return generated_models.GetNodesNodeLxcVmidStatusCurrentResponse.model_validate(payload)
         raise ValueError(f"Unsupported VM type: {vm_type}")
     except ProxboxException:
         raise
     except ProxmoxTimeoutError as error:
-        raise ProxmoxAPIError(
-            message="Proxmox VM status request timed out", original_error=error
-        )
+        raise ProxmoxAPIError(message="Proxmox VM status request timed out", original_error=error)
     except ProxmoxConnectionError as error:
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for VM status", original_error=error
@@ -719,9 +715,7 @@ async def start_vm(
                 session.session.nodes(node).qemu(vmid).status.start.post()
             )
         elif vm_type == "lxc":
-            payload = await resolve_async(
-                session.session.nodes(node).lxc(vmid).status.start.post()
-            )
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).status.start.post())
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
         if isinstance(payload, str):

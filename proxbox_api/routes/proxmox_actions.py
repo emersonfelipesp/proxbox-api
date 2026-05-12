@@ -62,9 +62,7 @@ VmType = Literal["qemu", "lxc"]
 Verb = Literal["start", "stop", "snapshot", "migrate"]
 
 
-async def _gate(
-    session: SessionDep, endpoint_id: int | None
-) -> JSONResponse | ProxmoxEndpoint:
+async def _gate(session: SessionDep, endpoint_id: int | None) -> JSONResponse | ProxmoxEndpoint:
     """Resolve the target endpoint and enforce ``allow_writes``."""
     if endpoint_id is None:
         return JSONResponse(
@@ -143,9 +141,7 @@ async def _dispatch_start(
     cache = get_idempotency_cache()
     cache_key: CacheKey | None = None
     if idempotency_key:
-        cache_key = CacheKey(
-            endpoint_id=endpoint_id, verb="start", vmid=vmid, key=idempotency_key
-        )
+        cache_key = CacheKey(endpoint_id=endpoint_id, verb="start", vmid=vmid, key=idempotency_key)
         cached = await cache.get(cache_key)
         if cached is not None:
             return JSONResponse(status_code=status.HTTP_200_OK, content=cached)

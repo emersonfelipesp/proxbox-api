@@ -449,9 +449,7 @@ def test_vm_patchable_never_includes_tenant_legacy_none() -> None:
 def test_vm_patchable_never_includes_tenant_with_any_flag_false(flag_name: str) -> None:
     from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
 
-    assert "tenant" not in _compute_vm_patchable_fields(
-        SyncOverwriteFlags(**{flag_name: False})
-    )
+    assert "tenant" not in _compute_vm_patchable_fields(SyncOverwriteFlags(**{flag_name: False}))
 
 
 def test_vm_create_body_rejects_tenant_field() -> None:

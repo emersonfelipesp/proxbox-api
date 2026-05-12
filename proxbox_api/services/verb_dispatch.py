@@ -51,9 +51,7 @@ async def resolve_proxmox_node(
     try:
         resources = await get_cluster_resources(session, resource_type=vm_type)
     except ProxmoxAPIError as error:
-        logger.warning(
-            "Failed to fetch cluster resources for %s/%s: %s", vm_type, vmid, error
-        )
+        logger.warning("Failed to fetch cluster resources for %s/%s: %s", vm_type, vmid, error)
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={

@@ -50,18 +50,12 @@ STUB_VERB_PATHS = [
 @pytest.fixture
 def client(tmp_path: Path):
     sqlite_file = tmp_path / "test.db"
-    engine = create_engine(
-        f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine(f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
 
     async_url = str(engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    async_engine = create_async_engine(
-        async_url, connect_args={"check_same_thread": False}
-    )
-    session_factory = async_sessionmaker(
-        async_engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
     def _override_get_session():
         with Session(engine) as session:

@@ -179,9 +179,7 @@ def test_settings_client_module_does_not_reference_activate_branch():
     import pathlib
 
     settings_path = (
-        pathlib.Path(__file__).resolve().parent.parent
-        / "proxbox_api"
-        / "settings_client.py"
+        pathlib.Path(__file__).resolve().parent.parent / "proxbox_api" / "settings_client.py"
     )
     text = settings_path.read_text(encoding="utf-8")
     assert "activate_branch" not in text
