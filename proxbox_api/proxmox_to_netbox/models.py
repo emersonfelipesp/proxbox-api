@@ -327,12 +327,20 @@ class NetBoxInterfaceSyncState(BaseModel):
 
 
 class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
+    """Desired state for `/api/virtualization/interfaces/` rows.
+
+    Note: `mac_address` is intentionally **not** declared here. NetBox 4.5/4.6
+    treat it as a read-only computed echo of `primary_mac_address`; writing it
+    is silently dropped, so including it in the desired payload would produce a
+    perpetual no-op diff. MAC reconciliation lives in
+    `proxbox_api.services.sync.mac_address` and runs as a per-interface post-step.
+    """
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     virtual_machine: int
     name: str
     enabled: bool | None = None
-    mac_address: str | None = None
     type: str | None = None
     description: str | None = None
     bridge: int | None = None
@@ -366,6 +374,43 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     @classmethod
     def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
+
+
+class NetBoxMACAddressSyncState(BaseModel):
+    """Desired state of a `dcim.MACAddress` row in NetBox.
+
+    NetBox 4.2+ stores MACs as first-class objects under `/api/dcim/mac-addresses/`
+    with a GFK to the assigned interface (DCIM or VMInterface). The legacy
+    inline `mac_address` string on `VMInterface` is `read_only=True` at NetBox
+    4.5/4.6 — writes to it are silently dropped, so the only way to record a
+    MAC is the model below plus a `primary_mac_address` FK PATCH on the
+    interface.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    mac_address: str
+    assigned_object_type: str
+    assigned_object_id: int
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("mac_address", mode="before")
+    @classmethod
+    def normalize_mac(cls, value: object) -> str:
+        text = str(value or "").strip().replace("-", ":").upper()
+        # NetBox canonical form is colon-separated uppercase hex.
+        return text
+
+    @field_validator("assigned_object_id", mode="before")
+    @classmethod
+    def normalize_assigned_object_id(cls, value: object) -> object:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
+        return NetBoxNamedSlugTaggedState.normalize_tags(value)
 
 
 class NetBoxIpAddressSyncState(BaseModel):

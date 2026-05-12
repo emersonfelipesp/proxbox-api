@@ -718,7 +718,6 @@ async def _create_vm_interface_parallel(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "mac_address": mac_address,
         "bridge": None,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
@@ -745,7 +744,6 @@ async def _create_vm_interface_parallel(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
             "bridge": record.get("bridge"),
@@ -766,6 +764,26 @@ async def _create_vm_interface_parallel(
         else getattr(vm_interface, "id", None)
     )
     result["interface"] = vm_interface
+
+    if interface_id is not None and mac_address:
+        from proxbox_api.services.sync.mac_address import (
+            reconcile_mac_for_vm_interface,
+        )
+
+        try:
+            await reconcile_mac_for_vm_interface(
+                nb,
+                vminterface_id=int(interface_id),
+                mac=mac_address,
+                tag_refs=tag_refs,
+            )
+        except Exception as mac_exc:
+            logger.warning(
+                "Failed to reconcile MAC %s for VM interface %s: %s",
+                mac_address,
+                interface_id,
+                mac_exc,
+            )
 
     from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 
@@ -2307,11 +2325,11 @@ async def create_only_vm_interfaces(  # noqa: C901
                     )
 
                 try:
+                    iface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                     # Collect interface payload info for later bulk processing
                     payload = {
                         "name": resolved_name,
                         "enabled": True,
-                        "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
                         "bridge": None,
                         "untagged_vlan": None,
                         "mode": None,
@@ -2328,6 +2346,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                     key = f"{netbox_vm.get('id')}:{resolved_name}"
                     interface_info[key] = {
                         "payload": payload,
+                        "mac_address": iface_mac,
                         "vlan_tag": vlan_tag,
                         "bridge_name": bridge_name,
                         "vm_id": netbox_vm.get("id"),
@@ -2476,6 +2495,40 @@ async def create_only_vm_interfaces(  # noqa: C901
                 "Bulk interface reconciliation completed: %d interfaces processed",
                 len(all_interface_payloads),
             )
+
+            # Per-interface MAC reconcile: NetBox 4.2+ stores MACs as a separate
+            # dcim.MACAddress row referenced by VMInterface.primary_mac_address.
+            from proxbox_api.services.sync.mac_address import (
+                reconcile_mac_for_vm_interface,
+            )
+
+            for key, info in all_interface_info.items():
+                mac_value = info.get("mac_address")
+                if not mac_value:
+                    continue
+                vm_id_for_mac = info.get("vm_id")
+                iface_name_for_mac = info.get("resolved_name")
+                if not vm_id_for_mac or not iface_name_for_mac:
+                    continue
+                iface_id_for_mac = interface_name_vm_to_id.get(
+                    (iface_name_for_mac, int(vm_id_for_mac))
+                )
+                if not iface_id_for_mac:
+                    continue
+                try:
+                    await reconcile_mac_for_vm_interface(
+                        nb,
+                        vminterface_id=int(iface_id_for_mac),
+                        mac=mac_value,
+                        tag_refs=tag_refs,
+                    )
+                except Exception as mac_exc:
+                    logger.warning(
+                        "Failed to reconcile MAC %s for VM interface %s: %s",
+                        mac_value,
+                        iface_id_for_mac,
+                        mac_exc,
+                    )
 
             # Emit WebSocket progress for each created interface
             if use_websocket and websocket:

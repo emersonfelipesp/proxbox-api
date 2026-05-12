@@ -216,22 +216,15 @@ def build_vm_interface_payload(
 ) -> dict:
     """Build a VM interface payload dict for bulk operations (no NetBox writes).
 
-    Args:
-        resolved_name: Interface name
-        mac_address: MAC address
-        bridge_id: Node dcim.Interface ID for the bridge (stored as proxbox_bridge custom field)
-        vlan_id: VLAN ID (if applicable)
-        tag_refs: List of tag references
-        vm_id: Virtual machine ID
-        now: Current datetime for custom fields
-
-    Returns:
-        Payload dict for bulk reconciliation
+    The ``mac_address`` argument is accepted for backward-compatible call sites
+    but is no longer placed in the payload — NetBox 4.5/4.6 treat the inline
+    field as read-only, so the value must be written to ``dcim.MACAddress``
+    separately. See ``proxbox_api.services.sync.mac_address``.
     """
+    _ = mac_address  # kept in the signature for source-call compatibility
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "mac_address": mac_address,
         "untagged_vlan": vlan_id,
         "mode": "access" if vlan_id is not None else None,
         "tags": tag_refs,
@@ -369,7 +362,6 @@ async def _reconcile_vm_interface_record(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "mac_address": mac_address,
         "bridge": None,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
@@ -396,7 +388,6 @@ async def _reconcile_vm_interface_record(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
             "bridge": record.get("bridge"),
@@ -415,6 +406,28 @@ async def _reconcile_vm_interface_record(
         if isinstance(vm_interface, dict)
         else getattr(vm_interface, "id", None)
     )
+
+    # Write the MAC to dcim.MACAddress and link primary_mac_address. The
+    # legacy inline field on VMInterface is read-only at NetBox 4.5/4.6, so
+    # this is the only write path that actually persists the MAC.
+    if interface_id is not None and mac_address:
+        from proxbox_api.services.sync.mac_address import reconcile_mac_for_vm_interface
+
+        try:
+            await reconcile_mac_for_vm_interface(
+                nb,
+                vminterface_id=int(interface_id),
+                mac=mac_address,
+                tag_refs=tag_refs,
+            )
+        except Exception as mac_exc:
+            logger.warning(
+                "Failed to reconcile MAC %s for VM interface %s: %s",
+                mac_address,
+                resolved_name,
+                mac_exc,
+            )
+
     return vm_interface, interface_id, resolved_name
 
 
@@ -484,11 +497,13 @@ async def bulk_reconcile_vm_interfaces(
     # custom_fields follow per-resource overwrite_vm_interface_* flags. When
     # overwrite_flags is None, all normalizer keys are patchable, preserving
     # the historical always-overwrite behavior.
+    # `mac_address` is intentionally absent: it is a read-only computed field
+    # at NetBox 4.5/4.6; the MAC is persisted via dcim.MACAddress in a
+    # follow-up post-step (see proxbox_api.services.sync.mac_address).
     _vm_interface_patchable: set[str] = {
         "name",
         "virtual_machine",
         "enabled",
-        "mac_address",
         "type",
         "description",
         "untagged_vlan",
@@ -513,7 +528,6 @@ async def bulk_reconcile_vm_interfaces(
                 "name": record.get("name"),
                 "virtual_machine": record.get("virtual_machine"),
                 "enabled": record.get("enabled"),
-                "mac_address": record.get("mac_address"),
                 "type": record.get("type"),
                 "description": record.get("description"),
                 "untagged_vlan": record.get("untagged_vlan"),
