@@ -393,10 +393,8 @@ def test_vm_patchable_drops_vm_type_when_netbox_lacks_native_type_field() -> Non
     ("flag_name", "missing_key"),
     [
         ("overwrite_vm_type", "virtual_machine_type"),
-        ("overwrite_vm_role", "role"),
         ("overwrite_vm_tags", "tags"),
         ("overwrite_vm_description", "description"),
-        ("overwrite_vm_custom_fields", "custom_fields"),
     ],
 )
 def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_key: str) -> None:
@@ -406,3 +404,14 @@ def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_k
 
     assert missing_key not in fields
     assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
+
+
+@pytest.mark.parametrize("flag_name", ["overwrite_vm_role", "overwrite_vm_custom_fields"])
+def test_vm_patchable_keeps_role_and_custom_fields_regardless_of_flag(flag_name: str) -> None:
+    """Per-VM lock now controls writes via payload mutation; allowlist stays open."""
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    fields = _compute_vm_patchable_fields(SyncOverwriteFlags(**{flag_name: False}))
+
+    assert "role" in fields
+    assert "custom_fields" in fields

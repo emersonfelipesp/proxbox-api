@@ -231,7 +231,9 @@ async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
     kwargs = captured["kwargs"]
     payload = kwargs["payload"]
     assert payload["virtual_machine_type"] == 18
-    assert "role" not in payload
+    # Issue #364: role + virtual_machine_type now coexist on NetBox 4.6+;
+    # the historic clamp that nulled role when a VM type was present is gone.
+    assert payload["role"] == 3
     assert payload["custom_fields"]["proxmox_vm_type"] == "lxc"
     assert "virtual_machine_type" in kwargs["patchable_fields"]
     assert nb.client.calls == [("GET", "/api/status/")]
