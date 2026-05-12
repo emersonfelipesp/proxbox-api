@@ -26,6 +26,14 @@ class StreamMessageType(str, Enum):
     ERROR_DETAIL = "error_detail"
     PROGRESS = "progress"
     DUPLICATE_NAME_RESOLVED = "duplicate_name_resolved"
+    # Migrate verb (operational-verbs.md §7.1) — dedicated SSE channel.
+    # The migrate route emits these names verbatim; mirrored by the
+    # contract at contracts/proxbox_api_sse_schema.json on the
+    # netbox-proxbox side.
+    MIGRATE_DISPATCHED = "migrate_dispatched"
+    MIGRATE_PROGRESS = "migrate_progress"
+    MIGRATE_SUCCEEDED = "migrate_succeeded"
+    MIGRATE_FAILED = "migrate_failed"
 
 
 class SubstepStatus(str, Enum):
