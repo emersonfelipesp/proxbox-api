@@ -92,12 +92,8 @@ def test_reconcile_unchanged_when_primary_mac_already_set(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.mac_address.rest_reconcile_async", _fake_reconcile
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_first_async", _fake_first
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_patch_async", _fake_patch
-    )
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_patch_async", _fake_patch)
 
     mac_id, status = asyncio.run(
         reconcile_mac_for_vm_interface(
@@ -141,12 +137,8 @@ def test_reconcile_patches_primary_mac_address_when_fk_differs(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.mac_address.rest_reconcile_async", _fake_reconcile
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_first_async", _fake_first
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_patch_async", _fake_patch
-    )
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_patch_async", _fake_patch)
 
     mac_id, status = asyncio.run(
         reconcile_mac_for_vm_interface(
@@ -185,12 +177,8 @@ def test_reconcile_patches_when_no_primary_mac_address_set(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.mac_address.rest_reconcile_async", _fake_reconcile
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_first_async", _fake_first
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_patch_async", _fake_patch
-    )
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_patch_async", _fake_patch)
 
     mac_id, status = asyncio.run(
         reconcile_mac_for_vm_interface(
@@ -201,9 +189,7 @@ def test_reconcile_patches_when_no_primary_mac_address_set(monkeypatch):
     )
 
     assert (mac_id, status) == (999, "updated")
-    assert patched == [
-        ("/api/virtualization/interfaces/", 7, {"primary_mac_address": 999})
-    ]
+    assert patched == [("/api/virtualization/interfaces/", 7, {"primary_mac_address": 999})]
 
 
 def test_reconcile_for_dcim_interface_uses_dcim_path(monkeypatch):
@@ -220,9 +206,7 @@ def test_reconcile_for_dcim_interface_uses_dcim_path(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.mac_address.rest_reconcile_async", _fake_reconcile
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_first_async", _fake_first
-    )
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_first_async", _fake_first)
 
     mac_id, status = asyncio.run(
         reconcile_mac_for_interface(
@@ -267,9 +251,7 @@ def test_current_normalizer_canonicalizes_netbox_mac_casing(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.mac_address.rest_reconcile_async", _fake_reconcile
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.mac_address.rest_first_async", _fake_first
-    )
+    monkeypatch.setattr("proxbox_api.services.sync.mac_address.rest_first_async", _fake_first)
 
     mac_id, status = asyncio.run(
         reconcile_mac_for_vm_interface(

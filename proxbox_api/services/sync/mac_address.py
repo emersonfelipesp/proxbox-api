@@ -120,9 +120,7 @@ async def reconcile_mac_for_interface(
         strict_lookup=True,
     )
     mac_id = (
-        mac_record.get("id")
-        if isinstance(mac_record, dict)
-        else getattr(mac_record, "id", None)
+        mac_record.get("id") if isinstance(mac_record, dict) else getattr(mac_record, "id", None)
     )
     if not isinstance(mac_id, int):
         return None, "skipped"
