@@ -391,3 +391,50 @@ def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_k
 
     assert missing_key not in fields
     assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
+
+
+# ---------------------------------------------------------------------------
+# Issue #365 — Plugin owns tenant assignment by VM-name regex. proxbox-api
+# MUST NOT include `tenant` in the patchable allowlist or the create body,
+# otherwise the plugin's tenant write would be stomped on every re-sync.
+# ---------------------------------------------------------------------------
+
+
+def test_vm_patchable_never_includes_tenant_default_flags() -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    assert "tenant" not in _compute_vm_patchable_fields(SyncOverwriteFlags())
+
+
+def test_vm_patchable_never_includes_tenant_legacy_none() -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    assert "tenant" not in _compute_vm_patchable_fields(None)
+
+
+@pytest.mark.parametrize(
+    "flag_name",
+    [
+        "overwrite_vm_type",
+        "overwrite_vm_role",
+        "overwrite_vm_tags",
+        "overwrite_vm_description",
+        "overwrite_vm_custom_fields",
+    ],
+)
+def test_vm_patchable_never_includes_tenant_with_any_flag_false(flag_name: str) -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    assert "tenant" not in _compute_vm_patchable_fields(
+        SyncOverwriteFlags(**{flag_name: False})
+    )
+
+
+def test_vm_create_body_rejects_tenant_field() -> None:
+    """NetBoxVirtualMachineCreateBody must reject `tenant` (extra='forbid')."""
+    from pydantic import ValidationError
+
+    from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
+
+    with pytest.raises(ValidationError):
+        NetBoxVirtualMachineCreateBody(name="vm-1", status="active", tenant=1)
