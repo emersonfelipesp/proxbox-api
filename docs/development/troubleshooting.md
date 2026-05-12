@@ -48,6 +48,17 @@ Resolution:
 - Confirm frontend origin is included in app CORS origin list.
 - Confirm requests target expected API host and port.
 
+## NetBox self-signed certificate errors
+
+Symptom:
+
+- Logs show `certificate verify failed` while fetching `ProxboxPluginSettings` or other NetBox API data.
+
+Resolution:
+
+- For production, install a certificate trusted by the proxbox-api runtime.
+- For private lab deployments, set the stored NetBox endpoint `verify_ssl` field to `false`. This disables certificate verification for both normal NetBox API calls and plugin-settings/runtime-settings fetches.
+
 ## NetBox Cache Issues
 
 ### Stale data after sync

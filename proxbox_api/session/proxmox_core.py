@@ -83,6 +83,12 @@ class ProxmoxSession:
         self.node_name: str | None = None
         self.fingerprints: list[str] | None = None
         self.name: str | None = None
+        self.site_id: int | None = None
+        self.site_slug: str | None = None
+        self.site_name: str | None = None
+        self.tenant_id: int | None = None
+        self.tenant_slug: str | None = None
+        self.tenant_name: str | None = None
 
         if cluster_config is not None:
             try:
@@ -186,6 +192,14 @@ class ProxmoxSession:
             self.retry_backoff = (
                 float(config["retry_backoff"]) if config.get("retry_backoff") is not None else 0.5
             )
+            self.site_id = int(config["site_id"]) if config.get("site_id") is not None else None
+            self.site_slug = str(config["site_slug"]) if config.get("site_slug") else None
+            self.site_name = str(config["site_name"]) if config.get("site_name") else None
+            self.tenant_id = (
+                int(config["tenant_id"]) if config.get("tenant_id") is not None else None
+            )
+            self.tenant_slug = str(config["tenant_slug"]) if config.get("tenant_slug") else None
+            self.tenant_name = str(config["tenant_name"]) if config.get("tenant_name") else None
             self._normalize_token_auth_fields()
         except KeyError:
             raise ProxboxException(

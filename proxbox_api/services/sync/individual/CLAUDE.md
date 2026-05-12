@@ -1,5 +1,14 @@
 # proxbox_api/services/sync/individual Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/services/sync/individual/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Per-object synchronization services that sync individual objects from Proxmox to NetBox using targeted API calls with specific path and query parameters. This package provides standalone sync functionality independent from bulk sync mechanisms.

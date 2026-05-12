@@ -1,5 +1,14 @@
 # proxbox_api/routes/sync Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/routes/sync/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Internal sync helper routes that expose targeted, per-object synchronization operations. These routes complement the full-update orchestration in `app/full_update.py` by providing fine-grained control over individual object syncs with dry-run and dependency-creation options.

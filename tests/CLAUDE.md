@@ -1,5 +1,14 @@
 # tests/ Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/tests/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Unit, integration, and end-to-end tests for the `proxbox_api` backend package. All tests run against the `proxbox_api` package with dependency-injected mocks for NetBox and Proxmox sessions. The `tests/e2e/` subdirectory holds API-level end-to-end tests that wire the full FastAPI app to a `proxmox-sdk` mock (HTTP container or in-process backend) — they use `httpx.AsyncClient`, not Playwright.

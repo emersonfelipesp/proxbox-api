@@ -27,6 +27,12 @@ class ProxmoxEndpointCreate(BaseModel):
     verify_ssl: bool = True
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
+    site_id: int | None = Field(default=None, ge=1)
+    site_slug: str | None = Field(default=None, max_length=255)
+    site_name: str | None = Field(default=None, max_length=255)
+    tenant_id: int | None = Field(default=None, ge=1)
+    tenant_slug: str | None = Field(default=None, max_length=255)
+    tenant_name: str | None = Field(default=None, max_length=255)
 
 
 class ProxmoxEndpointUpdate(BaseModel):
@@ -39,6 +45,12 @@ class ProxmoxEndpointUpdate(BaseModel):
     verify_ssl: bool | None = None
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
+    site_id: int | None = Field(default=None, ge=1)
+    site_slug: str | None = Field(default=None, max_length=255)
+    site_name: str | None = Field(default=None, max_length=255)
+    tenant_id: int | None = Field(default=None, ge=1)
+    tenant_slug: str | None = Field(default=None, max_length=255)
+    tenant_name: str | None = Field(default=None, max_length=255)
 
 
 class ProxmoxEndpointPublic(BaseModel):
@@ -53,6 +65,12 @@ class ProxmoxEndpointPublic(BaseModel):
     port: int
     username: str
     verify_ssl: bool
+    site_id: int | None = None
+    site_slug: str | None = None
+    site_name: str | None = None
+    tenant_id: int | None = None
+    tenant_slug: str | None = None
+    tenant_name: str | None = None
 
 
 def _validate_auth_fields(

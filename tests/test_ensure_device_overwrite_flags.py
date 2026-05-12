@@ -19,6 +19,8 @@ from typing import Any
 
 import pytest
 
+from proxbox_api.netbox_rest import clear_rest_get_cache, rest_bulk_reconcile_async
+from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync import device_ensure
 
@@ -212,3 +214,107 @@ async def test_first_create_propagates_patchable_fields(
     assert allowed is not None
     assert "device_type" not in allowed
     assert "cluster" in allowed
+
+
+# ── final bulk PATCH boundary ────────────────────────────────────────────────
+
+
+class _FakeResponse:
+    def __init__(self, payload: Any) -> None:
+        self.status = 200
+        self._payload = payload
+        self.text = "ok"
+
+    def json(self) -> Any:
+        return self._payload
+
+
+class _FakeNetBoxClient:
+    def __init__(self, existing: dict[str, Any]) -> None:
+        self.existing = existing
+        self.patch_payloads: list[Any] = []
+
+    async def request(self, method: str, path: str, query=None, payload=None, **_kwargs):
+        if method == "GET":
+            return _FakeResponse({"results": [self.existing], "next": None})
+        if method == "PATCH":
+            self.patch_payloads.append(payload)
+            return _FakeResponse(payload)
+        raise AssertionError(f"unexpected method: {method}")
+
+
+class _FakeNetBox:
+    def __init__(self, existing: dict[str, Any]) -> None:
+        self.client = _FakeNetBoxClient(existing)
+
+
+@pytest.mark.asyncio
+async def test_bulk_device_reconcile_omits_reported_fields_when_flags_disabled() -> None:
+    """Regression for issue #350's May 7 log: final PATCH must honor false flags."""
+    clear_rest_get_cache()
+    existing = _existing_payload(device_type_id=5, role_id=5)
+    existing.update(
+        {
+            "id": 1,
+            "cluster": {"id": 10},
+            "site": {"id": 41},
+            "device_type": {"id": 5, "model": "Custom Device"},
+            "role": {"id": 5, "name": "Custom Role"},
+            "description": "operator-owned description",
+            "tags": [
+                {"id": 8, "name": "AH", "slug": "ah", "color": "000000"},
+                {"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"},
+            ],
+            "custom_fields": {"proxmox_last_updated": "2026-05-07T16:43:17+00:00"},
+        }
+    )
+    nb = _FakeNetBox(existing)
+    flags = SyncOverwriteFlags(
+        overwrite_device_role=False,
+        overwrite_device_type=False,
+        overwrite_device_tags=False,
+        overwrite_device_status=False,
+        overwrite_device_description=False,
+        overwrite_device_custom_fields=False,
+    )
+    patchable = device_ensure._compute_device_patchable_fields(
+        flags,
+        overwrite_device_role=flags.overwrite_device_role,
+        overwrite_device_type=flags.overwrite_device_type,
+        overwrite_device_tags=flags.overwrite_device_tags,
+    )
+
+    await rest_bulk_reconcile_async(
+        nb,
+        "/api/dcim/devices/",
+        payloads=[
+            {
+                "name": "pve01",
+                "status": "active",
+                "cluster": 11,
+                "device_type": 38,
+                "role": 13,
+                "site": 41,
+                "description": "Proxmox Node pve01",
+                "tags": [{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+                "custom_fields": {"proxmox_last_updated": "2026-05-07T16:56:58+00:00"},
+            }
+        ],
+        lookup_fields=["name"],
+        schema=NetBoxDeviceSyncState,
+        patchable_fields=frozenset(patchable),
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "status": record.get("status"),
+            "cluster": device_ensure._relation_id_or_none(record.get("cluster")),
+            "device_type": device_ensure._relation_id_or_none(record.get("device_type")),
+            "role": device_ensure._relation_id_or_none(record.get("role")),
+            "site": device_ensure._relation_id_or_none(record.get("site")),
+            "description": record.get("description"),
+            "tags": record.get("tags"),
+            "custom_fields": record.get("custom_fields"),
+        },
+    )
+
+    assert patchable == {"cluster"}
+    assert nb.client.patch_payloads == [[{"id": 1, "cluster": 11}]]

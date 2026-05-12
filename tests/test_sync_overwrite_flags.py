@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.dependencies import resolved_sync_overwrite_flags
+from proxbox_api.schemas.sync import SyncOverwriteFlags, overwrite_flags_from_query_params
 
 EXPECTED_FLAGS: tuple[str, ...] = (
     "overwrite_device_role",
@@ -76,3 +77,44 @@ def test_overwrite_flags_individually_settable_to_false(flag_name: str) -> None:
     for other in EXPECTED_FLAGS:
         expected = False if other == flag_name else True
         assert getattr(flags, other) is expected
+
+
+def test_overwrite_flags_from_query_params_makes_flat_query_authoritative() -> None:
+    """Raw plugin query params override the model-bound defaults."""
+    base = SyncOverwriteFlags(
+        overwrite_device_role=True,
+        overwrite_device_type=True,
+        overwrite_device_tags=True,
+    )
+
+    flags = overwrite_flags_from_query_params(
+        {
+            "overwrite_device_role": "false",
+            "overwrite_device_type": "0",
+            "overwrite_device_tags": "False",
+            "not_an_overwrite_flag": "false",
+        },
+        base,
+    )
+
+    assert flags.overwrite_device_role is False
+    assert flags.overwrite_device_type is False
+    assert flags.overwrite_device_tags is False
+    assert not hasattr(flags, "not_an_overwrite_flag")
+
+
+def test_resolved_sync_overwrite_flags_dependency_reads_request_query() -> None:
+    """Dependency used by routes re-reads the raw flat query string."""
+
+    class _Request:
+        query_params = {
+            "overwrite_device_role": "false",
+            "overwrite_vm_type": "false",
+            "overwrite_ip_address_dns_name": "false",
+        }
+
+    flags = resolved_sync_overwrite_flags(_Request(), SyncOverwriteFlags())
+
+    assert flags.overwrite_device_role is False
+    assert flags.overwrite_vm_type is False
+    assert flags.overwrite_ip_address_dns_name is False

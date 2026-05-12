@@ -103,6 +103,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
 
 def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypatch):
     import json
+    import ssl
     import urllib.error
     from unittest.mock import MagicMock
 
@@ -111,6 +112,7 @@ def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypa
         token_secret = "test-token"
         token_version = "v1"
         token_key = None
+        ssl_verify = False
 
     class _Client:
         config = _Config()
@@ -129,9 +131,11 @@ def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypa
     mock_response.__enter__ = MagicMock(return_value=mock_response)
     mock_response.__exit__ = MagicMock(return_value=None)
     requested_urls: list[str] = []
+    requested_contexts: list[object] = []
 
     def _urlopen(req, *args, **kwargs):
         requested_urls.append(req.full_url)
+        requested_contexts.append(kwargs.get("context"))
         if req.full_url.endswith("/settings/runtime/"):
             raise urllib.error.HTTPError(
                 req.full_url,
@@ -151,6 +155,91 @@ def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypa
         "https://netbox.local/api/plugins/proxbox/settings/runtime/",
         "https://netbox.local/api/plugins/proxbox/settings/",
     ]
+    assert len(requested_contexts) == 2
+    for context in requested_contexts:
+        assert isinstance(context, ssl.SSLContext)
+        assert context.verify_mode == ssl.CERT_NONE
+        assert context.check_hostname is False
+
+
+def test_fetch_settings_from_netbox_disables_tls_verification_when_configured(monkeypatch):
+    import json
+    import ssl
+    from unittest.mock import MagicMock
+
+    class _Config:
+        base_url = "https://netbox.local"
+        token_secret = "test-token"
+        token_version = "v1"
+        token_key = None
+        ssl_verify = False
+
+    class _Client:
+        config = _Config()
+
+    class _Session:
+        client = _Client()
+
+    response_data = {"backend_log_file_path": "/srv/log/proxbox-api.log"}
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.status = 200
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+    urlopen_kwargs: list[dict[str, object]] = []
+
+    def _urlopen(req, *args, **kwargs):
+        urlopen_kwargs.append(kwargs)
+        return mock_response
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+    settings = settings_client.fetch_settings_from_netbox(_Session())
+    assert settings is not None
+    assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
+    context = urlopen_kwargs[0].get("context")
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_NONE
+    assert context.check_hostname is False
+
+
+def test_fetch_settings_from_netbox_keeps_default_tls_verification(monkeypatch):
+    import json
+    from unittest.mock import MagicMock
+
+    class _Config:
+        base_url = "https://netbox.local"
+        token_secret = "test-token"
+        token_version = "v1"
+        token_key = None
+        ssl_verify = True
+
+    class _Client:
+        config = _Config()
+
+    class _Session:
+        client = _Client()
+
+    response_data = {"backend_log_file_path": "/srv/log/proxbox-api.log"}
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(response_data).encode()
+    mock_response.status = 200
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+    urlopen_kwargs: list[dict[str, object]] = []
+
+    def _urlopen(req, *args, **kwargs):
+        urlopen_kwargs.append(kwargs)
+        return mock_response
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+    settings = settings_client.fetch_settings_from_netbox(_Session())
+    assert settings is not None
+    assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
+    assert "context" not in urlopen_kwargs[0]
 
 
 def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path(monkeypatch):

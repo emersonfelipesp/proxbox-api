@@ -1,5 +1,14 @@
 # proxbox_api/app Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/app/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Application factory and lifecycle management for the `proxbox-api` FastAPI service. This directory owns app composition, startup/shutdown, middleware, exception wiring, WebSocket management, and the full-update orchestration endpoint.

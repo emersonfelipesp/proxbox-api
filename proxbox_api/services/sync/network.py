@@ -28,6 +28,15 @@ from proxbox_api.services.sync.vm_helpers import (
 )
 
 
+def _relation_id_or_none(value: object) -> int | None:
+    if isinstance(value, dict):
+        value = value.get("id")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 async def sync_node_interface_and_ip(
     nb,
     device: dict,
@@ -168,6 +177,9 @@ def build_vlan_payload(
     vlan_tag: int,
     tag_refs: list[dict],
     now: datetime,
+    *,
+    site_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> dict:
     """Build a VLAN payload dict for bulk operations (no NetBox writes).
 
@@ -179,13 +191,18 @@ def build_vlan_payload(
     Returns:
         Payload dict for bulk reconciliation
     """
-    return {
+    payload: dict[str, object] = {
         "vid": vlan_tag,
         "name": f"VLAN {vlan_tag}",
         "status": "active",
         "tags": tag_refs,
         "custom_fields": {"proxmox_last_updated": now.isoformat()},
     }
+    if site_id is not None:
+        payload["site"] = site_id
+    if tenant_id is not None:
+        payload["tenant"] = tenant_id
+    return payload
 
 
 def build_vm_interface_payload(
@@ -404,31 +421,33 @@ async def _reconcile_vm_interface_record(
 async def bulk_reconcile_vlans(
     nb,
     vlan_payloads: list[dict],
-) -> dict[int, int]:
-    """Perform bulk reconciliation of VLAN payloads. Returns mapping of vid → NetBox ID.
+) -> dict[object, int]:
+    """Perform bulk reconciliation of VLAN payloads. Returns mapping of VLAN lookup key → NetBox ID.
 
     Args:
         nb: NetBox session
         vlan_payloads: List of VLAN payload dicts
 
     Returns:
-        Dict mapping VLAN vid to NetBox ID
+        Dict mapping VLAN vid and (vid, site_id, tenant_id) to NetBox ID
     """
     if not vlan_payloads:
         return {}
 
-    vlan_vid_to_id = {}
+    vlan_vid_to_id: dict[object, int] = {}
     try:
         result = await rest_bulk_reconcile_async(
             nb,
             "/api/ipam/vlans/",
             payloads=vlan_payloads,
-            lookup_fields=["vid"],
+            lookup_fields=["vid", "site", "tenant"],
             schema=NetBoxVlanSyncState,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
                 "name": record.get("name"),
                 "status": record.get("status"),
+                "site": record.get("site"),
+                "tenant": record.get("tenant"),
                 "tags": record.get("tags"),
                 "custom_fields": record.get("custom_fields"),
             },
@@ -436,8 +455,13 @@ async def bulk_reconcile_vlans(
         # Build mapping of vid → ID from returned records
         for record in result.records:
             vid = record.get("vid")
-            if vid:
-                vlan_vid_to_id[vid] = record.get("id")
+            vlan_id = _relation_id_or_none(record.get("id"))
+            if vid and vlan_id is not None:
+                normalized_vid = int(vid)
+                site_id = _relation_id_or_none(record.get("site"))
+                tenant_id = _relation_id_or_none(record.get("tenant"))
+                vlan_vid_to_id[(normalized_vid, site_id, tenant_id)] = vlan_id
+                vlan_vid_to_id.setdefault(normalized_vid, vlan_id)
     except Exception as e:
         logger.error("Error during bulk VLAN reconciliation: %s", e)
     return vlan_vid_to_id

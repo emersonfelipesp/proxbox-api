@@ -48,6 +48,17 @@ Resolucao:
 - Confirme que a origem do frontend esta na allowlist de CORS.
 - Confirme que os requests usam o host e a porta esperados.
 
+## Erros de certificado self-signed do NetBox
+
+Sintoma:
+
+- Os logs mostram `certificate verify failed` ao buscar `ProxboxPluginSettings` ou outros dados da API NetBox.
+
+Resolucao:
+
+- Em producao, instale um certificado confiavel para o runtime do proxbox-api.
+- Em labs ou ambientes privados, defina `verify_ssl` como `false` no endpoint NetBox armazenado. Isso desabilita a verificacao de certificado para chamadas normais ao NetBox e tambem para buscas de plugin settings/runtime settings.
+
 ## Falhas de conexao com Proxmox
 
 Sintoma:

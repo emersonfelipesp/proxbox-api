@@ -81,6 +81,12 @@ class ProxmoxEndpoint(SQLModel, table=True):
     timeout: int | None = Field(default=None)
     max_retries: int | None = Field(default=None)
     retry_backoff: float | None = Field(default=None)
+    site_id: int | None = Field(default=None)
+    site_slug: str | None = Field(default=None)
+    site_name: str | None = Field(default=None)
+    tenant_id: int | None = Field(default=None)
+    tenant_slug: str | None = Field(default=None)
+    tenant_name: str | None = Field(default=None)
 
     @property
     def has_token(self) -> bool:
@@ -244,7 +250,7 @@ class ApiKey(SQLModel, table=True):
         return False
 
 
-def _migrate_proxmox_endpoint_columns() -> None:
+def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
     table = ProxmoxEndpoint.__tablename__
     try:
         insp = inspect(engine)
@@ -262,6 +268,18 @@ def _migrate_proxmox_endpoint_columns() -> None:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN retry_backoff REAL")
     if "allow_writes" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
+    if "site_id" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN site_id INTEGER")
+    if "site_slug" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN site_slug VARCHAR")
+    if "site_name" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN site_name VARCHAR")
+    if "tenant_id" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER")
+    if "tenant_slug" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN tenant_slug VARCHAR")
+    if "tenant_name" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN tenant_name VARCHAR")
     if not stmts:
         return
     with engine.begin() as conn:

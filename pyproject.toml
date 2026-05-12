@@ -49,7 +49,7 @@ docs = [
     "mkdocs-static-i18n>=1.3.1",
 ]
 granian = [
-    "granian>=2.7.0",
+    "granian>=2.7.4",
 ]
 
 [dependency-groups]
@@ -85,7 +85,7 @@ show_missing = true
 [tool.uv]
 default-groups = ["dev"]
 # Raise transitive Pygments (pytest / MkDocs stack) above Dependabot-patched floor.
-constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4", "pytest>=9.0.3", "python-multipart>=0.0.26"]
+constraint-dependencies = ["pygments>=2.20.0", "aiohttp>=3.13.4", "pytest>=9.0.3", "python-multipart>=0.0.27", "urllib3>=2.7.0"]
 
 [tool.uv.sources]
 "proxmox-mock-api" = { path = "proxmox-mock", editable = true }

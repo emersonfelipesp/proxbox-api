@@ -52,6 +52,12 @@ def test_proxmox_endpoint_crud_lifecycle(client: TestClient):
         "username": "root@pam",
         "password": "supersecret",
         "verify_ssl": False,
+        "site_id": 42,
+        "site_slug": "dc1",
+        "site_name": "DC 1",
+        "tenant_id": 9,
+        "tenant_slug": "customer-a",
+        "tenant_name": "Customer A",
     }
 
     create_response = client.post("/proxmox/endpoints", json=create_payload)
@@ -59,6 +65,8 @@ def test_proxmox_endpoint_crud_lifecycle(client: TestClient):
     created = create_response.json()
     endpoint_id = created["id"]
     assert created["name"] == "pve-lab-1"
+    assert created["site_id"] == 42
+    assert created["tenant_slug"] == "customer-a"
     for secret_field in ("password", "token_name", "token_value"):
         assert secret_field not in created
 
@@ -67,6 +75,7 @@ def test_proxmox_endpoint_crud_lifecycle(client: TestClient):
     listed = list_response.json()
     assert len(listed) == 1
     assert listed[0]["id"] == endpoint_id
+    assert listed[0]["site_slug"] == "dc1"
     for secret_field in ("password", "token_name", "token_value"):
         assert secret_field not in listed[0]
 
