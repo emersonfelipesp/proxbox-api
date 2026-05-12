@@ -250,7 +250,7 @@ class SyncBehaviorFlags(ProxboxBaseModel):
         title="Parse Description Metadata",
         description=(
             "When true, the sync reads Proxmox descriptions for a fenced "
-            "``netbox-metadata`` JSON block (e.g. ``{\"tenant\": 13, \"site\": 4}``) "
+            '``netbox-metadata`` JSON block (e.g. ``{"tenant": 13, "site": 4}``) '
             "and applies the resulting NetBox PK overrides to the synced object. "
             "When false, the Proxmox description is ignored exactly as it was "
             "before this feature shipped."

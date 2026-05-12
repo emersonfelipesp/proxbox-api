@@ -58,7 +58,7 @@ def test_parse_last_block_wins_on_multiple_fences():
 
 
 def test_parse_fence_is_case_insensitive():
-    text = "```NetBox-Metadata\n{\"site\": 4}\n```"
+    text = '```NetBox-Metadata\n{"site": 4}\n```'
     assert parse_netbox_metadata(text) == {"site": 4}
 
 
@@ -93,18 +93,14 @@ def test_filter_drops_keys_when_overwrite_flag_is_false():
         overwrite_vm_tenant=True,
         # site has no matching flag; should pass through unconditionally.
     )
-    applied, dropped = filter_metadata_by_overwrite_flags(
-        metadata, flags, object_kind="vm"
-    )
+    applied, dropped = filter_metadata_by_overwrite_flags(metadata, flags, object_kind="vm")
     assert applied == {"tenant": 13, "site": 4}
     assert dropped == ["role"]
 
 
 def test_filter_keeps_all_when_flags_is_none():
     metadata = {"role": 5, "tenant": 13}
-    applied, dropped = filter_metadata_by_overwrite_flags(
-        metadata, None, object_kind="vm"
-    )
+    applied, dropped = filter_metadata_by_overwrite_flags(metadata, None, object_kind="vm")
     assert applied == {"role": 5, "tenant": 13}
     assert dropped == []
 
@@ -123,8 +119,6 @@ def test_filter_dropped_keys_are_sorted_alphabetically():
         overwrite_vm_tenant=False,
         overwrite_vm_platform=False,
     )
-    applied, dropped = filter_metadata_by_overwrite_flags(
-        metadata, flags, object_kind="vm"
-    )
+    applied, dropped = filter_metadata_by_overwrite_flags(metadata, flags, object_kind="vm")
     assert applied == {}
     assert dropped == ["platform", "role", "tenant"]

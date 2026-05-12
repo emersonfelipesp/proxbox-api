@@ -233,12 +233,7 @@ def test_build_payload_applies_description_metadata_when_enabled(monkeypatch):
         lambda: {"source": "cache", "openapi": {"paths": {}}},
     )
 
-    description = (
-        "Production database VM.\n"
-        "```netbox-metadata\n"
-        '{"tenant": 13, "site": 4}\n'
-        "```\n"
-    )
+    description = 'Production database VM.\n```netbox-metadata\n{"tenant": 13, "site": 4}\n```\n'
 
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource=PROXMOX_VM_RESOURCE,
@@ -265,7 +260,7 @@ def test_build_payload_ignores_metadata_when_flag_off(monkeypatch):
         lambda: {"source": "cache", "openapi": {"paths": {}}},
     )
 
-    description = "```netbox-metadata\n{\"tenant\": 13}\n```"
+    description = '```netbox-metadata\n{"tenant": 13}\n```'
 
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource=PROXMOX_VM_RESOURCE,
@@ -293,11 +288,7 @@ def test_build_payload_respects_overwrite_vm_role_when_off(monkeypatch):
     )
 
     overwrite_flags = SyncOverwriteFlags(overwrite_vm_role=False)
-    description = (
-        "```netbox-metadata\n"
-        '{"role": 5, "tenant": 13}\n'
-        "```"
-    )
+    description = '```netbox-metadata\n{"role": 5, "tenant": 13}\n```'
 
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource=PROXMOX_VM_RESOURCE,
