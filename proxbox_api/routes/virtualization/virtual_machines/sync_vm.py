@@ -45,6 +45,10 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.name_collision import (
+    NameResolution,
+    resolve_unique_vm_name,
+)
 from proxbox_api.services.proxmox_helpers import (
     fetch_qemu_guest_agent_network_interfaces,
     get_qemu_guest_agent_hostname,
@@ -256,6 +260,116 @@ def _resolve_vm_overwrites(
         description if description is not None else overwrite_flags.overwrite_vm_description,
         custom_fields if custom_fields is not None else overwrite_flags.overwrite_vm_custom_fields,
     )
+
+
+async def _resolve_vm_names_pre_pass(
+    prepared_vms: list[_PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+    bridge: WebSocketSSEBridge | None,
+) -> list[NameResolution]:
+    """Apply deterministic name-collision resolution to ``prepared_vms``.
+
+    Mutates ``prepared.desired_payload["name"]`` in place for any VM that
+    collides with another VM in the same NetBox cluster or whose NetBox record
+    has been renamed by an operator. Emits ``duplicate_name_resolved`` SSE
+    frames via ``bridge`` for each renamed VM.
+
+    Determinism rule: within one NetBox cluster, VMs are processed sorted by
+    ``(proxmox_cluster_name.casefold(), proxmox_vmid)``. The first VM keeps
+    the bare name; subsequent VMs receive ``" (2)"``, ``" (3)"``, ...
+    """
+
+    by_vmid = _build_vm_index_by_proxmox_id(netbox_snapshot)
+    cluster_used_names: dict[int, set[str]] = {}
+    cluster_no_id_used_names: set[str] = set()
+    for record in netbox_snapshot:
+        cluster_id = _relation_id(record.get("cluster"))
+        name = record.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if cluster_id is None:
+            continue
+        cluster_used_names.setdefault(cluster_id, set()).add(name)
+
+    grouped: dict[int | None, list[_PreparedVMState]] = {}
+    for prepared in prepared_vms:
+        cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
+        grouped.setdefault(cluster_id, []).append(prepared)
+
+    def _sort_key(p: _PreparedVMState) -> tuple[str, int]:
+        try:
+            vmid = int(p.resource.get("vmid", 0) or 0)
+        except (TypeError, ValueError):
+            vmid = 0
+        return (p.cluster_name.casefold(), vmid)
+
+    resolutions: list[NameResolution] = []
+
+    for cluster_id, group in grouped.items():
+        if cluster_id is None:
+            used = cluster_no_id_used_names
+        else:
+            used = cluster_used_names.setdefault(cluster_id, set())
+
+        # Strip names owned by the VMIDs we're about to write — they'll be
+        # re-registered (possibly under a different name) by the resolver.
+        for prepared in group:
+            try:
+                vmid = int(prepared.resource.get("vmid", 0) or 0)
+            except (TypeError, ValueError):
+                vmid = 0
+            existing = by_vmid.get(vmid) if vmid else None
+            if existing is not None:
+                existing_name = existing.get("name")
+                if isinstance(existing_name, str) and existing_name in used:
+                    used.discard(existing_name)
+
+        for prepared in sorted(group, key=_sort_key):
+            try:
+                vmid = int(prepared.resource.get("vmid", 0) or 0)
+            except (TypeError, ValueError):
+                vmid = 0
+            candidate = str(prepared.desired_payload.get("name") or "")
+            if not candidate or vmid == 0:
+                continue
+
+            resolution = await resolve_unique_vm_name(
+                None,
+                netbox_cluster_id=cluster_id,
+                proxmox_cluster_name=prepared.cluster_name,
+                candidate=candidate,
+                proxmox_vmid=vmid,
+                used_names_in_cluster=used,
+                existing_vm_by_vmid=by_vmid,
+            )
+
+            if resolution.operator_renamed:
+                prepared.desired_payload["name"] = resolution.resolved_name
+            elif resolution.is_collision:
+                prepared.desired_payload["name"] = resolution.resolved_name
+
+            if resolution.is_collision or resolution.operator_renamed:
+                resolutions.append(resolution)
+                logger.info(
+                    "name_collision: cluster=%s vmid=%s %r -> %r (suffix=%s, operator=%s)",
+                    prepared.cluster_name,
+                    vmid,
+                    resolution.original_name,
+                    resolution.resolved_name,
+                    resolution.suffix_index,
+                    resolution.operator_renamed,
+                )
+                if bridge is not None:
+                    await bridge.emit_duplicate_name_resolved(
+                        cluster=prepared.cluster_name,
+                        original_name=resolution.original_name,
+                        resolved_name=resolution.resolved_name,
+                        vmid=vmid,
+                        suffix_index=resolution.suffix_index,
+                        operator_renamed=resolution.operator_renamed,
+                    )
+
+    return resolutions
 
 
 def _build_vm_operation_queue(
@@ -1539,6 +1653,7 @@ async def create_virtual_machines(  # noqa: C901
             return []
 
         netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
+        await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
         operation_queue = _build_vm_operation_queue(
             prepared_vms,
             netbox_snapshot,
