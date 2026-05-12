@@ -16,13 +16,18 @@ def _compute_vm_patchable_fields(
     *,
     supports_virtual_machine_type_field: bool = True,
 ) -> set[str]:
-    """Build the patchable_fields allowlist for virtual machine reconciliation."""
+    """Build the patchable_fields allowlist for virtual machine reconciliation.
+
+    `tenant` is intentionally excluded so that the netbox-proxbox plugin's
+    VM-name-regex tenant resolver (issue #365) can write `vm.tenant` after
+    create without being stomped on every re-sync. proxbox-api still sets
+    tenant on initial create via the create body, but never patches it.
+    """
     fields: set[str] = {
         "name",
         "cluster",
         "device",
         "site",
-        "tenant",
         "vcpus",
         "memory",
         "disk",
