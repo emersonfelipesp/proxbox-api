@@ -18,6 +18,7 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.schemas.proxmox import ClusterStatusSchemaList
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.sync.cloudinit import sync_vm_cloudinit
 from proxbox_api.services.sync.devices import (
     _ensure_cluster,
     _ensure_cluster_type,
@@ -315,4 +316,21 @@ async def create_or_update_virtual_machine(
     )
 
     logger.debug("Created/updated virtual machine: %s", virtual_machine)
+
+    vm_id = (
+        virtual_machine.get("id")
+        if isinstance(virtual_machine, dict)
+        else getattr(virtual_machine, "id", None)
+    )
+    if vm_id is not None:
+        try:
+            await sync_vm_cloudinit(
+                netbox_session,
+                vm_id=int(vm_id),
+                proxmox_config=proxmox_config,
+                overwrite_flags=overwrite_flags,
+            )
+        except Exception as exc:  # pragma: no cover - non-fatal
+            logger.warning("cloud-init reflection failed for vm_id=%s: %s", vm_id, exc)
+
     return virtual_machine if isinstance(virtual_machine, dict) else virtual_machine.dict()

@@ -113,6 +113,14 @@ class SyncOverwriteFlags(ProxboxBaseModel):
             "non-empty custom_fields. Custom fields are still applied on first create."
         ),
     )
+    overwrite_vm_cloudinit: bool = Field(
+        default=True,
+        title="Overwrite VM Cloud-init",
+        description=(
+            "When false, the ProxmoxVMCloudInit plugin row is not patched on existing "
+            "VMs that already have one. The row is still created on first sync."
+        ),
+    )
 
     # Cluster
     overwrite_cluster_tags: bool = Field(
