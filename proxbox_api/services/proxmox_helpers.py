@@ -650,6 +650,102 @@ async def get_node_task_status(
         )
 
 
+@_dual_mode
+async def get_vm_status(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> (
+    generated_models.GetNodesNodeQemuVmidStatusCurrentResponse
+    | generated_models.GetNodesNodeLxcVmidStatusCurrentResponse
+):
+    """Return current Proxmox VM run state (used for state-based no-op checks).
+
+    Wraps ``GET /nodes/{node}/{vm_type}/{vmid}/status/current``. Per
+    ``docs/design/operational-verbs.md`` §4.2, the verb routes call this
+    before dispatch so a ``start`` against an already-running VM (or a
+    ``stop`` against a stopped one) returns a no-op without consuming an
+    Idempotency-Key window.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).status.current.get()
+            )
+            return generated_models.GetNodesNodeQemuVmidStatusCurrentResponse.model_validate(
+                payload
+            )
+        if vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).status.current.get()
+            )
+            return generated_models.GetNodesNodeLxcVmidStatusCurrentResponse.model_validate(
+                payload
+            )
+        raise ValueError(f"Unsupported VM type: {vm_type}")
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox VM status request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM status", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox VM status",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def start_vm(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/{vm_type}/{vmid}/status/start``.
+
+    Returns the Proxmox task ``UPID`` string. ``ProxmoxAPIError`` is
+    raised on timeout / connection failure per the existing convention.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).status.start.post()
+            )
+        elif vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).status.start.post()
+            )
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, str):
+                return data
+        return str(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM start request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM start", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM start",
+            original_error=error,
+        )
+
+
 def dump_models(items: list[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 
