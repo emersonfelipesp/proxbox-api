@@ -25,6 +25,7 @@ class StreamMessageType(str, Enum):
     PHASE_SUMMARY = "phase_summary"
     ERROR_DETAIL = "error_detail"
     PROGRESS = "progress"
+    DUPLICATE_NAME_RESOLVED = "duplicate_name_resolved"
 
 
 class SubstepStatus(str, Enum):
@@ -150,6 +151,30 @@ class ErrorDetailMessage(ProxboxBaseModel):
     detail: str | None = Field(default=None, description="Technical error details")
     suggestion: str | None = Field(default=None, description="Suggested remediation")
     traceback: str | None = Field(default=None, description="Stack trace (debug mode only)")
+
+
+class DuplicateNameResolvedMessage(ProxboxBaseModel):
+    """Warning frame emitted when the name-collision resolver renames a VM.
+
+    A frame is emitted in two cases: (1) the resolver applied an algorithmic
+    " (N)" suffix because the candidate name was already taken in the target
+    NetBox cluster, or (2) the existing NetBox record was operator-renamed and
+    the sync skipped the rename. Consumers can surface a warning UI without
+    failing the sync.
+    """
+
+    event: str = Field(default="duplicate_name_resolved", description="Message event type")
+    cluster: str = Field(description="Proxmox cluster name (human label)")
+    original_name: str = Field(description="Candidate VM name from Proxmox")
+    resolved_name: str = Field(description="Final name written to NetBox")
+    vmid: int = Field(description="Proxmox VMID")
+    suffix_index: int = Field(
+        description="1 = no algorithmic suffix (operator-rename flow); 2+ = suffix applied",
+    )
+    operator_renamed: bool = Field(
+        default=False,
+        description="True when the NetBox record was already manually renamed by an operator",
+    )
 
 
 class StreamMessage(ProxboxBaseModel):
@@ -324,6 +349,26 @@ def build_error_detail_message(
         detail=detail,
         suggestion=suggestion,
         traceback=traceback,
+    )
+    return msg.model_dump(exclude_none=True)
+
+
+def build_duplicate_name_resolved_message(
+    cluster: str,
+    original_name: str,
+    resolved_name: str,
+    vmid: int,
+    suffix_index: int,
+    operator_renamed: bool = False,
+) -> dict[str, Any]:
+    """Build a `duplicate_name_resolved` warning frame."""
+    msg = DuplicateNameResolvedMessage(
+        cluster=cluster,
+        original_name=original_name,
+        resolved_name=resolved_name,
+        vmid=vmid,
+        suffix_index=suffix_index,
+        operator_renamed=operator_renamed,
     )
     return msg.model_dump(exclude_none=True)
 
