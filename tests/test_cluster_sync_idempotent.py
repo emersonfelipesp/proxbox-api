@@ -17,6 +17,7 @@ import pytest
 
 from proxbox_api import netbox_rest
 from proxbox_api.services.sync.individual.cluster_sync import sync_cluster_individual
+from tests.factories.session import make_session, make_settings
 
 
 class _FakeRecord:
@@ -118,18 +119,15 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_second_cluster_sync_is_silent(in_sync_netbox: dict[str, Any]) -> None:
     """First-and-second-run idempotency: no PATCH, no POST, status unchanged."""
-    first = await sync_cluster_individual(
+    ctx = make_session(
         nb=object(),
-        px=SimpleNamespace(name="lab"),
+        px_sessions=[SimpleNamespace(name="lab")],
         tag=_TAG,
-        cluster_name="lab",
+        settings=make_settings(),
+        operation_id="test-cluster-sync-idempotent",
     )
-    second = await sync_cluster_individual(
-        nb=object(),
-        px=SimpleNamespace(name="lab"),
-        tag=_TAG,
-        cluster_name="lab",
-    )
+    first = await sync_cluster_individual(ctx, "lab")
+    second = await sync_cluster_individual(ctx, "lab")
 
     assert first["action"] == "unchanged", first
     assert second["action"] == "unchanged", second

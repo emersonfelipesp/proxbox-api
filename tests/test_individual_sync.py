@@ -22,6 +22,7 @@ from proxbox_api.services.sync.individual.vm_sync import (
 )
 from proxbox_api.session.netbox import get_netbox_session
 from proxbox_api.session.proxmox_providers import proxmox_sessions
+from tests.factories.session import make_session, make_settings
 
 
 class FakeRecord:
@@ -355,12 +356,14 @@ async def test_sync_cluster_individual_reports_real_drift_status(monkeypatch):
         _fake_upsert_cluster,
     )
 
-    result = await sync_cluster_individual(
+    ctx = make_session(
         nb=object(),
-        px=SimpleNamespace(name="lab"),
+        px_sessions=[SimpleNamespace(name="lab")],
         tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
-        cluster_name="lab",
+        settings=make_settings(),
+        operation_id="test-cluster-drift-status",
     )
+    result = await sync_cluster_individual(ctx, "lab")
 
     assert result["action"] == "updated"
     assert {"object_type": "cluster_type", "action": "unchanged"} in result["dependencies_synced"]
