@@ -30,7 +30,6 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_create_async, rest_first_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
 
-
 Verb = Literal["start", "stop", "snapshot", "migrate"]
 VmType = Literal["qemu", "lxc"]
 JournalKind = Literal["info", "success", "warning", "danger"]

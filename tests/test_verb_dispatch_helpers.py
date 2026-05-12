@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import ProxmoxAPIError

@@ -24,7 +24,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api.database import ApiKey, ProxmoxEndpoint, get_async_session, get_session
 from proxbox_api.main import app
 
-
 VERB_PATHS = [
     ("/proxmox/qemu/100/start"),
     ("/proxmox/lxc/100/start"),

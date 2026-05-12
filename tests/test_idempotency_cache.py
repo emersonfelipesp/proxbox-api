@@ -17,9 +17,9 @@ import asyncio
 import pytest
 
 from proxbox_api.services.idempotency import (
+    TTL_SECONDS,
     CacheKey,
     IdempotencyCache,
-    TTL_SECONDS,
     get_idempotency_cache,
 )
 

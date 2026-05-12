@@ -15,9 +15,6 @@ from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import AsyncMock
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

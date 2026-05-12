@@ -22,7 +22,6 @@ import time
 from dataclasses import dataclass
 from typing import Literal
 
-
 Verb = Literal["start", "stop", "snapshot", "migrate"]
 TTL_SECONDS = 60.0
 
