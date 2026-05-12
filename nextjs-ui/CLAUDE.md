@@ -1,5 +1,14 @@
 # nextjs-ui Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/nextjs-ui/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Standalone Next.js frontend for managing one NetBox endpoint and multiple Proxmox endpoints through the `proxbox-api` backend.

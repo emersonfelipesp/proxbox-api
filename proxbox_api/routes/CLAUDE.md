@@ -1,5 +1,14 @@
 # proxbox_api/routes Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/routes/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Top-level namespace for FastAPI route packages.

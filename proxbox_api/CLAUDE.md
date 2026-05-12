@@ -1,5 +1,14 @@
 # proxbox_api Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Core FastAPI package for `proxbox-api`. This package owns application composition, route registration, client session factories, schemas, services, generated artifacts, and shared helpers.

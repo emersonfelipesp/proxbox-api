@@ -1,5 +1,14 @@
 # proxbox_api/generated/netbox Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/generated/netbox/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Stores cached NetBox OpenAPI schema documents fetched from live NetBox instances.
