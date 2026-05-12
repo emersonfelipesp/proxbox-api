@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import unquote
 
 from pydantic import (
     BaseModel,
@@ -16,6 +17,9 @@ from pydantic import (
 
 from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
+
+CLOUDINIT_SSHKEYS_MAX_BYTES = 10 * 1024
+CLOUDINIT_SSHKEYS_TRUNCATION_SENTINEL = "\n# truncated by proxbox-api at 10KB"
 
 
 def _as_bool(value: object) -> bool:
@@ -557,6 +561,28 @@ class NetBoxBackupSyncState(BaseModel):
         return _choice_value(value)
 
 
+class NetBoxCloudInitSyncState(BaseModel):
+    """Pinned schema for the ``/api/plugins/proxbox/vm-cloudinit/`` payload."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    ciuser: str = ""
+    sshkeys: str = ""
+    ipconfig0: str = ""
+    sshkeys_truncated: bool = False
+
+    @field_validator("virtual_machine", mode="before")
+    @classmethod
+    def normalize_virtual_machine(cls, value: object) -> object:
+        return _relation_id(value)
+
+    @field_validator("ciuser", "sshkeys", "ipconfig0", mode="before")
+    @classmethod
+    def coerce_string(cls, value: object) -> str:
+        return "" if value is None else str(value)
+
+
 class NetBoxSnapshotSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -921,6 +947,35 @@ class ProxmoxVmConfigInput(BaseModel):
     agent: int | str | bool | None = None
     unprivileged: int | str | bool | None = None
     searchdomain: str | None = None
+    ciuser: str | None = None
+    sshkeys: str | None = None
+    ipconfig0: str | None = None
+    sshkeys_truncated: bool = False
+
+    @field_validator("sshkeys", mode="before")
+    @classmethod
+    def decode_and_truncate_sshkeys(cls, value: object) -> str | None:
+        """Decode Proxmox's URL-encoded ``sshkeys`` (newlines as ``%0A``).
+
+        Proxmox stores the blob URL-encoded; if nothing decodes it before
+        the row is written, NetBox ends up with a single-line ``%0A``-laced
+        string. Truncate decoded payloads to 10 KB plus a sentinel suffix.
+        """
+        if value is None:
+            return None
+        text = value if isinstance(value, str) else str(value)
+        decoded = unquote(text)
+        encoded = decoded.encode("utf-8")
+        if len(encoded) <= CLOUDINIT_SSHKEYS_MAX_BYTES:
+            return decoded
+        truncated = encoded[:CLOUDINIT_SSHKEYS_MAX_BYTES].decode("utf-8", "ignore")
+        return truncated + CLOUDINIT_SSHKEYS_TRUNCATION_SENTINEL
+
+    @model_validator(mode="after")
+    def _mark_sshkeys_truncated(self) -> ProxmoxVmConfigInput:
+        if self.sshkeys and CLOUDINIT_SSHKEYS_TRUNCATION_SENTINEL in self.sshkeys:
+            self.sshkeys_truncated = True
+        return self
 
     @computed_field(return_type=bool)
     @property
@@ -944,6 +999,18 @@ class ProxmoxVmConfigInput(BaseModel):
         from proxbox_api.proxmox_to_netbox.schemas.disks import parse_vm_config_disks
 
         return parse_vm_config_disks(self.model_extra or {})
+
+    def cloudinit_payload(self) -> dict[str, object] | None:
+        """Return the cloud-init reflection payload, or ``None`` if absent."""
+        has_data = bool(self.ciuser or self.sshkeys or self.ipconfig0)
+        if not has_data:
+            return None
+        return {
+            "ciuser": self.ciuser or "",
+            "sshkeys": self.sshkeys or "",
+            "ipconfig0": self.ipconfig0 or "",
+            "sshkeys_truncated": self.sshkeys_truncated,
+        }
 
 
 class NetBoxVirtualMachineCreateBody(BaseModel):
