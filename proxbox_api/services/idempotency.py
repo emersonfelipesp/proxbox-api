@@ -22,7 +22,6 @@ import time
 from dataclasses import dataclass
 from typing import Literal
 
-
 Verb = Literal["start", "stop", "snapshot", "migrate"]
 TTL_SECONDS = 60.0
 
@@ -75,9 +74,7 @@ class IdempotencyCache:
     async def store(self, cache_key: CacheKey, response: dict[str, object]) -> None:
         async with self._lock:
             now = self._now()
-            self._entries[cache_key] = _Entry(
-                response=dict(response), expires_at=now + self._ttl
-            )
+            self._entries[cache_key] = _Entry(response=dict(response), expires_at=now + self._ttl)
 
     async def clear(self) -> None:
         async with self._lock:

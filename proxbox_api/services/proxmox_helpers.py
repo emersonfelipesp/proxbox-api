@@ -680,16 +680,12 @@ async def get_vm_status(
             payload = await resolve_async(
                 session.session.nodes(node).lxc(vmid).status.current.get()
             )
-            return generated_models.GetNodesNodeLxcVmidStatusCurrentResponse.model_validate(
-                payload
-            )
+            return generated_models.GetNodesNodeLxcVmidStatusCurrentResponse.model_validate(payload)
         raise ValueError(f"Unsupported VM type: {vm_type}")
     except ProxboxException:
         raise
     except ProxmoxTimeoutError as error:
-        raise ProxmoxAPIError(
-            message="Proxmox VM status request timed out", original_error=error
-        )
+        raise ProxmoxAPIError(message="Proxmox VM status request timed out", original_error=error)
     except ProxmoxConnectionError as error:
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for VM status", original_error=error
@@ -719,9 +715,7 @@ async def start_vm(
                 session.session.nodes(node).qemu(vmid).status.start.post()
             )
         elif vm_type == "lxc":
-            payload = await resolve_async(
-                session.session.nodes(node).lxc(vmid).status.start.post()
-            )
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).status.start.post())
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
         if isinstance(payload, str):
@@ -760,13 +754,9 @@ async def stop_vm(
     """
     try:
         if vm_type == "qemu":
-            payload = await resolve_async(
-                session.session.nodes(node).qemu(vmid).status.stop.post()
-            )
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).status.stop.post())
         elif vm_type == "lxc":
-            payload = await resolve_async(
-                session.session.nodes(node).lxc(vmid).status.stop.post()
-            )
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).status.stop.post())
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
         if isinstance(payload, str):
@@ -792,7 +782,7 @@ async def stop_vm(
 
 
 @_dual_mode
-async def create_vm_snapshot(
+async def create_vm_snapshot(  # noqa: C901
     session: ProxmoxSession,
     node: str,
     vm_type: str,
@@ -829,9 +819,7 @@ async def create_vm_snapshot(
     except ProxboxException:
         raise
     except ProxmoxTimeoutError as error:
-        raise ProxmoxAPIError(
-            message="Proxmox VM snapshot request timed out", original_error=error
-        )
+        raise ProxmoxAPIError(message="Proxmox VM snapshot request timed out", original_error=error)
     except ProxmoxConnectionError as error:
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for VM snapshot", original_error=error
@@ -860,21 +848,15 @@ async def migrate_preflight(
     """
     try:
         if vm_type == "qemu":
-            payload = await resolve_async(
-                session.session.nodes(node).qemu(vmid).migrate.get()
-            )
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).migrate.get())
         elif vm_type == "lxc":
-            payload = await resolve_async(
-                session.session.nodes(node).lxc(vmid).migrate.get()
-            )
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).migrate.get())
         else:
             raise ValueError(f"Unsupported VM type: {vm_type}")
     except ProxboxException:
         raise
     except ProxmoxTimeoutError as error:
-        raise ProxmoxAPIError(
-            message="Proxmox migrate preflight timed out", original_error=error
-        )
+        raise ProxmoxAPIError(message="Proxmox migrate preflight timed out", original_error=error)
     except ProxmoxConnectionError as error:
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for migrate preflight",
@@ -933,9 +915,7 @@ async def migrate_vm(
     except ProxboxException:
         raise
     except ProxmoxTimeoutError as error:
-        raise ProxmoxAPIError(
-            message="Proxmox VM migrate request timed out", original_error=error
-        )
+        raise ProxmoxAPIError(message="Proxmox VM migrate request timed out", original_error=error)
     except ProxmoxConnectionError as error:
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for VM migrate",
@@ -964,9 +944,7 @@ async def cancel_task(
     except ProxboxException:
         raise
     except ProxmoxTimeoutError as error:
-        raise ProxmoxAPIError(
-            message="Proxmox task cancel request timed out", original_error=error
-        )
+        raise ProxmoxAPIError(message="Proxmox task cancel request timed out", original_error=error)
     except ProxmoxConnectionError as error:
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for task cancel",

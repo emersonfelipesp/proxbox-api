@@ -27,18 +27,12 @@ from proxbox_api.services.idempotency import get_idempotency_cache
 @pytest.fixture
 def client(tmp_path: Path):
     sqlite_file = tmp_path / "test.db"
-    engine = create_engine(
-        f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine(f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
 
     async_url = str(engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    async_engine = create_async_engine(
-        async_url, connect_args={"check_same_thread": False}
-    )
-    session_factory = async_sessionmaker(
-        async_engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
     def _override_get_session():
         with Session(engine) as session:
@@ -97,25 +91,15 @@ def _patch_route(
     nb_session = AsyncMock(return_value=object())
     node_mock = AsyncMock(return_value=node_or_response)
     netbox_id_mock = AsyncMock(return_value=netbox_vm_id)
-    snapshot_mock = AsyncMock(
-        return_value=snapshot_result, side_effect=snapshot_side_effect
-    )
+    snapshot_mock = AsyncMock(return_value=snapshot_result, side_effect=snapshot_side_effect)
     journal_mock = AsyncMock(return_value=journal_entry)
 
     patches = [
-        patch(
-            "proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session
-        ),
-        patch(
-            "proxbox_api.routes.proxmox_actions.get_netbox_async_session", nb_session
-        ),
+        patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
+        patch("proxbox_api.routes.proxmox_actions.get_netbox_async_session", nb_session),
         patch("proxbox_api.routes.proxmox_actions.resolve_proxmox_node", node_mock),
-        patch(
-            "proxbox_api.routes.proxmox_actions.resolve_netbox_vm_id", netbox_id_mock
-        ),
-        patch(
-            "proxbox_api.routes.proxmox_actions.create_vm_snapshot", snapshot_mock
-        ),
+        patch("proxbox_api.routes.proxmox_actions.resolve_netbox_vm_id", netbox_id_mock),
+        patch("proxbox_api.routes.proxmox_actions.create_vm_snapshot", snapshot_mock),
         patch(
             "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
             journal_mock,
@@ -164,9 +148,9 @@ def test_snapshot_qemu_success_returns_response_shape_and_writes_journal(
 
     handles["snapshot"].assert_awaited_once()
     call_args = handles["snapshot"].call_args
-    assert "before-upgrade" in call_args.args or call_args.kwargs.get(
-        "snapname"
-    ) == "before-upgrade"
+    assert (
+        "before-upgrade" in call_args.args or call_args.kwargs.get("snapname") == "before-upgrade"
+    )
     handles["journal"].assert_awaited_once()
     journal_kwargs = handles["journal"].call_args.kwargs
     assert journal_kwargs["kind"] == "info"
@@ -207,9 +191,7 @@ def test_snapshot_qemu_default_snapname_with_no_key_uses_utc_stamp(
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post(
-            "/proxmox/qemu/100/snapshot", params={"endpoint_id": endpoint_id}
-        )
+        resp = client.post("/proxmox/qemu/100/snapshot", params={"endpoint_id": endpoint_id})
     finally:
         for p in handles["patches"]:
             p.stop()
@@ -256,9 +238,7 @@ def test_snapshot_qemu_proxmox_dispatch_failure_writes_warning_journal(
     client: TestClient,
 ):
     endpoint_id = _make_endpoint(client)
-    handles = _patch_route(
-        snapshot_side_effect=ProxmoxAPIError(message="snapshot name in use")
-    )
+    handles = _patch_route(snapshot_side_effect=ProxmoxAPIError(message="snapshot name in use"))
     for p in handles["patches"]:
         p.start()
     try:
@@ -287,9 +267,7 @@ def test_snapshot_lxc_routes_through_same_dispatch(client: TestClient):
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post(
-            "/proxmox/lxc/101/snapshot", params={"endpoint_id": endpoint_id}
-        )
+        resp = client.post("/proxmox/lxc/101/snapshot", params={"endpoint_id": endpoint_id})
     finally:
         for p in handles["patches"]:
             p.stop()
@@ -308,9 +286,7 @@ def test_snapshot_qemu_no_matching_netbox_vm_still_dispatches(client: TestClient
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post(
-            "/proxmox/qemu/100/snapshot", params={"endpoint_id": endpoint_id}
-        )
+        resp = client.post("/proxmox/qemu/100/snapshot", params={"endpoint_id": endpoint_id})
     finally:
         for p in handles["patches"]:
             p.stop()

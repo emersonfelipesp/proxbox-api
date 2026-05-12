@@ -31,18 +31,12 @@ from proxbox_api.services.idempotency import get_idempotency_cache
 @pytest.fixture
 def client(tmp_path: Path):
     sqlite_file = tmp_path / "test.db"
-    engine = create_engine(
-        f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine(f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
 
     async_url = str(engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    async_engine = create_async_engine(
-        async_url, connect_args={"check_same_thread": False}
-    )
-    session_factory = async_sessionmaker(
-        async_engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
     def _override_get_session():
         with Session(engine) as session:
@@ -112,33 +106,20 @@ def _patch_route(
     nb_session = AsyncMock(return_value=object())
     node_mock = AsyncMock(return_value=node_or_response)
     netbox_id_mock = AsyncMock(return_value=netbox_vm_id)
-    preflight_mock = AsyncMock(
-        return_value=preflight_payload, side_effect=preflight_side_effect
-    )
-    migrate_mock = AsyncMock(
-        return_value=migrate_result, side_effect=migrate_side_effect
-    )
+    preflight_mock = AsyncMock(return_value=preflight_payload, side_effect=preflight_side_effect)
+    migrate_mock = AsyncMock(return_value=migrate_result, side_effect=migrate_side_effect)
     cancel_mock = AsyncMock(return_value=None, side_effect=cancel_side_effect)
     task_status_mock = AsyncMock(
-        return_value=task_status_payload
-        or SimpleNamespace(status="stopped", exitstatus="OK")
+        return_value=task_status_payload or SimpleNamespace(status="stopped", exitstatus="OK")
     )
     journal_mock = AsyncMock(return_value=journal_entry)
 
     patches = [
-        patch(
-            "proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session
-        ),
-        patch(
-            "proxbox_api.routes.proxmox_actions.get_netbox_async_session", nb_session
-        ),
+        patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
+        patch("proxbox_api.routes.proxmox_actions.get_netbox_async_session", nb_session),
         patch("proxbox_api.routes.proxmox_actions.resolve_proxmox_node", node_mock),
-        patch(
-            "proxbox_api.routes.proxmox_actions.resolve_netbox_vm_id", netbox_id_mock
-        ),
-        patch(
-            "proxbox_api.routes.proxmox_actions.migrate_preflight", preflight_mock
-        ),
+        patch("proxbox_api.routes.proxmox_actions.resolve_netbox_vm_id", netbox_id_mock),
+        patch("proxbox_api.routes.proxmox_actions.migrate_preflight", preflight_mock),
         patch("proxbox_api.routes.proxmox_actions.migrate_vm", migrate_mock),
         patch("proxbox_api.routes.proxmox_actions.cancel_task", cancel_mock),
         patch(
@@ -306,9 +287,7 @@ def test_migrate_qemu_success_returns_202_with_sse_url_and_journal(
     assert body["endpoint_id"] == endpoint_id
     assert body["result"] == "accepted"
     assert body["proxmox_task_upid"] == "UPID:pve-node-01:0001:migrate"
-    assert body["sse_url"] == (
-        "/proxmox/qemu/100/migrate/UPID:pve-node-01:0001:migrate/stream"
-    )
+    assert body["sse_url"] == ("/proxmox/qemu/100/migrate/UPID:pve-node-01:0001:migrate/stream")
     assert body["target"] == "pve-node-02"
     assert body["online"] is False
     assert body["source_node"] == "pve-node-01"
@@ -351,9 +330,7 @@ def test_migrate_qemu_proxmox_dispatch_failure_writes_warning_journal(
     client: TestClient,
 ):
     endpoint_id = _make_endpoint(client)
-    handles = _patch_route(
-        migrate_side_effect=ProxmoxAPIError(message="cluster lock held")
-    )
+    handles = _patch_route(migrate_side_effect=ProxmoxAPIError(message="cluster lock held"))
     for p in handles["patches"]:
         p.start()
     try:
@@ -429,9 +406,7 @@ def test_migrate_qemu_cancel_returns_200_and_writes_journal(client: TestClient):
 
 def test_migrate_qemu_cancel_proxmox_failure_writes_warning(client: TestClient):
     endpoint_id = _make_endpoint(client)
-    handles = _patch_route(
-        cancel_side_effect=ProxmoxAPIError(message="task already gone")
-    )
+    handles = _patch_route(cancel_side_effect=ProxmoxAPIError(message="task already gone"))
     for p in handles["patches"]:
         p.start()
     try:
@@ -460,9 +435,7 @@ def test_migrate_qemu_stream_emits_dispatched_and_succeeded(client: TestClient):
     endpoint_id = _make_endpoint(client)
     # Task is already complete on the first poll → stream emits
     # ``migrate_dispatched`` then ``migrate_succeeded`` and closes.
-    handles = _patch_route(
-        task_status_payload=SimpleNamespace(status="stopped", exitstatus="OK")
-    )
+    handles = _patch_route(task_status_payload=SimpleNamespace(status="stopped", exitstatus="OK"))
     for p in handles["patches"]:
         p.start()
     try:

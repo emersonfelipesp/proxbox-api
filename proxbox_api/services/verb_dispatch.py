@@ -30,7 +30,6 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_create_async, rest_first_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
 
-
 Verb = Literal["start", "stop", "snapshot", "migrate"]
 VmType = Literal["qemu", "lxc"]
 JournalKind = Literal["info", "success", "warning", "danger"]
@@ -52,9 +51,7 @@ async def resolve_proxmox_node(
     try:
         resources = await get_cluster_resources(session, resource_type=vm_type)
     except ProxmoxAPIError as error:
-        logger.warning(
-            "Failed to fetch cluster resources for %s/%s: %s", vm_type, vmid, error
-        )
+        logger.warning("Failed to fetch cluster resources for %s/%s: %s", vm_type, vmid, error)
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={
