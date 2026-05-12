@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
-from proxbox_api.proxmox_to_netbox.models import NetBoxClusterSyncState, NetBoxClusterTypeSyncState
+from proxbox_api.netbox_rest import rest_list_async
+from proxbox_api.services.netbox_writers import upsert_cluster, upsert_cluster_type
 
 
 async def sync_cluster_individual(
@@ -25,7 +25,9 @@ async def sync_cluster_individual(
         dry_run: If True, return what would be synced without making changes.
 
     Returns:
-        IndividualSyncResponse dict.
+        IndividualSyncResponse dict whose ``action`` reports the actual
+        drift-detection outcome (``created`` / ``updated`` / ``unchanged``)
+        for the cluster itself.
     """
     from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 
@@ -59,63 +61,34 @@ async def sync_cluster_individual(
         }
 
     try:
-        existing_clusters = await rest_list_async(
+        cluster_type_result = await upsert_cluster_type(
             nb,
-            "/api/virtualization/clusters/",
-            query={"name": cluster_name},
+            mode="cluster",
+            tag_refs=tag_refs,
         )
-        cluster_type = await rest_reconcile_async(
+        cluster_result = await upsert_cluster(
             nb,
-            "/api/virtualization/cluster-types/",
-            lookup={"slug": "cluster"},
-            payload={
-                "name": "Cluster",
-                "slug": "cluster",
-                "description": "Proxmox cluster mode",
-                "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-            },
-            schema=NetBoxClusterTypeSyncState,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "slug": record.get("slug"),
-                "description": record.get("description"),
-                "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
-            },
+            cluster_name=cluster_name,
+            cluster_type_id=getattr(cluster_type_result.record, "id", None),
+            mode="cluster",
+            tag_refs=tag_refs,
         )
 
-        cluster = await rest_reconcile_async(
-            nb,
-            "/api/virtualization/clusters/",
-            lookup={"name": cluster_name},
-            payload={
-                "name": cluster_name,
-                "type": getattr(cluster_type, "id", None),
-                "description": "Proxmox cluster.",
-                "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-            },
-            schema=NetBoxClusterSyncState,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "type": record.get("type"),
-                "description": record.get("description"),
-                "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
-            },
+        netbox_object = (
+            cluster_result.record.serialize()
+            if hasattr(cluster_result.record, "serialize")
+            else None
         )
-
-        netbox_object = cluster.serialize() if hasattr(cluster, "serialize") else None
-        action = "updated" if existing_clusters else "created"
 
         return {
             "object_type": "cluster",
-            "action": action,
+            "action": cluster_result.status,
             "proxmox_resource": proxmox_resource,
             "netbox_object": netbox_object,
             "dry_run": False,
-            "dependencies_synced": [],
+            "dependencies_synced": [
+                {"object_type": "cluster_type", "action": cluster_type_result.status},
+            ],
             "error": None,
         }
 
