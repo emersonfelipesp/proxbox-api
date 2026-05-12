@@ -40,6 +40,7 @@ Comportamento principal:
 - Cria interfaces e IPs da VM quando possivel.
 - Escreve journal entries para auditoria.
 - No modo full-update, a criacao de VM nao faz writes de rede, porque as etapas dedicadas de interface e IP cuidam disso.
+- Nomes duplicados de VM dentro de um mesmo cluster NetBox sao resolvidos de forma deterministica antes da fila de operacoes. Veja [Resolvedor de Colisoes de Nome de VM](./name-collision-resolver.md).
 
 ### Modelo Assincrono com Ordem de Dependencias
 

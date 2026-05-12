@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TypeVar
 
 from proxmox_sdk.sdk.exceptions import (
@@ -112,6 +113,103 @@ async def get_cluster_replication(
 
 
 @_dual_mode
+async def get_ha_status_current(
+    session: ProxmoxSession,
+) -> list[generated_models.GetClusterHaStatusCurrentResponseItem]:
+    """Get current HA service/CRM status from Proxmox.
+
+    Mirrors `GET /cluster/ha/status/current`. The list includes per-service
+    rows (`type=service`) plus quorum/master/lrm rows that describe the
+    cluster as a whole.
+    """
+    try:
+        result = await resolve_async(session.session("cluster/ha/status/current").get())
+        validated = generated_models.GetClusterHaStatusCurrentResponse.model_validate(result)
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox HA status request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for HA status", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox HA status",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def get_ha_resources(
+    session: ProxmoxSession,
+    sid: str | None = None,
+) -> list[dict[str, object]] | generated_models.GetClusterHaResourcesSidResponse:
+    """Get HA resources from Proxmox.
+
+    When ``sid`` is provided, fetches the full single-resource detail at
+    `cluster/ha/resources/{sid}` and returns the validated Pydantic model.
+    Otherwise lists all HA resources at `cluster/ha/resources`. The list
+    endpoint upstream returns minimal rows (just `sid`); merge with
+    `/cluster/ha/status/current` if you need state per resource.
+    """
+    try:
+        if sid is None:
+            result = await resolve_async(session.session("cluster/ha/resources").get())
+            return result if isinstance(result, list) else []
+        result = await resolve_async(session.session(f"cluster/ha/resources/{sid}").get())
+        return generated_models.GetClusterHaResourcesSidResponse.model_validate(result)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox HA resources request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for HA resources", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox HA resources",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def get_ha_groups(
+    session: ProxmoxSession,
+    group: str | None = None,
+) -> list[dict[str, object]] | dict[str, object]:
+    """Get HA groups from Proxmox.
+
+    With no ``group``, returns the list of HA group rows. With a ``group``
+    name, returns the full group detail dictionary (the upstream schema is
+    a permissive ``dict[str, object]``).
+    """
+    try:
+        if group is None:
+            result = await resolve_async(session.session("cluster/ha/groups").get())
+            return result if isinstance(result, list) else []
+        result = await resolve_async(session.session(f"cluster/ha/groups/{group}").get())
+        return result if isinstance(result, dict) else {}
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox HA groups request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for HA groups", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox HA groups",
+            original_error=error,
+        )
+
+
+@_dual_mode
 async def get_vm_config(
     session: ProxmoxSession,
     node: str,
@@ -184,13 +282,57 @@ def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]
     return normalized
 
 
+@dataclass(frozen=True)
+class GuestAgentFetchResult:
+    """Outcome of a guest-agent network-get-interfaces call.
+
+    ``interfaces`` is empty when the call failed or the agent returned no data.
+    ``diagnostic`` carries a short, operator-facing reason for the empty list
+    (None on success or when no diagnostic is meaningful).
+    """
+
+    interfaces: list[dict[str, object]]
+    diagnostic: str | None = None
+
+
+_GUEST_AGENT_PERMISSION_HINT = (
+    "PVE rejected agent network-get-interfaces (permission denied). "
+    "On PVE >= 9 the API-token role needs VM.GuestAgent.Audit in addition "
+    "to VM.Monitor; on PVE 8 VM.Monitor alone is sufficient."
+)
+
+
+def _classify_guest_agent_error(error: Exception) -> tuple[str, str]:
+    """Map a guest-agent fetch error to (log_level, operator_hint).
+
+    log_level is one of "info", "warning", "error".
+    """
+    text = str(error).lower()
+    status = getattr(error, "status", None) or getattr(error, "status_code", None)
+    if status == 403 or any(
+        token in text for token in ("forbidden", "permission denied", "not authorized")
+    ):
+        return "error", _GUEST_AGENT_PERMISSION_HINT
+    if "guest agent is not running" in text or "guest-agent is not running" in text:
+        return "info", "QEMU guest agent is not running in the VM."
+    if "agent" in text and "not enabled" in text:
+        return "info", "QEMU guest agent is not enabled in VM config."
+    return "warning", f"Guest-agent fetch failed: {error}"
+
+
 @_dual_mode
-async def get_qemu_guest_agent_network_interfaces(
+async def fetch_qemu_guest_agent_network_interfaces(
     session: ProxmoxSession,
     node: str,
     vmid: int,
-) -> list[dict[str, object]]:
-    """Return normalized guest-agent interfaces or [] when unavailable."""
+) -> GuestAgentFetchResult:
+    """Fetch and normalize guest-agent interfaces, with a structured diagnostic.
+
+    Returns ``GuestAgentFetchResult(interfaces=[...], diagnostic=None)`` on
+    success and ``GuestAgentFetchResult(interfaces=[], diagnostic="...")`` on
+    failure. The diagnostic is suitable for surfacing to the SSE/WebSocket
+    progress stream so operators see *why* IPs were not synced for a VM.
+    """
     try:
         try:
             payload = await resolve_async(
@@ -206,15 +348,41 @@ async def get_qemu_guest_agent_network_interfaces(
             payload = await resolve_async(
                 session.session.nodes(node).qemu(vmid).agent.get(command="network-get-interfaces")
             )
-        return _normalize_guest_agent_interfaces(payload)
+        return GuestAgentFetchResult(
+            interfaces=_normalize_guest_agent_interfaces(payload),
+            diagnostic=None,
+        )
     except Exception as error:
-        logger.warning(
-            "Unable to fetch guest-agent interfaces for node=%s vmid=%s: %s",
+        level, hint = _classify_guest_agent_error(error)
+        log_fn = {
+            "info": logger.info,
+            "warning": logger.warning,
+            "error": logger.error,
+        }.get(level, logger.warning)
+        log_fn(
+            "Unable to fetch guest-agent interfaces for node=%s vmid=%s: %s (%s)",
             node,
             vmid,
             error,
+            hint,
         )
-        return []
+        return GuestAgentFetchResult(interfaces=[], diagnostic=hint)
+
+
+@_dual_mode
+async def get_qemu_guest_agent_network_interfaces(
+    session: ProxmoxSession,
+    node: str,
+    vmid: int,
+) -> list[dict[str, object]]:
+    """Return normalized guest-agent interfaces or [] when unavailable.
+
+    Thin wrapper over :func:`fetch_qemu_guest_agent_network_interfaces` for
+    callers that only need the interface list. New callers should prefer the
+    structured variant so they can surface a diagnostic to the user.
+    """
+    result = await fetch_qemu_guest_agent_network_interfaces(session, node, vmid)
+    return result.interfaces
 
 
 def sanitize_dns_hostname(value: object) -> str | None:
@@ -478,6 +646,102 @@ async def get_node_task_status(
     except Exception as error:
         raise ProxmoxAPIError(
             message="Error fetching Proxmox task status",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def get_vm_status(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> (
+    generated_models.GetNodesNodeQemuVmidStatusCurrentResponse
+    | generated_models.GetNodesNodeLxcVmidStatusCurrentResponse
+):
+    """Return current Proxmox VM run state (used for state-based no-op checks).
+
+    Wraps ``GET /nodes/{node}/{vm_type}/{vmid}/status/current``. Per
+    ``docs/design/operational-verbs.md`` §4.2, the verb routes call this
+    before dispatch so a ``start`` against an already-running VM (or a
+    ``stop`` against a stopped one) returns a no-op without consuming an
+    Idempotency-Key window.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).status.current.get()
+            )
+            return generated_models.GetNodesNodeQemuVmidStatusCurrentResponse.model_validate(
+                payload
+            )
+        if vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).status.current.get()
+            )
+            return generated_models.GetNodesNodeLxcVmidStatusCurrentResponse.model_validate(
+                payload
+            )
+        raise ValueError(f"Unsupported VM type: {vm_type}")
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox VM status request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM status", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox VM status",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def start_vm(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/{vm_type}/{vmid}/status/start``.
+
+    Returns the Proxmox task ``UPID`` string. ``ProxmoxAPIError`` is
+    raised on timeout / connection failure per the existing convention.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).status.start.post()
+            )
+        elif vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).status.start.post()
+            )
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, str):
+                return data
+        return str(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM start request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM start", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM start",
             original_error=error,
         )
 
