@@ -1,6 +1,8 @@
 """Individual cluster sync route."""
 
 import uuid
+from contextlib import nullcontext
+from typing import Annotated
 
 from fastapi import APIRouter, Query
 
@@ -25,6 +27,18 @@ async def sync_cluster(
     dry_run: bool = Query(
         default=False, title="Dry Run", description="If true, don't make changes"
     ),
+    netbox_branch_schema_id: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional netbox-branching schema_id (X-NetBox-Branch). When set, all "
+                "NetBox writes performed by this single-cluster sync run carry the "
+                "header so changes land on the branch rather than main. Bridges "
+                "issue #370 (header pass-through) through SyncContext (#375) per "
+                "issue #406."
+            ),
+        ),
+    ] = None,
 ):
     """Sync a single cluster from Proxmox to NetBox."""
     px = resolve_proxmox_session(pxs, cluster_name)
@@ -39,5 +53,10 @@ async def sync_cluster(
         tag=tag,
         settings=settings,
         operation_id=operation_id,
+        netbox_branch=netbox_branch_schema_id or "",
     )
-    return await sync_cluster_individual(ctx, cluster_name, dry_run=dry_run)
+    branch_scope = (
+        nb.activate_branch(netbox_branch_schema_id) if netbox_branch_schema_id else nullcontext()
+    )
+    with branch_scope:
+        return await sync_cluster_individual(ctx, cluster_name, dry_run=dry_run)

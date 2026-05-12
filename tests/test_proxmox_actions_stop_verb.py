@@ -27,18 +27,12 @@ from proxbox_api.services.idempotency import get_idempotency_cache
 @pytest.fixture
 def client(tmp_path: Path):
     sqlite_file = tmp_path / "test.db"
-    engine = create_engine(
-        f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine(f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
 
     async_url = str(engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    async_engine = create_async_engine(
-        async_url, connect_args={"check_same_thread": False}
-    )
-    session_factory = async_sessionmaker(
-        async_engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
     def _override_get_session():
         with Session(engine) as session:
@@ -103,16 +97,10 @@ def _patch_route(
     journal_mock = AsyncMock(return_value=journal_entry)
 
     patches = [
-        patch(
-            "proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session
-        ),
-        patch(
-            "proxbox_api.routes.proxmox_actions.get_netbox_async_session", nb_session
-        ),
+        patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
+        patch("proxbox_api.routes.proxmox_actions.get_netbox_async_session", nb_session),
         patch("proxbox_api.routes.proxmox_actions.resolve_proxmox_node", node_mock),
-        patch(
-            "proxbox_api.routes.proxmox_actions.resolve_netbox_vm_id", netbox_id_mock
-        ),
+        patch("proxbox_api.routes.proxmox_actions.resolve_netbox_vm_id", netbox_id_mock),
         patch("proxbox_api.routes.proxmox_actions.get_vm_status", status_mock),
         patch("proxbox_api.routes.proxmox_actions.stop_vm", stop_mock),
         patch(
@@ -199,9 +187,7 @@ def test_stop_qemu_already_stopped_skips_dispatch_but_writes_journal(
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post(
-            "/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id}
-        )
+        resp = client.post("/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id})
     finally:
         for p in handles["patches"]:
             p.stop()
@@ -218,15 +204,11 @@ def test_stop_qemu_proxmox_dispatch_failure_writes_warning_journal(
     client: TestClient,
 ):
     endpoint_id = _make_endpoint(client)
-    handles = _patch_route(
-        stop_side_effect=ProxmoxAPIError(message="cannot acquire lock")
-    )
+    handles = _patch_route(stop_side_effect=ProxmoxAPIError(message="cannot acquire lock"))
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post(
-            "/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id}
-        )
+        resp = client.post("/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id})
     finally:
         for p in handles["patches"]:
             p.stop()
@@ -246,9 +228,7 @@ def test_stop_lxc_routes_through_same_dispatch(client: TestClient):
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post(
-            "/proxmox/lxc/101/stop", params={"endpoint_id": endpoint_id}
-        )
+        resp = client.post("/proxmox/lxc/101/stop", params={"endpoint_id": endpoint_id})
     finally:
         for p in handles["patches"]:
             p.stop()
@@ -267,9 +247,7 @@ def test_stop_qemu_no_matching_netbox_vm_still_dispatches(client: TestClient):
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post(
-            "/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id}
-        )
+        resp = client.post("/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id})
     finally:
         for p in handles["patches"]:
             p.stop()
