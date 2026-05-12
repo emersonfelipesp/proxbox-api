@@ -1188,8 +1188,10 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
         _fake_snapshots,
     )
 
+    fake_request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     response = asyncio.run(
         full_update_sync_stream(
+            fake_request,
             netbox_session=object(),
             pxs=[],
             cluster_status=[],

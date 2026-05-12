@@ -12,6 +12,7 @@ from proxbox_api.schemas.stream_messages import (
     ItemOperation,
     SubstepStatus,
     build_discovery_message,
+    build_duplicate_name_resolved_message,
     build_error_detail_message,
     build_item_progress_message,
     build_phase_summary_message,
@@ -286,6 +287,35 @@ class WebSocketSSEBridge:
             traceback=traceback,
         )
         await self._queue.put(("error_detail", msg))
+
+    async def emit_duplicate_name_resolved(
+        self,
+        cluster: str,
+        original_name: str,
+        resolved_name: str,
+        vmid: int,
+        suffix_index: int,
+        operator_renamed: bool = False,
+    ) -> None:
+        """Emit a `duplicate_name_resolved` warning frame.
+
+        Args:
+            cluster: Proxmox cluster name (human label)
+            original_name: Candidate VM name from Proxmox
+            resolved_name: Final name written to NetBox
+            vmid: Proxmox VMID
+            suffix_index: 1 = no algorithmic suffix (operator-rename); 2+ = suffix applied
+            operator_renamed: True when the NetBox record was already manually renamed
+        """
+        msg = build_duplicate_name_resolved_message(
+            cluster=cluster,
+            original_name=original_name,
+            resolved_name=resolved_name,
+            vmid=vmid,
+            suffix_index=suffix_index,
+            operator_renamed=operator_renamed,
+        )
+        await self._queue.put(("duplicate_name_resolved", msg))
 
     # Legacy helper methods (preserved for compatibility)
 

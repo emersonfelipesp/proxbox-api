@@ -40,6 +40,7 @@ Core behavior:
 - Creates VM interfaces and IP addresses when possible.
 - Writes journal entries for auditability.
 - In full-update mode, VM creation skips network writes so the dedicated VM interface and IP stages own that work.
+- Duplicate VM names within a single NetBox cluster are resolved deterministically before the operation queue is built. See [VM Name Collision Resolver](./name-collision-resolver.md).
 
 ### Dependency-Ordered Async Model
 
