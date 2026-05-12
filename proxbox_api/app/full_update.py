@@ -6,7 +6,7 @@ import asyncio
 import time
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.dependencies import (
@@ -351,6 +351,7 @@ async def full_update_sync(  # noqa: C901
 
 @full_update_router.get("/full-update/stream", response_model=None)
 async def full_update_sync_stream(  # noqa: C901
+    request: Request,
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
@@ -360,6 +361,21 @@ async def full_update_sync_stream(  # noqa: C901
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
 ) -> StreamingResponse:
+    bootstrap_status_obj = getattr(request.app.state, "bootstrap_status", None)
+    bootstrap_payload: dict[str, object]
+    if bootstrap_status_obj is not None and hasattr(bootstrap_status_obj, "as_dict"):
+        bootstrap_payload = bootstrap_status_obj.as_dict()
+    else:
+        bootstrap_payload = {
+            "ok": True,
+            "skipped": True,
+            "reason": "bootstrap_not_run",
+            "warnings": [],
+            "created": [],
+            "patched": [],
+            "unchanged": [],
+        }
+
     async def event_stream():  # noqa: C901
         sync_nodes: list = []
         sync_storage: list = []
@@ -400,6 +416,7 @@ async def full_update_sync_stream(  # noqa: C901
         logger.info("Starting full_update sync (stream)", extra={"operation_id": operation_id})
 
         try:
+            yield sse_event("bootstrap_done", bootstrap_payload)
             yield sse_event(
                 "step",
                 {

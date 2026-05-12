@@ -242,7 +242,62 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         ", ".join(bundled) if bundled else "(none)",
     )
 
+    await _run_bootstrap_pass(app)
+
     yield
+
+
+async def _run_bootstrap_pass(app: FastAPI) -> None:
+    """Resolve the ``ensure_netbox_objects`` flag and run NetBox bootstrap.
+
+    Stores a :class:`BootstrapStatus` on ``app.state.bootstrap_status`` so the
+    full-update SSE stream can emit the ``bootstrap_done`` frame on every
+    subsequent run. NetBox-connectivity failures are logged but do not abort
+    startup — the existing inline ``_ensure_*`` helpers in the sync path stay
+    as a defensive fallback.
+    """
+    from proxbox_api.app.netbox_session import get_raw_netbox_session
+    from proxbox_api.runtime_settings import get_bool
+    from proxbox_api.services.netbox_bootstrap import BootstrapStatus, run_netbox_bootstrap
+
+    enabled = get_bool(
+        settings_key="ensure_netbox_objects",
+        env="PROXBOX_ENSURE_NETBOX_OBJECTS",
+        default=True,
+    )
+
+    if not enabled:
+        app.state.bootstrap_status = BootstrapStatus(
+            ok=True,
+            skipped=True,
+            reason="ensure_netbox_objects=false",
+        )
+        logger.info("NetBox bootstrap skipped via ensure_netbox_objects flag")
+        return
+
+    try:
+        nb = get_raw_netbox_session()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("NetBox bootstrap skipped: no NetBox session available (%s)", exc)
+        app.state.bootstrap_status = BootstrapStatus(
+            ok=False,
+            skipped=True,
+            reason=f"no_netbox_session: {exc}",
+        )
+        return
+
+    try:
+        status = await run_netbox_bootstrap(nb, enabled=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("NetBox bootstrap pass failed: %s", exc)
+        app.state.bootstrap_status = BootstrapStatus(
+            ok=False,
+            skipped=False,
+            reason=f"bootstrap_error: {exc}",
+        )
+        return
+
+    app.state.bootstrap_status = status
 
 
 def create_app() -> FastAPI:
