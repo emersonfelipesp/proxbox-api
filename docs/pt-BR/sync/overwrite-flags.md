@@ -25,18 +25,18 @@ configured on the `ProxboxPluginSettings` row.
 
 The flags live in
 [`proxbox_api/schemas/sync.py`](https://github.com/emersonfelipesp/proxbox-api/blob/main/proxbox_api/schemas/sync.py)
-as `SyncOverwriteFlags`, a `ProxboxBaseModel`. There are 21 boolean fields
+as `SyncOverwriteFlags`, a `ProxboxBaseModel`. There are 23 boolean fields
 grouped by NetBox resource:
 
 | Group | Flags |
 |---|---|
 | Device | `overwrite_device_role`, `overwrite_device_type`, `overwrite_device_tags`, `overwrite_device_status`, `overwrite_device_description`, `overwrite_device_custom_fields` |
-| Virtual Machine | `overwrite_vm_role`, `overwrite_vm_tags`, `overwrite_vm_description`, `overwrite_vm_custom_fields` |
+| Virtual Machine | `overwrite_vm_role`, `overwrite_vm_type`, `overwrite_vm_tags`, `overwrite_vm_description`, `overwrite_vm_custom_fields` |
 | Cluster | `overwrite_cluster_tags`, `overwrite_cluster_description`, `overwrite_cluster_custom_fields` |
 | Node Interface | `overwrite_node_interface_tags`, `overwrite_node_interface_custom_fields` |
 | Storage | `overwrite_storage_tags` |
 | VM Interface | `overwrite_vm_interface_tags`, `overwrite_vm_interface_custom_fields` |
-| IP Address | `overwrite_ip_status`, `overwrite_ip_tags`, `overwrite_ip_custom_fields` |
+| IP Address | `overwrite_ip_status`, `overwrite_ip_tags`, `overwrite_ip_custom_fields`, `overwrite_ip_address_dns_name` |
 
 The flag list, order, and default value (`True`) must stay in lock-step with
 `netbox_proxbox.constants.OVERWRITE_FIELDS` on the plugin side.
@@ -46,31 +46,36 @@ The flag list, order, and default value (`True`) must stay in lock-step with
 Each sync route accepts the schema as a flattened query group:
 
 ```python
-from typing import Annotated
-from fastapi import Query
+from proxbox_api.dependencies import ResolvedSyncOverwriteFlagsDep
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 
 @router.get("/devices/create/stream")
 async def create_devices_stream(
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     ...
 ```
 
 FastAPI flattens the model: the URL `?overwrite_device_tags=false` is
 equivalent to constructing `SyncOverwriteFlags(overwrite_device_tags=False)`.
+Routes also pass the bound model through the shared
+`resolved_sync_overwrite_flags` dependency, which re-reads the raw query string
+and makes any canonical flat `overwrite_*` key authoritative. This guards the
+plugin/backend contract against FastAPI/Pydantic query-model behavior changes.
 
-For VM sync routes, `overwrite_vm_role`, `overwrite_vm_tags`,
-`overwrite_vm_description`, and `overwrite_vm_custom_fields` are also exposed
-as flat top-level query parameters for backward compatibility. When both are
-present, the flat parameter wins; when only the flat parameter is omitted
+For VM sync routes, `overwrite_vm_role`, `overwrite_vm_type`,
+`overwrite_vm_tags`, `overwrite_vm_description`, and
+`overwrite_vm_custom_fields` are also exposed as explicit flat top-level query
+parameters for backward compatibility. When both are present, the flat
+parameter wins; when only the flat parameter is omitted
 (`None`), the corresponding field on `overwrite_flags` is used. Resolution is
 done at the entry of each route via the
 `_resolve_vm_overwrites(...)` helper in
 `proxbox_api/routes/virtualization/virtual_machines/sync_vm.py`.
 
-The DCIM device sync route does **not** expose flat `overwrite_device_*` query
-parameters — all device flags are driven through the `overwrite_flags` group.
+The DCIM device sync route accepts the same canonical flat query shape. For
+example, `/dcim/devices/create/stream?overwrite_device_role=false` must result
+in `role` being omitted from existing-device PATCH payloads.
 
 ## How it reaches the reconciler
 

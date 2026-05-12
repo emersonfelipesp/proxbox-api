@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.dependencies import (
+    NetBoxSessionDep,
+    ProxboxTagDep,
+    ResolvedSyncOverwriteFlagsDep,
+)
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
@@ -51,7 +55,7 @@ async def create_vm_interfaces_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Stream VM interface sync progress as SSE events."""
 
@@ -120,7 +124,7 @@ async def create_vm_ip_addresses_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
-    overwrite_flags: Annotated[SyncOverwriteFlags, Query()] = SyncOverwriteFlags(),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Stream VM IP address sync progress as SSE events."""
 

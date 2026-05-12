@@ -341,6 +341,8 @@ def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
         "name",
         "cluster",
         "device",
+        "site",
+        "tenant",
         "vcpus",
         "memory",
         "disk",
@@ -372,6 +374,19 @@ def test_vm_patchable_legacy_none_flags_keeps_all_keys() -> None:
         "description",
         "custom_fields",
     }.issubset(fields)
+
+
+def test_vm_patchable_drops_vm_type_when_netbox_lacks_native_type_field() -> None:
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    fields = _compute_vm_patchable_fields(
+        SyncOverwriteFlags(),
+        supports_virtual_machine_type_field=False,
+    )
+
+    assert "virtual_machine_type" not in fields
+    assert "role" in fields
+    assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
 
 
 @pytest.mark.parametrize(

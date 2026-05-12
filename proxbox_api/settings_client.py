@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -115,15 +117,19 @@ def _request_settings_json(
     base_url: str,
     path: str,
     auth: str,
+    ssl_verify: bool | None,
 ) -> tuple[object | None, int | None]:
     url = f"{base_url}{path}"
     req = urllib.request.Request(
         url,
         headers={"Authorization": auth, "Accept": "application/json"},
     )
+    urlopen_kwargs: dict[str, object] = {"timeout": 10}
+    if ssl_verify is False and urllib.parse.urlsplit(base_url).scheme.lower() == "https":
+        urlopen_kwargs["context"] = ssl._create_unverified_context()
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, **urlopen_kwargs) as resp:
             if resp.status != 200:
                 return None, resp.status
             return json.loads(resp.read().decode()), resp.status
@@ -160,7 +166,12 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "/api/plugins/proxbox/settings/runtime/",
             "/api/plugins/proxbox/settings/",
         ):
-            data, status = _request_settings_json(base_url=base_url, path=path, auth=auth)
+            data, status = _request_settings_json(
+                base_url=base_url,
+                path=path,
+                auth=auth,
+                ssl_verify=getattr(config, "ssl_verify", None),
+            )
             if status is not None and status != 200:
                 if path.endswith("/runtime/") and status == 404:
                     logger.debug("ProxboxPluginSettings runtime endpoint is not available")

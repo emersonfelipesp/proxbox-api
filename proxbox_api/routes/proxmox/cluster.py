@@ -43,11 +43,12 @@ def _cluster_item_defaults(
     cluster_name: str,
     node_count: int,
     mode: str,
+    proxmox_object: ProxmoxSession | None = None,
 ) -> dict[str, object]:
     """Normalize sparse Proxmox cluster payloads to the route schema."""
     name = str(item_data.get("name") or cluster_name)
     quorate = item_data.get("quorate")
-    return {
+    payload: dict[str, object] = {
         "id": item_data.get("id") or f"cluster/{name}",
         "name": name,
         "type": item_data.get("type") or "cluster",
@@ -56,6 +57,17 @@ def _cluster_item_defaults(
         "version": int(item_data.get("version") or 0),
         "mode": mode,
     }
+    if proxmox_object is not None:
+        for field in (
+            "site_id",
+            "site_slug",
+            "site_name",
+            "tenant_id",
+            "tenant_slug",
+            "tenant_name",
+        ):
+            payload[field] = getattr(proxmox_object, field, None)
+    return payload
 
 
 def _node_item_defaults(item_data: dict[str, object]) -> dict[str, object]:
@@ -143,6 +155,7 @@ async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
             cluster_name=proxmox_object.name,
             node_count=len(node_list),
             mode=proxmox_object.mode,
+            proxmox_object=proxmox_object,
         )
         cluster = ClusterStatusSchema(**cluster_payload)
         cluster.node_list = node_list

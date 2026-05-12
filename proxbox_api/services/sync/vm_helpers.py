@@ -11,10 +11,26 @@ from proxbox_api.schemas.sync import SyncOverwriteFlags
 PrimaryIPPreference = Literal["ipv4", "ipv6"]
 
 
-def _compute_vm_patchable_fields(overwrite_flags: SyncOverwriteFlags | None) -> set[str]:
+def _compute_vm_patchable_fields(
+    overwrite_flags: SyncOverwriteFlags | None,
+    *,
+    supports_virtual_machine_type_field: bool = True,
+) -> set[str]:
     """Build the patchable_fields allowlist for virtual machine reconciliation."""
-    fields: set[str] = {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}
-    if overwrite_flags is None or overwrite_flags.overwrite_vm_type:
+    fields: set[str] = {
+        "name",
+        "cluster",
+        "device",
+        "site",
+        "tenant",
+        "vcpus",
+        "memory",
+        "disk",
+        "status",
+    }
+    if supports_virtual_machine_type_field and (
+        overwrite_flags is None or overwrite_flags.overwrite_vm_type
+    ):
         fields.add("virtual_machine_type")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_role:
         fields.add("role")
@@ -25,6 +41,32 @@ def _compute_vm_patchable_fields(overwrite_flags: SyncOverwriteFlags | None) -> 
     if overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields:
         fields.add("custom_fields")
     return fields
+
+
+def normalize_current_virtual_machine_payload(
+    record: dict[str, object],
+    *,
+    supports_virtual_machine_type_field: bool = True,
+) -> dict[str, object]:
+    """Normalize a NetBox VM record for diffing across NetBox 4.5 and 4.6."""
+    payload = {
+        "name": record.get("name"),
+        "status": record.get("status"),
+        "cluster": record.get("cluster"),
+        "device": record.get("device"),
+        "site": record.get("site"),
+        "tenant": record.get("tenant"),
+        "role": record.get("role"),
+        "vcpus": record.get("vcpus"),
+        "memory": record.get("memory"),
+        "disk": record.get("disk"),
+        "tags": record.get("tags"),
+        "custom_fields": record.get("custom_fields"),
+        "description": record.get("description"),
+    }
+    if supports_virtual_machine_type_field:
+        payload["virtual_machine_type"] = record.get("virtual_machine_type")
+    return payload
 
 
 def to_mapping(value: object) -> dict[str, object]:

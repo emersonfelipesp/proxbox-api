@@ -21,7 +21,9 @@ from proxbox_api.services.sync.device_ensure import (
     _ensure_device_type,
     _ensure_manufacturer,
     _ensure_site,
+    _resolve_tenant,
     ensure_proxmox_devices_bulk,
+    placement_from_source,
 )
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge
@@ -35,6 +37,8 @@ __all__ = [
     "_ensure_device_type",
     "_ensure_manufacturer",
     "_ensure_site",
+    "_resolve_tenant",
+    "placement_from_source",
     "create_proxmox_devices",
     "ProxmoxCreateDevicesDep",
 ]

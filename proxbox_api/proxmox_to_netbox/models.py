@@ -95,6 +95,16 @@ def _choice_value(value: object) -> object:
     return value
 
 
+def _content_type_value(value: object) -> object:
+    if isinstance(value, dict):
+        app_label = value.get("app_label") or value.get("app")
+        model = value.get("model")
+        if app_label and model:
+            return f"{app_label}.{model}"
+        return value.get("value") or value.get("label")
+    return value
+
+
 def _task_action_label(value: object) -> str:
     text = str(value or "").strip()
     if not text:
@@ -216,14 +226,25 @@ class NetBoxClusterSyncState(BaseModel):
 
     name: str
     type: int | None = None
+    tenant: int | None = None
+    scope_type: str | None = None
+    scope_id: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("type", mode="before")
+    @field_validator("type", "tenant", "scope_id", mode="before")
     @classmethod
-    def normalize_type(cls, value: object) -> object:
+    def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("scope_type", mode="before")
+    @classmethod
+    def normalize_scope_type(cls, value: object) -> object:
+        normalized = _content_type_value(value)
+        if normalized in (None, ""):
+            return None
+        return str(normalized).strip() or None
 
     @field_validator("tags", mode="before")
     @classmethod
@@ -344,12 +365,20 @@ class NetBoxInterfaceSyncState(BaseModel):
 
 
 class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
+    """Desired state for `/api/virtualization/interfaces/` rows.
+
+    Note: `mac_address` is intentionally **not** declared here. NetBox 4.5/4.6
+    treat it as a read-only computed echo of `primary_mac_address`; writing it
+    is silently dropped, so including it in the desired payload would produce a
+    perpetual no-op diff. MAC reconciliation lives in
+    `proxbox_api.services.sync.mac_address` and runs as a per-interface post-step.
+    """
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     virtual_machine: int
     name: str
     enabled: bool | None = None
-    mac_address: str | None = None
     type: str | None = None
     description: str | None = None
     bridge: int | None = None
@@ -383,6 +412,43 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     @classmethod
     def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
+
+
+class NetBoxMACAddressSyncState(BaseModel):
+    """Desired state of a `dcim.MACAddress` row in NetBox.
+
+    NetBox 4.2+ stores MACs as first-class objects under `/api/dcim/mac-addresses/`
+    with a GFK to the assigned interface (DCIM or VMInterface). The legacy
+    inline `mac_address` string on `VMInterface` is `read_only=True` at NetBox
+    4.5/4.6 — writes to it are silently dropped, so the only way to record a
+    MAC is the model below plus a `primary_mac_address` FK PATCH on the
+    interface.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    mac_address: str
+    assigned_object_type: str
+    assigned_object_id: int
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("mac_address", mode="before")
+    @classmethod
+    def normalize_mac(cls, value: object) -> str:
+        text = str(value or "").strip().replace("-", ":").upper()
+        # NetBox canonical form is colon-separated uppercase hex.
+        return text
+
+    @field_validator("assigned_object_id", mode="before")
+    @classmethod
+    def normalize_assigned_object_id(cls, value: object) -> object:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
+        return NetBoxNamedSlugTaggedState.normalize_tags(value)
 
 
 class NetBoxIpAddressSyncState(BaseModel):
@@ -429,8 +495,15 @@ class NetBoxVlanSyncState(BaseModel):
     vid: int
     name: str
     status: str = "active"
+    site: int | None = None
+    tenant: int | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("site", "tenant", mode="before")
+    @classmethod
+    def normalize_relations(cls, value: object) -> object:
+        return _relation_id(value)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -882,6 +955,8 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     status: str
     cluster: int | None = None
     device: int | None = None
+    site: int | None = None
+    tenant: int | None = None
     virtual_machine_type: int | None = None
     role: int | None = None
     vcpus: int = 0
@@ -906,7 +981,15 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     def normalize_status(cls, value: object) -> str:
         return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
 
-    @field_validator("cluster", "device", "virtual_machine_type", "role", mode="before")
+    @field_validator(
+        "cluster",
+        "device",
+        "site",
+        "tenant",
+        "virtual_machine_type",
+        "role",
+        mode="before",
+    )
     @classmethod
     def normalize_relations(cls, value: object) -> object:
         return _relation_id(value)
@@ -917,6 +1000,10 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
             raise ValueError("cluster must be a positive NetBox object id")
         if self.device is not None and self.device <= 0:
             raise ValueError("device must be positive when provided")
+        if self.site is not None and self.site <= 0:
+            raise ValueError("site must be positive when provided")
+        if self.tenant is not None and self.tenant <= 0:
+            raise ValueError("tenant must be positive when provided")
         if self.virtual_machine_type is not None and self.virtual_machine_type <= 0:
             raise ValueError("virtual_machine_type must be positive when provided")
         if self.role is not None and self.role <= 0:
@@ -999,6 +1086,8 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     config: ProxmoxVmConfigInput = Field(default_factory=ProxmoxVmConfigInput)
     cluster_id: int
     device_id: int | None = None
+    site_id: int | None = None
+    tenant_id: int | None = None
     role_id: int | None = None
     virtual_machine_type_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
@@ -1077,6 +1166,8 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             status=self.resource.status,
             cluster=self.cluster_id,
             device=self.device_id,
+            site=self.site_id,
+            tenant=self.tenant_id,
             virtual_machine_type=self.virtual_machine_type_id,
             role=self.role_id,
             vcpus=int(self.resource.maxcpu or 0),

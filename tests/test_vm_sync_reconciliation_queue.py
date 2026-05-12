@@ -112,6 +112,37 @@ def test_build_vm_operation_queue_omits_vm_type_when_overwrite_disabled():
     assert queue[0].patch_payload == {"memory": 8192}
 
 
+def test_build_vm_operation_queue_omits_vm_type_when_netbox_lacks_native_field():
+    prepared = [_prepared_vm(cluster_name="cluster-a", vmid=105, memory=8192)]
+    prepared[0].desired_payload["virtual_machine_type"] = 99
+
+    snapshot = [
+        {
+            "id": 2005,
+            "name": "vm-105",
+            "status": "active",
+            "cluster": {"id": 1, "name": "cluster-a"},
+            "device": {"id": 10},
+            "role": {"id": 20},
+            "vcpus": 2,
+            "memory": 4096,
+            "disk": 30,
+            "tags": [{"id": 99}],
+            "custom_fields": {"proxmox_vm_id": 105},
+            "description": "Synced from Proxmox node pve01",
+        }
+    ]
+
+    queue = sync_vm._build_vm_operation_queue(
+        prepared,
+        snapshot,
+        supports_virtual_machine_type_field=False,
+    )
+
+    assert [op.method for op in queue] == ["UPDATE"]
+    assert queue[0].patch_payload == {"memory": 8192}
+
+
 @pytest.mark.asyncio
 async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch):
     calls: list[str] = []

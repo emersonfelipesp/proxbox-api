@@ -9,6 +9,7 @@ from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_version import detect_netbox_version, supports_virtual_machine_type
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
@@ -19,7 +20,10 @@ from proxbox_api.services.proxmox_helpers import (
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
-from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+from proxbox_api.services.sync.vm_helpers import (
+    _compute_vm_patchable_fields,
+    normalize_current_virtual_machine_payload,
+)
 
 
 def _mb_from_bytes(value: object) -> int:
@@ -60,6 +64,8 @@ def _build_netbox_vm_payload(
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
     virtual_machine_type_id: int | None = None,
+    site_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -104,6 +110,8 @@ def _build_netbox_vm_payload(
         "status": status,
         "cluster": cluster_id,
         "device": device_id,
+        "site": site_id,
+        "tenant": tenant_id,
         "role": role_id,
         "vcpus": maxcpu,
         "memory": memory_mb,
@@ -231,6 +239,9 @@ async def sync_vm_individual(
         device_id = int(getattr(device, "id", 0) or 0) if device else None
         role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
+        site_id = int(getattr(_site, "id", 0) or 0) if _site else None
+        tenant = await service._get_or_create_tenant()
+        tenant_id = int(getattr(tenant, "id", 0) or 0) if tenant else None
 
         px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
         px_port = getattr(px, "http_port", 8006)
@@ -270,7 +281,11 @@ async def sync_vm_individual(
             cluster_name=cluster_name,
             proxmox_url=px_url,
             virtual_machine_type_id=vm_type_id,
+            site_id=site_id,
+            tenant_id=tenant_id,
         )
+        netbox_version = await detect_netbox_version(nb)
+        supports_vm_type = supports_virtual_machine_type(netbox_version)
 
         virtual_machine = await rest_reconcile_async(
             nb,
@@ -281,21 +296,16 @@ async def sync_vm_individual(
             },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
-            patchable_fields=frozenset(_compute_vm_patchable_fields(overwrite_flags)),
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "status": record.get("status"),
-                "cluster": record.get("cluster"),
-                "device": record.get("device"),
-                "virtual_machine_type": record.get("virtual_machine_type"),
-                "role": record.get("role"),
-                "vcpus": record.get("vcpus"),
-                "memory": record.get("memory"),
-                "disk": record.get("disk"),
-                "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
-                "description": record.get("description"),
-            },
+            patchable_fields=frozenset(
+                _compute_vm_patchable_fields(
+                    overwrite_flags,
+                    supports_virtual_machine_type_field=supports_vm_type,
+                )
+            ),
+            current_normalizer=lambda record: normalize_current_virtual_machine_payload(
+                record,
+                supports_virtual_machine_type_field=supports_vm_type,
+            ),
         )
 
         netbox_object = (

@@ -256,7 +256,6 @@ async def sync_interface_individual(  # noqa: C901
         interface_payload: dict[str, object] = {
             "name": resolved_name,
             "enabled": True,
-            "mac_address": mac_address,
             "bridge": None,
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id else None,
@@ -285,7 +284,6 @@ async def sync_interface_individual(  # noqa: C901
                 "name": record.get("name"),
                 "virtual_machine": record.get("virtual_machine"),
                 "enabled": record.get("enabled"),
-                "mac_address": record.get("mac_address"),
                 "type": record.get("type"),
                 "description": record.get("description"),
                 "bridge": record.get("bridge"),
@@ -296,6 +294,31 @@ async def sync_interface_individual(  # noqa: C901
             },
             nullable_fields={"bridge"},
         )
+
+        interface_id = (
+            interface_record.get("id")
+            if isinstance(interface_record, dict)
+            else getattr(interface_record, "id", None)
+        )
+        if interface_id is not None and mac_address:
+            from proxbox_api.services.sync.mac_address import (
+                reconcile_mac_for_vm_interface,
+            )
+
+            try:
+                await reconcile_mac_for_vm_interface(
+                    nb,
+                    vminterface_id=int(interface_id),
+                    mac=mac_address,
+                    tag_refs=tag_refs,
+                )
+            except Exception as mac_exc:
+                logger.warning(
+                    "Failed to reconcile MAC %s for VM interface %s: %s",
+                    mac_address,
+                    interface_id,
+                    mac_exc,
+                )
 
         netbox_object = (
             interface_record.serialize() if hasattr(interface_record, "serialize") else None
