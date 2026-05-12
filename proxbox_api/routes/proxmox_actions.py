@@ -1,7 +1,7 @@
 """Operational verb routes (start / stop / snapshot / migrate).
 
-Issue #376. Sub-PR B introduced the gate stub; sub-PR C wires the
-``start`` verb (qemu + lxc); sub-PRs D–F wire the remaining three.
+Issue #376. Sub-PR B introduced the gate stub; sub-PR C wired the
+``start`` verb; sub-PR D wires ``stop``; sub-PRs E–F wire the rest.
 The 403 ``allow_writes`` gate at the top of every handler is the
 load-bearing trust boundary described in ``operational-verbs.md`` §2.3
 layer 3 — it must remain in place after every verb is wired.
@@ -45,7 +45,7 @@ from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox import ProxmoxSession
 from proxbox_api.session.proxmox_providers import _parse_db_endpoint
 from proxbox_api.services.idempotency import CacheKey, get_idempotency_cache
-from proxbox_api.services.proxmox_helpers import get_vm_status, start_vm
+from proxbox_api.services.proxmox_helpers import get_vm_status, start_vm, stop_vm
 from proxbox_api.services.verb_dispatch import (
     build_journal_comments,
     build_success_response,
@@ -109,6 +109,17 @@ async def _open_proxmox_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
     """Open a Proxmox API session for ``endpoint`` (factored for testability)."""
     schema = _parse_db_endpoint(endpoint)
     return await ProxmoxSession.create(schema)
+
+
+def _is_stopped(vm_type: str, status_payload: object) -> bool:
+    """True when the VM's current Proxmox ``status`` is ``"stopped"``.
+
+    Works for both QEMU and LXC response schemas. Treats missing/None
+    as "not stopped" so the verb proceeds to dispatch and surfaces any
+    failure there.
+    """
+    value = getattr(status_payload, "status", None)
+    return value == "stopped"
 
 
 def _is_running(vm_type: str, status_payload: object) -> bool:
@@ -257,6 +268,139 @@ async def _dispatch_start(
     )
 
 
+async def _dispatch_stop(
+    *,
+    endpoint: ProxmoxEndpoint,
+    vm_type: VmType,
+    vmid: int,
+    nb: object,
+    idempotency_key: str | None,
+    actor: str,
+) -> JSONResponse:
+    """Execute the stop verb: resolve node, pre-flight, dispatch, audit.
+
+    Mirrors ``_dispatch_start``; the only changes are the no-op state
+    (``status == "stopped"`` → ``already_stopped``) and the Proxmox
+    POST target (``status/stop`` instead of ``status/start``).
+    """
+    endpoint_id = endpoint.id
+    assert endpoint_id is not None
+
+    cache = get_idempotency_cache()
+    cache_key: CacheKey | None = None
+    if idempotency_key:
+        cache_key = CacheKey(
+            endpoint_id=endpoint_id, verb="stop", vmid=vmid, key=idempotency_key
+        )
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except ProxboxException as error:
+        logger.warning("Failed to open Proxmox session for endpoint=%s: %s", endpoint_id, error)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "proxmox_session_unreachable",
+                "detail": str(error),
+                "endpoint_id": endpoint_id,
+            },
+        )
+
+    node_or_error = await resolve_proxmox_node(proxmox, vm_type, vmid)
+    if isinstance(node_or_error, JSONResponse):
+        return node_or_error
+    node: str = node_or_error
+
+    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    dispatched_at = utcnow_iso()
+
+    try:
+        current = await get_vm_status(proxmox, node, vm_type, vmid)
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="stop",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_status_unreachable",
+        )
+
+    if _is_stopped(vm_type, current):
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="stop",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="already_stopped",
+            kind="info",
+            proxmox_task_upid=None,
+            error_detail=None,
+        )
+
+    try:
+        upid = await stop_vm(proxmox, node, vm_type, vmid)
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="stop",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_dispatch_failed",
+        )
+
+    return await _audit_and_respond(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="stop",
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
+        result="ok",
+        kind="info",
+        proxmox_task_upid=upid,
+        error_detail=None,
+    )
+
+
 async def _audit_and_respond(
     *,
     nb: object,
@@ -383,6 +527,37 @@ async def _handle_start(
     )
 
 
+async def _handle_stop(
+    vm_type: VmType,
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None,
+    idempotency_key: str | None,
+    actor: str,
+) -> JSONResponse:
+    gated = await _gate(session, endpoint_id)
+    if isinstance(gated, JSONResponse):
+        return gated
+    try:
+        nb_session = await get_netbox_async_session(database_session=session)
+    except ProxboxException as error:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "netbox_session_unavailable",
+                "detail": str(error),
+            },
+        )
+    return await _dispatch_stop(
+        endpoint=gated,
+        vm_type=vm_type,
+        vmid=vmid,
+        nb=nb_session,
+        idempotency_key=idempotency_key,
+        actor=actor,
+    )
+
+
 async def _handle_stub(
     verb: Verb,
     vm_type: VmType,
@@ -432,8 +607,12 @@ async def stop_qemu(
     vmid: int,
     session: SessionDep,
     endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
 ) -> JSONResponse:
-    return await _handle_stub("stop", "qemu", vmid, session, endpoint_id)
+    return await _handle_stop(
+        "qemu", vmid, session, endpoint_id, idempotency_key, _actor_label(actor)
+    )
 
 
 @router.post("/lxc/{vmid}/stop")
@@ -441,8 +620,12 @@ async def stop_lxc(
     vmid: int,
     session: SessionDep,
     endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
 ) -> JSONResponse:
-    return await _handle_stub("stop", "lxc", vmid, session, endpoint_id)
+    return await _handle_stop(
+        "lxc", vmid, session, endpoint_id, idempotency_key, _actor_label(actor)
+    )
 
 
 @router.post("/qemu/{vmid}/snapshot")
