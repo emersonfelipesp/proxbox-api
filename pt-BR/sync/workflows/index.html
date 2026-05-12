@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/workflows/">
       
       
-        <link rel="prev" href="../../api/cache/">
+        <link rel="prev" href="../../api/cluster-ha/">
       
       
         <link rel="next" href="../reconciliation-architecture/">
@@ -661,6 +661,34 @@
     
   
     Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cluster-ha/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster HA
   
 
     
@@ -1650,6 +1678,7 @@
 <li>Cria interfaces e IPs da VM quando possivel.</li>
 <li>Escreve journal entries para auditoria.</li>
 <li>No modo full-update, a criacao de VM nao faz writes de rede, porque as etapas dedicadas de interface e IP cuidam disso.</li>
+<li>Nomes duplicados de VM dentro de um mesmo cluster NetBox sao resolvidos de forma deterministica antes da fila de operacoes. Veja <a href="../name-collision-resolver/">Resolvedor de Colisoes de Nome de VM</a>.</li>
 </ul>
 <h3 id="modelo-assincrono-com-ordem-de-dependencias">Modelo Assincrono com Ordem de Dependencias<a class="headerlink" href="#modelo-assincrono-com-ordem-de-dependencias" title="Permanent link">&para;</a></h3>
 <p>O sync de VM e assincrono de ponta a ponta, mas nem todas as etapas podem rodar em paralelo. O fluxo aplica uma cadeia estrita de dependencias antes de abrir fan-out por VM.</p>

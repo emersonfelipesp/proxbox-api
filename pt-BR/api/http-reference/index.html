@@ -763,6 +763,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#alta-disponibilidade-somente-leitura" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alta Disponibilidade (somente leitura)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#helpers-do-viewer-e-do-contrato-gerado" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -929,6 +940,34 @@
     
   
     Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cluster-ha/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster HA
   
 
     
@@ -1540,6 +1579,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#alta-disponibilidade-somente-leitura" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alta Disponibilidade (somente leitura)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#helpers-do-viewer-e-do-contrato-gerado" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1755,6 +1805,16 @@
 <li><code>GET /proxmox/nodes/{node}/network</code></li>
 <li><code>GET /proxmox/nodes/{node}/qemu</code></li>
 <li><code>GET /proxmox/replication</code></li>
+</ul>
+<h3 id="alta-disponibilidade-somente-leitura">Alta Disponibilidade (somente leitura)<a class="headerlink" href="#alta-disponibilidade-somente-leitura" title="Permanent link">&para;</a></h3>
+<p>Endpoints agregados entre todos os clusters Proxmox configurados. Atendem a aba HA na pagina de detalhe da VM e a pagina de HA do cluster adicionadas pelo <code>netbox-proxbox</code> para a <a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/243">issue #243</a>. Mutacoes (incluir/remover recurso, migrar/realocar, CRUD de grupos) ficam fora deste escopo e podem entrar em uma release seguinte.</p>
+<ul>
+<li><code>GET /proxmox/cluster/ha/status</code> - Linhas por servico do CRM/LRM vindas de <code>/cluster/ha/status/current</code>, mais entradas de quorum/master.</li>
+<li><code>GET /proxmox/cluster/ha/resources</code> - Recursos HA configurados, mesclados com o estado atual (node, CRM state, request state).</li>
+<li><code>GET /proxmox/cluster/ha/resources/by-vm/{vmid}</code> - Conveniencia para uma VM/CT; tenta <code>vm:{vmid}</code> e cai para <code>ct:{vmid}</code>. Retorna <code>null</code> (nao 404) quando o guest nao esta sob HA, para que a aba do NetBox renderize estado vazio.</li>
+<li><code>GET /proxmox/cluster/ha/groups</code> - Lista de grupos HA com detalhe mesclado (nodes, restricted, nofailback).</li>
+<li><code>GET /proxmox/cluster/ha/groups/{group}</code> - Detalhe de um grupo unico; retorna <code>null</code> quando nenhum cluster possui o grupo.</li>
+<li><code>GET /proxmox/cluster/ha/summary</code> - Envelope unico (<code>{status, groups, resources}</code>) composto em paralelo via <code>asyncio.gather</code>. Usado pela pagina HA do cluster para que cada render gere apenas um round-trip.</li>
 </ul>
 <h3 id="helpers-do-viewer-e-do-contrato-gerado">Helpers do viewer e do contrato gerado<a class="headerlink" href="#helpers-do-viewer-e-do-contrato-gerado" title="Permanent link">&para;</a></h3>
 <ul>

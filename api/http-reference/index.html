@@ -763,6 +763,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#high-availability-read-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-Availability (read-only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#viewer-and-generated-contract-helpers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -946,6 +957,34 @@
     
   
     Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cluster-ha/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster HA
   
 
     
@@ -1557,6 +1596,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#high-availability-read-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-Availability (read-only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#viewer-and-generated-contract-helpers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1791,6 +1841,20 @@
 <li><code>GET /proxmox/nodes/{node}/network</code></li>
 <li><code>GET /proxmox/nodes/{node}/qemu</code></li>
 <li><code>GET /proxmox/replication</code></li>
+</ul>
+<h3 id="high-availability-read-only">High-Availability (read-only)<a class="headerlink" href="#high-availability-read-only" title="Permanent link">&para;</a></h3>
+<p>Aggregated across every configured Proxmox cluster. These endpoints back the
+HA tab on the NetBox VM detail page and the cluster-wide HA page added by
+<code>netbox-proxbox</code> for <a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/243">issue #243</a>.
+Mutations (add/remove resource, migrate/relocate, group CRUD) are intentionally
+out of scope and may be added in a follow-up release.</p>
+<ul>
+<li><code>GET /proxmox/cluster/ha/status</code> - Per-service CRM/LRM rows from <code>/cluster/ha/status/current</code>, plus quorum/master entries.</li>
+<li><code>GET /proxmox/cluster/ha/resources</code> - Configured HA resources merged with their live runtime state (node, CRM state, request state).</li>
+<li><code>GET /proxmox/cluster/ha/resources/by-vm/{vmid}</code> - Convenience lookup for a single VM/CT id; tries <code>vm:{vmid}</code> then falls back to <code>ct:{vmid}</code>. Returns <code>null</code> (not 404) when the guest is not HA-managed so the NetBox tab can render an empty state.</li>
+<li><code>GET /proxmox/cluster/ha/groups</code> - List of HA groups with merged detail (nodes, restricted, nofailback).</li>
+<li><code>GET /proxmox/cluster/ha/groups/{group}</code> - Single group detail across clusters; returns <code>null</code> when no cluster has the group.</li>
+<li><code>GET /proxmox/cluster/ha/summary</code> - Single envelope (<code>{status, groups, resources}</code>) composed in parallel via <code>asyncio.gather</code>. Used by the NetBox cluster-wide HA page so a render only triggers one round-trip.</li>
 </ul>
 <h3 id="viewer-and-generated-contract-helpers">Viewer and generated contract helpers<a class="headerlink" href="#viewer-and-generated-contract-helpers" title="Permanent link">&para;</a></h3>
 <ul>

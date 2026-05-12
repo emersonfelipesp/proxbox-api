@@ -10,19 +10,19 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/configuration/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/api/cluster-ha/">
       
       
-        <link rel="prev" href="../installation/">
+        <link rel="prev" href="../cache/">
       
       
-        <link rel="next" href="../authentication/">
+        <link rel="next" href="../../sync/workflows/">
       
       
         
           <link rel="alternate" href="./" hreflang="en">
         
-          <link rel="alternate" href="../../pt-BR/getting-started/configuration/" hreflang="pt-BR">
+          <link rel="alternate" href="../../pt-BR/api/cluster-ha/" hreflang="pt-BR">
         
       
       
@@ -31,7 +31,7 @@
     
     
       
-        <title>Configuration - proxbox-api</title>
+        <title>Cluster HA - proxbox-api</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#configuration" class="md-skip">
+        <a href="#proxmox-cluster-ha-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Configuration
+              Cluster HA
             
           </span>
         </div>
@@ -135,7 +135,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../pt-BR/getting-started/configuration/" hreflang="pt-BR" class="md-select__link">
+            <a href="../../pt-BR/api/cluster-ha/" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -278,8 +278,6 @@
       
   
   
-    
-  
   
   
     
@@ -292,11 +290,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
@@ -317,7 +317,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -335,7 +335,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../installation/" class="md-nav__link">
+      <a href="../../getting-started/installation/" class="md-nav__link">
         
   
   
@@ -360,37 +360,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Configuration
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../getting-started/configuration/" class="md-nav__link">
         
   
   
@@ -406,248 +379,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#database-location" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Database Location
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#netbox-endpoint" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        NetBox Endpoint
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="NetBox Endpoint">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#netbox-token-v1-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        NetBox token v1 example
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#netbox-token-v2-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        NetBox token v2 example
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#proxmox-endpoints" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Proxmox Endpoints
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Proxmox Endpoints">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#password-based-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Password-based example
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#token-based-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Token-based example
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#required-proxmox-role-privileges" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required Proxmox role privileges
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#runtime-session-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Runtime Session Behavior
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#authentication" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Authentication
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#runtime-tunable-resolution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Runtime Tunable Resolution
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment Variables
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#handling-netbox-overwhelmed-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Handling NetBox Overwhelmed Errors
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cors-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CORS Behavior
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#credential-encryption" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Credential Encryption
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Credential Encryption">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#key-resolution-order" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key resolution order
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#setting-the-key" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Setting the key
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#backwards-compatibility" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backwards compatibility
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -660,7 +391,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../authentication/" class="md-nav__link">
+      <a href="../../getting-started/authentication/" class="md-nav__link">
         
   
   
@@ -809,8 +540,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -821,13 +554,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
@@ -848,7 +579,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -866,7 +597,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/http-reference/" class="md-nav__link">
+      <a href="../http-reference/" class="md-nav__link">
         
   
   
@@ -894,7 +625,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/websocket-reference/" class="md-nav__link">
+      <a href="../websocket-reference/" class="md-nav__link">
         
   
   
@@ -922,7 +653,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/cache/" class="md-nav__link">
+      <a href="../cache/" class="md-nav__link">
         
   
   
@@ -947,10 +678,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../api/cluster-ha/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster HA
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -966,6 +724,142 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#endpoint-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoint Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#response-schemas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response Schemas
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Response Schemas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hastatusitemschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HaStatusItemSchema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#haresourceschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HaResourceSchema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hagroupschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HaGroupSchema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hasummaryschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HaSummarySchema
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coercion-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coercion Rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-netbox-proxbox-consumes-these-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How netbox-proxbox Consumes These Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1463,10 +1357,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#database-location" class="md-nav__link">
+  <a href="#endpoint-summary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Database Location
+        Endpoint Summary
       
     </span>
   </a>
@@ -1474,22 +1368,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#netbox-endpoint" class="md-nav__link">
+  <a href="#response-schemas" class="md-nav__link">
     <span class="md-ellipsis">
       
-        NetBox Endpoint
+        Response Schemas
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="NetBox Endpoint">
+    <nav class="md-nav" aria-label="Response Schemas">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#netbox-token-v1-example" class="md-nav__link">
+  <a href="#hastatusitemschema" class="md-nav__link">
     <span class="md-ellipsis">
       
-        NetBox token v1 example
+        HaStatusItemSchema
       
     </span>
   </a>
@@ -1497,10 +1391,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#netbox-token-v2-example" class="md-nav__link">
+  <a href="#haresourceschema" class="md-nav__link">
     <span class="md-ellipsis">
       
-        NetBox token v2 example
+        HaResourceSchema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hagroupschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HaGroupSchema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hasummaryschema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HaSummarySchema
       
     </span>
   </a>
@@ -1513,60 +1429,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#proxmox-endpoints" class="md-nav__link">
+  <a href="#error-handling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Proxmox Endpoints
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Proxmox Endpoints">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#password-based-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Password-based example
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#token-based-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Token-based example
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#required-proxmox-role-privileges" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required Proxmox role privileges
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#runtime-session-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Runtime Session Behavior
+        Error Handling
       
     </span>
   </a>
@@ -1574,10 +1440,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#authentication" class="md-nav__link">
+  <a href="#coercion-rules" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authentication
+        Coercion Rules
       
     </span>
   </a>
@@ -1585,10 +1451,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#runtime-tunable-resolution" class="md-nav__link">
+  <a href="#how-netbox-proxbox-consumes-these-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runtime Tunable Resolution
+        How netbox-proxbox Consumes These Endpoints
       
     </span>
   </a>
@@ -1596,91 +1462,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
+  <a href="#tests" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Environment Variables
+        Tests
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#handling-netbox-overwhelmed-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Handling NetBox Overwhelmed Errors
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cors-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CORS Behavior
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#credential-encryption" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Credential Encryption
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Credential Encryption">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#key-resolution-order" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key resolution order
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#setting-the-key" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Setting the key
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#backwards-compatibility" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backwards compatibility
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1701,7 +1489,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/getting-started/configuration.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/api/cluster-ha.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1709,305 +1497,170 @@
   
 
 
-<h1 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h1>
-<p><code>proxbox-api</code> uses SQLite for local bootstrap configuration and runtime dependencies.</p>
-<h2 id="database-location">Database Location<a class="headerlink" href="#database-location" title="Permanent link">&para;</a></h2>
+<h1 id="proxmox-cluster-ha-reference">Proxmox Cluster HA Reference<a class="headerlink" href="#proxmox-cluster-ha-reference" title="Permanent link">&para;</a></h1>
+<p>Read-only Proxmox High-Availability endpoints aggregated across every configured cluster. Power the <strong>HA tab</strong> on the NetBox VM detail page and the <strong>cluster-wide HA Status</strong> page added by <code>netbox-proxbox</code> v0.0.15+ for <a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/243">issue #243</a>.</p>
 <ul>
-<li>Default SQLite file: <code>database.db</code> in the repository root.</li>
-<li>ORM: SQLModel.</li>
-<li>Tables are created automatically at startup.</li>
+<li><strong>Available since:</strong> proxbox-api <code>v0.0.11</code>. The matching consumer floor is <code>netbox-proxbox &gt;= 0.0.15</code> — older plugin builds do not call these paths.</li>
+<li><strong>Mutations are intentionally out of scope.</strong> Adding/removing a resource, migrating, relocating, or any HA group CRUD is not exposed here and may land in a follow-up release.</li>
+<li><strong>Source paths on Proxmox:</strong> <code>/cluster/ha/status/current</code>, <code>/cluster/ha/resources</code>, <code>/cluster/ha/groups</code>. The router merges results across every <code>ProxmoxSession</code> configured in the backend, so a single request fans out one call per cluster.</li>
 </ul>
-<h2 id="netbox-endpoint">NetBox Endpoint<a class="headerlink" href="#netbox-endpoint" title="Permanent link">&para;</a></h2>
-<p>NetBox endpoint configuration is managed with:</p>
-<ul>
-<li><code>POST /netbox/endpoint</code></li>
-<li><code>GET /netbox/endpoint</code></li>
-<li><code>PUT /netbox/endpoint/{netbox_id}</code></li>
-<li><code>DELETE /netbox/endpoint/{netbox_id}</code></li>
-</ul>
-<p>Only one NetBox endpoint record is allowed.</p>
-<p>The stored model now includes:</p>
-<ul>
-<li><code>token_version</code>: <code>v1</code> or <code>v2</code></li>
-<li><code>token_key</code>: required for token v2, ignored for token v1</li>
-<li><code>token</code>: the token secret</li>
-<li><code>verify_ssl</code>: controls TLS certificate verification for all outbound NetBox HTTPS calls, including <code>ProxboxPluginSettings</code> runtime-settings fetches. Set this to <code>false</code> only for lab or private deployments that use self-signed certificates.</li>
-</ul>
-<h3 id="netbox-token-v1-example">NetBox token v1 example<a class="headerlink" href="#netbox-token-v1-example" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "netbox-primary",
-  "ip_address": "10.0.0.20",
-  "domain": "netbox.local",
-  "port": 443,
-  "token_version": "v1",
-  "token": "&lt;NETBOX_API_TOKEN&gt;",
-  "verify_ssl": true
-}</code></p>
-<h3 id="netbox-token-v2-example">NetBox token v2 example<a class="headerlink" href="#netbox-token-v2-example" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "netbox-secondary",
-  "ip_address": "10.0.0.21",
-  "domain": "netbox.local",
-  "port": 443,
-  "token_version": "v2",
-  "token_key": "token-name",
-  "token": "&lt;NETBOX_API_TOKEN_SECRET&gt;",
-  "verify_ssl": true
-}</code></p>
-<h2 id="proxmox-endpoints">Proxmox Endpoints<a class="headerlink" href="#proxmox-endpoints" title="Permanent link">&para;</a></h2>
-<p>Proxmox endpoint records are managed with:</p>
-<ul>
-<li><code>POST /proxmox/endpoints</code></li>
-<li><code>GET /proxmox/endpoints</code></li>
-<li><code>GET /proxmox/endpoints/{endpoint_id}</code></li>
-<li><code>PUT /proxmox/endpoints/{endpoint_id}</code></li>
-<li><code>DELETE /proxmox/endpoints/{endpoint_id}</code></li>
-</ul>
-<p>Authentication rules for create and update:</p>
-<ul>
-<li>Provide either <code>password</code>, or both <code>token_name</code> and <code>token_value</code>.</li>
-<li><code>token_name</code> and <code>token_value</code> must be provided together.</li>
-<li>Endpoint names must be unique.</li>
-</ul>
-<h3 id="password-based-example">Password-based example<a class="headerlink" href="#password-based-example" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "pve-lab-1",
-  "ip_address": "10.0.0.10",
-  "domain": "pve-lab-1.local",
-  "port": 8006,
-  "username": "root@pam",
-  "password": "&lt;PASSWORD&gt;",
-  "verify_ssl": false
-}</code></p>
-<h3 id="token-based-example">Token-based example<a class="headerlink" href="#token-based-example" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "pve-lab-token",
-  "ip_address": "10.0.0.11",
-  "domain": "pve-lab-token.local",
-  "port": 8006,
-  "username": "root@pam",
-  "token_name": "api-token",
-  "token_value": "&lt;TOKEN_VALUE&gt;",
-  "verify_ssl": true
-}</code></p>
-<h3 id="required-proxmox-role-privileges">Required Proxmox role privileges<a class="headerlink" href="#required-proxmox-role-privileges" title="Permanent link">&para;</a></h3>
-<p>The user/token used by <code>proxbox-api</code> needs read access to cluster, datastore,
-and VM data, plus the QEMU guest-agent read endpoint so VM IP addresses can be
-synced into NetBox.</p>
-<p>Minimum privileges:</p>
+<h2 id="endpoint-summary">Endpoint Summary<a class="headerlink" href="#endpoint-summary" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Privilege</th>
-<th>Why it is needed</th>
+<th>Method</th>
+<th>Path</th>
+<th>Returns</th>
+<th>Notes</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>Datastore.Audit</code></td>
-<td>List storages and read storage status.</td>
+<td><code>GET</code></td>
+<td><code>/proxmox/cluster/ha/status</code></td>
+<td><code>list[HaStatusItemSchema]</code></td>
+<td>Per-service CRM/LRM rows plus quorum/master entries from <code>/cluster/ha/status/current</code>. Errors fetching one cluster surface as a single row with <code>status="error: ..."</code> and the rest of the clusters still aggregate.</td>
 </tr>
 <tr>
-<td><code>Sys.Audit</code></td>
-<td>Read cluster status and node information.</td>
+<td><code>GET</code></td>
+<td><code>/proxmox/cluster/ha/resources</code></td>
+<td><code>list[HaResourceSchema]</code></td>
+<td>Configured HA resources merged with their live runtime state (node, CRM state, request state). Errors fetching one cluster log via <code>logger.exception</code> and that cluster contributes zero rows.</td>
 </tr>
 <tr>
-<td><code>VM.Audit</code></td>
-<td>Read VM config, snapshots, backups, and replication.</td>
+<td><code>GET</code></td>
+<td><code>/proxmox/cluster/ha/resources/by-vm/{vmid}</code></td>
+<td><code>HaResourceSchema \| null</code></td>
+<td>Convenience lookup for a single VM/CT id. Tries <code>vm:{vmid}</code> first, falls back to <code>ct:{vmid}</code>. Returns <code>null</code> (not 404) when the guest is not HA-managed so the NetBox tab can render an empty state.</td>
 </tr>
 <tr>
-<td><code>VM.Monitor</code></td>
-<td>Required by <code>agent network-get-interfaces</code> on PVE 8.</td>
+<td><code>GET</code></td>
+<td><code>/proxmox/cluster/ha/groups</code></td>
+<td><code>list[HaGroupSchema]</code></td>
+<td>List of HA groups across clusters with merged detail (nodes, restricted, nofailback).</td>
 </tr>
 <tr>
-<td><code>VM.GuestAgent.Audit</code></td>
-<td>Required by <code>agent network-get-interfaces</code> on PVE &gt;= 9.</td>
+<td><code>GET</code></td>
+<td><code>/proxmox/cluster/ha/groups/{group}</code></td>
+<td><code>HaGroupSchema \| null</code></td>
+<td>Single HA group detail across clusters; returns <code>null</code> when no cluster has the group.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/proxmox/cluster/ha/summary</code></td>
+<td><code>HaSummarySchema</code></td>
+<td>Composed <code>{status, groups, resources}</code> envelope. Calls the three handlers concurrently via <code>asyncio.gather</code> so the cluster-wide page only triggers one round-trip per render.</td>
 </tr>
 </tbody>
 </table>
-<p>Create or update a read-only role from any node:</p>
-<p>```bash
-pveum role add NetBoxReadOnly --privs \
-  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"</p>
-<p>pveum role modify NetBoxReadOnly --privs \
-  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"
-```</p>
-<p>Then bind it to the user/token at the root path with propagation:</p>
-<p><code>bash
-pveum acl modify / --users netbox@pam --roles NetBoxReadOnly --propagate 1</code></p>
-<div class="admonition warning">
-<p class="admonition-title">PVE 9 split out <code>VM.GuestAgent.*</code></p>
-<p>Proxmox VE 9 introduced separate <code>VM.GuestAgent.Audit</code>,
-<code>VM.GuestAgent.FileRead</code>, <code>VM.GuestAgent.FileWrite</code>,
-<code>VM.GuestAgent.FileSystemMgmt</code>, and <code>VM.GuestAgent.Unrestricted</code>
-privileges. A role created on PVE 8 (or copied from <code>PVEAuditor</code>) does
-<strong>not</strong> include <code>VM.GuestAgent.Audit</code>, and <code>agent network-get-interfaces</code>
-will return HTTP 403. Symptom: VMs sync but their IP addresses are missing
-from NetBox. The fix is to add <code>VM.GuestAgent.Audit</code> to the role.</p>
-</div>
-<h2 id="runtime-session-behavior">Runtime Session Behavior<a class="headerlink" href="#runtime-session-behavior" title="Permanent link">&para;</a></h2>
+<p>All endpoints require the <code>X-Proxbox-API-Key</code> header like the rest of <code>proxbox-api</code>. They reuse <code>ProxmoxSessionsDep</code> and inherit the global rate limit.</p>
+<h2 id="response-schemas">Response Schemas<a class="headerlink" href="#response-schemas" title="Permanent link">&para;</a></h2>
+<p>Defined in <code>proxbox_api/routes/proxmox/ha.py</code> and exported as Pydantic v2 models. Every field is optional because Proxmox mixes service rows with cluster-wide rows (quorum, master, lrm:&lt;node&gt;) and service rows in different cluster states omit different keys.</p>
+<h3 id="hastatusitemschema"><code>HaStatusItemSchema</code><a class="headerlink" href="#hastatusitemschema" title="Permanent link">&para;</a></h3>
+<p><code>jsonc
+{
+  "cluster_name": "lab",      // injected by proxbox-api so multi-cluster rows stay disambiguated
+  "id": null,                  // raw id key from Proxmox, when present
+  "type": "service",           // "service" | "quorum" | "master" | "lrm" | ...
+  "sid": "vm:100",             // service id; null on quorum/master rows
+  "node": "pve01",
+  "state": "started",
+  "status": "started",
+  "crm_state": "started",
+  "request_state": "started",
+  "quorate": true,
+  "failback": null,
+  "max_relocate": 1,
+  "max_restart": 1,
+  "timestamp": 1730000000
+}</code></p>
+<h3 id="haresourceschema"><code>HaResourceSchema</code><a class="headerlink" href="#haresourceschema" title="Permanent link">&para;</a></h3>
+<p><code>jsonc
+{
+  "cluster_name": "lab",
+  "sid": "vm:100",
+  "type": "vm",                // "vm" | "ct"
+  "state": "started",
+  "group": "ha-group-a",
+  "max_relocate": 2,
+  "max_restart": 1,
+  "failback": true,
+  "comment": null,
+  "digest": "abc",
+  // Live runtime state merged from /cluster/ha/status/current when present.
+  "node": "pve02",
+  "crm_state": "started",
+  "request_state": "started",
+  "status": "started"
+}</code></p>
+<h3 id="hagroupschema"><code>HaGroupSchema</code><a class="headerlink" href="#hagroupschema" title="Permanent link">&para;</a></h3>
+<p><code>jsonc
+{
+  "cluster_name": "lab",
+  "group": "ha-group-a",
+  "type": "group",
+  "nodes": "pve01:1,pve02:2",
+  "restricted": true,
+  "nofailback": false,
+  "comment": null,
+  "digest": null
+}</code></p>
+<h3 id="hasummaryschema"><code>HaSummarySchema</code><a class="headerlink" href="#hasummaryschema" title="Permanent link">&para;</a></h3>
+<p><code>jsonc
+{
+  "status":    [/* HaStatusItemSchema, ... */],
+  "groups":    [/* HaGroupSchema, ... */],
+  "resources": [/* HaResourceSchema, ... */]
+}</code></p>
+<h2 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
 <ul>
-<li>NetBox sessions are derived from the single stored NetBox endpoint.</li>
-<li>The NetBox endpoint <code>verify_ssl</code> value is reused by plugin-settings fetches, so self-signed NetBox certificates work consistently when verification is disabled.</li>
-<li>Proxmox sessions default to local database endpoint records.</li>
-<li>Legacy source mode (<code>source=netbox</code>) is still supported in Proxmox session dependency behavior.</li>
+<li>The router uses <code>logger.exception</code> (not silent <code>except</code>) when a per-cluster fetch fails so dashboards on the netbox-proxbox side never see "silent zeros".</li>
+<li>A failed <code>/cluster/ha/status</code> fetch records one synthetic <code>HaStatusItemSchema</code> row for that cluster with <code>status="error: &lt;message&gt;"</code>; healthy clusters still contribute their rows.</li>
+<li>A failed <code>/cluster/ha/resources</code> or <code>/cluster/ha/groups</code> top-level fetch logs and skips that cluster.</li>
+<li>Inner-loop sub-detail fetches (single SID resource detail, single group detail) log at <code>debug</code> level and fall back to the list-row payload — the response is best-effort, never a 5xx.</li>
+<li><code>/proxmox/cluster/ha/resources/by-vm/{vmid}</code> always returns <code>null</code> for unmanaged VM/CT ids; the consumer must treat <code>null</code> as "not HA-managed" instead of error.</li>
 </ul>
-<h2 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h2>
-<p>All API requests (except bootstrap endpoints) require authentication via the <code>X-Proxbox-API-Key</code> header. Keys are stored in the SQLite database with bcrypt hashing.</p>
-<p>See <a href="../authentication/">Authentication</a> for complete documentation on:</p>
+<h2 id="coercion-rules">Coercion Rules<a class="headerlink" href="#coercion-rules" title="Permanent link">&para;</a></h2>
+<p>Proxmox returns <code>0</code>/<code>1</code> integers, kebab-case keys (<code>max-restart</code>, <code>crm-state</code>), and string booleans on some endpoints. The router normalizes them through <code>_coerce_int</code> and <code>_coerce_bool</code>:</p>
 <ul>
-<li>Bootstrap flow for first-time setup</li>
-<li>Key registration and management</li>
-<li>Auth-exempt endpoints</li>
-<li>Brute-force protection</li>
+<li><code>bool</code> → <code>bool</code> itself; <code>int</code>/<code>float</code> → <code>bool(value)</code>; <code>"1"</code>/<code>"true"</code>/<code>"yes"</code>/<code>"on"</code> → <code>True</code>; <code>"0"</code>/<code>"false"</code>/<code>"no"</code>/<code>"off"</code>/<code>""</code> → <code>False</code>; otherwise <code>None</code>.</li>
+<li><code>bool</code> → <code>int(value)</code>; <code>int</code> → itself; numeric <code>str</code> → <code>int(str)</code>; otherwise <code>None</code>.</li>
 </ul>
-<h2 id="runtime-tunable-resolution">Runtime Tunable Resolution<a class="headerlink" href="#runtime-tunable-resolution" title="Permanent link">&para;</a></h2>
-<p>Most runtime tunables now resolve in the order <strong>environment variable &gt; <code>ProxboxPluginSettings</code> (NetBox plugin settings page) &gt; built-in default</strong>, via <code>proxbox_api/runtime_settings.py</code>. The settings cache TTL is 5 minutes, so changes made on the NetBox plugin settings page take effect on the next sync run without restarting the backend. Setting an environment variable still works as an override; leaving it unset means the plugin settings page is the authoritative source.</p>
-<p>A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: <code>PROXBOX_BIND_HOST</code>, <code>PROXBOX_RATE_LIMIT</code>, <code>PROXBOX_ENCRYPTION_KEY</code> / <code>PROXBOX_ENCRYPTION_KEY_FILE</code>, <code>PROXBOX_STRICT_STARTUP</code>, <code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code>, <code>PROXBOX_GENERATED_DIR</code>, and <code>PROXBOX_CORS_EXTRA_ORIGINS</code>. The rest map 1:1 to <code>ProxboxPluginSettings</code> fields and can be edited from the NetBox plugin settings page.</p>
-<h2 id="environment-variables">Environment Variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h2>
+<p>The kebab-case fallbacks (<code>row.get("max_restart") or row.get("max-restart")</code>) are intentional — the same reading code handles both pre-8.x and 8.x Proxmox payload styles.</p>
+<h2 id="how-netbox-proxbox-consumes-these-endpoints">How <code>netbox-proxbox</code> Consumes These Endpoints<a class="headerlink" href="#how-netbox-proxbox-consumes-these-endpoints" title="Permanent link">&para;</a></h2>
+<p><code>netbox-proxbox</code> exposes a thin REST shim under <code>/api/plugins/proxbox/ha/</code> that proxies into these endpoints:</p>
 <table>
 <thead>
 <tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
+<th>Plugin shim</th>
+<th>Backend call</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>PROXBOX_NETBOX_TIMEOUT</code></td>
-<td><code>120</code></td>
-<td>NetBox API client timeout in seconds. Applied to <code>netbox-sdk</code> config and underlying requests.</td>
+<td><code>GET /api/plugins/proxbox/ha/summary/</code></td>
+<td><code>GET /proxmox/cluster/ha/summary</code></td>
 </tr>
 <tr>
-<td><code>PROXBOX_NETBOX_MAX_RETRIES</code></td>
-<td><code>5</code></td>
-<td>Retry attempts for transient NetBox connection failures.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_NETBOX_RETRY_DELAY</code></td>
-<td><code>2.0</code></td>
-<td>Initial retry delay in seconds for NetBox retries.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_NETBOX_MAX_CONCURRENT</code></td>
-<td><code>1</code></td>
-<td>Maximum concurrent NetBox API requests. Keep low (1-2) to avoid exhausting NetBox's PostgreSQL connection pool.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code></td>
-<td><code>4</code></td>
-<td>Maximum number of concurrent VM sync write tasks.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code></td>
-<td><code>8</code> (VM sync) / <code>4</code> (task-history, snapshots)</td>
-<td>Maximum number of concurrent NetBox write operations. Default varies by sync service.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_PROXMOX_FETCH_CONCURRENCY</code></td>
-<td><code>8</code> (most paths) / <code>4</code> (task-history)</td>
-<td>Maximum number of concurrent Proxmox read operations. Default varies by sync service.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_FETCH_MAX_CONCURRENCY</code></td>
-<td><code>8</code></td>
-<td>Legacy fetch concurrency override used by some sync entrypoints.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_RATE_LIMIT</code></td>
-<td><code>60</code></td>
-<td>Maximum API requests per minute per IP address.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_BACKUP_BATCH_SIZE</code></td>
-<td><code>5</code></td>
-<td>Backup sync batch size. Reduce to lower NetBox write pressure during backup sync.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_BACKUP_BATCH_DELAY_MS</code></td>
-<td><code>200</code></td>
-<td>Delay in milliseconds between backup batches.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_BULK_BATCH_SIZE</code></td>
-<td><code>50</code></td>
-<td>Per-batch size for bulk VM-related sync requests (volumes, backups).</td>
-</tr>
-<tr>
-<td><code>PROXBOX_BULK_BATCH_DELAY_MS</code></td>
-<td><code>500</code></td>
-<td>Delay in milliseconds between bulk batches.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_GENERATED_DIR</code></td>
-<td><code>$XDG_DATA_HOME/proxbox/generated/proxmox</code></td>
-<td>Override output directory for the schema generator CLI (<code>proxbox-schema generate</code>).</td>
-</tr>
-<tr>
-<td><code>PROXBOX_CORS_EXTRA_ORIGINS</code></td>
-<td>(empty)</td>
-<td>Comma-separated extra CORS origins added to the runtime allowlist.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_EXPOSE_INTERNAL_ERRORS</code></td>
-<td>unset</td>
-<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, HTTP 500 responses include internal exception details.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_STRICT_STARTUP</code></td>
-<td>unset</td>
-<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, startup fails if generated Proxmox routes cannot be mounted.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code></td>
-<td>unset</td>
-<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, skips creating the default NetBox client during app startup.</td>
-</tr>
-<tr>
-<td><code>PROXBOX_ENCRYPTION_KEY</code></td>
-<td>unset</td>
-<td>Secret key for encrypting credentials at rest. See <a href="#credential-encryption">Credential Encryption</a> below.</td>
+<td><code>GET /api/plugins/proxbox/ha/vm/{vmid}/</code></td>
+<td><code>GET /proxmox/cluster/ha/resources/by-vm/{vmid}</code></td>
 </tr>
 </tbody>
 </table>
-<h3 id="handling-netbox-overwhelmed-errors">Handling NetBox Overwhelmed Errors<a class="headerlink" href="#handling-netbox-overwhelmed-errors" title="Permanent link">&para;</a></h3>
-<p>When NetBox's PostgreSQL connection pool is saturated, proxbox-api returns <code>netbox_overwhelmed</code> errors. To mitigate:</p>
-<ol>
-<li><strong>Reduce concurrency</strong>: Set <code>PROXBOX_NETBOX_MAX_CONCURRENT=1</code> to serialize requests</li>
-<li><strong>Increase retries</strong>: More attempts with longer delays give NetBox time to recover</li>
-<li><strong>Extend cache TTL</strong>: Use <code>PROXBOX_NETBOX_GET_CACHE_TTL=300</code> to reduce redundant fetches</li>
-</ol>
-<p>The retry logic applies aggressive backoff (up to 30 seconds) when overwhelmed errors are detected.</p>
-<h2 id="cors-behavior">CORS Behavior<a class="headerlink" href="#cors-behavior" title="Permanent link">&para;</a></h2>
+<p>The plugin renders these as a Django dashboard page (<code>HAClusterView</code>) and a per-VM HA tab (<code>ProxmoxVMHATabView</code>, gated on the <code>proxmox_vm_id</code> custom field). The plugin's own page documents the consumer side — see <code>netbox-proxbox/docs/api/ha.md</code>.</p>
+<h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
+<p>Unit tests for the router live in <code>tests/test_proxmox_ha_routes.py</code>. They patch <code>get_ha_status_current</code>, <code>get_ha_resources</code>, and <code>get_ha_groups</code> from <code>proxbox_api.services.proxmox_helpers</code> and exercise:</p>
 <ul>
-<li>Origins are populated from NetBox endpoint records plus default development origins.</li>
-<li>Methods are currently allowed for all (<code>allow_methods=["*"]</code>).</li>
+<li><code>ha_status</code> aggregation across rows and the synthetic error row when a helper raises.</li>
+<li><code>ha_resources</code> merging runtime state from <code>/status/current</code> into list rows.</li>
+<li><code>ha_resource_by_vm</code> returning <code>null</code> when no SID is HA-managed and falling back from <code>vm:{vmid}</code> to <code>ct:{vmid}</code>.</li>
+<li><code>ha_groups</code> list + detail merge and <code>null</code> when a group is missing on every cluster.</li>
+<li><code>ha_summary</code> parallel composition.</li>
+<li>Router registration under the <code>/proxmox/cluster/ha/*</code> prefix in the live app factory.</li>
 </ul>
-<h2 id="credential-encryption">Credential Encryption<a class="headerlink" href="#credential-encryption" title="Permanent link">&para;</a></h2>
-<p>proxbox-api stores NetBox API tokens and Proxmox passwords/token values in a local SQLite database. When an encryption key is configured, these fields are encrypted at rest using <strong>Fernet</strong> (AES-128-CBC with HMAC-SHA256).</p>
-<h3 id="key-resolution-order">Key resolution order<a class="headerlink" href="#key-resolution-order" title="Permanent link">&para;</a></h3>
-<p>proxbox-api resolves the encryption key using the following priority chain:</p>
-<ol>
-<li><strong><code>PROXBOX_ENCRYPTION_KEY</code> environment variable</strong> — highest priority, takes effect immediately on startup.</li>
-<li><strong><code>ProxboxPluginSettings.encryption_key</code></strong> — fetched from the NetBox plugin settings API (configurable on the <code>/plugins/proxbox/settings/</code> page in NetBox). Checked only if the env var is not set.</li>
-<li><strong>None</strong> — no key configured. Credentials are stored in plaintext and a <code>CRITICAL</code> warning is logged. Never use this in production.</li>
-</ol>
-<h3 id="setting-the-key">Setting the key<a class="headerlink" href="#setting-the-key" title="Permanent link">&para;</a></h3>
-<p>Generate a secure key:</p>
+<p>Run them with:</p>
 <p><code>bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code></p>
-<p>Then set it via environment variable:</p>
-<p><code>bash
-export PROXBOX_ENCRYPTION_KEY="&lt;paste key here&gt;"</code></p>
-<p>Or set it in the NetBox plugin settings page under <strong>Encryption</strong> → <strong>Encryption key</strong>.</p>
-<h3 id="backwards-compatibility">Backwards compatibility<a class="headerlink" href="#backwards-compatibility" title="Permanent link">&para;</a></h3>
-<p>If credentials were stored in plaintext before encryption was enabled, they continue to work — <code>decrypt_value</code> returns them unchanged when no <code>enc:</code> prefix is found. They are re-encrypted the next time the endpoint is saved.</p>
-<p>If the encryption key changes after credentials were already encrypted, proxbox-api logs a warning and returns the raw ciphertext (unusable as a credential). Re-save each endpoint with the correct credentials after rotating the key.</p>
+uv run pytest tests/test_proxmox_ha_routes.py -q</code></p>
 
 
 

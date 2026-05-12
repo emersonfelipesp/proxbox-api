@@ -22,6 +22,13 @@
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cache/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/api/cluster-ha/</loc>
+        <lastmod>2026-05-12</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/cluster-ha/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cluster-ha/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/api/http-reference/</loc>
         <lastmod>2026-05-12</lastmod>
         <changefreq>daily</changefreq>
@@ -134,6 +141,13 @@
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/installation/"/>
     </url>
     <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/sync/name-collision-resolver/</loc>
+        <lastmod>2026-05-12</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/sync/name-collision-resolver/"/>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/name-collision-resolver/"/>
+    </url>
+    <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/sync/overwrite-flags/</loc>
         <lastmod>2026-05-12</lastmod>
         <changefreq>daily</changefreq>
@@ -174,6 +188,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cache/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/cache/"/>
+    </url>
+    <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cluster-ha/</loc>
+        <lastmod>2026-05-12</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/cluster-ha/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/api/cluster-ha/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/api/http-reference/</loc>
@@ -286,6 +307,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/getting-started/installation/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/getting-started/installation/"/>
+    </url>
+    <url>
+        <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/name-collision-resolver/</loc>
+        <lastmod>2026-05-12</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt-BR" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/name-collision-resolver/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://emersonfelipesp.github.io/proxbox-api/sync/name-collision-resolver/"/>
     </url>
     <url>
         <loc>https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/overwrite-flags/</loc>

@@ -506,6 +506,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#privilegios-minimos-do-papel-proxmox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Privilegios minimos do papel Proxmox
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -516,6 +527,17 @@
     <span class="md-ellipsis">
       
         Comportamento de sessoes em runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resolucao-de-tunaveis-em-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolucao de tunaveis em runtime
       
     </span>
   </a>
@@ -558,6 +580,56 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#criptografia-de-credenciais" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Criptografia de credenciais
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Criptografia de credenciais">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ordem-de-resolucao-da-chave" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ordem de resolucao da chave
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#definindo-a-chave" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Definindo a chave
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compatibilidade-retroativa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compatibilidade retroativa
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -847,6 +919,34 @@
     
   
     Cache API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cluster-ha/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster HA
   
 
     
@@ -1435,6 +1535,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#privilegios-minimos-do-papel-proxmox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Privilegios minimos do papel Proxmox
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1445,6 +1556,17 @@
     <span class="md-ellipsis">
       
         Comportamento de sessoes em runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resolucao-de-tunaveis-em-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolucao de tunaveis em runtime
       
     </span>
   </a>
@@ -1487,6 +1609,56 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#criptografia-de-credenciais" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Criptografia de credenciais
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Criptografia de credenciais">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ordem-de-resolucao-da-chave" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ordem de resolucao da chave
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#definindo-a-chave" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Definindo a chave
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compatibilidade-retroativa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compatibilidade retroativa
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1600,6 +1772,61 @@
   "token_value": "&lt;TOKEN_VALUE&gt;",
   "verify_ssl": true
 }</code></p>
+<h3 id="privilegios-minimos-do-papel-proxmox">Privilegios minimos do papel Proxmox<a class="headerlink" href="#privilegios-minimos-do-papel-proxmox" title="Permanent link">&para;</a></h3>
+<p>O usuario/token usado pelo <code>proxbox-api</code> precisa de leitura em cluster,
+datastore e VMs, alem do endpoint de leitura do guest-agent QEMU para que os
+IPs das VMs sejam sincronizados com o NetBox.</p>
+<p>Privilegios minimos:</p>
+<table>
+<thead>
+<tr>
+<th>Privilegio</th>
+<th>Motivo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Datastore.Audit</code></td>
+<td>Listar storages e ler status.</td>
+</tr>
+<tr>
+<td><code>Sys.Audit</code></td>
+<td>Ler status do cluster e dos nos.</td>
+</tr>
+<tr>
+<td><code>VM.Audit</code></td>
+<td>Ler config, snapshots, backups e replicacao das VMs.</td>
+</tr>
+<tr>
+<td><code>VM.Monitor</code></td>
+<td>Necessario para <code>agent network-get-interfaces</code> no PVE 8.</td>
+</tr>
+<tr>
+<td><code>VM.GuestAgent.Audit</code></td>
+<td>Necessario para <code>agent network-get-interfaces</code> no PVE &gt;= 9.</td>
+</tr>
+</tbody>
+</table>
+<p>Criar ou atualizar um papel somente-leitura a partir de qualquer no:</p>
+<p>```bash
+pveum role add NetBoxReadOnly --privs \
+  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"</p>
+<p>pveum role modify NetBoxReadOnly --privs \
+  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"
+```</p>
+<p>Vincular o papel ao usuario/token na raiz, com propagacao:</p>
+<p><code>bash
+pveum acl modify / --users netbox@pam --roles NetBoxReadOnly --propagate 1</code></p>
+<div class="admonition warning">
+<p class="admonition-title">PVE 9 separou <code>VM.GuestAgent.*</code></p>
+<p>O Proxmox VE 9 introduziu privilegios separados <code>VM.GuestAgent.Audit</code>,
+<code>VM.GuestAgent.FileRead</code>, <code>VM.GuestAgent.FileWrite</code>,
+<code>VM.GuestAgent.FileSystemMgmt</code> e <code>VM.GuestAgent.Unrestricted</code>. Um papel
+criado no PVE 8 (ou copiado de <code>PVEAuditor</code>) <strong>nao</strong> inclui
+<code>VM.GuestAgent.Audit</code>, e <code>agent network-get-interfaces</code> retorna HTTP 403.
+Sintoma: as VMs sincronizam, mas os IPs delas nao aparecem no NetBox. A
+correcao e adicionar <code>VM.GuestAgent.Audit</code> ao papel.</p>
+</div>
 <h2 id="comportamento-de-sessoes-em-runtime">Comportamento de sessoes em runtime<a class="headerlink" href="#comportamento-de-sessoes-em-runtime" title="Permanent link">&para;</a></h2>
 <ul>
 <li>A sessao NetBox e derivada do endpoint NetBox armazenado.</li>
@@ -1607,6 +1834,9 @@
 <li>As sessoes Proxmox usam por padrao registros de endpoint do banco local.</li>
 <li>O modo legado (<code>source=netbox</code>) continua suportado na dependencia de sessoes Proxmox.</li>
 </ul>
+<h2 id="resolucao-de-tunaveis-em-runtime">Resolucao de tunaveis em runtime<a class="headerlink" href="#resolucao-de-tunaveis-em-runtime" title="Permanent link">&para;</a></h2>
+<p>A maioria dos tunaveis em runtime resolvem agora na ordem <strong>variavel de ambiente &gt; <code>ProxboxPluginSettings</code> (pagina de configuracoes do plugin no NetBox) &gt; padrao embutido</strong>, via <code>proxbox_api/runtime_settings.py</code>. O TTL do cache de configuracoes e de 5 minutos, entao mudancas feitas na pagina de configuracoes do plugin entram em efeito no proximo run de sync sem precisar reiniciar o backend. Definir uma variavel de ambiente continua funcionando como override; deixa-la em branco torna a pagina de configuracoes do plugin a fonte autoritativa.</p>
+<p>Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes da conexao com o NetBox existir ou sao infraestrutura exclusiva do operador: <code>PROXBOX_BIND_HOST</code>, <code>PROXBOX_RATE_LIMIT</code>, <code>PROXBOX_ENCRYPTION_KEY</code> / <code>PROXBOX_ENCRYPTION_KEY_FILE</code>, <code>PROXBOX_STRICT_STARTUP</code>, <code>PROXBOX_SKIP_NETBOX_BOOTSTRAP</code>, <code>PROXBOX_GENERATED_DIR</code> e <code>PROXBOX_CORS_EXTRA_ORIGINS</code>. As demais mapeiam 1:1 para campos de <code>ProxboxPluginSettings</code> e podem ser editadas pela pagina de configuracoes do plugin no NetBox.</p>
 <h2 id="variaveis-de-ambiente">Variaveis de ambiente<a class="headerlink" href="#variaveis-de-ambiente" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1673,6 +1903,21 @@
 <td>Delay em milissegundos entre lotes de backup.</td>
 </tr>
 <tr>
+<td><code>PROXBOX_BULK_BATCH_SIZE</code></td>
+<td><code>50</code></td>
+<td>Tamanho do lote para requisicoes em massa relacionadas a VMs (volumes, backups).</td>
+</tr>
+<tr>
+<td><code>PROXBOX_BULK_BATCH_DELAY_MS</code></td>
+<td><code>500</code></td>
+<td>Delay em milissegundos entre lotes em massa.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_GENERATED_DIR</code></td>
+<td><code>$XDG_DATA_HOME/proxbox/generated/proxmox</code></td>
+<td>Override do diretorio de saida da CLI geradora de schema (<code>proxbox-schema generate</code>).</td>
+</tr>
+<tr>
 <td><code>PROXBOX_CORS_EXTRA_ORIGINS</code></td>
 <td>(vazio)</td>
 <td>Lista de origens CORS extras, separadas por virgula.</td>
@@ -1692,6 +1937,11 @@
 <td>nao definido</td>
 <td>Quando <code>1</code>, <code>true</code> ou <code>yes</code>, nao cria o cliente NetBox padrao no startup.</td>
 </tr>
+<tr>
+<td><code>PROXBOX_ENCRYPTION_KEY</code></td>
+<td>nao definido</td>
+<td>Chave secreta para criptografar credenciais em repouso. Veja <a href="#criptografia-de-credenciais">Criptografia de credenciais</a> abaixo.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="tratando-erros-de-netbox-sobrecarregado">Tratando erros de NetBox sobrecarregado<a class="headerlink" href="#tratando-erros-de-netbox-sobrecarregado" title="Permanent link">&para;</a></h3>
@@ -1707,6 +1957,26 @@
 <li>Origens sao montadas a partir de endpoints NetBox mais origens de desenvolvimento padrao.</li>
 <li>Metodos sao liberados para todos (<code>allow_methods=["*"]</code>).</li>
 </ul>
+<h2 id="criptografia-de-credenciais">Criptografia de credenciais<a class="headerlink" href="#criptografia-de-credenciais" title="Permanent link">&para;</a></h2>
+<p>O proxbox-api armazena tokens de API do NetBox e senhas/tokens do Proxmox em um banco SQLite local. Quando uma chave de criptografia esta configurada, esses campos sao criptografados em repouso usando <strong>Fernet</strong> (AES-128-CBC com HMAC-SHA256).</p>
+<h3 id="ordem-de-resolucao-da-chave">Ordem de resolucao da chave<a class="headerlink" href="#ordem-de-resolucao-da-chave" title="Permanent link">&para;</a></h3>
+<p>O proxbox-api resolve a chave de criptografia na seguinte ordem de prioridade:</p>
+<ol>
+<li><strong>Variavel de ambiente <code>PROXBOX_ENCRYPTION_KEY</code></strong> — prioridade maxima, aplicada imediatamente no startup.</li>
+<li><strong><code>ProxboxPluginSettings.encryption_key</code></strong> — buscada na API de configuracoes do plugin no NetBox (configuravel na pagina <code>/plugins/proxbox/settings/</code>). So e consultada quando a env var nao esta definida.</li>
+<li><strong>Nenhuma</strong> — sem chave configurada. Credenciais ficam armazenadas em texto puro e um log <code>CRITICAL</code> e emitido. Nunca use em producao.</li>
+</ol>
+<h3 id="definindo-a-chave">Definindo a chave<a class="headerlink" href="#definindo-a-chave" title="Permanent link">&para;</a></h3>
+<p>Gere uma chave segura:</p>
+<p><code>bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code></p>
+<p>Defina via variavel de ambiente:</p>
+<p><code>bash
+export PROXBOX_ENCRYPTION_KEY="&lt;cole a chave aqui&gt;"</code></p>
+<p>Ou defina na pagina de configuracoes do plugin no NetBox em <strong>Encryption</strong> → <strong>Encryption key</strong>.</p>
+<h3 id="compatibilidade-retroativa">Compatibilidade retroativa<a class="headerlink" href="#compatibilidade-retroativa" title="Permanent link">&para;</a></h3>
+<p>Se as credenciais ja estavam armazenadas em texto puro antes da criptografia ser ligada, elas continuam funcionando — <code>decrypt_value</code> retorna o valor inalterado quando nenhum prefixo <code>enc:</code> esta presente. Elas sao recriptografadas na proxima vez que o endpoint for salvo.</p>
+<p>Se a chave de criptografia mudar depois das credenciais ja terem sido criptografadas, o proxbox-api emite um warning e retorna o ciphertext bruto (inutilizavel como credencial). Salve cada endpoint novamente com as credenciais corretas apos a rotacao da chave.</p>
 
 
 
