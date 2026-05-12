@@ -66,6 +66,7 @@ nav:
       - HTTP Reference: api/http-reference.md
       - WebSocket Reference: api/websocket-reference.md
       - Cache API: api/cache.md
+      - Cluster HA: api/cluster-ha.md
   - Synchronization:
       - Workflows: sync/workflows.md
       - VM Reconciliation Architecture: sync/reconciliation-architecture.md

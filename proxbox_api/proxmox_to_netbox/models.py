@@ -28,6 +28,44 @@ def _as_bool(value: object) -> bool:
     return False
 
 
+_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
+
+
+def _parse_proxmox_kv_flag(value: object) -> bool:
+    """Parse a Proxmox VE flag of the form ``<1|0>[,k=v,...]`` or
+    ``enabled=<1|0>[,k=v,...]`` into a bool.
+
+    Proxmox returns several config fields (notably ``agent``) as a comma-joined
+    string with optional key=value tail entries, e.g. ``"1,fstrim_cloned_disks=1"``
+    or ``"enabled=1,fstrim_cloned_disks=1"``. The plain ``_as_bool`` helper only
+    matches whole-string tokens and returns False for both forms, which silently
+    disables guest-agent fetches for users who turned the agent on through the
+    PVE web UI with default options.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if not isinstance(value, str):
+        return False
+    text = value.strip().lower()
+    if not text:
+        return False
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if not parts:
+        return False
+    head = parts[0]
+    if "=" not in head:
+        return head in _TRUE_TOKENS
+    for part in parts:
+        if "=" not in part:
+            continue
+        key, _, raw = part.partition("=")
+        if key.strip() == "enabled":
+            return raw.strip() in _TRUE_TOKENS
+    return False
+
+
 def _mb_from_bytes(value: object) -> int:
     try:
         as_int = int(value)
@@ -892,7 +930,7 @@ class ProxmoxVmConfigInput(BaseModel):
     @computed_field(return_type=bool)
     @property
     def qemu_agent_enabled(self) -> bool:
-        return _as_bool(self.agent)
+        return _parse_proxmox_kv_flag(self.agent)
 
     @computed_field(return_type=bool)
     @property

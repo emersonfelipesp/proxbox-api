@@ -100,6 +100,48 @@ Authentication rules for create and update:
 }
 ```
 
+### Required Proxmox role privileges
+
+The user/token used by `proxbox-api` needs read access to cluster, datastore,
+and VM data, plus the QEMU guest-agent read endpoint so VM IP addresses can be
+synced into NetBox.
+
+Minimum privileges:
+
+| Privilege              | Why it is needed                                         |
+|------------------------|----------------------------------------------------------|
+| `Datastore.Audit`      | List storages and read storage status.                   |
+| `Sys.Audit`            | Read cluster status and node information.                |
+| `VM.Audit`             | Read VM config, snapshots, backups, and replication.     |
+| `VM.Monitor`           | Required by `agent network-get-interfaces` on PVE 8.     |
+| `VM.GuestAgent.Audit`  | Required by `agent network-get-interfaces` on PVE >= 9.  |
+
+Create or update a read-only role from any node:
+
+```bash
+pveum role add NetBoxReadOnly --privs \
+  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"
+
+pveum role modify NetBoxReadOnly --privs \
+  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"
+```
+
+Then bind it to the user/token at the root path with propagation:
+
+```bash
+pveum acl modify / --users netbox@pam --roles NetBoxReadOnly --propagate 1
+```
+
+!!! warning "PVE 9 split out `VM.GuestAgent.*`"
+
+    Proxmox VE 9 introduced separate `VM.GuestAgent.Audit`,
+    `VM.GuestAgent.FileRead`, `VM.GuestAgent.FileWrite`,
+    `VM.GuestAgent.FileSystemMgmt`, and `VM.GuestAgent.Unrestricted`
+    privileges. A role created on PVE 8 (or copied from `PVEAuditor`) does
+    **not** include `VM.GuestAgent.Audit`, and `agent network-get-interfaces`
+    will return HTTP 403. Symptom: VMs sync but their IP addresses are missing
+    from NetBox. The fix is to add `VM.GuestAgent.Audit` to the role.
+
 ## Runtime Session Behavior
 
 - NetBox sessions are derived from the single stored NetBox endpoint.
@@ -117,6 +159,12 @@ See [Authentication](./authentication.md) for complete documentation on:
 - Key registration and management
 - Auth-exempt endpoints
 - Brute-force protection
+
+## Runtime Tunable Resolution
+
+Most runtime tunables now resolve in the order **environment variable > `ProxboxPluginSettings` (NetBox plugin settings page) > built-in default**, via `proxbox_api/runtime_settings.py`. The settings cache TTL is 5 minutes, so changes made on the NetBox plugin settings page take effect on the next sync run without restarting the backend. Setting an environment variable still works as an override; leaving it unset means the plugin settings page is the authoritative source.
+
+A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
 
 ## Environment Variables
 

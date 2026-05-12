@@ -319,24 +319,40 @@ async def test_sync_snapshot_individual_links_storage(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sync_cluster_individual_reports_updated_when_record_exists(monkeypatch):
-    responses = {
-        "/api/virtualization/clusters/": [SimpleNamespace(id=1, serialize=lambda: {"id": 1})],
-    }
+async def test_sync_cluster_individual_reports_real_drift_status(monkeypatch):
+    """Post-#357: the reported action is the real ``upsert_*`` outcome.
 
-    async def _fake_rest_list_async(_nb, path, query=None):
-        return responses.get(path, [])
+    Previously the action was a heuristic based on whether the GET found an
+    existing record, which mislabeled no-op syncs as ``updated``. The
+    migration to ``upsert_cluster`` makes the action mirror the underlying
+    ``ReconcileResult.status``.
+    """
+    from proxbox_api.services import netbox_writers
+    from proxbox_api.services.netbox_writers import UpsertResult
 
-    async def _fake_get_or_create_cluster(_self, cluster_name, mode="cluster"):
-        return SimpleNamespace(id=1, serialize=lambda: {"id": 1})
+    async def _fake_rest_list_async(_nb, _path, query=None):
+        return []
+
+    async def _fake_upsert_cluster_type(_nb, *, mode, tag_refs):
+        return UpsertResult(record=SimpleNamespace(id=7), status="unchanged")
+
+    async def _fake_upsert_cluster(_nb, **kwargs):
+        return UpsertResult(
+            record=SimpleNamespace(id=1, serialize=lambda: {"id": 1}),
+            status="updated",
+        )
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.base.BaseIndividualSyncService._get_or_create_cluster",
-        _fake_get_or_create_cluster,
+        "proxbox_api.services.sync.individual.cluster_sync.upsert_cluster_type",
+        _fake_upsert_cluster_type,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.cluster_sync.upsert_cluster",
+        _fake_upsert_cluster,
     )
 
     result = await sync_cluster_individual(
@@ -347,6 +363,9 @@ async def test_sync_cluster_individual_reports_updated_when_record_exists(monkey
     )
 
     assert result["action"] == "updated"
+    assert {"object_type": "cluster_type", "action": "unchanged"} in result["dependencies_synced"]
+    # Silence linter: helper referenced for the import side-effect.
+    assert netbox_writers.UpsertResult is UpsertResult
 
 
 @pytest.mark.asyncio

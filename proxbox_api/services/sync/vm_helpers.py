@@ -155,25 +155,47 @@ def parse_key_value_string(value: object) -> dict[str, str]:
     return parsed
 
 
+def _is_skippable_ip(ip_text: str, ignore_ipv6_link_local: bool = True) -> tuple[bool, str | None]:
+    """Decide whether an IP should be skipped before reaching NetBox IPAM.
+
+    Strips the IPv6 zone-ID suffix (``%eth0``, ``%vmbr0``...) unconditionally,
+    since NetBox IPAM rejects zone-scoped addresses with a 400. Then checks
+    whether the address is empty, unparseable, loopback, or (when the toggle
+    is on) IPv6 link-local.
+
+    Returns ``(True, None)`` when the address should be skipped, and
+    ``(False, cleaned)`` with the canonical compressed form when it should
+    be kept.
+    """
+    cleaned = str(ip_text or "").strip()
+    if not cleaned:
+        return (True, None)
+    cleaned = cleaned.split("%", 1)[0]
+    if not cleaned:
+        return (True, None)
+    try:
+        parsed = ip_address(cleaned)
+    except ValueError:
+        return (True, None)
+    if parsed.is_loopback:
+        return (True, None)
+    if ignore_ipv6_link_local and parsed.is_link_local:
+        return (True, None)
+    return (False, parsed.compressed)
+
+
 def guest_agent_ip_with_prefix(
     addr: dict[str, object], ignore_ipv6_link_local: bool = True
 ) -> str | None:
     """Extract and format guest agent IP with prefix."""
     ip_text = str(addr.get("ip_address") or "").strip()
-    if not ip_text:
-        return None
-    try:
-        parsed = ip_address(ip_text)
-    except ValueError:
-        return None
-    if parsed.is_loopback:
-        return None
-    if ignore_ipv6_link_local and parsed.is_link_local:
+    skip, cleaned = _is_skippable_ip(ip_text, ignore_ipv6_link_local=ignore_ipv6_link_local)
+    if skip or cleaned is None:
         return None
     prefix = addr.get("prefix")
     if isinstance(prefix, int) and 0 <= prefix <= 128:
-        return f"{parsed.compressed}/{prefix}"
-    return parsed.compressed
+        return f"{cleaned}/{prefix}"
+    return cleaned
 
 
 def best_guest_agent_ip(

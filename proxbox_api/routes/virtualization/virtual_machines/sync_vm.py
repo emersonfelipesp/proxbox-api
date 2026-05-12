@@ -46,6 +46,7 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import (
+    fetch_qemu_guest_agent_network_interfaces,
     get_qemu_guest_agent_hostname,
     get_qemu_guest_agent_network_interfaces,
     sanitize_dns_hostname,
@@ -1849,6 +1850,7 @@ async def create_virtual_machines(  # noqa: C901
         first_ip_id: int | None = None
         if virtual_machine and vm_config and sync_vm_network:
             guest_agent_interfaces: list[dict] = []
+            guest_agent_diagnostic: str | None = None
             if vm_type == "qemu" and vm_config_obj.qemu_agent_enabled:
                 proxmox_session = next(
                     (
@@ -1859,17 +1861,32 @@ async def create_virtual_machines(  # noqa: C901
                     None,
                 )
                 if proxmox_session is not None:
-                    guest_agent_interfaces = await get_qemu_guest_agent_network_interfaces(
+                    guest_agent_result = await fetch_qemu_guest_agent_network_interfaces(
                         proxmox_session,
                         node=str(resource.get("node")),
                         vmid=int(resource.get("vmid")),
                     )
+                    guest_agent_interfaces = guest_agent_result.interfaces
+                    guest_agent_diagnostic = guest_agent_result.diagnostic
                     if not guest_agent_interfaces:
                         logger.info(
-                            "Guest agent network data unavailable for VM %s (vmid=%s); falling back to config networks.",
+                            "Guest agent network data unavailable for VM %s (vmid=%s); falling back to config networks. (%s)",
                             resource.get("name"),
                             resource.get("vmid"),
+                            guest_agent_diagnostic or "no interfaces returned",
                         )
+                        if bridge and guest_agent_diagnostic:
+                            await bridge.emit_substep(
+                                phase="virtual-machines",
+                                substep="vm_interfaces",
+                                status=SubstepStatus.COMPLETED,
+                                message=(
+                                    f"VM '{vm_name}' guest-agent IPs unavailable: "
+                                    f"{guest_agent_diagnostic}"
+                                ),
+                                item={"name": vm_name, "vmid": resource.get("vmid")},
+                                timing_key=timing_key,
+                            )
 
             guest_by_name = {
                 str(iface.get("name", "")).strip().lower(): iface
@@ -2861,6 +2878,14 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     from proxbox_api.services.sync.network import build_vm_interface_ip_payload
                     from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
 
+                    raw_guest_ip_count = 0
+                    if isinstance(guest_iface, dict):
+                        raw_guest_ip_count = sum(
+                            1
+                            for addr in (guest_iface.get("ip_addresses") or [])
+                            if isinstance(addr, dict)
+                        )
+
                     all_ips_for_iface: list[str] = []
                     if guest_iface:
                         all_ips_for_iface = all_guest_agent_ips(
@@ -2868,6 +2893,26 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                             ignore_ipv6_link_local_addresses,
                             primary_ip_preference=primary_ip_preference,
                         )
+
+                    skipped_guest_ips = max(0, raw_guest_ip_count - len(all_ips_for_iface))
+                    if skipped_guest_ips and isinstance(websocket, WebSocketSSEBridge):
+                        try:
+                            await websocket.emit_phase_summary(
+                                phase="vm-ip-addresses",
+                                skipped=skipped_guest_ips,
+                                message=(
+                                    f"Skipped {skipped_guest_ips} link-local/zone-scoped/"
+                                    f"loopback IPs on {vm_name}.{resolved_name}"
+                                ),
+                            )
+                        except Exception as emit_exc:
+                            logger.debug(
+                                "emit_phase_summary failed for VM %s interface %s: %s",
+                                vm_name,
+                                resolved_name,
+                                emit_exc,
+                            )
+
                     if not all_ips_for_iface:
                         config_ip = config_dict.get("ip")
                         if config_ip and str(config_ip) != "dhcp":
@@ -2888,7 +2933,10 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 tag_refs,
                                 now,
                                 dns_name=vm_dns_name,
+                                ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
                             )
+                            if payload is None:
+                                continue
                             ip_payloads.append(payload)
 
                             # Track first IP for primary assignment

@@ -86,6 +86,21 @@ Validation rules:
 - `GET /proxmox/nodes/{node}/qemu`
 - `GET /proxmox/replication`
 
+### High-Availability (read-only)
+
+Aggregated across every configured Proxmox cluster. These endpoints back the
+HA tab on the NetBox VM detail page and the cluster-wide HA page added by
+`netbox-proxbox` for [issue #243](https://github.com/emersonfelipesp/netbox-proxbox/issues/243).
+Mutations (add/remove resource, migrate/relocate, group CRUD) are intentionally
+out of scope and may be added in a follow-up release.
+
+- `GET /proxmox/cluster/ha/status` - Per-service CRM/LRM rows from `/cluster/ha/status/current`, plus quorum/master entries.
+- `GET /proxmox/cluster/ha/resources` - Configured HA resources merged with their live runtime state (node, CRM state, request state).
+- `GET /proxmox/cluster/ha/resources/by-vm/{vmid}` - Convenience lookup for a single VM/CT id; tries `vm:{vmid}` then falls back to `ct:{vmid}`. Returns `null` (not 404) when the guest is not HA-managed so the NetBox tab can render an empty state.
+- `GET /proxmox/cluster/ha/groups` - List of HA groups with merged detail (nodes, restricted, nofailback).
+- `GET /proxmox/cluster/ha/groups/{group}` - Single group detail across clusters; returns `null` when no cluster has the group.
+- `GET /proxmox/cluster/ha/summary` - Single envelope (`{status, groups, resources}`) composed in parallel via `asyncio.gather`. Used by the NetBox cluster-wide HA page so a render only triggers one round-trip.
+
 ### Viewer and generated contract helpers
 
 - `POST /proxmox/viewer/generate` - Crawl the Proxmox API Viewer and generate OpenAPI + Pydantic artifacts. Accepts `version_tag`, `workers`, `persist`, and other tuning query parameters.

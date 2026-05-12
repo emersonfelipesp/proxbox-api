@@ -30,6 +30,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
+| `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
 | `test_proxmox_to_netbox_contracts.py` | VM mapper behavior and generated schema availability checks |
 | `test_pydantic_generator_models.py` | Pydantic model generation from OpenAPI specs |
