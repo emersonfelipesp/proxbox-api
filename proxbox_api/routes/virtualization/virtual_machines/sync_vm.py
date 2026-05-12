@@ -2782,6 +2782,14 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     from proxbox_api.services.sync.network import build_vm_interface_ip_payload
                     from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
 
+                    raw_guest_ip_count = 0
+                    if isinstance(guest_iface, dict):
+                        raw_guest_ip_count = sum(
+                            1
+                            for addr in (guest_iface.get("ip_addresses") or [])
+                            if isinstance(addr, dict)
+                        )
+
                     all_ips_for_iface: list[str] = []
                     if guest_iface:
                         all_ips_for_iface = all_guest_agent_ips(
@@ -2789,6 +2797,26 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                             ignore_ipv6_link_local_addresses,
                             primary_ip_preference=primary_ip_preference,
                         )
+
+                    skipped_guest_ips = max(0, raw_guest_ip_count - len(all_ips_for_iface))
+                    if skipped_guest_ips and isinstance(websocket, WebSocketSSEBridge):
+                        try:
+                            await websocket.emit_phase_summary(
+                                phase="vm-ip-addresses",
+                                skipped=skipped_guest_ips,
+                                message=(
+                                    f"Skipped {skipped_guest_ips} link-local/zone-scoped/"
+                                    f"loopback IPs on {vm_name}.{resolved_name}"
+                                ),
+                            )
+                        except Exception as emit_exc:
+                            logger.debug(
+                                "emit_phase_summary failed for VM %s interface %s: %s",
+                                vm_name,
+                                resolved_name,
+                                emit_exc,
+                            )
+
                     if not all_ips_for_iface:
                         config_ip = config_dict.get("ip")
                         if config_ip and str(config_ip) != "dhcp":
@@ -2809,7 +2837,10 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 tag_refs,
                                 now,
                                 dns_name=vm_dns_name,
+                                ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
                             )
+                            if payload is None:
+                                continue
                             ip_payloads.append(payload)
 
                             # Track first IP for primary assignment
