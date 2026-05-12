@@ -5,8 +5,14 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_network_interfaces
-from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
+from proxbox_api.services.sync.vm_helpers import (
+    _is_skippable_ip,
+    all_guest_agent_ips,
+    guest_agent_ip_with_prefix,
+)
 
 
 class _FakeNestedResource:
@@ -272,3 +278,65 @@ def test_cleanup_stale_ips_returns_zero_when_no_existing():
             assert count == 0
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    "raw, ignore_ll, expected",
+    [
+        # Empty / garbage → skip
+        ("", True, (True, None)),
+        ("   ", True, (True, None)),
+        ("not-an-ip", True, (True, None)),
+        ("%eth0", True, (True, None)),
+        # Loopback → always skip
+        ("127.0.0.1", True, (True, None)),
+        ("::1", True, (True, None)),
+        # Link-local with toggle on → skip (issue acceptance)
+        ("fe80::1", True, (True, None)),
+        ("fe80::1%eth0", True, (True, None)),
+        # Link-local with toggle off → keep, zone stripped
+        ("fe80::1%eth0", False, (False, "fe80::1")),
+        # Global IPv6 with zone-ID → keep, zone stripped (issue acceptance)
+        ("2001:db8::1%eth0", True, (False, "2001:db8::1")),
+        ("2001:db8::1%vmbr0", True, (False, "2001:db8::1")),
+        ("2001:db8::1", True, (False, "2001:db8::1")),
+        # IPv4 → keep (issue acceptance)
+        ("192.0.2.1", True, (False, "192.0.2.1")),
+        # Whitespace tolerance
+        ("  2001:db8::1%eth0  ", True, (False, "2001:db8::1")),
+    ],
+)
+def test_is_skippable_ip_matrix(raw, ignore_ll, expected):
+    """Pin the four acceptance-criteria cases plus edge cases for the helper."""
+    assert _is_skippable_ip(raw, ignore_ipv6_link_local=ignore_ll) == expected
+
+
+def test_guest_agent_ip_with_prefix_strips_zone_id():
+    """A global IPv6 with %eth0 must reach NetBox as zone-stripped CIDR."""
+    addr = {"ip_address": "2001:db8::1%eth0", "prefix": 64}
+    assert guest_agent_ip_with_prefix(addr) == "2001:db8::1/64"
+
+
+def test_guest_agent_ip_with_prefix_skips_link_local_with_zone():
+    """fe80::…%eth0 is dropped when the toggle is on (default)."""
+    addr = {"ip_address": "fe80::1%eth0", "prefix": 64}
+    assert guest_agent_ip_with_prefix(addr) is None
+
+
+def test_guest_agent_ip_with_prefix_keeps_link_local_when_toggle_off():
+    """fe80::…%eth0 is kept (zone stripped) when the operator opts in."""
+    addr = {"ip_address": "fe80::1%eth0", "prefix": 64}
+    assert guest_agent_ip_with_prefix(addr, ignore_ipv6_link_local=False) == "fe80::1/64"
+
+
+def test_all_guest_agent_ips_skips_link_local_and_strips_zone():
+    """Full acceptance scenario: fe80::1%eth0 + 2001:db8::1%eth0 + 192.0.2.1."""
+    guest_iface = {
+        "ip_addresses": [
+            {"ip_address": "fe80::1%eth0", "prefix": 64, "ip_address_type": "ipv6"},
+            {"ip_address": "2001:db8::1%eth0", "prefix": 64, "ip_address_type": "ipv6"},
+            {"ip_address": "192.0.2.1", "prefix": 24, "ip_address_type": "ipv4"},
+        ]
+    }
+    result = all_guest_agent_ips(guest_iface)
+    assert sorted(result) == sorted(["2001:db8::1/64", "192.0.2.1/24"])
