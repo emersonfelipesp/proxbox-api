@@ -37,9 +37,11 @@ from proxbox_api.routes.extras import router as extras_router
 from proxbox_api.routes.netbox import router as netbox_router
 from proxbox_api.routes.proxmox import router as proxmox_router
 from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
+from proxbox_api.routes.proxmox.ha import router as px_ha_router
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
+from proxbox_api.routes.proxmox_actions import router as proxmox_actions_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
@@ -332,7 +334,11 @@ def create_app() -> FastAPI:
     app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
     app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
     app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
+    app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
     app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
+    app.include_router(
+        proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
+    )
     app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
     app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
     app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])

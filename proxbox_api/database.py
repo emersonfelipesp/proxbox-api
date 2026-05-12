@@ -75,6 +75,7 @@ class ProxmoxEndpoint(SQLModel, table=True):
     username: str = Field(index=True)
     password: str | None = Field(default=None)
     verify_ssl: bool = Field(default=True)
+    allow_writes: bool = Field(default=False)
     token_name: str | None = Field(default=None)
     token_value: str | None = Field(default=None)
     timeout: int | None = Field(default=None)
@@ -265,6 +266,8 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
         stmts.append(f"ALTER TABLE {table} ADD COLUMN max_retries INTEGER")
     if "retry_backoff" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN retry_backoff REAL")
+    if "allow_writes" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
     if "site_id" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN site_id INTEGER")
     if "site_slug" not in existing:

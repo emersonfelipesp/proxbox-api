@@ -100,12 +100,60 @@ Regras de autenticacao para create/update:
 }
 ```
 
+### Privilegios minimos do papel Proxmox
+
+O usuario/token usado pelo `proxbox-api` precisa de leitura em cluster,
+datastore e VMs, alem do endpoint de leitura do guest-agent QEMU para que os
+IPs das VMs sejam sincronizados com o NetBox.
+
+Privilegios minimos:
+
+| Privilegio             | Motivo                                                         |
+|------------------------|----------------------------------------------------------------|
+| `Datastore.Audit`      | Listar storages e ler status.                                  |
+| `Sys.Audit`            | Ler status do cluster e dos nos.                               |
+| `VM.Audit`             | Ler config, snapshots, backups e replicacao das VMs.           |
+| `VM.Monitor`           | Necessario para `agent network-get-interfaces` no PVE 8.       |
+| `VM.GuestAgent.Audit`  | Necessario para `agent network-get-interfaces` no PVE >= 9.    |
+
+Criar ou atualizar um papel somente-leitura a partir de qualquer no:
+
+```bash
+pveum role add NetBoxReadOnly --privs \
+  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"
+
+pveum role modify NetBoxReadOnly --privs \
+  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"
+```
+
+Vincular o papel ao usuario/token na raiz, com propagacao:
+
+```bash
+pveum acl modify / --users netbox@pam --roles NetBoxReadOnly --propagate 1
+```
+
+!!! warning "PVE 9 separou `VM.GuestAgent.*`"
+
+    O Proxmox VE 9 introduziu privilegios separados `VM.GuestAgent.Audit`,
+    `VM.GuestAgent.FileRead`, `VM.GuestAgent.FileWrite`,
+    `VM.GuestAgent.FileSystemMgmt` e `VM.GuestAgent.Unrestricted`. Um papel
+    criado no PVE 8 (ou copiado de `PVEAuditor`) **nao** inclui
+    `VM.GuestAgent.Audit`, e `agent network-get-interfaces` retorna HTTP 403.
+    Sintoma: as VMs sincronizam, mas os IPs delas nao aparecem no NetBox. A
+    correcao e adicionar `VM.GuestAgent.Audit` ao papel.
+
 ## Comportamento de sessoes em runtime
 
 - A sessao NetBox e derivada do endpoint NetBox armazenado.
 - O valor `verify_ssl` do endpoint NetBox tambem e usado nas buscas de plugin settings, entao certificados self-signed funcionam de forma consistente quando a verificacao esta desabilitada.
 - As sessoes Proxmox usam por padrao registros de endpoint do banco local.
 - O modo legado (`source=netbox`) continua suportado na dependencia de sessoes Proxmox.
+
+## Resolucao de tunaveis em runtime
+
+A maioria dos tunaveis em runtime resolvem agora na ordem **variavel de ambiente > `ProxboxPluginSettings` (pagina de configuracoes do plugin no NetBox) > padrao embutido**, via `proxbox_api/runtime_settings.py`. O TTL do cache de configuracoes e de 5 minutos, entao mudancas feitas na pagina de configuracoes do plugin entram em efeito no proximo run de sync sem precisar reiniciar o backend. Definir uma variavel de ambiente continua funcionando como override; deixa-la em branco torna a pagina de configuracoes do plugin a fonte autoritativa.
+
+Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes da conexao com o NetBox existir ou sao infraestrutura exclusiva do operador: `PROXBOX_BIND_HOST`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR` e `PROXBOX_CORS_EXTRA_ORIGINS`. As demais mapeiam 1:1 para campos de `ProxboxPluginSettings` e podem ser editadas pela pagina de configuracoes do plugin no NetBox.
 
 ## Variaveis de ambiente
 
@@ -122,10 +170,14 @@ Regras de autenticacao para create/update:
 | `PROXBOX_RATE_LIMIT` | `60` | Maximo de requisicoes por minuto por endereco IP. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Tamanho do lote de sync de backups. Reduza para diminuir a pressao de escrita no NetBox. |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup. |
+| `PROXBOX_BULK_BATCH_SIZE` | `50` | Tamanho do lote para requisicoes em massa relacionadas a VMs (volumes, backups). |
+| `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay em milissegundos entre lotes em massa. |
+| `PROXBOX_GENERATED_DIR` | `$XDG_DATA_HOME/proxbox/generated/proxmox` | Override do diretorio de saida da CLI geradora de schema (`proxbox-schema generate`). |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (vazio) | Lista de origens CORS extras, separadas por virgula. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | nao definido | Quando `1`, `true` ou `yes`, respostas HTTP 500 incluem detalhes internos da excecao. |
 | `PROXBOX_STRICT_STARTUP` | nao definido | Quando `1`, `true` ou `yes`, falha no mount de rotas Proxmox geradas interrompe o startup. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | nao definido | Quando `1`, `true` ou `yes`, nao cria o cliente NetBox padrao no startup. |
+| `PROXBOX_ENCRYPTION_KEY` | nao definido | Chave secreta para criptografar credenciais em repouso. Veja [Criptografia de credenciais](#criptografia-de-credenciais) abaixo. |
 
 ### Tratando erros de NetBox sobrecarregado
 
@@ -141,3 +193,37 @@ A logica de retry aplica backoff agressivo (ate 30 segundos) quando erros de sob
 
 - Origens sao montadas a partir de endpoints NetBox mais origens de desenvolvimento padrao.
 - Metodos sao liberados para todos (`allow_methods=["*"]`).
+
+## Criptografia de credenciais
+
+O proxbox-api armazena tokens de API do NetBox e senhas/tokens do Proxmox em um banco SQLite local. Quando uma chave de criptografia esta configurada, esses campos sao criptografados em repouso usando **Fernet** (AES-128-CBC com HMAC-SHA256).
+
+### Ordem de resolucao da chave
+
+O proxbox-api resolve a chave de criptografia na seguinte ordem de prioridade:
+
+1. **Variavel de ambiente `PROXBOX_ENCRYPTION_KEY`** — prioridade maxima, aplicada imediatamente no startup.
+2. **`ProxboxPluginSettings.encryption_key`** — buscada na API de configuracoes do plugin no NetBox (configuravel na pagina `/plugins/proxbox/settings/`). So e consultada quando a env var nao esta definida.
+3. **Nenhuma** — sem chave configurada. Credenciais ficam armazenadas em texto puro e um log `CRITICAL` e emitido. Nunca use em producao.
+
+### Definindo a chave
+
+Gere uma chave segura:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Defina via variavel de ambiente:
+
+```bash
+export PROXBOX_ENCRYPTION_KEY="<cole a chave aqui>"
+```
+
+Ou defina na pagina de configuracoes do plugin no NetBox em **Encryption** → **Encryption key**.
+
+### Compatibilidade retroativa
+
+Se as credenciais ja estavam armazenadas em texto puro antes da criptografia ser ligada, elas continuam funcionando — `decrypt_value` retorna o valor inalterado quando nenhum prefixo `enc:` esta presente. Elas sao recriptografadas na proxima vez que o endpoint for salvo.
+
+Se a chave de criptografia mudar depois das credenciais ja terem sido criptografadas, o proxbox-api emite um warning e retorna o ciphertext bruto (inutilizavel como credencial). Salve cada endpoint novamente com as credenciais corretas apos a rotacao da chave.
