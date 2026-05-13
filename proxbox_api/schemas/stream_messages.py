@@ -52,6 +52,7 @@ class ItemOperation(str, Enum):
     CREATED = "created"
     UPDATED = "updated"
     DELETED = "deleted"
+    WOULD_DELETE = "would_delete"
     SKIPPED = "skipped"
     FAILED = "failed"
 
