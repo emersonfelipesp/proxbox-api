@@ -382,31 +382,48 @@ def create_app() -> FastAPI:
 
     app.include_router(root_meta_router)
     app.include_router(auth_router)
-    register_cache_routes(app)
-    register_full_update_routes(app)
-    register_websocket_routes(app)
 
-    app.include_router(admin_router, prefix="/admin", tags=["admin"])
-    app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
-    app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
-    app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
-    app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
-    app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
-    app.include_router(
-        proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
-    )
-    app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
-    app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
-    app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
-    app.include_router(
-        virtual_machines_router,
-        prefix="/virtualization/virtual-machines",
-        tags=["virtualization / virtual-machines"],
-    )
-    app.include_router(extras_router, prefix="/extras", tags=["extras"])
-    app.include_router(
-        sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
-    )
-    app.include_router(sync_active_router)
+    features = {
+        token.strip().lower()
+        for token in os.environ.get("PROXBOX_FEATURES", "").split(",")
+        if token.strip()
+    }
+    pbs_only = features == {"pbs"}
+
+    if not pbs_only:
+        register_cache_routes(app)
+        register_full_update_routes(app)
+        register_websocket_routes(app)
+        app.include_router(admin_router, prefix="/admin", tags=["admin"])
+        app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
+        app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
+        app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
+        app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
+        app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
+        app.include_router(
+            proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
+        )
+        app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
+        app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
+        app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
+        app.include_router(
+            virtual_machines_router,
+            prefix="/virtualization/virtual-machines",
+            tags=["virtualization / virtual-machines"],
+        )
+        app.include_router(extras_router, prefix="/extras", tags=["extras"])
+        app.include_router(
+            sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
+        )
+        app.include_router(sync_active_router)
+
+    try:
+        from proxbox_api.pbs import admin_router as pbs_admin_router  # noqa: PLC0415
+        from proxbox_api.pbs import router as pbs_router  # noqa: PLC0415
+    except ImportError as exc:
+        logger.info("PBS subpackage unavailable; /pbs/* routes disabled (%s)", exc)
+    else:
+        app.include_router(pbs_admin_router, prefix="/pbs", tags=["pbs"])
+        app.include_router(pbs_router, prefix="/pbs", tags=["pbs"])
 
     return app
