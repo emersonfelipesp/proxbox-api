@@ -34,6 +34,24 @@ For the current route and docs contract surface:
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
 ```
 
+For the v0.0.11 surface specifically (HA routes, operational verbs, the
+`allow_writes` gate, and supporting helpers):
+
+```bash
+pytest \
+  tests/test_proxmox_ha_routes.py \
+  tests/test_proxmox_actions_gate.py \
+  tests/test_proxmox_actions_start.py \
+  tests/test_proxmox_actions_stop.py \
+  tests/test_proxmox_actions_snapshot.py \
+  tests/test_proxmox_actions_migrate_verb.py \
+  tests/test_verb_dispatch_helpers.py \
+  tests/test_sync_active.py \
+  tests/test_name_collision.py \
+  tests/test_vm_cloudinit_mapping.py \
+  tests/test_description_metadata.py
+```
+
 ## Proxmox Mock Testing
 
 All tests use `proxmox-sdk` mock features to validate Proxmox API integration. The test suite supports three mock modes:
