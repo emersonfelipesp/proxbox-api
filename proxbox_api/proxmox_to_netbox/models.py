@@ -911,7 +911,8 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     cluster: int | None = None
     device: int | None = None
     site: int | None = None
-    tenant: int | None = None
+    # Issue #365: tenant assignment is owned by the netbox-proxbox plugin via
+    # name-regex mapping; proxbox-api never sends tenant on the create body.
     virtual_machine_type: int | None = None
     role: int | None = None
     vcpus: int = 0
@@ -940,7 +941,6 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
         "cluster",
         "device",
         "site",
-        "tenant",
         "virtual_machine_type",
         "role",
         mode="before",
@@ -957,8 +957,6 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
             raise ValueError("device must be positive when provided")
         if self.site is not None and self.site <= 0:
             raise ValueError("site must be positive when provided")
-        if self.tenant is not None and self.tenant <= 0:
-            raise ValueError("tenant must be positive when provided")
         if self.virtual_machine_type is not None and self.virtual_machine_type <= 0:
             raise ValueError("virtual_machine_type must be positive when provided")
         if self.role is not None and self.role <= 0:
@@ -1122,7 +1120,6 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             cluster=self.cluster_id,
             device=self.device_id,
             site=self.site_id,
-            tenant=self.tenant_id,
             virtual_machine_type=self.virtual_machine_type_id,
             role=self.role_id,
             vcpus=int(self.resource.maxcpu or 0),

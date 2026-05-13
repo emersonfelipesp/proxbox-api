@@ -231,6 +231,35 @@ async def create_proxmox_devices(  # noqa: C901
     if use_websocket and websocket:
         await websocket.send_json({"object": "device", "end": True})
 
+    try:
+        from proxbox_api.services.hardware_discovery import is_enabled, run_for_nodes
+
+        if is_enabled():
+            hw_nodes: list[dict[str, object]] = []
+            for entry in device_list:
+                netbox_id = entry.get("id")
+                if netbox_id is None:
+                    continue
+                primary = entry.get("primary_ip4") or entry.get("primary_ip")
+                host = ""
+                if isinstance(primary, dict):
+                    raw = primary.get("address") or primary.get("display") or ""
+                    host = str(raw).split("/", 1)[0].strip()
+                elif isinstance(primary, str):
+                    host = primary.split("/", 1)[0].strip()
+                hw_nodes.append(
+                    {
+                        "id": netbox_id,
+                        "name": entry.get("name"),
+                        "host": host,
+                        "cluster": device_cluster_map.get(str(entry.get("name") or "")),
+                    }
+                )
+            if hw_nodes:
+                await run_for_nodes(nb, hw_nodes, bridge=bridge)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Hardware discovery pass failed: %s", exc)
+
     global_cache.clear_cache()
     return device_list
 

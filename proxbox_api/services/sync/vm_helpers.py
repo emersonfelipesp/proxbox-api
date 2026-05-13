@@ -17,12 +17,14 @@ def _compute_vm_patchable_fields(
     supports_virtual_machine_type_field: bool = True,
 ) -> set[str]:
     """Build the patchable_fields allowlist for virtual machine reconciliation."""
+    # Issue #365: tenant is owned by the netbox-proxbox plugin (name-regex
+    # mapping); proxbox-api must never patch tenant on existing VMs nor send
+    # it on the create body.
     fields: set[str] = {
         "name",
         "cluster",
         "device",
         "site",
-        "tenant",
         "vcpus",
         "memory",
         "disk",
@@ -56,7 +58,6 @@ def normalize_current_virtual_machine_payload(
         "cluster": record.get("cluster"),
         "device": record.get("device"),
         "site": record.get("site"),
-        "tenant": record.get("tenant"),
         "role": record.get("role"),
         "vcpus": record.get("vcpus"),
         "memory": record.get("memory"),
