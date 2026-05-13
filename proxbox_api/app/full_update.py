@@ -42,10 +42,15 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
+from proxbox_api.runtime_settings import get_bool
 from proxbox_api.schemas.stream_messages import ErrorCategory
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
+from proxbox_api.services.sync.orphan_sweep import (
+    extract_touched_vm_ids,
+    run_orphan_vm_sweep,
+)
 from proxbox_api.services.sync.replications import sync_all_replications
 from proxbox_api.services.sync.storages import create_storages
 from proxbox_api.services.sync.task_history import (
@@ -156,6 +161,7 @@ async def _full_update_sync_impl(  # noqa: C901
     sync_node_interfaces: list = []
     sync_vm_interfaces: list = []
     sync_vm_ip_addresses: list = []
+    orphan_sweep_result: dict[str, object] | None = None
 
     tag_refs = [
         {
@@ -392,7 +398,29 @@ async def _full_update_sync_impl(  # noqa: C901
                 python_exception=str(error),
             ) from error
 
-        return {
+        delete_orphans_enabled = get_bool(
+            settings_key="delete_orphans",
+            env="PROXBOX_DELETE_ORPHANS",
+            default=False,
+        )
+        if delete_orphans_enabled:
+            try:
+                orphan_sweep_result = await run_orphan_vm_sweep(
+                    netbox_session,
+                    run_id=operation_id,
+                    enabled=delete_orphans_enabled,
+                    touched_vm_ids=extract_touched_vm_ids(sync_vms),
+                )
+            except ProxboxException:
+                raise
+            except Exception as error:  # noqa: BLE001
+                logger.exception("Error while sweeping orphan virtual machines during full-update")
+                raise ProxboxException(
+                    message="Error while sweeping orphan virtual machines.",
+                    python_exception=str(error),
+                ) from error
+
+        result = {
             "status": "completed",
             "devices": sync_nodes,
             "storage": sync_storage,
@@ -421,6 +449,9 @@ async def _full_update_sync_impl(  # noqa: C901
             "vm_interfaces_count": len(sync_vm_interfaces),
             "vm_ip_addresses_count": len(sync_vm_ip_addresses),
         }
+        if orphan_sweep_result is not None:
+            result["orphan_sweep"] = orphan_sweep_result
+        return result
     finally:
         await release_active_sync(_active_entry)
 
@@ -436,6 +467,13 @@ async def full_update_sync_stream(  # noqa: C901
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     fetch_max_concurrency: int | None = None,
+    dry_run: bool = Query(
+        default=False,
+        description=(
+            "Preview destructive end-of-run cleanup. When true, orphan VMs are "
+            "reported as would_delete events and no DELETE requests are sent."
+        ),
+    ),
     netbox_branch_schema_id: Annotated[
         str | None,
         Query(
@@ -475,6 +513,7 @@ async def full_update_sync_stream(  # noqa: C901
         sync_vm_ip_addresses: list = []
         sync_replications: dict = {}
         sync_backup_routines: dict = {}
+        orphan_sweep_result: dict[str, object] | None = None
         devices_bridge = WebSocketSSEBridge()
         storage_bridge = WebSocketSSEBridge()
         vm_bridge = WebSocketSSEBridge()
@@ -487,6 +526,7 @@ async def full_update_sync_stream(  # noqa: C901
         vm_ip_addresses_bridge = WebSocketSSEBridge()
         replications_bridge = WebSocketSSEBridge()
         backup_routines_bridge = WebSocketSSEBridge()
+        orphan_sweep_bridge = WebSocketSSEBridge()
 
         tag_refs = [
             {
@@ -1035,39 +1075,101 @@ async def full_update_sync_stream(  # noqa: C901
                     },
                 )
 
+                delete_orphans_enabled = get_bool(
+                    settings_key="delete_orphans",
+                    env="PROXBOX_DELETE_ORPHANS",
+                    default=False,
+                )
+                if delete_orphans_enabled or dry_run:
+                    yield sse_event(
+                        "step",
+                        {
+                            "step": "sweep-orphans",
+                            "status": "started",
+                            "message": (
+                                "Previewing orphan virtual machine sweep."
+                                if dry_run
+                                else "Starting orphan virtual machine sweep."
+                            ),
+                            "metadata": {
+                                "operation_id": operation_id,
+                                "delete_orphans": delete_orphans_enabled,
+                                "dry_run": dry_run,
+                            },
+                        },
+                    )
+
+                    async def _run_orphan_sweep():
+                        try:
+                            return await run_orphan_vm_sweep(
+                                netbox_session,
+                                run_id=operation_id,
+                                enabled=delete_orphans_enabled,
+                                dry_run=dry_run,
+                                stream=orphan_sweep_bridge,
+                                touched_vm_ids=extract_touched_vm_ids(sync_vms),
+                            )
+                        finally:
+                            await orphan_sweep_bridge.close()
+
+                    _orphan_sweep_start = time.monotonic()
+                    orphan_sweep_task = asyncio.create_task(_run_orphan_sweep())
+                    async for frame in orphan_sweep_bridge.iter_sse():
+                        yield frame
+                    orphan_sweep_result = await orphan_sweep_task
+
+                    yield sse_event(
+                        "step",
+                        {
+                            "step": "sweep-orphans",
+                            "status": "completed",
+                            "message": (
+                                "Orphan virtual machine sweep preview finished."
+                                if dry_run
+                                else "Orphan virtual machine sweep finished."
+                            ),
+                            "result": orphan_sweep_result,
+                            "duration_seconds": round(time.monotonic() - _orphan_sweep_start, 3),
+                        },
+                    )
+
+                final_result = {
+                    "devices": sync_nodes,
+                    "storage": sync_storage,
+                    "virtual_machines": sync_vms,
+                    "virtual_disks": sync_disks,
+                    "task_history": sync_task_history,
+                    "backups": sync_backups,
+                    "snapshots": sync_snapshots,
+                    "node_interfaces": sync_node_interfaces,
+                    "vm_interfaces": sync_vm_interfaces,
+                    "vm_ip_addresses": sync_vm_ip_addresses,
+                    "replications": sync_replications,
+                    "backup_routines": sync_backup_routines,
+                    "devices_count": len(sync_nodes),
+                    "storage_count": len(sync_storage),
+                    "virtual_machines_count": len(sync_vms),
+                    "virtual_disks_count": _result_count(sync_disks),
+                    "task_history_count": _result_count(sync_task_history),
+                    "backups_count": len(sync_backups),
+                    "snapshots_count": _result_count(sync_snapshots),
+                    "node_interfaces_count": len(sync_node_interfaces),
+                    "vm_interfaces_count": len(sync_vm_interfaces),
+                    "vm_ip_addresses_count": len(sync_vm_ip_addresses),
+                    "replications_count": sync_replications.get("created", 0)
+                    + sync_replications.get("updated", 0),
+                    "backup_routines_count": sync_backup_routines.get("created", 0)
+                    + sync_backup_routines.get("updated", 0),
+                }
+                if orphan_sweep_result is not None:
+                    final_result["orphan_sweep"] = orphan_sweep_result
+
                 yield sse_event(
                     "complete",
                     {
                         "ok": True,
                         "message": "Full update sync completed.",
-                        "result": {
-                            "devices": sync_nodes,
-                            "storage": sync_storage,
-                            "virtual_machines": sync_vms,
-                            "virtual_disks": sync_disks,
-                            "task_history": sync_task_history,
-                            "backups": sync_backups,
-                            "snapshots": sync_snapshots,
-                            "node_interfaces": sync_node_interfaces,
-                            "vm_interfaces": sync_vm_interfaces,
-                            "vm_ip_addresses": sync_vm_ip_addresses,
-                            "replications": sync_replications,
-                            "backup_routines": sync_backup_routines,
-                            "devices_count": len(sync_nodes),
-                            "storage_count": len(sync_storage),
-                            "virtual_machines_count": len(sync_vms),
-                            "virtual_disks_count": _result_count(sync_disks),
-                            "task_history_count": _result_count(sync_task_history),
-                            "backups_count": len(sync_backups),
-                            "snapshots_count": _result_count(sync_snapshots),
-                            "node_interfaces_count": len(sync_node_interfaces),
-                            "vm_interfaces_count": len(sync_vm_interfaces),
-                            "vm_ip_addresses_count": len(sync_vm_ip_addresses),
-                            "replications_count": sync_replications.get("created", 0)
-                            + sync_replications.get("updated", 0),
-                            "backup_routines_count": sync_backup_routines.get("created", 0)
-                            + sync_backup_routines.get("updated", 0),
-                        },
+                        "result": final_result,
                     },
                 )
             except asyncio.CancelledError:
