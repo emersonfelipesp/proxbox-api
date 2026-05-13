@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from proxbox_api import settings_client
+from proxbox_api import runtime_settings, settings_client
 
 
 def test_get_default_settings_exposes_backend_log_file_path():
@@ -10,6 +10,7 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["backend_log_file_path"] == "/var/log/proxbox.log"
     assert settings["primary_ip_preference"] == "ipv4"
     assert settings["encryption_key"] == ""
+    assert settings["delete_orphans"] is False
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -36,6 +37,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "additional_allowed_ip_ranges": "",
         "explicitly_blocked_ip_ranges": "",
         "encryption_key": "my-plugin-key",
+        "delete_orphans": True,
     }
 
     mock_response = MagicMock()
@@ -51,6 +53,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
     assert settings["primary_ip_preference"] == "ipv6"
     assert settings["encryption_key"] == "my-plugin-key"
+    assert settings["delete_orphans"] is True
 
 
 def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):
@@ -80,6 +83,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
                 "netbox_timeout": 240,
                 "netbox_get_cache_max_entries": 8192,
                 "debug_cache": True,
+                "delete_orphans": True,
             }
         ],
     }
@@ -99,6 +103,45 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
     assert settings["netbox_timeout"] == 240
     assert settings["netbox_get_cache_max_entries"] == 8192
     assert settings["debug_cache"] is True
+    assert settings["delete_orphans"] is True
+
+
+def test_delete_orphans_runtime_bool_prefers_env_over_settings(monkeypatch):
+    monkeypatch.delenv("PROXBOX_DELETE_ORPHANS", raising=False)
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {"delete_orphans": True},
+    )
+
+    assert (
+        runtime_settings.get_bool(
+            settings_key="delete_orphans",
+            env="PROXBOX_DELETE_ORPHANS",
+            default=False,
+        )
+        is True
+    )
+
+    monkeypatch.setenv("PROXBOX_DELETE_ORPHANS", "0")
+    assert (
+        runtime_settings.get_bool(
+            settings_key="delete_orphans",
+            env="PROXBOX_DELETE_ORPHANS",
+            default=True,
+        )
+        is False
+    )
+
+    monkeypatch.setenv("PROXBOX_DELETE_ORPHANS", "1")
+    assert (
+        runtime_settings.get_bool(
+            settings_key="delete_orphans",
+            env="PROXBOX_DELETE_ORPHANS",
+            default=False,
+        )
+        is True
+    )
 
 
 def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypatch):
