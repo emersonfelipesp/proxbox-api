@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timezone
 
 from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
@@ -28,6 +29,7 @@ from proxbox_api.services.sync.individual.interface_sync import sync_interface_i
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     normalize_current_virtual_machine_payload,
+    stamp_vm_last_run_id,
 )
 
 
@@ -205,6 +207,7 @@ async def sync_vm_individual(
     vmid: int,
     dry_run: bool = False,
     overwrite_flags: SyncOverwriteFlags | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Sync a single Virtual Machine from Proxmox to NetBox.
 
@@ -220,10 +223,14 @@ async def sync_vm_individual(
         vmid: Proxmox VM ID.
         dry_run: If True, return what would be synced without making changes.
         overwrite_flags: Per-field overwrite gates for existing VM updates.
+        run_id: Optional UUID stamped on the VM's proxbox_last_run_id custom field.
+            When omitted, a fresh UUID is generated. Pass a shared UUID to make
+            related individual syncs share the same stamp.
 
     Returns:
         IndividualSyncResponse dict.
     """
+    effective_run_id = run_id or str(uuid.uuid4())
     service = BaseIndividualSyncService(nb, px, tag, overwrite_flags=overwrite_flags)
     now = datetime.now(timezone.utc)
 
@@ -394,6 +401,8 @@ async def sync_vm_individual(
             ),
         )
 
+        await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
+
         netbox_object = (
             virtual_machine.serialize() if hasattr(virtual_machine, "serialize") else None
         )
@@ -448,6 +457,7 @@ async def sync_vm_with_related(
     sync_interfaces: bool = True,
     sync_task_history: bool = True,
     overwrite_flags: SyncOverwriteFlags | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Sync a VM with its related objects (interfaces, task history) in parallel.
 
@@ -462,6 +472,7 @@ async def sync_vm_with_related(
         dry_run: If True, don't make changes.
         sync_interfaces: Whether to sync interfaces.
         sync_task_history: Whether to sync task history.
+        run_id: Optional UUID stamped on the VM's proxbox_last_run_id custom field.
 
     Returns:
         Dict with VM result and related sync results.
@@ -478,6 +489,7 @@ async def sync_vm_with_related(
         vmid,
         dry_run,
         overwrite_flags=overwrite_flags,
+        run_id=run_id,
     )
 
     related_results: list[dict] = []

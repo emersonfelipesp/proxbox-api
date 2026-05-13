@@ -3,6 +3,7 @@
 # FastAPI Imports
 import asyncio
 import inspect
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
@@ -90,6 +91,7 @@ from proxbox_api.services.sync.vm_helpers import (
     parse_comma_separated_ints,
     parse_key_value_string,
     preferred_primary_ip_order,
+    stamp_vm_last_run_id,
 )
 from proxbox_api.services.sync.vm_helpers import (
     relation_id as _relation_id,
@@ -1217,6 +1219,15 @@ async def create_virtual_machines(  # noqa: C901
     ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
+    run_id: str | None = Query(
+        default=None,
+        title="Run ID",
+        description=(
+            "UUID stamped on each touched VM's proxbox_last_run_id custom field. "
+            "When omitted, a fresh UUID is generated. Pass the full-update operation_id "
+            "to make every VM touched in a single run share the same stamp."
+        ),
+    ),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -1274,6 +1285,7 @@ async def create_virtual_machines(  # noqa: C901
             supports_virtual_machine_type_field=supports_vm_type,
         )
     )
+    effective_run_id = run_id or str(uuid.uuid4())
 
     filtered_cluster_resources = cluster_resources
     bridge: WebSocketSSEBridge | None = (
@@ -1951,6 +1963,8 @@ async def create_virtual_machines(  # noqa: C901
                 supports_virtual_machine_type_field=supports_vm_type,
             ),
         )
+
+        await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)
         if bridge:

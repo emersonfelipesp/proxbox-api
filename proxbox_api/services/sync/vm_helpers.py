@@ -332,3 +332,83 @@ def filter_cluster_resources_for_vm(
             if selected:
                 filtered.append({cluster_key_str: selected})
     return filtered
+
+
+LAST_RUN_ID_CUSTOM_FIELD = "proxbox_last_run_id"
+
+
+def _coerce_vm_record_to_dict(vm_record: object) -> dict[str, object] | None:
+    """Coerce a NetBox VM record (dict or pynetbox-style) into a plain dict."""
+    if isinstance(vm_record, dict):
+        return vm_record
+    if hasattr(vm_record, "dict"):
+        try:
+            coerced = vm_record.dict()
+        except Exception as error:
+            logger.debug("Failed to coerce VM record for stamping: %s", error)
+            return None
+        return coerced if isinstance(coerced, dict) else None
+    return None
+
+
+def _extract_vm_id(record: dict[str, object]) -> int | None:
+    """Extract an integer id from a NetBox VM record dict."""
+    raw_id = record.get("id")
+    if isinstance(raw_id, int):
+        return raw_id
+    if raw_id is None:
+        return None
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError):
+        return None
+
+
+async def stamp_vm_last_run_id(
+    nb: object,
+    vm_record: object,
+    run_id: str | None,
+) -> None:
+    """Stamp `custom_fields.proxbox_last_run_id` on a NetBox VM after reconcile.
+
+    Idempotent: if the record already carries the same run_id, no PATCH is issued.
+    Operator-set custom_fields keys are preserved by merging on top of the
+    current custom_fields dict. This runs as a separate narrow PATCH so the
+    stamp is written regardless of the operator's `overwrite_vm_custom_fields`
+    gate (which controls whether the main reconciler diffs `custom_fields` at all).
+    """
+    if not run_id or not vm_record:
+        return
+
+    record = _coerce_vm_record_to_dict(vm_record)
+    if record is None:
+        return
+
+    record_id = _extract_vm_id(record)
+    if not record_id:
+        return
+
+    current_cf = record.get("custom_fields")
+    if not isinstance(current_cf, dict):
+        current_cf = {}
+
+    if current_cf.get(LAST_RUN_ID_CUSTOM_FIELD) == run_id:
+        return
+
+    from proxbox_api.netbox_rest import rest_patch_async
+
+    merged_cf = {**current_cf, LAST_RUN_ID_CUSTOM_FIELD: run_id}
+    try:
+        await rest_patch_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            record_id,
+            {"custom_fields": merged_cf},
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Failed to stamp proxbox_last_run_id on VM id=%s name=%s: %s",
+            record_id,
+            record.get("name"),
+            error,
+        )
