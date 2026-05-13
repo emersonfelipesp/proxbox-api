@@ -342,7 +342,6 @@ def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
         "cluster",
         "device",
         "site",
-        "tenant",
         "vcpus",
         "memory",
         "disk",

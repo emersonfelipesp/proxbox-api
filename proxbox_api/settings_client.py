@@ -101,6 +101,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "proxmox_retry_backoff": 0.5,
         "default_role_qemu_id": None,
         "default_role_lxc_id": None,
+        "hardware_discovery_enabled": False,
     }
 
 
@@ -258,6 +259,7 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "proxmox_retry_backoff": float(settings.get("proxmox_retry_backoff", 0.5)),
             "default_role_qemu_id": _coerce_role_id(settings.get("default_role_qemu")),
             "default_role_lxc_id": _coerce_role_id(settings.get("default_role_lxc")),
+            "hardware_discovery_enabled": bool(settings.get("hardware_discovery_enabled", False)),
         }
 
     except urllib.error.URLError as exc:

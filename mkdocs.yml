@@ -71,6 +71,8 @@ nav:
       - Workflows: sync/workflows.md
       - VM Reconciliation Architecture: sync/reconciliation-architecture.md
       - Overwrite Flags: sync/overwrite-flags.md
+  - Operations:
+      - Hardware Discovery: operations/hardware-discovery.md
   - Development:
       - Schema Management: development/schema-management.md
       - Testing: development/testing.md

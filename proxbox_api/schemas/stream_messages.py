@@ -26,6 +26,7 @@ class StreamMessageType(str, Enum):
     ERROR_DETAIL = "error_detail"
     PROGRESS = "progress"
     DUPLICATE_NAME_RESOLVED = "duplicate_name_resolved"
+    HARDWARE_DISCOVERY = "hardware_discovery"
 
 
 class SubstepStatus(str, Enum):
@@ -175,6 +176,27 @@ class DuplicateNameResolvedMessage(ProxboxBaseModel):
         default=False,
         description="True when the NetBox record was already manually renamed by an operator",
     )
+
+
+class HardwareDiscoveryProgressMessage(ProxboxBaseModel):
+    """Frame emitted when SSH-based hardware discovery completes for a node.
+
+    A frame is emitted per node after ``dmidecode`` / ``ethtool`` parsing
+    succeeds. Failures use :class:`ItemProgressMessage` with the ``warning``
+    field so they ride the same UI surface as other per-item warnings
+    (host-key mismatch, SSH timeout, etc.).
+    """
+
+    event: str = Field(default="hardware_discovery", description="Message event type")
+    node: str = Field(description="Proxmox node name")
+    cluster: str | None = Field(default=None, description="Proxmox cluster name (human label)")
+    chassis_serial: str | None = Field(default=None, description="dmidecode chassis serial")
+    chassis_manufacturer: str | None = Field(
+        default=None, description="dmidecode chassis manufacturer"
+    )
+    chassis_product: str | None = Field(default=None, description="dmidecode system product name")
+    nic_count: int = Field(default=0, description="Number of NICs reflected onto NetBox")
+    duration_ms: int | None = Field(default=None, description="Discovery duration in ms")
 
 
 class StreamMessage(ProxboxBaseModel):
@@ -369,6 +391,28 @@ def build_duplicate_name_resolved_message(
         vmid=vmid,
         suffix_index=suffix_index,
         operator_renamed=operator_renamed,
+    )
+    return msg.model_dump(exclude_none=True)
+
+
+def build_hardware_discovery_message(
+    node: str,
+    cluster: str | None = None,
+    chassis_serial: str | None = None,
+    chassis_manufacturer: str | None = None,
+    chassis_product: str | None = None,
+    nic_count: int = 0,
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    """Build a hardware-discovery progress frame for a single node."""
+    msg = HardwareDiscoveryProgressMessage(
+        node=node,
+        cluster=cluster,
+        chassis_serial=chassis_serial,
+        chassis_manufacturer=chassis_manufacturer,
+        chassis_product=chassis_product,
+        nic_count=nic_count,
+        duration_ms=duration_ms,
     )
     return msg.model_dump(exclude_none=True)
 

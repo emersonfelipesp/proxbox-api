@@ -63,7 +63,9 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
     assert payload["tenant"] == 9
 
 
-def test_vm_payload_includes_endpoint_site_and_tenant() -> None:
+def test_vm_payload_includes_endpoint_site_and_excludes_tenant() -> None:
+    # Issue #365: tenant assignment is owned by the netbox-proxbox plugin via
+    # name-regex mapping; the create body must never include tenant.
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource={
             "vmid": 101,
@@ -86,4 +88,4 @@ def test_vm_payload_includes_endpoint_site_and_tenant() -> None:
     )
 
     assert payload["site"] == 42
-    assert payload["tenant"] == 11
+    assert "tenant" not in payload

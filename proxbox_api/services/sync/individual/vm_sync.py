@@ -131,7 +131,6 @@ def _build_netbox_vm_payload(
     proxmox_url: str | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
-    tenant_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -171,13 +170,14 @@ def _build_netbox_vm_payload(
         vmid = int(resource.get("vmid") or 0)
         vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
+    # Issue #365: tenant is owned by the netbox-proxbox plugin (name-regex
+    # mapping); proxbox-api must never send tenant on the create body.
     payload: dict[str, object] = {
         "name": str(resource.get("name", "")),
         "status": status,
         "cluster": cluster_id,
         "device": device_id,
         "site": site_id,
-        "tenant": tenant_id,
         "role": role_id,
         "vcpus": maxcpu,
         "memory": memory_mb,
@@ -306,8 +306,6 @@ async def sync_vm_individual(
         role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
         site_id = int(getattr(_site, "id", 0) or 0) if _site else None
-        tenant = await service._get_or_create_tenant()
-        tenant_id = int(getattr(tenant, "id", 0) or 0) if tenant else None
 
         px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
         px_port = getattr(px, "http_port", 8006)
@@ -348,7 +346,6 @@ async def sync_vm_individual(
             proxmox_url=px_url,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
-            tenant_id=tenant_id,
         )
         netbox_version = await detect_netbox_version(nb)
         supports_vm_type = supports_virtual_machine_type(netbox_version)

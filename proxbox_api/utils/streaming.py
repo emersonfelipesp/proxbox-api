@@ -14,6 +14,7 @@ from proxbox_api.schemas.stream_messages import (
     build_discovery_message,
     build_duplicate_name_resolved_message,
     build_error_detail_message,
+    build_hardware_discovery_message,
     build_item_progress_message,
     build_phase_summary_message,
     build_substep_message,
@@ -316,6 +317,28 @@ class WebSocketSSEBridge:
             operator_renamed=operator_renamed,
         )
         await self._queue.put(("duplicate_name_resolved", msg))
+
+    async def emit_hardware_discovery_progress(
+        self,
+        node: str,
+        cluster: str | None = None,
+        chassis_serial: str | None = None,
+        chassis_manufacturer: str | None = None,
+        chassis_product: str | None = None,
+        nic_count: int = 0,
+        duration_ms: int | None = None,
+    ) -> None:
+        """Emit a `hardware_discovery` progress frame for a single node."""
+        msg = build_hardware_discovery_message(
+            node=node,
+            cluster=cluster,
+            chassis_serial=chassis_serial,
+            chassis_manufacturer=chassis_manufacturer,
+            chassis_product=chassis_product,
+            nic_count=nic_count,
+            duration_ms=duration_ms,
+        )
+        await self._queue.put(("hardware_discovery", msg))
 
     # Legacy helper methods (preserved for compatibility)
 
