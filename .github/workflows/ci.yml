@@ -83,15 +83,14 @@ jobs:
   test-free-threaded:
     runs-on: ubuntu-latest
     continue-on-error: true
-    # SQLAlchemy's C-extension event registry is not yet free-thread safe and
-    # segfaults during engine.dispose() teardown under Python 3.14t (crash
-    # trace points at sqlalchemy/event/registry.py:_stored_in_collection_multi
-    # via pool.recreate → engine.dispose). Until SQLAlchemy ships a
-    # free-threading-safe release we run this lane with the GIL re-enabled so
-    # we still validate that the package compiles and imports cleanly on the
-    # 3.14t binary without false-negatives from upstream segfaults.
-    env:
-      PYTHON_GIL: "1"
+    # This lane validates that the package compiles and imports cleanly on the
+    # 3.14t free-threaded binary. It does NOT run the full pytest suite because
+    # SQLAlchemy's C-extension event registry segfaults during engine.dispose()
+    # teardown under 3.14t (crash trace points at
+    # sqlalchemy/event/registry.py:_stored_in_collection_multi via
+    # pool.recreate → engine.dispose), and the crash persists even with
+    # PYTHON_GIL=1. The Python 3.13 and 3.11 lanes already exercise the
+    # full test suite.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -113,9 +112,6 @@ jobs:
           uv run python -c "import proxbox_api.main"
           uv run python -c "import proxmox_sdk.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-
-      - name: Core tests
-        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --ignore=tests/test_endpoint_crud.py --tb=short
 
   docker-bind-smoke:
     name: Docker bind-host smoke (issue #52)
