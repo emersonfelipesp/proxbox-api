@@ -407,7 +407,8 @@ jobs:
             -e POSTGRES_DB=netbox \
             -e POSTGRES_USER=netbox \
             -e POSTGRES_PASSWORD=netbox \
-            postgres:16-alpine
+            postgres:16-alpine \
+            postgres -c max_connections=300
 
           docker run -d --name netbox-e2e-redis --network proxbox-e2e \
             redis:7-alpine
@@ -503,6 +504,7 @@ jobs:
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
               -e DB_PASSWORD=netbox \
+              -e DB_CONN_MAX_AGE=0 \
               -e REDIS_HOST=netbox-e2e-redis \
               -e REDIS_DATABASE=0 \
               -e REDIS_CACHE_HOST=netbox-e2e-redis \
@@ -520,6 +522,7 @@ jobs:
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
               -e DB_PASSWORD=netbox \
+              -e DB_CONN_MAX_AGE=0 \
               -e REDIS_HOST=netbox-e2e-redis \
               -e REDIS_DATABASE=0 \
               -e REDIS_CACHE_HOST=netbox-e2e-redis \
@@ -543,6 +546,7 @@ jobs:
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
               -e DB_PASSWORD=netbox \
+              -e DB_CONN_MAX_AGE=0 \
               -e REDIS_HOST=netbox-e2e-redis \
               -e REDIS_DATABASE=0 \
               -e REDIS_CACHE_HOST=netbox-e2e-redis \
