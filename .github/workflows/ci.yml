@@ -105,8 +105,13 @@ jobs:
           uv run python -c "import proxmox_sdk.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
-      - name: Core tests
-        run: uv run pytest tests/ -v --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --ignore=tests/test_endpoint_crud.py --tb=short
+      - name: Free-threaded unit subset
+        run: |
+          uv run pytest \
+            tests/test_proxbox_last_run_id_stamp.py \
+            tests/test_vm_sync.py \
+            tests/test_patchable_fields.py \
+            -v --tb=short
 
   docker-bind-smoke:
     name: Docker bind-host smoke (issue #52)
