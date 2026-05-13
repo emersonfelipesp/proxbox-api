@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="pt" class="no-js">
+<html lang="en" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -10,32 +10,32 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/deployment/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/operations/hardware-discovery/">
       
       
-        <link rel="prev" href="../ci-e2e-workflows/">
+        <link rel="prev" href="../../sync/overwrite-flags/">
       
       
-        <link rel="next" href="../release-publishing/">
+        <link rel="next" href="../../development/schema-management/">
       
       
         
-          <link rel="alternate" href="../../../development/deployment/" hreflang="en">
+          <link rel="alternate" href="./" hreflang="en">
         
-          <link rel="alternate" href="./" hreflang="pt-BR">
+          <link rel="alternate" href="../../pt-BR/operations/hardware-discovery/" hreflang="pt-BR">
         
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Deployment - proxbox-api</title>
+        <title>Hardware Discovery - proxbox-api</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -54,7 +54,7 @@
       
     
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -72,8 +72,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#deploy-e-github-pages" class="md-skip">
-          Pular para conteúdo
+        <a href="#hardware-discovery" class="md-skip">
+          Skip to content
         </a>
       
     </div>
@@ -87,8 +87,8 @@
   
 
 <header class="md-header md-header--shadow" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="Cabeçalho">
-    <a href="../../" title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Deployment
+              Hardware Discovery
             
           </span>
         </div>
@@ -122,20 +122,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="Selecione o idioma">
+    <button class="md-header__button md-icon" aria-label="Select language">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../development/deployment/" hreflang="en" class="md-select__link">
+            <a href="./" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="./" hreflang="pt-BR" class="md-select__link">
+            <a href="../../pt-BR/operations/hardware-discovery/" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -156,16 +156,16 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="Buscar" placeholder="Buscar" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="Pesquisar">
+      <nav class="md-search__options" aria-label="Search">
         
-        <button type="reset" class="md-search__icon md-icon" title="Limpar" aria-label="Limpar" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -176,7 +176,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            Inicializando busca
+            Initializing search
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -188,7 +188,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
+        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -222,9 +222,9 @@
 
 
 
-<nav class="md-nav md-nav--primary" aria-label="Navegação" data-md-level="0">
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../" title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+    <a href="../.." title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -234,7 +234,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
+      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -254,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -858,8 +858,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -870,13 +872,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
           <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
@@ -897,7 +897,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -912,10 +912,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../operations/hardware-discovery/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware Discovery
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -931,6 +958,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enabling-the-pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enabling the pass
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sse-frames" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE frames
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#netbox-custom-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBox custom fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test surface
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -947,8 +1060,6 @@
       
   
   
-    
-  
   
   
     
@@ -961,11 +1072,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
         
           
           <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
@@ -986,7 +1099,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1004,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../schema-management/" class="md-nav__link">
+      <a href="../../development/schema-management/" class="md-nav__link">
         
   
   
@@ -1032,7 +1145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../testing/" class="md-nav__link">
+      <a href="../../development/testing/" class="md-nav__link">
         
   
   
@@ -1060,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ci-e2e-workflows/" class="md-nav__link">
+      <a href="../../development/ci-e2e-workflows/" class="md-nav__link">
         
   
   
@@ -1085,37 +1198,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Deployment
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../development/deployment/" class="md-nav__link">
         
   
   
@@ -1131,48 +1217,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Índice">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Índice
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Workflow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#destino-de-publicacao" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Destino de publicacao
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1185,7 +1229,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../release-publishing/" class="md-nav__link">
+      <a href="../../development/release-publishing/" class="md-nav__link">
         
   
   
@@ -1213,7 +1257,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../development/troubleshooting/" class="md-nav__link">
         
   
   
@@ -1241,7 +1285,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../contributing/" class="md-nav__link">
+      <a href="../../development/contributing/" class="md-nav__link">
         
   
   
@@ -1269,7 +1313,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../refactoring-summary/" class="md-nav__link">
+      <a href="../../development/refactoring-summary/" class="md-nav__link">
         
   
   
@@ -1297,7 +1341,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sync-fix-summary/" class="md-nav__link">
+      <a href="../../development/sync-fix-summary/" class="md-nav__link">
         
   
   
@@ -1338,7 +1382,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="Índice">
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
   
   
   
@@ -1347,15 +1391,15 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Índice
+      Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
+  <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Workflow
+        Architecture
       
     </span>
   </a>
@@ -1363,10 +1407,54 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#destino-de-publicacao" class="md-nav__link">
+  <a href="#enabling-the-pass" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Destino de publicacao
+        Enabling the pass
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sse-frames" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SSE frames
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#netbox-custom-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NetBox custom fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test surface
       
     </span>
   </a>
@@ -1390,7 +1478,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/development/deployment.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/operations/hardware-discovery.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1398,24 +1486,195 @@
   
 
 
-<h1 id="deploy-e-github-pages">Deploy e GitHub Pages<a class="headerlink" href="#deploy-e-github-pages" title="Permanent link">&para;</a></h1>
-<p>A documentacao e publicada automaticamente no GitHub Pages usando a branch <code>gh-pages</code>.</p>
-<h2 id="workflow">Workflow<a class="headerlink" href="#workflow" title="Permanent link">&para;</a></h2>
-<p>Arquivo:</p>
+<h1 id="hardware-discovery">Hardware Discovery<a class="headerlink" href="#hardware-discovery" title="Permanent link">&para;</a></h1>
+<p>Opt-in pass that enriches each Proxmox node's <code>dcim.Device</code> and per-NIC
+<code>dcim.Interface</code> records with chassis and link facts that Proxmox VE does not
+expose over its REST API. Facts are gathered over SSH from the node by running
+<code>dmidecode</code>, <code>ip -o link show</code>, and <code>ethtool</code>.</p>
+<p>This pass is <strong>disabled by default</strong>. With the flag off, zero SSH sockets are
+opened during a sync.</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<p>```
+proxbox-api  (orchestrator — no paramiko import)
+  └── proxbox_api/services/hardware_discovery.py
+        ├── is_enabled()                    settings flag check
+        ├── fetch_credential(node_id)       HTTPS+Bearer to netbox-proxbox
+        └── run_for_nodes(nb, nodes, *, bridge)
+              imports proxmox_sdk.ssh.RemoteSSHClient
+              imports proxmox_sdk.node.hardware.discover_node
+              sequential per-node loop, exception → SSE warning frame</p>
+<p>proxmox-sdk (library — owns all SSH primitives + parsers)
+  ├── proxmox_sdk.ssh.RemoteSSHClient
+  └── proxmox_sdk.node.hardware.{dmidecode,ethtool,facts,discover}</p>
+<p>netbox-proxbox (NetBox plugin)
+  ├── ProxboxPluginSettings.hardware_discovery_enabled
+  └── NodeSSHCredential model + REST endpoint
+        /api/plugins/proxbox/ssh-credentials/by-node/{node_id}/credentials/
+```</p>
+<p>The "no <code>paramiko</code> under <code>proxbox_api/</code>" invariant is pinned by
+<code>tests/test_hardware_discovery_no_paramiko_import.py</code>, which AST-walks the
+package and fails on any import of <code>paramiko</code>, <code>asyncssh</code>, <code>fabric</code>, etc.</p>
+<h2 id="enabling-the-pass">Enabling the pass<a class="headerlink" href="#enabling-the-pass" title="Permanent link">&para;</a></h2>
+<ol>
+<li>In NetBox → Plugins → Proxbox → Settings, toggle
+   <strong>Hardware discovery enabled</strong>.</li>
+<li>For each node, create a <code>NodeSSHCredential</code> (NetBox → Plugins → Proxbox →
+   SSH Credentials). Configure:</li>
+<li>username</li>
+<li>private key (ed25519 recommended) or password</li>
+<li>SHA-256 host-key fingerprint (no TOFU; the fingerprint must be
+     captured beforehand and pinned)</li>
+<li><code>sudo_required</code> (defaults to <code>True</code> for <code>dmidecode</code>)</li>
+<li>On the Proxmox node, provision a dedicated <code>proxbox-discovery</code> user with a
+   sudoers entry restricted to <code>/usr/sbin/dmidecode -t 1</code> and
+   <code>/usr/sbin/dmidecode -t 3</code> only.</li>
+<li>Trigger a sync. After each node is upserted, the discovery pass runs
+   sequentially for nodes that have a primary IP.</li>
+</ol>
+<p>See <code>netbox-proxbox/docs/configuration/hardware-discovery.md</code> for the operator
+walkthrough (key generation, fingerprint pinning UI, node-side <code>authorized_keys</code>
+<code>command=</code> setup).</p>
+<h2 id="sse-frames">SSE frames<a class="headerlink" href="#sse-frames" title="Permanent link">&para;</a></h2>
+<p>On success the orchestrator emits one <code>hardware_discovery</code> frame per node via
+<code>WebSocketSSEBridge.emit_hardware_discovery_progress()</code>:</p>
+<p><code>json
+{
+  "type": "hardware_discovery",
+  "node": "pve01",
+  "node_id": 42,
+  "chassis_serial": "ABCD1234",
+  "chassis_manufacturer": "Dell Inc.",
+  "chassis_product": "PowerEdge R740",
+  "nic_count": 4
+}</code></p>
+<p>On failure the orchestrator emits a generic <code>item_progress</code> frame with a
+<code>warning</code> field. Warning codes:</p>
+<table>
+<thead>
+<tr>
+<th>Warning</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hardware_discovery_no_primary_ip</code></td>
+<td>Node has no <code>primary_ip4</code>/<code>primary_ip</code> set in NetBox.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_no_credential</code></td>
+<td>No <code>NodeSSHCredential</code> exists for this node id.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_timeout</code></td>
+<td>SSH connect or exec timed out.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_auth_failed</code></td>
+<td>SSH authentication failed.</td>
+</tr>
+<tr>
+<td><code>host_key_mismatch</code></td>
+<td>The node's host key does not match the pinned fingerprint. Credentials are NOT sent.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_failed: &lt;exc&gt;</code></td>
+<td>Catch-all for any other exception.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="netbox-custom-fields">NetBox custom fields<a class="headerlink" href="#netbox-custom-fields" title="Permanent link">&para;</a></h2>
+<p>Six custom fields are bootstrapped under the existing <strong>Proxmox</strong> group_name
+by <code>proxbox_api/routes/extras/__init__.py::create_custom_fields()</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Object</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hardware_chassis_serial</code></td>
+<td><code>dcim.device</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>hardware_chassis_manufacturer</code></td>
+<td><code>dcim.device</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>hardware_chassis_product</code></td>
+<td><code>dcim.device</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>nic_speed_gbps</code></td>
+<td><code>dcim.interface</code></td>
+<td>decimal</td>
+</tr>
+<tr>
+<td><code>nic_duplex</code></td>
+<td><code>dcim.interface</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>nic_link</code></td>
+<td><code>dcim.interface</code></td>
+<td>boolean</td>
+</tr>
+</tbody>
+</table>
+<p>Writes go through the existing drift-detect PATCH path
+(<code>netbox_rest.rest_patch_async</code>), so a second consecutive successful sync emits
+zero <code>extras.ObjectChange</code> rows for these fields.</p>
+<h2 id="security-boundary">Security boundary<a class="headerlink" href="#security-boundary" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>.github/workflows/docs.yml</code></li>
+<li>Credentials live encrypted (Fernet) inside netbox-proxbox; plaintext only
+  exists in the orchestrator's process memory for the duration of one SSH
+  session.</li>
+<li>The credential REST endpoint requires a Bearer token matching
+  <code>FastAPIEndpoint.token</code>.</li>
+<li><code>RemoteSSHClient</code> in proxmox-sdk enforces:</li>
+<li>SHA-256 host-key fingerprint pinning (refuses connect on mismatch — no
+    TOFU)</li>
+<li>argv-list-only <code>run()</code> (no shell interpolation)</li>
+<li>command allowlist (<code>["dmidecode", "ip", "ethtool"]</code> is enforced by the
+    orchestrator)</li>
+<li>output cap, connect/exec timeouts</li>
+<li>log-redactor regexes to keep key material out of <code>caplog</code>/<code>logger</code></li>
+<li>The orchestrator runs nodes sequentially per cluster so a stalled node
+  cannot starve others.</li>
 </ul>
-<p>Comportamento:</p>
-<ul>
-<li>PRs para <code>main</code> com alteracoes em docs executam build estrito.</li>
-<li>Push em <code>main</code> com alteracoes em docs executa build e deploy.</li>
-<li>Tambem pode ser executado manualmente (<code>workflow_dispatch</code>).</li>
-</ul>
-<h2 id="destino-de-publicacao">Destino de publicacao<a class="headerlink" href="#destino-de-publicacao" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Branch: <code>gh-pages</code></li>
-<li>Pasta publicada: <code>site/</code></li>
-</ul>
+<h2 id="test-surface">Test surface<a class="headerlink" href="#test-surface" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Pins</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests/test_hardware_discovery_no_paramiko_import.py</code></td>
+<td>Static AST guard: no SSH library imports under <code>proxbox_api/</code>.</td>
+</tr>
+<tr>
+<td><code>tests/test_hardware_discovery_flag_off.py</code></td>
+<td>Flag off → zero <code>RemoteSSHClient</code> constructions.</td>
+</tr>
+<tr>
+<td><code>tests/test_hardware_discovery_orchestrator.py</code></td>
+<td>Sequential dispatch, success-frame shape, warning-code mapping for every failure class.</td>
+</tr>
+<tr>
+<td><code>tests/test_hardware_discovery_credential_fetch.py</code></td>
+<td>HTTPS+Bearer URL shape, 404 → <code>MissingCredential</code>, 5xx/malformed/non-dict → <code>HardwareDiscoveryError</code>, no secret leakage at DEBUG.</td>
+</tr>
+</tbody>
+</table>
 
 
 
@@ -1439,7 +1698,7 @@
           <button type="button" class="md-top md-icon" data-md-component="top" hidden>
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
-  Voltar para o topo
+  Back to top
 </button>
         
       </main>
@@ -1471,10 +1730,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado para \u00e1rea de transfer\u00eancia", "clipboard.copy": "Copiar para \u00e1rea de transfer\u00eancia", "search.result.more.one": "mais 1 nesta p\u00e1gina", "search.result.more.other": "# mais nesta p\u00e1gina", "search.result.none": "Nenhum documento encontrado", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Digite para iniciar a busca", "search.result.term.missing": "Ausente", "select.version": "Selecione a vers\u00e3o"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

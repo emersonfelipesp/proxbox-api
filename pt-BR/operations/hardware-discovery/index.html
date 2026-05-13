@@ -10,17 +10,17 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/development/deployment/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/operations/hardware-discovery/">
       
       
-        <link rel="prev" href="../ci-e2e-workflows/">
+        <link rel="prev" href="../../sync/overwrite-flags/">
       
       
-        <link rel="next" href="../release-publishing/">
+        <link rel="next" href="../../development/schema-management/">
       
       
         
-          <link rel="alternate" href="../../../development/deployment/" hreflang="en">
+          <link rel="alternate" href="../../../operations/hardware-discovery/" hreflang="en">
         
           <link rel="alternate" href="./" hreflang="pt-BR">
         
@@ -31,7 +31,7 @@
     
     
       
-        <title>Deployment - proxbox-api</title>
+        <title>Hardware Discovery - proxbox-api</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#deploy-e-github-pages" class="md-skip">
+        <a href="#descoberta-de-hardware" class="md-skip">
           Pular para conteúdo
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Deployment
+              Hardware Discovery
             
           </span>
         </div>
@@ -129,7 +129,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../development/deployment/" hreflang="en" class="md-select__link">
+            <a href="../../../operations/hardware-discovery/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -858,8 +858,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -870,13 +872,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
           <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
@@ -897,7 +897,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -912,10 +912,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../operations/hardware-discovery/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware Discovery
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -931,6 +958,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Índice
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#arquitetura" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Arquitetura
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#habilitando-a-etapa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Habilitando a etapa
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frames-sse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frames SSE
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-fields-no-netbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom fields no NetBox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fronteira-de-seguranca" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fronteira de segurança
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cobertura-de-testes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cobertura de testes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -947,8 +1060,6 @@
       
   
   
-    
-  
   
   
     
@@ -961,11 +1072,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
         
           
           <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
@@ -986,7 +1099,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1004,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../schema-management/" class="md-nav__link">
+      <a href="../../development/schema-management/" class="md-nav__link">
         
   
   
@@ -1032,7 +1145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../testing/" class="md-nav__link">
+      <a href="../../development/testing/" class="md-nav__link">
         
   
   
@@ -1060,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ci-e2e-workflows/" class="md-nav__link">
+      <a href="../../development/ci-e2e-workflows/" class="md-nav__link">
         
   
   
@@ -1085,37 +1198,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Deployment
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../development/deployment/" class="md-nav__link">
         
   
   
@@ -1131,48 +1217,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Índice">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Índice
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Workflow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#destino-de-publicacao" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Destino de publicacao
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1185,7 +1229,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../release-publishing/" class="md-nav__link">
+      <a href="../../development/release-publishing/" class="md-nav__link">
         
   
   
@@ -1213,7 +1257,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../development/troubleshooting/" class="md-nav__link">
         
   
   
@@ -1241,7 +1285,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../contributing/" class="md-nav__link">
+      <a href="../../development/contributing/" class="md-nav__link">
         
   
   
@@ -1269,7 +1313,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../refactoring-summary/" class="md-nav__link">
+      <a href="../../development/refactoring-summary/" class="md-nav__link">
         
   
   
@@ -1297,7 +1341,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sync-fix-summary/" class="md-nav__link">
+      <a href="../../development/sync-fix-summary/" class="md-nav__link">
         
   
   
@@ -1352,10 +1396,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
+  <a href="#arquitetura" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Workflow
+        Arquitetura
       
     </span>
   </a>
@@ -1363,10 +1407,54 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#destino-de-publicacao" class="md-nav__link">
+  <a href="#habilitando-a-etapa" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Destino de publicacao
+        Habilitando a etapa
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frames-sse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frames SSE
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-fields-no-netbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom fields no NetBox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fronteira-de-seguranca" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fronteira de segurança
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cobertura-de-testes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cobertura de testes
       
     </span>
   </a>
@@ -1390,7 +1478,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/development/deployment.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/pt-BR/operations/hardware-discovery.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1398,24 +1486,197 @@
   
 
 
-<h1 id="deploy-e-github-pages">Deploy e GitHub Pages<a class="headerlink" href="#deploy-e-github-pages" title="Permanent link">&para;</a></h1>
-<p>A documentacao e publicada automaticamente no GitHub Pages usando a branch <code>gh-pages</code>.</p>
-<h2 id="workflow">Workflow<a class="headerlink" href="#workflow" title="Permanent link">&para;</a></h2>
-<p>Arquivo:</p>
+<h1 id="descoberta-de-hardware">Descoberta de Hardware<a class="headerlink" href="#descoberta-de-hardware" title="Permanent link">&para;</a></h1>
+<p>Etapa opcional que enriquece o <code>dcim.Device</code> de cada nó Proxmox e os
+<code>dcim.Interface</code> de suas NICs com informações de chassi e enlace que a API
+REST do Proxmox VE não expõe. Os dados são coletados via SSH no nó executando
+<code>dmidecode</code>, <code>ip -o link show</code> e <code>ethtool</code>.</p>
+<p>A etapa é <strong>desabilitada por padrão</strong>. Com o flag desligado, nenhum socket SSH
+é aberto durante a sincronização.</p>
+<h2 id="arquitetura">Arquitetura<a class="headerlink" href="#arquitetura" title="Permanent link">&para;</a></h2>
+<p>```
+proxbox-api  (orquestrador — sem import de paramiko)
+  └── proxbox_api/services/hardware_discovery.py
+        ├── is_enabled()                    checagem do flag de configuração
+        ├── fetch_credential(node_id)       HTTPS+Bearer para netbox-proxbox
+        └── run_for_nodes(nb, nodes, *, bridge)
+              importa proxmox_sdk.ssh.RemoteSSHClient
+              importa proxmox_sdk.node.hardware.discover_node
+              laço sequencial por nó, exceção → frame SSE de warning</p>
+<p>proxmox-sdk (biblioteca — dona de todas as primitivas SSH + parsers)
+  ├── proxmox_sdk.ssh.RemoteSSHClient
+  └── proxmox_sdk.node.hardware.{dmidecode,ethtool,facts,discover}</p>
+<p>netbox-proxbox (plugin NetBox)
+  ├── ProxboxPluginSettings.hardware_discovery_enabled
+  └── modelo NodeSSHCredential + endpoint REST
+        /api/plugins/proxbox/ssh-credentials/by-node/{node_id}/credentials/
+```</p>
+<p>A invariante "sem <code>paramiko</code> em <code>proxbox_api/</code>" é fixada pelo teste
+<code>tests/test_hardware_discovery_no_paramiko_import.py</code>, que percorre a AST do
+pacote e falha se encontrar qualquer import de <code>paramiko</code>, <code>asyncssh</code>,
+<code>fabric</code>, etc.</p>
+<h2 id="habilitando-a-etapa">Habilitando a etapa<a class="headerlink" href="#habilitando-a-etapa" title="Permanent link">&para;</a></h2>
+<ol>
+<li>No NetBox → Plugins → Proxbox → Settings, ative
+   <strong>Hardware discovery enabled</strong>.</li>
+<li>Para cada nó, crie uma <code>NodeSSHCredential</code> (NetBox → Plugins → Proxbox →
+   SSH Credentials). Configure:</li>
+<li>username</li>
+<li>chave privada (ed25519 recomendado) ou senha</li>
+<li>fingerprint SHA-256 da chave do host (não há TOFU; o fingerprint precisa
+     ser capturado e fixado previamente)</li>
+<li><code>sudo_required</code> (padrão <code>True</code> para <code>dmidecode</code>)</li>
+<li>No nó Proxmox, provisione um usuário dedicado <code>proxbox-discovery</code> com uma
+   entrada de sudoers restrita apenas a <code>/usr/sbin/dmidecode -t 1</code> e
+   <code>/usr/sbin/dmidecode -t 3</code>.</li>
+<li>Dispare uma sincronização. Após cada nó ser sincronizado, a etapa de
+   descoberta roda sequencialmente para os nós que possuem IP primário.</li>
+</ol>
+<p>Veja <code>netbox-proxbox/docs/configuration/hardware-discovery.md</code> para o passo a
+passo do operador (geração de chave, fixação de fingerprint na UI,
+configuração no nó de <code>authorized_keys</code> com <code>command=</code>).</p>
+<h2 id="frames-sse">Frames SSE<a class="headerlink" href="#frames-sse" title="Permanent link">&para;</a></h2>
+<p>Em caso de sucesso, o orquestrador emite um frame <code>hardware_discovery</code> por nó
+via <code>WebSocketSSEBridge.emit_hardware_discovery_progress()</code>:</p>
+<p><code>json
+{
+  "type": "hardware_discovery",
+  "node": "pve01",
+  "node_id": 42,
+  "chassis_serial": "ABCD1234",
+  "chassis_manufacturer": "Dell Inc.",
+  "chassis_product": "PowerEdge R740",
+  "nic_count": 4
+}</code></p>
+<p>Em caso de falha, um frame <code>item_progress</code> genérico com campo <code>warning</code> é
+emitido. Códigos:</p>
+<table>
+<thead>
+<tr>
+<th>Warning</th>
+<th>Causa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hardware_discovery_no_primary_ip</code></td>
+<td>Nó sem <code>primary_ip4</code>/<code>primary_ip</code> no NetBox.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_no_credential</code></td>
+<td>Nenhuma <code>NodeSSHCredential</code> para o <code>node_id</code>.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_timeout</code></td>
+<td>Timeout na conexão ou execução SSH.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_auth_failed</code></td>
+<td>Falha de autenticação SSH.</td>
+</tr>
+<tr>
+<td><code>host_key_mismatch</code></td>
+<td>Host-key do nó não bate com o fingerprint fixado. Credenciais NÃO são enviadas.</td>
+</tr>
+<tr>
+<td><code>hardware_discovery_failed: &lt;exc&gt;</code></td>
+<td>Catch-all para qualquer outra exceção.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="custom-fields-no-netbox">Custom fields no NetBox<a class="headerlink" href="#custom-fields-no-netbox" title="Permanent link">&para;</a></h2>
+<p>Seis custom fields são criados pelo bootstrap em
+<code>proxbox_api/routes/extras/__init__.py::create_custom_fields()</code> no grupo já
+existente <strong>Proxmox</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Campo</th>
+<th>Objeto</th>
+<th>Tipo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hardware_chassis_serial</code></td>
+<td><code>dcim.device</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>hardware_chassis_manufacturer</code></td>
+<td><code>dcim.device</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>hardware_chassis_product</code></td>
+<td><code>dcim.device</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>nic_speed_gbps</code></td>
+<td><code>dcim.interface</code></td>
+<td>decimal</td>
+</tr>
+<tr>
+<td><code>nic_duplex</code></td>
+<td><code>dcim.interface</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td><code>nic_link</code></td>
+<td><code>dcim.interface</code></td>
+<td>boolean</td>
+</tr>
+</tbody>
+</table>
+<p>As escritas passam pelo PATCH com drift-detect existente
+(<code>netbox_rest.rest_patch_async</code>), então um segundo sync consecutivo bem-sucedido
+não gera nenhum <code>extras.ObjectChange</code> para esses campos.</p>
+<h2 id="fronteira-de-seguranca">Fronteira de segurança<a class="headerlink" href="#fronteira-de-seguranca" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>.github/workflows/docs.yml</code></li>
+<li>Credenciais ficam criptografadas (Fernet) no netbox-proxbox; texto puro
+  existe apenas na memória do orquestrador pela duração de uma única sessão
+  SSH.</li>
+<li>O endpoint REST de credenciais exige Bearer token que case com
+  <code>FastAPIEndpoint.token</code>.</li>
+<li>O <code>RemoteSSHClient</code> do proxmox-sdk garante:</li>
+<li>fixação de fingerprint SHA-256 (recusa conexão em mismatch — sem TOFU)</li>
+<li><code>run()</code> aceita apenas <code>list[str]</code> (sem interpolação de shell)</li>
+<li>allowlist de comandos (<code>["dmidecode", "ip", "ethtool"]</code> é imposto pelo
+    orquestrador)</li>
+<li>cap de saída, timeouts de conexão/exec</li>
+<li>regexes de redator de logs para manter material de chave fora do
+    <code>caplog</code>/<code>logger</code></li>
+<li>O orquestrador roda os nós sequencialmente, por cluster, para que um nó
+  travado não impeça os demais.</li>
 </ul>
-<p>Comportamento:</p>
-<ul>
-<li>PRs para <code>main</code> com alteracoes em docs executam build estrito.</li>
-<li>Push em <code>main</code> com alteracoes em docs executa build e deploy.</li>
-<li>Tambem pode ser executado manualmente (<code>workflow_dispatch</code>).</li>
-</ul>
-<h2 id="destino-de-publicacao">Destino de publicacao<a class="headerlink" href="#destino-de-publicacao" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Branch: <code>gh-pages</code></li>
-<li>Pasta publicada: <code>site/</code></li>
-</ul>
+<h2 id="cobertura-de-testes">Cobertura de testes<a class="headerlink" href="#cobertura-de-testes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Teste</th>
+<th>Garante</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests/test_hardware_discovery_no_paramiko_import.py</code></td>
+<td>Guard estático via AST: nenhum import de biblioteca SSH em <code>proxbox_api/</code>.</td>
+</tr>
+<tr>
+<td><code>tests/test_hardware_discovery_flag_off.py</code></td>
+<td>Flag desligado → zero construções de <code>RemoteSSHClient</code>.</td>
+</tr>
+<tr>
+<td><code>tests/test_hardware_discovery_orchestrator.py</code></td>
+<td>Despacho sequencial, formato do frame de sucesso, mapeamento de cada classe de falha para o código de warning correto.</td>
+</tr>
+<tr>
+<td><code>tests/test_hardware_discovery_credential_fetch.py</code></td>
+<td>Formato da URL HTTPS+Bearer, 404 → <code>MissingCredential</code>, 5xx/JSON inválido/corpo não-dict → <code>HardwareDiscoveryError</code>, nenhum vazamento de segredo em DEBUG.</td>
+</tr>
+</tbody>
+</table>
 
 
 
