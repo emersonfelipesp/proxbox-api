@@ -21,12 +21,17 @@
   - `/ws`
   - `/ws/virtual-machines`
   - `/admin`
+  - `/admin/encryption` — superficie de inspecao e rotacao da chave de criptografia.
+  - `/auth` — bootstrap e gerenciamento de chaves de API.
   - `/netbox`
   - `/proxmox`
+  - `/proxmox/cluster/ha/*` — leitura agregada de High-Availability entre clusters; ver [API de HA do cluster](../api/cluster-ha.md).
+  - `/proxmox/{qemu,lxc}/{vmid}/{start,stop,snapshot,migrate}` — verbos operacionais de escrita (mais DELETE-para-cancelar e GET-stream para migrate). Gate em `ProxmoxEndpoint.allow_writes`. Ver [Referencia HTTP — Verbos Operacionais de VM](../api/http-reference.md#verbos-operacionais-de-vm).
   - `/dcim`
   - `/virtualization`
   - `/extras`
   - `/sync/individual`
+  - `/sync/active` — probe local-ao-processo para um `/full-update` em andamento.
 - Configuracao de endpoints persistida em SQLite.
 - Acesso ao NetBox via clientes `netbox-sdk` sync e async.
 - Acesso ao Proxmox via sessoes do SDK sync `proxmox-sdk` e wrappers tipados.

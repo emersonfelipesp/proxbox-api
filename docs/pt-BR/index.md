@@ -18,6 +18,8 @@ Esta documentacao cobre instalacao, configuracao, arquitetura, referencias de AP
 - CRUD de endpoints Proxmox com senha ou par de token.
 - Coleta de dados de cluster, node, storage, VM, backup, snapshot e replication.
 - Sincronizacao de VM, interfaces, IPs, discos, storages e backups para o NetBox.
+- Leitura de High-Availability agregada por cluster — ver [API de HA do cluster](api/cluster-ha.md).
+- Verbos operacionais de VM (start / stop / snapshot / migrate) com gate `ProxmoxEndpoint.allow_writes`, idempotencia, auditoria em journal e progresso SSE no migrate — ver [Referencia HTTP — Verbos Operacionais de VM](api/http-reference.md#verbos-operacionais-de-vm).
 - Inspecao de logs do admin, cache e fluxo full-update.
 
 ## Idioma
