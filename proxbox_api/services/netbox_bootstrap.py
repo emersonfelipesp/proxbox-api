@@ -33,7 +33,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
+from proxbox_api.constants import (
+    DISCOVERY_TAG_CLUSTER,
+    DISCOVERY_TAG_NODE,
+    DISCOVERY_TAG_VM_LXC,
+    DISCOVERY_TAG_VM_QEMU,
+    VM_ROLE_MAPPINGS,
+    VM_TYPE_MAPPINGS,
+)
 from proxbox_api.logger import logger
 from proxbox_api.netbox_version import (
     detect_netbox_version,
@@ -89,24 +96,34 @@ _PROXBOX_TAG_SLUG = "proxbox"
 _PROXBOX_TAG_COLOR = "ff5722"
 _PROXBOX_TAG_DESCRIPTION = "Proxbox Identifier (used to identify the items the plugin created)"
 
+# First-discovery audit tags (issue #362). Stamped onto an object only when
+# the reconciler takes the create branch; never re-attached on update. Operator
+# removal is permanent. Per-type QEMU/LXC split lets a saved-search filter
+# return exactly the VMs Proxbox first imported of that type.
 _DISCOVERY_TAGS: tuple[dict[str, str], ...] = (
     {
-        "name": "Proxbox: Discovered VM",
-        "slug": "proxbox-discovered-vm",
+        "name": "Proxbox: Discovered QEMU VM",
+        "slug": DISCOVERY_TAG_VM_QEMU,
         "color": "2196f3",
-        "description": "Virtual machine discovered by Proxbox during a sync run.",
+        "description": "QEMU virtual machine first discovered by Proxbox (apply-on-create-only).",
+    },
+    {
+        "name": "Proxbox: Discovered LXC Container",
+        "slug": DISCOVERY_TAG_VM_LXC,
+        "color": "00bcd4",
+        "description": "LXC container first discovered by Proxbox (apply-on-create-only).",
     },
     {
         "name": "Proxbox: Discovered Cluster",
-        "slug": "proxbox-discovered-cluster",
+        "slug": DISCOVERY_TAG_CLUSTER,
         "color": "4caf50",
-        "description": "Cluster discovered by Proxbox during a sync run.",
+        "description": "Cluster first discovered by Proxbox (apply-on-create-only).",
     },
     {
         "name": "Proxbox: Discovered Node",
-        "slug": "proxbox-discovered-node",
+        "slug": DISCOVERY_TAG_NODE,
         "color": "9c27b0",
-        "description": "Proxmox node discovered by Proxbox during a sync run.",
+        "description": "Proxmox node first discovered by Proxbox (apply-on-create-only).",
     },
 )
 

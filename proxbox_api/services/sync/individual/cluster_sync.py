@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from proxbox_api.netbox_rest import rest_list_async
+from proxbox_api.constants import DISCOVERY_TAG_CLUSTER
+from proxbox_api.netbox_rest import rest_first_async, rest_list_async
 from proxbox_api.services.netbox_writers import upsert_cluster, upsert_cluster_type
 from proxbox_api.services.run_session import SyncContext
+from proxbox_api.services.sync.discovery_tags import discovery_tag_ref, merge_tag_refs
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
 
 
@@ -80,12 +82,32 @@ async def sync_cluster_individual(
             mode="cluster",
             tag_refs=tag_refs,
         )
+
+        # Pre-check existence so the discovery tag (issue #362) only lands
+        # in the create payload. On update we merge the desired baseline
+        # with the current tag set so subsequent syncs do not strip the
+        # discovery slug nor any operator-added tags.
+        existing_cluster = await rest_first_async(
+            ctx.nb,
+            "/api/virtualization/clusters/",
+            query={"name": cluster_name},
+        )
+        if existing_cluster is None:
+            cluster_tag_refs = [*tag_refs, discovery_tag_ref(DISCOVERY_TAG_CLUSTER)]
+        else:
+            existing_tags = (
+                existing_cluster.serialize().get("tags")
+                if hasattr(existing_cluster, "serialize")
+                else None
+            )
+            cluster_tag_refs = merge_tag_refs(list(tag_refs), existing_tags)
+
         cluster_result = await upsert_cluster(
             ctx.nb,
             cluster_name=cluster_name,
             cluster_type_id=getattr(cluster_type_result.record, "id", None),
             mode="cluster",
-            tag_refs=tag_refs,
+            tag_refs=cluster_tag_refs,
         )
 
         netbox_object = (

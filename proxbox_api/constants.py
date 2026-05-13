@@ -78,6 +78,21 @@ PROXMOX_TAG = "proxmox"
 PROXBOX_TAG = "proxbox"
 AUTO_SYNCED_TAG = "auto-synced"
 
+# First-discovery audit tags — applied ONLY when an object is created by the
+# reconciler. Update paths must never re-stamp these slugs; operator removal
+# from NetBox is permanent. See issue #362.
+DISCOVERY_TAG_VM_QEMU = "proxbox-discovered-qemu"
+DISCOVERY_TAG_VM_LXC = "proxbox-discovered-lxc"
+DISCOVERY_TAG_CLUSTER = "proxbox-discovered-cluster"
+DISCOVERY_TAG_NODE = "proxbox-discovered-node"
+
+DISCOVERY_TAG_SLUGS: tuple[str, ...] = (
+    DISCOVERY_TAG_VM_QEMU,
+    DISCOVERY_TAG_VM_LXC,
+    DISCOVERY_TAG_CLUSTER,
+    DISCOVERY_TAG_NODE,
+)
+
 # Status codes
 HTTP_OK = 200
 HTTP_CREATED = 201

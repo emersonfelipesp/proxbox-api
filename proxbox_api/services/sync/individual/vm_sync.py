@@ -19,6 +19,10 @@ from proxbox_api.services.proxmox_helpers import (
     get_vm_config_individual,
     get_vm_resource_individual,
 )
+from proxbox_api.services.sync.discovery_tags import (
+    resolve_discovery_tag_id,
+    vm_discovery_tag_slug,
+)
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
 from proxbox_api.services.sync.vm_helpers import (
@@ -334,6 +338,16 @@ async def sync_vm_individual(
                     existing_tag_ids.append(int(tid))
                 except (TypeError, ValueError):
                     continue
+        else:
+            # First-discovery audit tag (issue #362) — stamp only on create.
+            # The merge below preserves it on subsequent syncs, and operator
+            # removal from NetBox is permanent because this branch is no
+            # longer reached once the VM exists.
+            discovery_id = await resolve_discovery_tag_id(
+                nb, vm_discovery_tag_slug(vm_type)
+            )
+            if discovery_id is not None:
+                tag_ids.append(discovery_id)
         merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids))
 
         netbox_vm_payload = _build_netbox_vm_payload(

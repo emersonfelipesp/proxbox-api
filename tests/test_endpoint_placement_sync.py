@@ -45,6 +45,10 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
         captured.update(kwargs)
         return SimpleNamespace(id=77)
 
+    async def _fake_first(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(device_ensure, "rest_first_async", _fake_first)
     monkeypatch.setattr(device_ensure, "rest_reconcile_async", _fake_reconcile)
 
     await device_ensure._ensure_cluster(
@@ -61,6 +65,9 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
     assert payload["scope_type"] == "dcim.site"
     assert payload["scope_id"] == 42
     assert payload["tenant"] == 9
+    # Issue #362: on create, the cluster discovery slug must be present.
+    tag_slugs = {ref.get("slug") for ref in payload["tags"] if isinstance(ref, dict)}
+    assert "proxbox-discovered-cluster" in tag_slugs
 
 
 def test_vm_payload_includes_endpoint_site_and_tenant() -> None:
