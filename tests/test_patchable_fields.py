@@ -394,10 +394,8 @@ def test_vm_patchable_drops_vm_type_when_netbox_lacks_native_type_field() -> Non
     ("flag_name", "missing_key"),
     [
         ("overwrite_vm_type", "virtual_machine_type"),
-        ("overwrite_vm_role", "role"),
         ("overwrite_vm_tags", "tags"),
         ("overwrite_vm_description", "description"),
-        ("overwrite_vm_custom_fields", "custom_fields"),
     ],
 )
 def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_key: str) -> None:
@@ -407,6 +405,17 @@ def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_k
 
     assert missing_key not in fields
     assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
+
+
+@pytest.mark.parametrize("flag_name", ["overwrite_vm_role", "overwrite_vm_custom_fields"])
+def test_vm_patchable_keeps_role_and_custom_fields_regardless_of_flag(flag_name: str) -> None:
+    """Per-VM lock now controls writes via payload mutation; allowlist stays open."""
+    from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
+
+    fields = _compute_vm_patchable_fields(SyncOverwriteFlags(**{flag_name: False}))
+
+    assert "role" in fields
+    assert "custom_fields" in fields
 
 
 # ---------------------------------------------------------------------------
@@ -444,14 +453,11 @@ def test_vm_patchable_never_includes_tenant_with_any_flag_false(flag_name: str) 
     assert "tenant" not in _compute_vm_patchable_fields(SyncOverwriteFlags(**{flag_name: False}))
 
 
-def test_vm_create_body_accepts_tenant_for_initial_create() -> None:
-    """CreateBody allows `tenant` so proxbox-api can set it once on create.
+def test_vm_create_body_rejects_tenant_field() -> None:
+    """NetBoxVirtualMachineCreateBody must reject `tenant` (extra='forbid')."""
+    from pydantic import ValidationError
 
-    The plugin's regex resolver (issue #365) only fires post-create and
-    never overwrites an existing `vm.tenant`, so initial create-time
-    assignment from the Proxmox endpoint config is safe.
-    """
     from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
 
-    body = NetBoxVirtualMachineCreateBody(name="vm-1", status="active", tenant=42)
-    assert body.tenant == 42
+    with pytest.raises(ValidationError):
+        NetBoxVirtualMachineCreateBody(name="vm-1", status="active", tenant=1)

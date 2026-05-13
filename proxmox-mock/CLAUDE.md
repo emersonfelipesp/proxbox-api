@@ -1,5 +1,14 @@
 # proxmox-mock Package Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxmox-mock/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Standalone `proxmox-mock-api` package — a schema-driven FastAPI mock for the generated Proxmox API. Published separately to PyPI and used as a dev dependency of `proxbox_api` for test isolation. The mock serves the same OpenAPI surface as a real Proxmox node so integration tests do not require a live cluster.

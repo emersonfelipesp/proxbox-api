@@ -6,10 +6,12 @@ the 'proxbox e2e testing' tag.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import aiohttp
     from netbox_sdk.facade import Api
 
 from netbox_sdk.client import NetBoxApiClient
@@ -28,6 +30,44 @@ class E2ENetBoxApiClient(NetBoxApiClient):
     same query; a cache hit returns the stale empty list, so the second pass
     tries POST again and NetBox rejects the duplicate.
     """
+
+    async def _get_session(self) -> "aiohttp.ClientSession":
+        """Use a single force-closed E2E connection to avoid NetBox DB exhaustion."""
+        try:
+            import aiohttp
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "aiohttp is required for HTTP requests. Install project dependencies first."
+            ) from exc
+
+        current_loop_id = id(asyncio.get_running_loop())
+        if (
+            self._session is not None
+            and not self._session_closed()
+            and self._session_loop_id == current_loop_id
+        ):
+            return self._session
+
+        async with self._get_lock():
+            session_closed = self._session_closed()
+            if self._session is None or session_closed or self._session_loop_id != current_loop_id:
+                if self._session is not None and not session_closed:
+                    await self._session.close()
+                connector_kwargs: dict[str, object] = {
+                    "limit": 1,
+                    "limit_per_host": 1,
+                    "force_close": True,
+                    "enable_cleanup_closed": True,
+                }
+                if self.config.ssl_verify is False:
+                    connector_kwargs["ssl"] = False
+                self._session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=self.config.timeout),
+                    connector=aiohttp.TCPConnector(**connector_kwargs),
+                )
+                self._session_loop_id = current_loop_id
+
+            return self._session
 
     def _cache_policy(
         self,

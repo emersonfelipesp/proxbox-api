@@ -1,5 +1,14 @@
 # proxbox_api/types Directory Guide
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/types/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Purpose
 
 Shared type aliases, structural protocols, and typed data structures used throughout the `proxbox_api` package. Centralizing these here prevents circular imports and gives a single place to adjust domain types.

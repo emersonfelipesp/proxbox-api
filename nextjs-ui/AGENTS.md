@@ -1,5 +1,14 @@
 # Agent Guide: Proxbox Next.js UI
 
+## Workspace Context
+
+This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/nextjs-ui/AGENTS.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
 ## Context
 
 This is the standalone Next.js 16.2.1 frontend for managing NetBox and Proxmox endpoint configuration as part of the `proxbox-api` project.

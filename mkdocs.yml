@@ -73,6 +73,8 @@ nav:
       - Name Collision Resolver: sync/name-collision-resolver.md
       - Overwrite Flags: sync/overwrite-flags.md
       - Scheduler Container: sync/scheduler-container.md
+  - Operations:
+      - Hardware Discovery: operations/hardware-discovery.md
   - Development:
       - Schema Management: development/schema-management.md
       - Testing: development/testing.md

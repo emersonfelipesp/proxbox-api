@@ -83,6 +83,14 @@ jobs:
   test-free-threaded:
     runs-on: ubuntu-latest
     continue-on-error: true
+    # This lane validates that the package compiles and imports cleanly on the
+    # 3.14t free-threaded binary. It does NOT run the full pytest suite because
+    # SQLAlchemy's C-extension event registry segfaults during engine.dispose()
+    # teardown under 3.14t (crash trace points at
+    # sqlalchemy/event/registry.py:_stored_in_collection_multi via
+    # pool.recreate → engine.dispose), and the crash persists even with
+    # PYTHON_GIL=1. The Python 3.13 and 3.11 lanes already exercise the
+    # full test suite.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -104,14 +112,6 @@ jobs:
           uv run python -c "import proxbox_api.main"
           uv run python -c "import proxmox_sdk.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-
-      - name: Free-threaded unit subset
-        run: |
-          uv run pytest \
-            tests/test_proxbox_last_run_id_stamp.py \
-            tests/test_vm_sync.py \
-            tests/test_patchable_fields.py \
-            -v --tb=short
 
   docker-bind-smoke:
     name: Docker bind-host smoke (issue #52)
@@ -407,7 +407,8 @@ jobs:
             -e POSTGRES_DB=netbox \
             -e POSTGRES_USER=netbox \
             -e POSTGRES_PASSWORD=netbox \
-            postgres:16-alpine
+            postgres:16-alpine \
+            postgres -c max_connections=300
 
           docker run -d --name netbox-e2e-redis --network proxbox-e2e \
             redis:7-alpine
@@ -503,6 +504,7 @@ jobs:
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
               -e DB_PASSWORD=netbox \
+              -e DB_CONN_MAX_AGE=0 \
               -e REDIS_HOST=netbox-e2e-redis \
               -e REDIS_DATABASE=0 \
               -e REDIS_CACHE_HOST=netbox-e2e-redis \
@@ -520,6 +522,7 @@ jobs:
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
               -e DB_PASSWORD=netbox \
+              -e DB_CONN_MAX_AGE=0 \
               -e REDIS_HOST=netbox-e2e-redis \
               -e REDIS_DATABASE=0 \
               -e REDIS_CACHE_HOST=netbox-e2e-redis \
@@ -543,6 +546,7 @@ jobs:
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
               -e DB_PASSWORD=netbox \
+              -e DB_CONN_MAX_AGE=0 \
               -e REDIS_HOST=netbox-e2e-redis \
               -e REDIS_DATABASE=0 \
               -e REDIS_CACHE_HOST=netbox-e2e-redis \

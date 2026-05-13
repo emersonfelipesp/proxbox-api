@@ -16,13 +16,10 @@ def _compute_vm_patchable_fields(
     *,
     supports_virtual_machine_type_field: bool = True,
 ) -> set[str]:
-    """Build the patchable_fields allowlist for virtual machine reconciliation.
-
-    `tenant` is intentionally excluded so that the netbox-proxbox plugin's
-    VM-name-regex tenant resolver (issue #365) can write `vm.tenant` after
-    create without being stomped on every re-sync. proxbox-api still sets
-    tenant on initial create via the create body, but never patches it.
-    """
+    """Build the patchable_fields allowlist for virtual machine reconciliation."""
+    # Issue #365: tenant is owned by the netbox-proxbox plugin (name-regex
+    # mapping); proxbox-api must never patch tenant on existing VMs nor send
+    # it on the create body.
     fields: set[str] = {
         "name",
         "cluster",
@@ -37,14 +34,15 @@ def _compute_vm_patchable_fields(
         overwrite_flags is None or overwrite_flags.overwrite_vm_type
     ):
         fields.add("virtual_machine_type")
-    if overwrite_flags is None or overwrite_flags.overwrite_vm_role:
-        fields.add("role")
+    # ``role`` and ``custom_fields`` are always patchable: per-VM lock is
+    # enforced by the snapshot decision in the payload, and the snapshot
+    # custom field itself must always be writable.
+    fields.add("role")
+    fields.add("custom_fields")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_tags:
         fields.add("tags")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_description:
         fields.add("description")
-    if overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields:
-        fields.add("custom_fields")
     return fields
 
 
@@ -60,7 +58,6 @@ def normalize_current_virtual_machine_payload(
         "cluster": record.get("cluster"),
         "device": record.get("device"),
         "site": record.get("site"),
-        "tenant": record.get("tenant"),
         "role": record.get("role"),
         "vcpus": record.get("vcpus"),
         "memory": record.get("memory"),

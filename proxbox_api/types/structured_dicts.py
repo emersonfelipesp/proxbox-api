@@ -41,6 +41,9 @@ class ProxboxSettingsDict(TypedDict):
     proxmox_timeout: NotRequired[int]
     proxmox_max_retries: NotRequired[int]
     proxmox_retry_backoff: NotRequired[float]
+    default_role_qemu_id: NotRequired[int | None]
+    default_role_lxc_id: NotRequired[int | None]
+    hardware_discovery_enabled: NotRequired[bool]
 
 
 class SyncResultDict(TypedDict):
