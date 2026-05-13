@@ -51,6 +51,11 @@ docs = [
 granian = [
     "granian>=2.7.4",
 ]
+# NOTE: the `pbs` optional extra will land once proxmox-sdk 0.0.4 (which adds
+# the `proxmox_sdk.pbs` namespace and its own `[pbs]` extra) is published. The
+# subpackage at `proxbox_api/pbs/` already ships in the wheel; importing
+# `proxbox_api.pbs.session` raises ImportError until the SDK release exposes
+# the namespace, at which point routes start serving against a real PBS.
 
 [dependency-groups]
 dev = [
