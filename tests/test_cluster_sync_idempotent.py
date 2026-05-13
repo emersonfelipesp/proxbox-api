@@ -99,6 +99,13 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
     )
+    # cluster_sync now pre-checks cluster existence directly via the imported
+    # `rest_first_async` symbol (issue #362 discovery-tag gate). Patch the
+    # bound name in that module so the fixture's fake handler is used.
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async",
+        _fake_first,
+    )
 
     # Pin the helper's timestamp so the desired and stored custom_fields
     # compare equal across runs.

@@ -290,15 +290,16 @@ async def test_run_netbox_bootstrap_creates_full_inventory_on_empty_netbox(
     assert status.patched == []
     assert status.unchanged == []
 
-    # 1 Proxbox tag + 3 discovery tags + 1 cluster_type + 1 manufacturer +
+    # 1 Proxbox tag + 4 discovery tags + 1 cluster_type + 1 manufacturer +
     # 1 device_type + 1 device_role + 3 VM roles + 2 VM types + 8 custom fields
-    # = 21 created objects on a fresh NetBox 4.6 install.
-    assert len(status.created) == 21
+    # = 22 created objects on a fresh NetBox 4.6 install.
+    assert len(status.created) == 22
 
     # Key entries from each category must appear in the created list.
     labels = set(status.created)
     assert "tag:Proxbox" in labels
-    assert "tag:proxbox-discovered-vm" in labels
+    assert "tag:proxbox-discovered-qemu" in labels
+    assert "tag:proxbox-discovered-lxc" in labels
     assert "tag:proxbox-discovered-cluster" in labels
     assert "tag:proxbox-discovered-node" in labels
     assert "cluster_type:proxmox" in labels
@@ -423,9 +424,10 @@ async def test_run_netbox_bootstrap_captures_per_entry_failures(
     warning = status.warnings[0]
     assert warning["object"] == "tag:Proxbox"
     assert "403" in warning["error"]
-    # The remaining 20 inventory entries must still have been created.
-    assert len(status.created) == 20
-    assert "tag:proxbox-discovered-vm" in status.created
+    # The remaining 21 inventory entries must still have been created.
+    assert len(status.created) == 21
+    assert "tag:proxbox-discovered-qemu" in status.created
+    assert "tag:proxbox-discovered-lxc" in status.created
     assert "cluster_type:proxmox" in status.created
     assert "custom_field:proxbox_last_run_id" in status.created
 
@@ -479,5 +481,5 @@ async def test_run_netbox_bootstrap_skips_vm_types_on_old_netbox(
 
     assert status.ok is True
     assert not any(label.startswith("vm_type:") for label in status.created)
-    # The other 19 inventory entries must still be created.
-    assert len(status.created) == 19
+    # The other 20 inventory entries must still be created.
+    assert len(status.created) == 20

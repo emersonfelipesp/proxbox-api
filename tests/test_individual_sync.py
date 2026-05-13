@@ -334,6 +334,9 @@ async def test_sync_cluster_individual_reports_real_drift_status(monkeypatch):
     async def _fake_rest_list_async(_nb, _path, query=None):
         return []
 
+    async def _fake_rest_first_async(_nb, _path, *, query=None):
+        return None
+
     async def _fake_upsert_cluster_type(_nb, *, mode, tag_refs):
         return UpsertResult(record=SimpleNamespace(id=7), status="unchanged")
 
@@ -346,6 +349,10 @@ async def test_sync_cluster_individual_reports_real_drift_status(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async",
+        _fake_rest_first_async,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.upsert_cluster_type",
