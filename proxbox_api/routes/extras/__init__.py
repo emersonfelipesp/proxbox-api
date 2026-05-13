@@ -639,6 +639,23 @@ async def create_custom_fields(  # noqa: C901
                 "search_weight": 1000,
                 "group_name": "Proxmox",
             },
+            {
+                "object_types": [
+                    "dcim.device",
+                    "virtualization.cluster",
+                    "virtualization.virtualmachine",
+                ],
+                "type": "text",
+                "name": "proxbox_last_run_id",
+                "label": "Last Run ID",
+                "description": "UUID of the most recent Proxbox sync run that touched this object.",
+                "ui_visible": "if-set",
+                "ui_editable": "hidden",
+                "weight": 250,
+                "filter_logic": "loose",
+                "search_weight": 1000,
+                "group_name": "Proxbox",
+            },
         ]
         fields = []
         had_failures = False

@@ -226,6 +226,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 overwrite_vm_description=overwrite_flags.overwrite_vm_description,
                 overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
                 overwrite_flags=overwrite_flags,
+                run_id=operation_id,
             )
         except ProxboxException:
             raise
@@ -650,6 +651,7 @@ async def full_update_sync_stream(  # noqa: C901
                             overwrite_vm_description=overwrite_flags.overwrite_vm_description,
                             overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
                             overwrite_flags=overwrite_flags,
+                            run_id=operation_id,
                         )
                     finally:
                         await vm_bridge.close()
