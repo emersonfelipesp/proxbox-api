@@ -21,6 +21,7 @@ Failures never abort the rest of the run — each node is independently
 
 from __future__ import annotations
 
+import asyncio
 import json
 import ssl
 import time
@@ -149,12 +150,13 @@ def fetch_credential(  # noqa: C901 — sequential transport branches read top-d
 
     urlopen_kwargs: dict[str, object] = {"timeout": timeout}
     if parsed.scheme.lower() == "https" and getattr(config, "ssl_verify", True) is False:
-        urlopen_kwargs["context"] = ssl._create_unverified_context()
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        urlopen_kwargs["context"] = ctx
 
     try:
         with urllib.request.urlopen(req, **urlopen_kwargs) as resp:
-            if resp.status == 404:
-                raise MissingCredential(f"No SSH credential registered for node {node_id}")
             if resp.status != 200:
                 raise HardwareDiscoveryError(
                     f"Credential fetch for node {node_id} returned HTTP {resp.status}"
@@ -198,7 +200,7 @@ async def reflect_to_netbox(
     matching interface are silently skipped (the device-sync pass owns
     interface lifecycle).
     """
-    from proxbox_api.netbox_rest import rest_patch_async
+    from proxbox_api.netbox_rest import rest_list_async, rest_patch_async
 
     chassis_payload: dict[str, object] = {
         "custom_fields": {
@@ -214,6 +216,30 @@ async def reflect_to_netbox(
         chassis_payload,
     )
 
+    if interface_lookup is None:
+        try:
+            records = await rest_list_async(
+                netbox_session,
+                "/api/dcim/interfaces/",
+                query={"device_id": int(node_id)},
+            )
+        except Exception as exc:  # noqa: BLE001 — reflect failure must not break the run
+            logger.warning(
+                "Hardware discovery interface lookup failed for device %s: %s",
+                node_id,
+                exc,
+            )
+            return
+        interface_lookup = {}
+        for rec in records:
+            name = rec.get("name")
+            rec_id = rec.get("id")
+            if not name or rec_id is None:
+                continue
+            try:
+                interface_lookup[str(name)] = int(rec_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
     if not interface_lookup:
         return
 
@@ -312,7 +338,7 @@ async def run_for_nodes(  # noqa: C901 — sequential per-node state machine wit
             continue
 
         try:
-            cred = fetch_credential(netbox_session, node_id, host)
+            cred = await asyncio.to_thread(fetch_credential, netbox_session, node_id, host)
         except MissingCredential:
             if bridge is not None:
                 await bridge.emit_item_progress(
