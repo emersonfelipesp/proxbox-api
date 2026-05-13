@@ -382,9 +382,6 @@ def create_app() -> FastAPI:
 
     app.include_router(root_meta_router)
     app.include_router(auth_router)
-    register_cache_routes(app)
-    register_full_update_routes(app)
-    register_websocket_routes(app)
 
     features = {
         token.strip().lower()
@@ -394,6 +391,9 @@ def create_app() -> FastAPI:
     pbs_only = features == {"pbs"}
 
     if not pbs_only:
+        register_cache_routes(app)
+        register_full_update_routes(app)
+        register_websocket_routes(app)
         app.include_router(admin_router, prefix="/admin", tags=["admin"])
         app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
         app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
