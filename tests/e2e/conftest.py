@@ -78,7 +78,7 @@ def netbox_e2e_config() -> dict[str, str]:
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def netbox_e2e_session(netbox_e2e_config: dict[str, str]) -> "Api":
+async def netbox_e2e_session(netbox_e2e_config: dict[str, str]) -> AsyncGenerator["Api", None]:
     """Create NetBox API session from environment config.
 
     This fixture creates a NetBox API session using URL and token from
@@ -93,7 +93,10 @@ async def netbox_e2e_session(netbox_e2e_config: dict[str, str]) -> "Api":
         token=netbox_e2e_config["token"],
     )
     print("[E2E Setup] NetBox session created")
-    return api
+    try:
+        yield api
+    finally:
+        await api.client.close()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
