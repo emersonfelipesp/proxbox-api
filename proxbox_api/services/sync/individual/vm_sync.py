@@ -343,9 +343,7 @@ async def sync_vm_individual(
             # The merge below preserves it on subsequent syncs, and operator
             # removal from NetBox is permanent because this branch is no
             # longer reached once the VM exists.
-            discovery_id = await resolve_discovery_tag_id(
-                nb, vm_discovery_tag_slug(vm_type)
-            )
+            discovery_id = await resolve_discovery_tag_id(nb, vm_discovery_tag_slug(vm_type))
             if discovery_id is not None:
                 tag_ids.append(discovery_id)
         merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids))

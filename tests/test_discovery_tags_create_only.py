@@ -66,9 +66,7 @@ class _FakeRecord:
 
 def test_discovery_tag_ref_returns_slug_only_ref() -> None:
     """``discovery_tag_ref`` builds the canonical slug-only ref form."""
-    assert discovery_tag_ref(DISCOVERY_TAG_CLUSTER) == {
-        "slug": "proxbox-discovered-cluster"
-    }
+    assert discovery_tag_ref(DISCOVERY_TAG_CLUSTER) == {"slug": "proxbox-discovered-cluster"}
 
 
 def test_vm_discovery_slug_routes_qemu_and_lxc() -> None:
