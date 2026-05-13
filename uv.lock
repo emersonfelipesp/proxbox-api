@@ -1765,7 +1765,7 @@ requires-dist = [
     { name = "netbox-sdk", specifier = "==0.0.8.post1" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "proxmox-sdk", specifier = "==0.0.3.post1" },
+    { name = "proxmox-sdk", specifier = "==0.0.4.post1" },
     { name = "pydantic", specifier = "==2.13.3" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
@@ -1807,17 +1807,18 @@ dev = [{ name = "ruff", specifier = ">=0.15.8" }]
 
 [[package]]
 name = "proxmox-sdk"
-version = "0.0.3.post1"
+version = "0.0.4.post1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "slowapi" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/f2/866c1448acea43de5f849c4857619d7b059185d7de00cc202d3b4ba57e97/proxmox_sdk-0.0.3.post1.tar.gz", hash = "sha256:2fd3ee7a1cf25fe7ecbf72864249fd2faec359e12f07bfe894586a4de8aca284", size = 178709, upload-time = "2026-04-22T22:47:10.337Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/e2/837e9ffb1d1bdb05e5488ddc74df822670b946b997589db39214aae3fb4a/proxmox_sdk-0.0.4.post1.tar.gz", hash = "sha256:ec2b66e54878fdea22e218fbca06c0832da5413e9784fc63578a2457961df976", size = 763456, upload-time = "2026-05-13T21:23:45.452Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/5d/c06f9585c45aab10907f084722e4d6f8144eeb38f99ffa3fd256338ddd07/proxmox_sdk-0.0.3.post1-py3-none-any.whl", hash = "sha256:0dc2eae6782621fc9d1af2995da1e198654429b83017eada4409c8b5eb009832", size = 211049, upload-time = "2026-04-22T22:47:09.061Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/3b/52bab62894813e2fd7f5271688e93c8378ebc058d820bb1afa30764474f5/proxmox_sdk-0.0.4.post1-py3-none-any.whl", hash = "sha256:862d9caca765fbc28021aa68e18112558199cbb80bf67016e9bd705e685ee6cc", size = 825954, upload-time = "2026-05-13T21:23:43.873Z" },
 ]
 
 [[package]]
