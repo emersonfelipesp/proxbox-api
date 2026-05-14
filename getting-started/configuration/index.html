@@ -485,6 +485,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#allow_writes-field" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        allow_writes field
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#password-based-example" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1095,6 +1106,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../sync/name-collision-resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name Collision Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../sync/overwrite-flags/" class="md-nav__link">
         
   
@@ -1103,6 +1142,34 @@
     
   
     Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/scheduler-container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
   
 
     
@@ -1614,6 +1681,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#allow_writes-field" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        allow_writes field
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#password-based-example" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1860,6 +1938,15 @@
 <li><code>token_name</code> and <code>token_value</code> must be provided together.</li>
 <li>Endpoint names must be unique.</li>
 </ul>
+<h3 id="allow_writes-field"><code>allow_writes</code> field<a class="headerlink" href="#allow_writes-field" title="Permanent link">&para;</a></h3>
+<p><code>ProxmoxEndpoint.allow_writes</code> (boolean, default <code>false</code>) is the trust boundary
+for the <a href="../../api/http-reference/#vm-operational-verbs">VM operational verbs</a>
+(<code>start</code>, <code>stop</code>, <code>snapshot</code>, <code>migrate</code>). The gate runs before any NetBox or
+Proxmox call: with the flag off, every write verb returns HTTP 403 with
+<code>reason: "endpoint_writes_disabled"</code>. Read-only sync paths are not affected.
+Toggle the flag from the NetBox plugin's ProxmoxEndpoint detail page; the
+column was added by migration <code>0037_proxmoxendpoint_allow_writes</code> and is
+backfilled to <code>false</code> for existing rows.</p>
 <h3 id="password-based-example">Password-based example<a class="headerlink" href="#password-based-example" title="Permanent link">&para;</a></h3>
 <p><code>json
 {
@@ -2033,6 +2120,31 @@ from NetBox. The fix is to add <code>VM.GuestAgent.Audit</code> to the role.</p>
 <td>Delay in milliseconds between bulk batches.</td>
 </tr>
 <tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_TTL</code></td>
+<td><code>60</code></td>
+<td>TTL (seconds) for the in-memory NetBox GET response cache. Set <code>0</code> to disable caching.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES</code></td>
+<td><code>4096</code></td>
+<td>Maximum entries kept in the NetBox GET cache before LRU eviction kicks in.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_BYTES</code></td>
+<td><code>52428800</code> (50 MiB)</td>
+<td>Maximum total bytes held in the NetBox GET cache before LRU eviction kicks in.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_DEBUG_CACHE</code></td>
+<td>unset</td>
+<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, the NetBox GET cache emits per-hit/miss debug log lines.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY</code></td>
+<td><code>0.5</code></td>
+<td>Per-request pause (seconds) between custom-field creations during the extras bootstrap to avoid hammering NetBox.</td>
+</tr>
+<tr>
 <td><code>PROXBOX_GENERATED_DIR</code></td>
 <td><code>$XDG_DATA_HOME/proxbox/generated/proxmox</code></td>
 <td>Override output directory for the schema generator CLI (<code>proxbox-schema generate</code>).</td>
@@ -2061,6 +2173,16 @@ from NetBox. The fix is to add <code>VM.GuestAgent.Audit</code> to the role.</p>
 <td><code>PROXBOX_ENCRYPTION_KEY</code></td>
 <td>unset</td>
 <td>Secret key for encrypting credentials at rest. See <a href="#credential-encryption">Credential Encryption</a> below.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_ENCRYPTION_KEY_FILE</code></td>
+<td>unset</td>
+<td>Path to a file containing the Fernet encryption key. Takes precedence over <code>PROXBOX_ENCRYPTION_KEY</code> when set; lets operators mount the key as a file/secret instead of an environment variable.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS</code></td>
+<td>unset</td>
+<td>When set to <code>1</code>, <code>true</code>, or <code>yes</code>, the backend boots even with no encryption key configured. Off by default — the backend refuses to start so credentials are never written plaintext in production.</td>
 </tr>
 </tbody>
 </table>

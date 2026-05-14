@@ -874,6 +874,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#reflexao-das-chaves-do-cloud-init" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reflexao das chaves do cloud-init
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parsing-de-netbox-metadata-a-partir-das-descricoes-do-proxmox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parsing de netbox-metadata a partir das descricoes do Proxmox
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1061,6 +1083,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../name-collision-resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name Collision Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../overwrite-flags/" class="md-nav__link">
         
   
@@ -1069,6 +1119,34 @@
     
   
     Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scheduler-container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
   
 
     
@@ -1562,6 +1640,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#reflexao-das-chaves-do-cloud-init" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reflexao das chaves do cloud-init
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parsing-de-netbox-metadata-a-partir-das-descricoes-do-proxmox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parsing de netbox-metadata a partir das descricoes do Proxmox
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1814,6 +1914,23 @@
 <li>Reconciliar estado da VM no NetBox antes de buscar os dados da VM no Proxmox.</li>
 <li>Criar device antes de manufacturer/device type/site/cluster estarem prontos.</li>
 </ul>
+<h3 id="reflexao-das-chaves-do-cloud-init">Reflexao das chaves do cloud-init<a class="headerlink" href="#reflexao-das-chaves-do-cloud-init" title="Permanent link">&para;</a></h3>
+<p>Para VMs QEMU que bootam com cloud-init, o sync de VM reflete as chaves SSH
+configuradas, o usuario e o bag de IP/Gateway/DNS para a metadata Proxbox da
+VM no NetBox para que operadores auditem o estado do cloud-init sem abrir a
+UI do Proxmox. O mapeamento fica em <code>proxbox_api/proxmox_to_netbox/</code> e e
+coberto por <code>tests/test_vm_cloudinit_mapping.py</code>; a aba correspondente no
+plugin NetBox renderiza o mesmo payload. Rastreado em
+<a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/363">netbox-proxbox#363</a>.</p>
+<h3 id="parsing-de-netbox-metadata-a-partir-das-descricoes-do-proxmox">Parsing de <code>netbox-metadata</code> a partir das descricoes do Proxmox<a class="headerlink" href="#parsing-de-netbox-metadata-a-partir-das-descricoes-do-proxmox" title="Permanent link">&para;</a></h3>
+<p>Operadores podem embutir um bloco JSON com cerca (<code>netbox-metadata</code>) dentro
+da descricao da VM no Proxmox. O sync extrai o bloco, valida-o por um schema
+Pydantic permissivo e usa o resultado para semear campos do NetBox geridos
+por usuario (description, tags, custom fields) antes do payload Proxmox-derivado
+normal mesclar. A logica de parsing fica centralizada em
+<code>proxbox_api/proxmox_to_netbox/description_metadata.py</code> e e travada por
+<code>tests/test_description_metadata.py</code>. JSON invalido ou violacoes de schema
+sao logadas mas nao falham o sync — o sync cai para a string bruta da descricao.</p>
 <h2 id="fluxo-de-backup">Fluxo de Backup<a class="headerlink" href="#fluxo-de-backup" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>
 <ul>

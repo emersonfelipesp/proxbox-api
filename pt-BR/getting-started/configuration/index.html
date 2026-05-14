@@ -485,6 +485,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#campo-allow_writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Campo allow_writes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#exemplo-com-senha" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1084,6 +1095,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../sync/name-collision-resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name Collision Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../sync/overwrite-flags/" class="md-nav__link">
         
   
@@ -1092,6 +1131,34 @@
     
   
     Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/scheduler-container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
   
 
     
@@ -1603,6 +1670,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#campo-allow_writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Campo allow_writes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#exemplo-com-senha" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1838,6 +1916,8 @@
 <li><code>token_name</code> e <code>token_value</code> devem ser enviados juntos.</li>
 <li>Os nomes dos endpoints devem ser unicos.</li>
 </ul>
+<h3 id="campo-allow_writes">Campo <code>allow_writes</code><a class="headerlink" href="#campo-allow_writes" title="Permanent link">&para;</a></h3>
+<p><code>ProxmoxEndpoint.allow_writes</code> (boolean, padrao <code>false</code>) atua como um gate de confianca para os <a href="../../api/http-reference/#verbos-operacionais-de-vm">Verbos Operacionais de VM</a>. Quando <code>false</code>, qualquer <code>POST</code> para <code>/proxmox/{qemu|lxc}/{vmid}/{start,stop,snapshot,migrate}</code> retorna <code>403</code> com <code>reason="writes_disabled_for_endpoint"</code>, mesmo que a chave de API e o <code>X-Proxbox-Actor</code> sejam validos. O campo so pode ser alterado por administradores e e auditado via journal entry. Adicionado na migracao <code>0037_proxmoxendpoint_allow_writes</code>.</p>
 <h3 id="exemplo-com-senha">Exemplo com senha<a class="headerlink" href="#exemplo-com-senha" title="Permanent link">&para;</a></h3>
 <p><code>json
 {
@@ -2002,6 +2082,31 @@ correcao e adicionar <code>VM.GuestAgent.Audit</code> ao papel.</p>
 <td>Delay em milissegundos entre lotes em massa.</td>
 </tr>
 <tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_TTL</code></td>
+<td><code>60</code></td>
+<td>TTL em segundos do cache de GETs no NetBox. <code>0</code> desabilita o cache.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES</code></td>
+<td><code>4096</code></td>
+<td>Maximo de entradas armazenadas no cache de GETs do NetBox antes de eviccao LRU.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_NETBOX_GET_CACHE_MAX_BYTES</code></td>
+<td><code>52428800</code> (50 MiB)</td>
+<td>Tamanho total maximo em bytes do cache de GETs do NetBox.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_DEBUG_CACHE</code></td>
+<td>nao definido</td>
+<td>Quando <code>1</code>, <code>true</code> ou <code>yes</code>, emite logs detalhados de hit/miss/evict do cache.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY</code></td>
+<td><code>0.5</code></td>
+<td>Delay em segundos entre requisicoes na criacao de custom fields no NetBox, para evitar overruns no PostgreSQL.</td>
+</tr>
+<tr>
 <td><code>PROXBOX_GENERATED_DIR</code></td>
 <td><code>$XDG_DATA_HOME/proxbox/generated/proxmox</code></td>
 <td>Override do diretorio de saida da CLI geradora de schema (<code>proxbox-schema generate</code>).</td>
@@ -2030,6 +2135,16 @@ correcao e adicionar <code>VM.GuestAgent.Audit</code> ao papel.</p>
 <td><code>PROXBOX_ENCRYPTION_KEY</code></td>
 <td>nao definido</td>
 <td>Chave secreta para criptografar credenciais em repouso. Veja <a href="#criptografia-de-credenciais">Criptografia de credenciais</a> abaixo.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_ENCRYPTION_KEY_FILE</code></td>
+<td>nao definido</td>
+<td>Caminho para um arquivo contendo a chave Fernet. Alternativa a <code>PROXBOX_ENCRYPTION_KEY</code> para deploys onde a chave nao deve ficar no ambiente.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS</code></td>
+<td>nao definido</td>
+<td>Quando <code>1</code>, <code>true</code> ou <code>yes</code>, permite startup mesmo sem chave de criptografia configurada. Apenas para labs — emite log <code>CRITICAL</code> e nunca deve ser usado em producao.</td>
 </tr>
 </tbody>
 </table>

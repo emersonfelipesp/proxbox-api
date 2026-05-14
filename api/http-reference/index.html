@@ -774,6 +774,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#vm-operational-verbs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VM Operational Verbs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VM Operational Verbs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#allow_writes-gate-403-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        allow_writes gate (403 shape)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-shape-success-no-op" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response shape (success / no-op)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#viewer-and-generated-contract-helpers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -844,6 +883,17 @@
     <span class="md-ellipsis">
       
         Full Update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync-state-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync State Probe
       
     </span>
   </a>
@@ -1122,6 +1172,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../sync/name-collision-resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name Collision Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../sync/overwrite-flags/" class="md-nav__link">
         
   
@@ -1130,6 +1208,34 @@
     
   
     Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/scheduler-container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
   
 
     
@@ -1696,6 +1802,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#vm-operational-verbs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VM Operational Verbs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VM Operational Verbs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#allow_writes-gate-403-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        allow_writes gate (403 shape)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-shape-success-no-op" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response shape (success / no-op)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#viewer-and-generated-contract-helpers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1766,6 +1911,17 @@
     <span class="md-ellipsis">
       
         Full Update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync-state-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync State Probe
       
     </span>
   </a>
@@ -1945,6 +2101,108 @@ out of scope and may be added in a follow-up release.</p>
 <li><code>GET /proxmox/cluster/ha/groups/{group}</code> - Single group detail across clusters; returns <code>null</code> when no cluster has the group.</li>
 <li><code>GET /proxmox/cluster/ha/summary</code> - Single envelope (<code>{status, groups, resources}</code>) composed in parallel via <code>asyncio.gather</code>. Used by the NetBox cluster-wide HA page so a render only triggers one round-trip.</li>
 </ul>
+<h3 id="vm-operational-verbs">VM Operational Verbs<a class="headerlink" href="#vm-operational-verbs" title="Permanent link">&para;</a></h3>
+<p>POST verbs that act on a single QEMU VM or LXC container. Implemented in <code>proxbox_api/routes/proxmox_actions.py</code>. Each handler is gated by <a href="../../getting-started/configuration/#proxmox-endpoints"><code>ProxmoxEndpoint.allow_writes</code></a>; the gate runs before any NetBox or Proxmox call, so a write-disabled endpoint returns 403 even when the downstream services are unreachable.</p>
+<p>All verb routes accept:</p>
+<ul>
+<li><code>endpoint_id</code> (query parameter, required) — selects the target Proxmox cluster among many.</li>
+<li><code>Idempotency-Key</code> (header, optional) — 60-second cache window per <code>(endpoint_id, verb, vmid)</code>. A second POST with the same key returns the cached body without re-dispatching.</li>
+<li><code>X-Proxbox-Actor</code> (header, optional) — actor label written to the NetBox journal entry. Defaults to <code>proxbox-api</code>.</li>
+</ul>
+<p>Every invocation (success, failure, or no-op) writes exactly one journal entry on the linked NetBox <code>VirtualMachine</code> resolved by the <code>proxmox_vm_id</code> custom field.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/start</code></td>
+<td>Start a QEMU VM. State-based no-op when already <code>running</code> (<code>result: "already_running"</code>).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/start</code></td>
+<td>Start an LXC container. Same no-op rule.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/stop</code></td>
+<td>Stop a QEMU VM. State-based no-op when already <code>stopped</code> (<code>result: "already_stopped"</code>).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/stop</code></td>
+<td>Stop an LXC container. Same no-op rule.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/snapshot</code></td>
+<td>Create a QEMU snapshot. Optional JSON body <code>{snapname, description}</code>; when <code>snapname</code> is omitted the route generates <code>proxbox-{idempotency_key[:8]}</code> or <code>proxbox-{utc_stamp}</code>. Always dispatched (no state-based no-op).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/snapshot</code></td>
+<td>Create an LXC snapshot. Same body and default rules.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/migrate</code></td>
+<td>Migrate a QEMU VM. Required body <code>{target, online}</code>. Runs a preflight against <code>/nodes/{node}/qemu/{vmid}/migrate</code> and rejects when the target is not allowed or <code>online=true</code> would hit local disks/resources. Returns <strong>202 Accepted</strong> with <code>proxmox_task_upid</code> and <code>sse_url</code> (the cancel/stream endpoints below).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/migrate</code></td>
+<td>Migrate an LXC container. Same body and 202 shape.</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/proxmox/qemu/{vmid}/migrate/{task_upid}</code></td>
+<td>Best-effort cancel of an in-flight migrate task. Journals the cancel intent even if Proxmox refuses.</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/proxmox/lxc/{vmid}/migrate/{task_upid}</code></td>
+<td>Best-effort cancel for LXC migrate.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/proxmox/qemu/{vmid}/migrate/{task_upid}/stream</code></td>
+<td>SSE stream emitting <code>migrate_dispatched</code>, repeated <code>migrate_progress</code>, then <code>migrate_succeeded</code> xor <code>migrate_failed</code>.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/proxmox/lxc/{vmid}/migrate/{task_upid}/stream</code></td>
+<td>SSE stream for LXC migrate task progress.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="allow_writes-gate-403-shape"><code>allow_writes</code> gate (403 shape)<a class="headerlink" href="#allow_writes-gate-403-shape" title="Permanent link">&para;</a></h4>
+<p>When <code>endpoint_id</code> is missing, the endpoint does not exist, or <code>ProxmoxEndpoint.allow_writes</code> is <code>false</code>, the handler returns HTTP 403 with one of three <code>reason</code> codes:</p>
+<p><code>json
+{
+  "reason": "endpoint_writes_disabled",
+  "detail": "Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.",
+  "endpoint_id": 7
+}</code></p>
+<p>Other 403 shapes use <code>reason: "endpoint_id_required"</code> or <code>reason: "endpoint_not_found"</code> and omit <code>endpoint_id</code>. The gate is the load-bearing trust boundary documented in <code>docs/design/operational-verbs.md</code> §2.3 layer 3 — it must remain the first check in every handler.</p>
+<h4 id="response-shape-success-no-op">Response shape (success / no-op)<a class="headerlink" href="#response-shape-success-no-op" title="Permanent link">&para;</a></h4>
+<p><code>json
+{
+  "verb": "start",
+  "vmid": 100,
+  "vm_type": "qemu",
+  "endpoint_id": 7,
+  "result": "ok",
+  "dispatched_at": "2026-05-13T14:22:08Z",
+  "proxmox_task_upid": "UPID:pve1:00012E34:...",
+  "journal_entry_url": "/api/extras/journal-entries/42/"
+}</code></p>
+<p><code>result</code> is one of <code>ok</code>, <code>already_running</code>, <code>already_stopped</code>, <code>accepted</code> (migrate dispatch), <code>cancel_requested</code>, <code>cancel_failed</code>, <code>rejected</code>, or <code>failed</code>. Error paths add <code>reason</code> and <code>detail</code>. The migrate 202 response also carries <code>sse_url</code>, <code>target</code>, <code>online</code>, and <code>source_node</code>.</p>
 <h3 id="viewer-and-generated-contract-helpers">Viewer and generated contract helpers<a class="headerlink" href="#viewer-and-generated-contract-helpers" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>POST /proxmox/viewer/generate</code> - Crawl the Proxmox API Viewer and generate OpenAPI + Pydantic artifacts. Accepts <code>version_tag</code>, <code>workers</code>, <code>persist</code>, and other tuning query parameters.</li>
@@ -2086,6 +2344,23 @@ out of scope and may be added in a follow-up release.</p>
 <li><code>GET /full-update</code> - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.</li>
 <li><code>GET /full-update/stream</code> - SSE streaming variant.</li>
 </ul>
+<h2 id="sync-state-probe">Sync State Probe<a class="headerlink" href="#sync-state-probe" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>GET /sync/active</code> - Returns <code>{ active, started_at, id, kind, runs }</code> reporting whether this API replica currently has a <code>/full-update</code> or <code>/full-update/stream</code> request in flight. Use this to fast-fail a cron / single-exec invocation when a sync is already running.</li>
+</ul>
+<p>The registry is <strong>process-local and memory-only</strong>, so the probe answers for the worker that handles the request. With multiple uvicorn workers, callers may see disagreeing answers across workers; treat the response as advisory and keep the scheduling interval larger than the typical sync duration. The endpoint is covered by the standard <code>X-Proxbox-API-Key</code> middleware.</p>
+<p>Response shape:</p>
+<p><code>json
+{
+  "active": true,
+  "started_at": "2026-05-12T17:53:28.122Z",
+  "id": "9b6c0408-...",
+  "kind": "full-update",
+  "runs": [
+    { "id": "9b6c0408-...", "kind": "full-update", "started_at": "2026-05-12T17:53:28.122Z" }
+  ]
+}</code></p>
+<p><code>started_at</code> / <code>id</code> / <code>kind</code> report the oldest in-flight run (FIFO). <code>runs</code> lists every registered run on the local replica for diagnostics.</p>
 <h2 id="websocket">WebSocket<a class="headerlink" href="#websocket" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>GET /</code> - Basic counter WebSocket for connectivity checks.</li>

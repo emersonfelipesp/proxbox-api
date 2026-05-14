@@ -926,6 +926,34 @@
   
   
     <li class="md-nav__item">
+      <a href="sync/name-collision-resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name Collision Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="sync/overwrite-flags/" class="md-nav__link">
         
   
@@ -934,6 +962,34 @@
     
   
     Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="sync/scheduler-container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
   
 
     
@@ -1479,6 +1535,8 @@
 <li>Proxmox endpoint CRUD with password or token-pair auth.</li>
 <li>Cluster, node, storage, VM, backup, snapshot, and replication data collection.</li>
 <li>Virtual machine, interface, IP, disk, storage, and backup synchronization toward NetBox.</li>
+<li>High-Availability readout across every configured cluster — see <a href="api/cluster-ha/">Cluster HA API</a>.</li>
+<li>VM operational verbs (start / stop / snapshot / migrate) gated by <code>ProxmoxEndpoint.allow_writes</code>, with idempotency, journal auditing, and SSE progress for migrate — see <a href="api/http-reference/#vm-operational-verbs">HTTP API Reference — VM Operational Verbs</a>.</li>
 <li>Admin log inspection, cache inspection, and full-update orchestration.</li>
 </ul>
 <h2 id="audience">Audience<a class="headerlink" href="#audience" title="Permanent link">&para;</a></h2>

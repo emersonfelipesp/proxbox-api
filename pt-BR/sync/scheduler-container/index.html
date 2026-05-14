@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="en" class="no-js">
+<html lang="pt" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -10,32 +10,32 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/development/schema-management/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/pt-BR/sync/scheduler-container/">
       
       
-        <link rel="prev" href="../../operations/hardware-discovery/">
+        <link rel="prev" href="../overwrite-flags/">
       
       
-        <link rel="next" href="../testing/">
+        <link rel="next" href="../../operations/hardware-discovery/">
       
       
         
-          <link rel="alternate" href="./" hreflang="en">
+          <link rel="alternate" href="../../../sync/scheduler-container/" hreflang="en">
         
-          <link rel="alternate" href="../../pt-BR/development/schema-management/" hreflang="pt-BR">
+          <link rel="alternate" href="./" hreflang="pt-BR">
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Schema Management - proxbox-api</title>
+        <title>Scheduler Container - proxbox-api</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -54,7 +54,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -72,8 +72,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#proxmox-schema-management" class="md-skip">
-          Skip to content
+        <a href="#periodic-syncs-the-proxbox-scheduler-container" class="md-skip">
+          Pular para conteúdo
         </a>
       
     </div>
@@ -87,8 +87,8 @@
   
 
 <header class="md-header md-header--shadow" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="Cabeçalho">
+    <a href="../../" title="proxbox-api" class="md-header__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Schema Management
+              Scheduler Container
             
           </span>
         </div>
@@ -122,20 +122,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="Select language">
+    <button class="md-header__button md-icon" aria-label="Selecione o idioma">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="./" hreflang="en" class="md-select__link">
+            <a href="../../../sync/scheduler-container/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="../../pt-BR/development/schema-management/" hreflang="pt-BR" class="md-select__link">
+            <a href="./" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -156,16 +156,16 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="Buscar" placeholder="Buscar" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="Search">
+      <nav class="md-search__options" aria-label="Pesquisar">
         
-        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="Limpar" aria-label="Limpar" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -176,7 +176,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            Initializing search
+            Inicializando busca
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -188,7 +188,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
+        <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -222,9 +222,9 @@
 
 
 
-<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+<nav class="md-nav md-nav--primary" aria-label="Navegação" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
+    <a href="../../" title="proxbox-api" class="md-nav__button md-logo" aria-label="proxbox-api" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -234,7 +234,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Go to repository" class="md-source" data-md-component="source">
+      <a href="https://github.com/emersonfelipesp/proxbox-api" title="Ir para repositório" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -254,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -713,8 +713,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -725,13 +727,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
@@ -752,7 +752,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -770,7 +770,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../sync/workflows/" class="md-nav__link">
+      <a href="../workflows/" class="md-nav__link">
         
   
   
@@ -798,7 +798,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../sync/reconciliation-architecture/" class="md-nav__link">
+      <a href="../reconciliation-architecture/" class="md-nav__link">
         
   
   
@@ -826,7 +826,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../sync/name-collision-resolver/" class="md-nav__link">
+      <a href="../name-collision-resolver/" class="md-nav__link">
         
   
   
@@ -854,7 +854,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../sync/overwrite-flags/" class="md-nav__link">
+      <a href="../overwrite-flags/" class="md-nav__link">
         
   
   
@@ -879,10 +879,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../sync/scheduler-container/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -898,6 +925,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Índice
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-the-container-talks-to-proxbox-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the container talks to proxbox-api
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compose-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compose example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordination-with-netbox-side-scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordination with NetBox-side scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backoff-on-hard-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backoff on hard error
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1003,8 +1116,6 @@
       
   
   
-    
-  
   
   
     
@@ -1017,11 +1128,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
         
           
           <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
@@ -1042,7 +1155,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1057,37 +1170,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Schema Management
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../development/schema-management/" class="md-nav__link">
         
   
   
@@ -1103,209 +1189,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#bundled-schemas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Bundled schemas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#automatic-version-detection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Automatic version detection
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cli-proxbox-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CLI: proxbox-schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="CLI: proxbox-schema">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#list-available-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        List available versions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#check-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#generate-a-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Generate a schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Generate a schema">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#regenerate-an-existing-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Regenerate an existing schema
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-output-directory" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom output directory
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#tune-crawl-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tune crawl performance
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#http-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HTTP API
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="HTTP API">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#check-schema-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check schema status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#trigger-generation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Trigger generation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#refresh-routes-at-runtime" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Refresh routes at runtime
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#version-naming-convention" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Version naming convention
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1318,7 +1201,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../testing/" class="md-nav__link">
+      <a href="../../development/testing/" class="md-nav__link">
         
   
   
@@ -1346,7 +1229,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ci-e2e-workflows/" class="md-nav__link">
+      <a href="../../development/ci-e2e-workflows/" class="md-nav__link">
         
   
   
@@ -1374,7 +1257,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deployment/" class="md-nav__link">
+      <a href="../../development/deployment/" class="md-nav__link">
         
   
   
@@ -1402,7 +1285,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../release-publishing/" class="md-nav__link">
+      <a href="../../development/release-publishing/" class="md-nav__link">
         
   
   
@@ -1430,7 +1313,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../development/troubleshooting/" class="md-nav__link">
         
   
   
@@ -1458,7 +1341,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../contributing/" class="md-nav__link">
+      <a href="../../development/contributing/" class="md-nav__link">
         
   
   
@@ -1486,7 +1369,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../refactoring-summary/" class="md-nav__link">
+      <a href="../../development/refactoring-summary/" class="md-nav__link">
         
   
   
@@ -1514,7 +1397,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sync-fix-summary/" class="md-nav__link">
+      <a href="../../development/sync-fix-summary/" class="md-nav__link">
         
   
   
@@ -1555,7 +1438,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="Índice">
   
   
   
@@ -1564,15 +1447,15 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      Índice
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#bundled-schemas" class="md-nav__link">
+  <a href="#how-the-container-talks-to-proxbox-api" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bundled schemas
+        How the container talks to proxbox-api
       
     </span>
   </a>
@@ -1580,10 +1463,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-version-detection" class="md-nav__link">
+  <a href="#compose-example" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic version detection
+        Compose example
       
     </span>
   </a>
@@ -1591,149 +1474,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cli-proxbox-schema" class="md-nav__link">
+  <a href="#modes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CLI: proxbox-schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="CLI: proxbox-schema">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#list-available-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        List available versions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#check-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#generate-a-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Generate a schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Generate a schema">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#regenerate-an-existing-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Regenerate an existing schema
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-output-directory" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom output directory
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#tune-crawl-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tune crawl performance
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#http-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HTTP API
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="HTTP API">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#check-schema-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check schema status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#trigger-generation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Trigger generation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#refresh-routes-at-runtime" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Refresh routes at runtime
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
+        Modes
       
     </span>
   </a>
@@ -1741,10 +1485,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#version-naming-convention" class="md-nav__link">
+  <a href="#coordination-with-netbox-side-scheduling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Version naming convention
+        Coordination with NetBox-side scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backoff-on-hard-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backoff on hard error
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
       
     </span>
   </a>
@@ -1768,7 +1534,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/development/schema-management.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/sync/scheduler-container.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1776,183 +1542,111 @@
   
 
 
-<h1 id="proxmox-schema-management">Proxmox Schema Management<a class="headerlink" href="#proxmox-schema-management" title="Permanent link">&para;</a></h1>
-<p><code>proxbox-api</code> ships bundled Proxmox OpenAPI schemas for the latest three stable PVE release lines. These schemas drive the runtime-generated proxy routes under <code>/proxmox/api2/*</code>. This page explains how to list, check, and generate schemas from the command line or via the HTTP API.</p>
-<h2 id="bundled-schemas">Bundled schemas<a class="headerlink" href="#bundled-schemas" title="Permanent link">&para;</a></h2>
-<p>The following versions are included with the package under <code>proxbox_api/generated/proxmox/</code>:</p>
+<h1 id="periodic-syncs-the-proxbox-scheduler-container">Periodic syncs: the <code>proxbox-scheduler</code> container<a class="headerlink" href="#periodic-syncs-the-proxbox-scheduler-container" title="Permanent link">&para;</a></h1>
+<p>Tracks <a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/372">netbox-proxbox#372</a>.</p>
+<p><code>proxbox-api</code> itself does not run a scheduler — it is an HTTP service
+that performs Proxmox→NetBox synchronization on request. To drive
+recurring syncs in production, you have two options:</p>
 <table>
 <thead>
 <tr>
-<th>Version tag</th>
-<th>Proxmox release</th>
+<th>Option</th>
+<th>Where it runs</th>
+<th>Best for</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>8.1</code></td>
-<td>PVE 8.1.x</td>
+<td>NetBox-side <strong>Schedule Sync</strong> form</td>
+<td>inside the NetBox container</td>
+<td>on-prem operators who control NetBox; supports <code>interval</code> (minute granularity, ≥1 minute floor)</td>
 </tr>
 <tr>
-<td><code>8.2</code></td>
-<td>PVE 8.2.x</td>
-</tr>
-<tr>
-<td><code>8.3</code></td>
-<td>PVE 8.3.x</td>
-</tr>
-<tr>
-<td><code>latest</code></td>
-<td>Current API Viewer snapshot</td>
+<td>Standalone <a href="https://github.com/emersonfelipesp/netbox-proxbox/tree/v0.0.15/proxbox_scheduler"><code>proxbox-scheduler</code></a> container</td>
+<td>a sidecar in your compose / k8s stack</td>
+<td>cron expressions, sub-minute intervals, zero-gap "continuous" reconciliation, managed-NetBox tenants</td>
 </tr>
 </tbody>
 </table>
-<p>On startup the app loads all available version directories and mounts routes for each. The startup log confirms which versions were found:</p>
-<p><code>[INFO] Bundled Proxmox OpenAPI schema versions available: 8.1, 8.2, 8.3, latest</code></p>
-<h2 id="automatic-version-detection">Automatic version detection<a class="headerlink" href="#automatic-version-detection" title="Permanent link">&para;</a></h2>
-<p>When you call <code>GET /proxmox/sessions</code>, the app checks the connected Proxmox cluster's version against the bundled schemas. Each session entry in the response includes a <code>schema_status</code> field:</p>
-<p><code>json
-{
-  "name": "pve-cluster",
-  "proxmox_version": {"version": "8.3.2", "release": "8.3", "repoid": "abc123"},
-  "schema_release": "8.3",
-  "schema_status": {"status": "available", "version_tag": "8.3"}
-}</code></p>
-<p>If the connected version has no matching bundled schema (for example, a future PVE 8.4 cluster), generation starts automatically in the background:</p>
-<p><code>json
-{
-  "schema_status": {
-    "status": "generating",
-    "version_tag": "8.4",
-    "message": "No bundled schema found for Proxmox 8.4. Background generation started. This may take several minutes."
-  }
-}</code></p>
-<p>Routes for the new version are registered at runtime once generation completes — no restart needed.</p>
-<h2 id="cli-proxbox-schema">CLI: <code>proxbox-schema</code><a class="headerlink" href="#cli-proxbox-schema" title="Permanent link">&para;</a></h2>
-<p>The <code>proxbox-schema</code> command is the recommended way to manage schemas manually.</p>
-<h3 id="list-available-versions">List available versions<a class="headerlink" href="#list-available-versions" title="Permanent link">&para;</a></h3>
-<p><code>bash
-proxbox-schema list</code></p>
-<p>Output:</p>
-<p><code>text
-Available Proxmox OpenAPI schema versions (4):
-         8.1   6.4 MB   /opt/proxbox_api/generated/proxmox/8.1/openapi.json
-         8.2   6.4 MB   /opt/proxbox_api/generated/proxmox/8.2/openapi.json
-         8.3   6.4 MB   /opt/proxbox_api/generated/proxmox/8.3/openapi.json
-      latest   7.3 MB   /opt/proxbox_api/generated/proxmox/latest/openapi.json</code></p>
-<h3 id="check-status">Check status<a class="headerlink" href="#check-status" title="Permanent link">&para;</a></h3>
-<p><code>bash
-proxbox-schema status</code></p>
-<p>Shows available versions and any active or recently completed generation tasks:</p>
-<p><code>Bundled versions: 8.1, 8.2, 8.3, latest
-No active or recent generation tasks.</code></p>
-<h3 id="generate-a-schema">Generate a schema<a class="headerlink" href="#generate-a-schema" title="Permanent link">&para;</a></h3>
-<p><code>bash
-proxbox-schema generate 8.4</code></p>
-<p>This crawls the Proxmox API Viewer, parses all endpoints, and writes the generated artifacts under <code>proxbox_api/generated/proxmox/8.4/</code>. The command prints progress and a completion summary:</p>
-<p>```
-Generating Proxmox OpenAPI schema for version '8.4'...
-Output directory: proxbox_api/generated/proxmox/8.4
-Source URL: https://pve.proxmox.com/pve-docs/api-viewer/
-Workers: 10</p>
-<p>This may take several minutes. The pipeline crawls the Proxmox API Viewer,
-parses all endpoints, and generates OpenAPI + Pydantic artifacts.</p>
-<p>Generation completed for Proxmox 8.4
-  Endpoints:  493
-  Operations: 1284
-  Duration:   187.3s
-  Output:     proxbox_api/generated/proxmox/8.4</p>
-<p>Schema is ready. Restart the app or call POST /proxmox/viewer/routes/refresh
-to register the new routes at runtime.
-```</p>
-<p>After generation, register the new routes without restarting:</p>
-<p><code>bash
-curl -s -X POST http://localhost:8800/proxmox/viewer/routes/refresh \
-  -H "X-Proxbox-API-Key: YOUR_KEY"</code></p>
-<h4 id="regenerate-an-existing-schema">Regenerate an existing schema<a class="headerlink" href="#regenerate-an-existing-schema" title="Permanent link">&para;</a></h4>
-<p><code>bash
-proxbox-schema generate 8.3 --force</code></p>
-<p>Without <code>--force</code>, the command exits early when a schema already exists.</p>
-<h4 id="custom-output-directory">Custom output directory<a class="headerlink" href="#custom-output-directory" title="Permanent link">&para;</a></h4>
-<p><code>bash
-proxbox-schema generate 8.4 --output-dir /data/proxmox-schemas</code></p>
-<p>The app only loads schemas from <code>proxbox_api/generated/proxmox/</code> by default. Use a custom directory only if you mount it there or adjust the load path.</p>
-<h4 id="tune-crawl-performance">Tune crawl performance<a class="headerlink" href="#tune-crawl-performance" title="Permanent link">&para;</a></h4>
-<p><code>bash
-proxbox-schema generate 8.4 --workers 5 --retry-count 3 --retry-backoff 0.5</code></p>
+<p>For the on-prem <code>interval ≥ 60s</code> case, prefer the NetBox-side form —
+it's already shipped, persisted in the NetBox database, and surfaced in
+<strong>Background Jobs</strong>.</p>
+<h2 id="how-the-container-talks-to-proxbox-api">How the container talks to proxbox-api<a class="headerlink" href="#how-the-container-talks-to-proxbox-api" title="Permanent link">&para;</a></h2>
+<p>When invoked in <code>http</code> mode (the default), <code>proxbox-scheduler</code> calls:</p>
+<p><code>GET {PROXBOX_API_URL}/full-update/stream
+Headers: X-Proxbox-API-Key: ...
+Accept: text/event-stream</code></p>
+<p>It blocks on the SSE stream until proxbox-api emits a terminal event
+(<code>complete</code>, <code>done</code>, <code>error</code>, …) and maps the outcome to success or
+failure for the next loop iteration.</p>
+<p><code>proxbox-api</code> already enforces <code>X-Proxbox-API-Key</code> on <code>/full-update/*</code>
+via the auth middleware in <code>proxbox_api/factory.py</code> and exposes the SSE
+stream in <code>proxbox_api/app/full_update.py</code>. <strong>No code changes are
+required on the proxbox-api side</strong> to support the scheduler — it lives
+entirely on the netbox-proxbox plugin side.</p>
+<h2 id="compose-example">Compose example<a class="headerlink" href="#compose-example" title="Permanent link">&para;</a></h2>
+<p>The scheduler ships its own example compose snippet at
+<code>netbox-proxbox/proxbox_scheduler/docker-compose.example.yml</code>. The
+minimal addition to a stack that already runs <code>proxbox-api</code> looks like:</p>
+<p><code>yaml
+services:
+  proxbox-scheduler:
+    image: proxbox-scheduler:0.0.15
+    restart: unless-stopped
+    environment:
+      PROXBOX_MODE: "cron=0 */4 * * *"
+      PROXBOX_SCHEDULER_TZ: America/Sao_Paulo
+      PROXBOX_API_URL: http://proxbox-api:8000
+      PROXBOX_API_KEY: ${PROXBOX_API_KEY}
+    depends_on:
+      - proxbox-api</code></p>
+<h2 id="modes">Modes<a class="headerlink" href="#modes" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
+<th><code>PROXBOX_MODE</code></th>
+<th>Behaviour</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>--workers</code></td>
-<td><code>10</code></td>
-<td>Number of async Playwright browser workers</td>
+<td><code>off</code></td>
+<td>disabled (container exits 0)</td>
 </tr>
 <tr>
-<td><code>--retry-count</code></td>
-<td><code>2</code></td>
-<td>Retries per endpoint on transient failures</td>
+<td><code>interval=&lt;seconds&gt;</code></td>
+<td>trigger every <code>&lt;seconds&gt;</code> seconds, measured from the <em>start</em> of each trigger; sub-minute supported</td>
 </tr>
 <tr>
-<td><code>--retry-backoff</code></td>
-<td><code>0.35</code></td>
-<td>Base exponential backoff in seconds</td>
+<td><code>continuous</code></td>
+<td>back-to-back trigger with configurable error backoff</td>
 </tr>
 <tr>
-<td><code>--checkpoint-every</code></td>
-<td><code>50</code></td>
-<td>Write a resume checkpoint every N endpoints</td>
+<td><code>cron=&lt;5-field cron&gt;</code></td>
+<td>trigger at each cron fire time, evaluated in <code>PROXBOX_SCHEDULER_TZ</code></td>
 </tr>
 </tbody>
 </table>
-<p>Lower <code>--workers</code> if the crawl machine has limited resources. Increase <code>--retry-count</code> on flaky networks.</p>
-<h2 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
-<p>Use the HTTP API when you want to trigger generation or poll status from scripts or automation pipelines.</p>
-<h3 id="check-schema-status">Check schema status<a class="headerlink" href="#check-schema-status" title="Permanent link">&para;</a></h3>
-<p><code>http
-GET /proxmox/viewer/schema-status</code></p>
-<p>Response:</p>
-<p><code>json
-{
-  "available_versions": ["8.1", "8.2", "8.3", "latest"],
-  "generation_tasks": {}
-}</code></p>
-<p>Check a specific version:</p>
-<p><code>http
-GET /proxmox/viewer/schema-status?version_tag=8.4</code></p>
-<p>Response when generation is in progress:</p>
-<p><code>json
-{
-  "version_tag": "8.4",
-  "schema_available": false,
-  "generation": {"status": "running", "error": null}
-}</code></p>
-<p>Possible <code>status</code> values: <code>pending</code>, <code>running</code>, <code>completed</code>, <code>failed</code>.</p>
-<h3 id="trigger-generation">Trigger generation<a class="headerlink" href="#trigger-generation" title="Permanent link">&para;</a></h3>
-<p><code>http
-POST /proxmox/viewer/generate?version_tag=8.4</code></p>
-<p>This is a long-running synchronous request — it blocks until generation completes or fails. For background generation, prefer <code>proxbox-schema generate</code> or let auto-detection trigger it via <code>GET /proxmox/sessions</code>.</p>
-<h3 id="refresh-routes-at-runtime">Refresh routes at runtime<a class="headerlink" href="#refresh-routes-at-runtime" title="Permanent link">&para;</a></h3>
-<p>After generating a new schema, register its routes without restarting:</p>
-<p><code>http
-POST /proxmox/viewer/routes/refresh</code></p>
-<p>Or for a specific version:</p>
-<p><code>http
-POST /proxmox/viewer/routes/refresh?version_tag=8.4</code></p>
-<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<p>Schema generation uses <a href="https://playwright.dev/python/">Playwright</a> to headlessly crawl the Proxmox API Viewer. Install the extra:</p>
-<p><code>bash
-pip install proxbox_api[playwright]
-playwright install chromium</code></p>
-<p>Without Playwright, the pipeline falls back to <code>apidoc.js</code> parsing. The fallback covers all endpoints but misses rendered descriptions from the interactive viewer.</p>
-<h2 id="version-naming-convention">Version naming convention<a class="headerlink" href="#version-naming-convention" title="Permanent link">&para;</a></h2>
-<p>Version tags use the <code>major.minor</code> format from the Proxmox <code>release</code> field (e.g. <code>"8.3"</code> from <code>{"release": "8.3", "version": "8.3.2"}</code>). The <code>latest</code> tag is a special alias for the most recent official API Viewer snapshot.</p>
-<p>When a connected Proxmox cluster reports a release (e.g. <code>"8.3"</code>) that matches a bundled schema directory exactly, that schema is used. If no exact match is found, the app falls back to the highest same-major bundled version, then to <code>latest</code>.</p>
+<h2 id="coordination-with-netbox-side-scheduling">Coordination with NetBox-side scheduling<a class="headerlink" href="#coordination-with-netbox-side-scheduling" title="Permanent link">&para;</a></h2>
+<p>If you also configure a recurring interval via the NetBox-side
+<strong>Schedule Sync</strong> form, the scheduler container can dedup against it —
+but only in <code>exec</code> mode. The default exec command is:</p>
+<p><code>python manage.py proxbox_sync --wait --enqueue-once</code></p>
+<p><code>--enqueue-once</code> routes through <code>ProxboxSyncJob.enqueue_once()</code>
+(inherited from NetBox's <code>JobRunner</code>), which short-circuits when a
+pending recurring <code>Job</code> already exists. <code>http</code> invocation cannot use
+this dedup — pick one source of truth if you mix the two.</p>
+<h2 id="backoff-on-hard-error">Backoff on hard error<a class="headerlink" href="#backoff-on-hard-error" title="Permanent link">&para;</a></h2>
+<p>Any failed trigger (HTTP non-200, connection refused, subprocess exit
+code ≠ 0, terminal <code>error</code> SSE event) causes the runner to sleep
+<code>PROXBOX_SCHEDULER_BACKOFF_ON_ERROR_SECONDS</code> (default <code>30</code>) before the
+next attempt. This prevents a wedged <code>proxbox-api</code> from being pounded
+with retries in <code>continuous</code> mode.</p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>proxbox-scheduler</code> README and full env-var reference: <a href="https://github.com/emersonfelipesp/netbox-proxbox/blob/v0.0.15/proxbox_scheduler/README.md"><code>proxbox_scheduler/README.md</code></a> in the netbox-proxbox repo.</li>
+<li>Issue #372 on netbox-proxbox: <a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/372">https://github.com/emersonfelipesp/netbox-proxbox/issues/372</a></li>
+</ul>
 
 
 
@@ -1976,7 +1670,7 @@ playwright install chromium</code></p>
           <button type="button" class="md-top md-icon" data-md-component="top" hidden>
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
-  Back to top
+  Voltar para o topo
 </button>
         
       </main>
@@ -2008,10 +1702,10 @@ playwright install chromium</code></p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado para \u00e1rea de transfer\u00eancia", "clipboard.copy": "Copiar para \u00e1rea de transfer\u00eancia", "search.result.more.one": "mais 1 nesta p\u00e1gina", "search.result.more.other": "# mais nesta p\u00e1gina", "search.result.none": "Nenhum documento encontrado", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Digite para iniciar a busca", "search.result.term.missing": "Ausente", "select.version": "Selecione a vers\u00e3o"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

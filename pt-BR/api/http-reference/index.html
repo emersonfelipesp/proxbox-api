@@ -774,6 +774,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#verbos-operacionais-de-vm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verbos Operacionais de VM
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verbos Operacionais de VM">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gate-allow_writes-formato-do-403" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate allow_writes (formato do 403)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shape-da-resposta-sucesso-no-op" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shape da resposta (sucesso / no-op)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#helpers-do-viewer-e-do-contrato-gerado" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1105,6 +1144,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../sync/name-collision-resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name Collision Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../sync/overwrite-flags/" class="md-nav__link">
         
   
@@ -1113,6 +1180,34 @@
     
   
     Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sync/scheduler-container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
   
 
     
@@ -1679,6 +1774,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#verbos-operacionais-de-vm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verbos Operacionais de VM
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verbos Operacionais de VM">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gate-allow_writes-formato-do-403" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate allow_writes (formato do 403)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shape-da-resposta-sucesso-no-op" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shape da resposta (sucesso / no-op)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#helpers-do-viewer-e-do-contrato-gerado" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1905,6 +2039,108 @@
 <li><code>GET /proxmox/cluster/ha/groups/{group}</code> - Detalhe de um grupo unico; retorna <code>null</code> quando nenhum cluster possui o grupo.</li>
 <li><code>GET /proxmox/cluster/ha/summary</code> - Envelope unico (<code>{status, groups, resources}</code>) composto em paralelo via <code>asyncio.gather</code>. Usado pela pagina HA do cluster para que cada render gere apenas um round-trip.</li>
 </ul>
+<h3 id="verbos-operacionais-de-vm">Verbos Operacionais de VM<a class="headerlink" href="#verbos-operacionais-de-vm" title="Permanent link">&para;</a></h3>
+<p>Verbos POST que atuam sobre uma unica VM QEMU ou container LXC. Implementados em <code>proxbox_api/routes/proxmox_actions.py</code>. Cada handler e protegido por <a href="../../getting-started/configuration/#endpoints-proxmox"><code>ProxmoxEndpoint.allow_writes</code></a>; o gate roda antes de qualquer chamada ao NetBox ou ao Proxmox, entao um endpoint com escritas desabilitadas retorna 403 mesmo que os servicos a jusante estejam fora do ar.</p>
+<p>Todos os verbos aceitam:</p>
+<ul>
+<li><code>endpoint_id</code> (query parameter, obrigatorio) — seleciona o cluster Proxmox alvo entre varios.</li>
+<li><code>Idempotency-Key</code> (header, opcional) — janela de cache de 60 segundos por <code>(endpoint_id, verb, vmid)</code>. Um segundo POST com a mesma chave retorna o corpo em cache sem re-despachar.</li>
+<li><code>X-Proxbox-Actor</code> (header, opcional) — rotulo do ator gravado no journal entry do NetBox. Default: <code>proxbox-api</code>.</li>
+</ul>
+<p>Toda invocacao (sucesso, falha ou no-op) escreve exatamente um journal entry no <code>VirtualMachine</code> correspondente do NetBox, resolvido pelo custom field <code>proxmox_vm_id</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Proposito</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/start</code></td>
+<td>Inicia uma VM QEMU. No-op por estado quando ja <code>running</code> (<code>result: "already_running"</code>).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/start</code></td>
+<td>Inicia um container LXC. Mesma regra de no-op.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/stop</code></td>
+<td>Para uma VM QEMU. No-op por estado quando ja <code>stopped</code> (<code>result: "already_stopped"</code>).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/stop</code></td>
+<td>Para um container LXC. Mesma regra de no-op.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/snapshot</code></td>
+<td>Cria snapshot QEMU. Corpo JSON opcional <code>{snapname, description}</code>; quando <code>snapname</code> e omitido a rota gera <code>proxbox-{idempotency_key[:8]}</code> ou <code>proxbox-{utc_stamp}</code>. Sempre despachado (sem no-op por estado).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/snapshot</code></td>
+<td>Cria snapshot LXC. Mesmas regras de corpo e default.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/qemu/{vmid}/migrate</code></td>
+<td>Migra uma VM QEMU. Corpo obrigatorio <code>{target, online}</code>. Executa um preflight contra <code>/nodes/{node}/qemu/{vmid}/migrate</code> e rejeita quando o target nao e permitido ou <code>online=true</code> esbarra em discos/recursos locais. Retorna <strong>202 Accepted</strong> com <code>proxmox_task_upid</code> e <code>sse_url</code> (endpoints de cancel/stream abaixo).</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/proxmox/lxc/{vmid}/migrate</code></td>
+<td>Migra um container LXC. Mesmo corpo e shape 202.</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/proxmox/qemu/{vmid}/migrate/{task_upid}</code></td>
+<td>Cancel best-effort de uma migracao em andamento. Audita a intencao de cancel mesmo que o Proxmox recuse.</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/proxmox/lxc/{vmid}/migrate/{task_upid}</code></td>
+<td>Cancel best-effort para migrate de LXC.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/proxmox/qemu/{vmid}/migrate/{task_upid}/stream</code></td>
+<td>Stream SSE emitindo <code>migrate_dispatched</code>, varios <code>migrate_progress</code>, depois <code>migrate_succeeded</code> xor <code>migrate_failed</code>.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/proxmox/lxc/{vmid}/migrate/{task_upid}/stream</code></td>
+<td>Stream SSE para progresso de migrate de LXC.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="gate-allow_writes-formato-do-403">Gate <code>allow_writes</code> (formato do 403)<a class="headerlink" href="#gate-allow_writes-formato-do-403" title="Permanent link">&para;</a></h4>
+<p>Quando <code>endpoint_id</code> falta, o endpoint nao existe ou <code>ProxmoxEndpoint.allow_writes</code> esta <code>false</code>, o handler retorna HTTP 403 com um dos tres codigos em <code>reason</code>:</p>
+<p><code>json
+{
+  "reason": "endpoint_writes_disabled",
+  "detail": "Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.",
+  "endpoint_id": 7
+}</code></p>
+<p>Outros formatos de 403 usam <code>reason: "endpoint_id_required"</code> ou <code>reason: "endpoint_not_found"</code> e omitem <code>endpoint_id</code>. O gate e a fronteira de confianca documentada em <code>docs/design/operational-verbs.md</code> §2.3 layer 3 — deve permanecer como o primeiro check de cada handler.</p>
+<h4 id="shape-da-resposta-sucesso-no-op">Shape da resposta (sucesso / no-op)<a class="headerlink" href="#shape-da-resposta-sucesso-no-op" title="Permanent link">&para;</a></h4>
+<p><code>json
+{
+  "verb": "start",
+  "vmid": 100,
+  "vm_type": "qemu",
+  "endpoint_id": 7,
+  "result": "ok",
+  "dispatched_at": "2026-05-13T14:22:08Z",
+  "proxmox_task_upid": "UPID:pve1:00012E34:...",
+  "journal_entry_url": "/api/extras/journal-entries/42/"
+}</code></p>
+<p><code>result</code> e um de <code>ok</code>, <code>already_running</code>, <code>already_stopped</code>, <code>accepted</code> (dispatch de migrate), <code>cancel_requested</code>, <code>cancel_failed</code>, <code>rejected</code> ou <code>failed</code>. Caminhos de erro adicionam <code>reason</code> e <code>detail</code>. A resposta 202 do migrate carrega tambem <code>sse_url</code>, <code>target</code>, <code>online</code> e <code>source_node</code>.</p>
 <h3 id="helpers-do-viewer-e-do-contrato-gerado">Helpers do viewer e do contrato gerado<a class="headerlink" href="#helpers-do-viewer-e-do-contrato-gerado" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>POST /proxmox/viewer/generate</code></li>

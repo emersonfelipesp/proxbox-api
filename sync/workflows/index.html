@@ -885,6 +885,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cloud-init-key-reflection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud-init key reflection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#netbox-metadata-json-parsing-from-proxmox-descriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        netbox-metadata JSON parsing from Proxmox descriptions
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1072,6 +1094,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../name-collision-resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name Collision Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../overwrite-flags/" class="md-nav__link">
         
   
@@ -1080,6 +1130,34 @@
     
   
     Overwrite Flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scheduler-container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduler Container
   
 
     
@@ -1584,6 +1662,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cloud-init-key-reflection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud-init key reflection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#netbox-metadata-json-parsing-from-proxmox-descriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        netbox-metadata JSON parsing from Proxmox descriptions
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1838,6 +1938,24 @@
 </ul>
 <h3 id="tag-preservation">Tag Preservation<a class="headerlink" href="#tag-preservation" title="Permanent link">&para;</a></h3>
 <p>When <code>overwrite_vm_tags=False</code> (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The <code>Proxbox</code> tag is always retained so the plugin can identify objects it owns. Setting <code>overwrite_vm_tags=True</code> switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via <code>overwrite_cluster_tags</code>, <code>overwrite_storage_tags</code>, <code>overwrite_node_interface_tags</code>, and <code>overwrite_ip_tags</code>. See <a href="../overwrite-flags/">Overwrite Flags</a>.</p>
+<h3 id="cloud-init-key-reflection">Cloud-init key reflection<a class="headerlink" href="#cloud-init-key-reflection" title="Permanent link">&para;</a></h3>
+<p>For QEMU VMs that boot with cloud-init, the VM sync reflects the configured
+SSH keys, user, and IP/Gateway/DNS bag into the NetBox VM's Proxbox metadata
+so operators can audit cloud-init state without opening the Proxmox UI. The
+mapping lives in <code>proxbox_api/proxmox_to_netbox/</code> and is covered by
+<code>tests/test_vm_cloudinit_mapping.py</code>; the corresponding NetBox plugin tab
+renders the same payload. Tracked under
+<a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/363">netbox-proxbox#363</a>.</p>
+<h3 id="netbox-metadata-json-parsing-from-proxmox-descriptions"><code>netbox-metadata</code> JSON parsing from Proxmox descriptions<a class="headerlink" href="#netbox-metadata-json-parsing-from-proxmox-descriptions" title="Permanent link">&para;</a></h3>
+<p>Operators can stash a fenced JSON block (<code>netbox-metadata</code>) inside the Proxmox
+VM description. The sync extracts the block, validates it through a permissive
+Pydantic schema, and uses it to seed user-managed NetBox fields (description,
+tags, custom fields) before the normal Proxmox-derived payload merges in. The
+parsing logic is centralized in
+<code>proxbox_api/proxmox_to_netbox/description_metadata.py</code> and locked in by
+<code>tests/test_description_metadata.py</code>. Invalid JSON or schema violations are
+logged but do not fail the sync — the sync falls back to the raw description
+string.</p>
 <h2 id="backup-sync-flow">Backup Sync Flow<a class="headerlink" href="#backup-sync-flow" title="Permanent link">&para;</a></h2>
 <p>Endpoints:</p>
 <ul>
