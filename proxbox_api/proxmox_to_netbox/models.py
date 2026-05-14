@@ -70,6 +70,26 @@ def _parse_proxmox_kv_flag(value: object) -> bool:
     return False
 
 
+def parse_proxmox_tags(raw: str | None) -> list[str]:
+    """Parse a Proxmox ``tags`` field into a normalized tag-name list.
+
+    Proxmox stores VM/LXC tags as a single ``;``-separated string
+    (e.g. ``"critical;end-user-impact;production"``). This helper splits,
+    trims, lowercases, and dedupes preserving input order.
+    """
+    if not raw or not isinstance(raw, str):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for chunk in raw.split(";"):
+        name = chunk.strip().lower()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
 def _mb_from_bytes(value: object) -> int:
     try:
         as_int = int(value)
@@ -951,6 +971,7 @@ class ProxmoxVmConfigInput(BaseModel):
     sshkeys: str | None = None
     ipconfig0: str | None = None
     sshkeys_truncated: bool = False
+    tags: str | None = None
 
     @field_validator("sshkeys", mode="before")
     @classmethod
@@ -981,6 +1002,11 @@ class ProxmoxVmConfigInput(BaseModel):
     @property
     def start_at_boot(self) -> bool:
         return _as_bool(self.onboot)
+
+    @computed_field(return_type=list[str])
+    @property
+    def proxmox_tags(self) -> list[str]:
+        return parse_proxmox_tags(self.tags)
 
     @computed_field(return_type=bool)
     @property

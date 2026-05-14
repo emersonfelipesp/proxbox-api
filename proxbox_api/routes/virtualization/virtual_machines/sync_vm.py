@@ -51,6 +51,7 @@ from proxbox_api.services.name_collision import (
     NameResolution,
     resolve_unique_vm_name,
 )
+from proxbox_api.services.proxmox.tag_styles import fetch_tag_color_map
 from proxbox_api.services.proxmox_helpers import (
     fetch_qemu_guest_agent_network_interfaces,
     get_qemu_guest_agent_hostname,
@@ -77,6 +78,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.task_history import (
     sync_virtual_machine_task_history,
 )
@@ -1303,12 +1305,39 @@ async def create_virtual_machines(  # noqa: C901
 
     # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link.
     proxmox_url_by_cluster: dict[str, str] = {}
+    px_by_cluster: dict[str, object] = {}
     for px, cs in zip(pxs, cluster_status):
         cluster_n = getattr(cs, "name", None) or getattr(px, "cluster_name", None)
         px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
         px_port = getattr(px, "http_port", 8006)
         if cluster_n and px_domain:
             proxmox_url_by_cluster[str(cluster_n)] = f"https://{px_domain}:{px_port}"
+        if cluster_n:
+            px_by_cluster[str(cluster_n)] = px
+
+    # Per-cluster color-map cache: fetched once on first VM that needs it.
+    tag_color_map_by_cluster: dict[str, dict[str, str]] = {}
+
+    async def _get_cluster_tag_color_map(cluster_name: str) -> dict[str, str]:
+        if cluster_name in tag_color_map_by_cluster:
+            return tag_color_map_by_cluster[cluster_name]
+        px = px_by_cluster.get(cluster_name)
+        if px is None:
+            tag_color_map_by_cluster[cluster_name] = {}
+            return tag_color_map_by_cluster[cluster_name]
+        tag_color_map_by_cluster[cluster_name] = await fetch_tag_color_map(px)
+        return tag_color_map_by_cluster[cluster_name]
+
+    async def _resolve_vm_proxmox_tag_ids(
+        cluster_name: str, vm_config: dict
+    ) -> list[int]:
+        if not overwrite_flags.overwrite_vm_proxmox_tags:
+            return []
+        raw = vm_config.get("tags") if isinstance(vm_config, dict) else None
+        if not raw:
+            return []
+        color_map = await _get_cluster_tag_color_map(cluster_name)
+        return await resolve_proxmox_tag_ids(nb, raw, color_map=color_map)
 
     total_vms = 0  # Track total VMs processed
     successful_vms = 0  # Track successful VM creations
@@ -1597,13 +1626,16 @@ async def create_virtual_machines(  # noqa: C901
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
 
         now = datetime.now(timezone.utc)
+        proxmox_tag_ids = await _resolve_vm_proxmox_tag_ids(str(cluster_name), vm_config)
+        proxbox_tag_id = int(getattr(tag, "id", 0) or 0)
+        merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
         desired_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
             cluster_id=int(getattr(cluster, "id", 0) or 0),
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
-            tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            tag_ids=merged_tag_ids,
             site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
             virtual_machine_type_id=vm_type_id,
@@ -1922,13 +1954,16 @@ async def create_virtual_machines(  # noqa: C901
             )
 
         now = datetime.now(timezone.utc)
+        proxmox_tag_ids = await _resolve_vm_proxmox_tag_ids(str(cluster_name), vm_config)
+        proxbox_tag_id = int(getattr(tag, "id", 0) or 0)
+        merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
             cluster_id=int(getattr(cluster, "id", 0) or 0),
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
-            tag_ids=[int(getattr(tag, "id", 0) or 0)],
+            tag_ids=merged_tag_ids,
             site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
             virtual_machine_type_id=vm_type_id,
