@@ -97,6 +97,16 @@ class SyncOverwriteFlags(ProxboxBaseModel):
             "Tags are still applied when a VM is first created."
         ),
     )
+    overwrite_vm_proxmox_tags: bool = Field(
+        default=True,
+        title="Sync Proxmox Tags",
+        description=(
+            "When true, Proxmox VM/LXC ``tags`` are mirrored as NetBox tags and "
+            "attached to the synced VM. Colors come from the Proxmox cluster "
+            "``tag-style`` color-map when available, otherwise from a deterministic "
+            "hash. When false, Proxmox tags are not propagated."
+        ),
+    )
     overwrite_vm_description: bool = Field(
         default=True,
         title="Overwrite VM Description",

@@ -40,10 +40,10 @@ def test_manifest_matches_sync_overwrite_flags_model_fields() -> None:
     )
 
 
-def test_manifest_field_count_is_canonical_24() -> None:
+def test_manifest_field_count_is_canonical_25() -> None:
     """Sanity check: any change to flag count is intentional and reviewed."""
     manifest_fields = _load_manifest_fields()
-    assert len(manifest_fields) == 24
+    assert len(manifest_fields) == 25
 
 
 def test_manifest_has_no_duplicate_fields() -> None:
