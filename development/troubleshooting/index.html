@@ -1373,6 +1373,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Proxmox connection failures">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reading-the-new-pve-9-auth-failure-detail-issue-417" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the new PVE 9 auth-failure detail (issue #417)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1698,6 +1715,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Proxmox connection failures">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reading-the-new-pve-9-auth-failure-detail-issue-417" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the new PVE 9 auth-failure detail (issue #417)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1901,6 +1935,20 @@ export PROXBOX_DEBUG_CACHE=1</code></p>
 <li>Check <code>verify_ssl</code> behavior and certificates.</li>
 <li>Confirm API user/token permissions in Proxmox.</li>
 <li>For multi-endpoint deployments, confirm the correct <code>source</code> and endpoint target selection values are being passed.</li>
+</ul>
+<h3 id="reading-the-new-pve-9-auth-failure-detail-issue-417">Reading the new PVE 9 auth-failure detail (issue #417)<a class="headerlink" href="#reading-the-new-pve-9-auth-failure-detail-issue-417" title="Permanent link">&para;</a></h3>
+<p>Symptom:</p>
+<ul>
+<li><code>HTTP 401 Authentication failed!</code> against a Proxmox VE 9.x cluster, with a <code>Detail</code> field that used to read <code>"Unknown error."</code>.</li>
+</ul>
+<p>Resolution:</p>
+<ul>
+<li>The <code>Detail</code> shown in the NetBox UI now mirrors the upstream PVE response. Read it as <code>HTTP &lt;code&gt; &lt;status&gt; — &lt;body&gt; — &lt;errors JSON&gt;</code>:</li>
+<li><code>no such realm</code> → the <code>user@realm</code> you typed is wrong (<code>root@pam</code> vs <code>root@pve</code> vs the realm name configured on the cluster).</li>
+<li><code>permission check failed</code> → role is missing <code>VM.GuestAgent.Audit</code> (PVE 9), <code>Datastore.Audit</code>, <code>Sys.Audit</code>, or <code>VM.Audit</code>.</li>
+<li><code>authentication failure</code> → password or token value is wrong, or has expired / been rotated on the Proxmox side.</li>
+<li>Stored credentials are no longer leaked into auth attempts after a credential switch: on the NetBox-side endpoint edit form, use the <strong>"Clear stored API token on save"</strong> and <strong>"Clear stored password on save"</strong> checkboxes to wipe the unused secret before saving. The form rejects rows that end up with neither a password nor a complete <code>(token name, token value)</code> pair.</li>
+<li>The aiohttp <code>ClientSession</code> is now closed on every auth failure path (domain probe, IP fallback, both attempts failing). If you still see <code>Unclosed client session</code> warnings in proxbox-api logs after an auth failure, you are running an older build — re-check the installed package version.</li>
 </ul>
 <h2 id="sync-endpoints-return-partial-data">Sync endpoints return partial data<a class="headerlink" href="#sync-endpoints-return-partial-data" title="Permanent link">&para;</a></h2>
 <p>Symptom:</p>
