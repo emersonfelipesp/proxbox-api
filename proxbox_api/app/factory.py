@@ -34,6 +34,8 @@ from proxbox_api.routes.admin import router as admin_router
 from proxbox_api.routes.auth import router as auth_router
 from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.routes.extras import router as extras_router
+from proxbox_api.routes.intent import router as intent_router
+from proxbox_api.routes.intent.deletion_requests import router as deletion_requests_router
 from proxbox_api.routes.netbox import router as netbox_router
 from proxbox_api.routes.proxmox import router as proxmox_router
 from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
@@ -362,6 +364,7 @@ def create_app() -> FastAPI:
             "Accept-Language",
             "Content-Type",
             "X-Proxbox-API-Key",
+            "X-Proxbox-Actor",
             "X-Requested-With",
         ],
     )
@@ -412,6 +415,8 @@ def create_app() -> FastAPI:
             tags=["virtualization / virtual-machines"],
         )
         app.include_router(extras_router, prefix="/extras", tags=["extras"])
+        app.include_router(intent_router, prefix="/intent", tags=["intent"])
+        app.include_router(deletion_requests_router, prefix="/intent", tags=["intent"])
         app.include_router(
             sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
         )

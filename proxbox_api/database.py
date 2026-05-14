@@ -109,6 +109,19 @@ class ProxmoxEndpoint(SQLModel, table=True):
         self.token_value = encrypt_value(value)
 
 
+class DeletionRequestRecord(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    endpoint_id: int = Field(index=True)
+    vmid: int = Field(index=True)
+    node: str = Field(index=True)
+    kind: str = Field(index=True)
+    state: str = Field(default="pending", index=True)
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
 class PBSEndpoint(SQLModel, table=True):
     """Proxmox Backup Server (PBS) endpoint record.
 
@@ -346,6 +359,48 @@ def _migrate_netbox_endpoint_columns() -> None:
         )
 
 
+def _migrate_deletion_request_columns() -> None:
+    table = DeletionRequestRecord.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    stmts: list[str] = []
+    column_specs = {
+        "endpoint_id": "INTEGER NOT NULL DEFAULT 0",
+        "vmid": "INTEGER NOT NULL DEFAULT 0",
+        "node": "VARCHAR NOT NULL DEFAULT ''",
+        "kind": "VARCHAR NOT NULL DEFAULT 'qemu'",
+        "state": "VARCHAR NOT NULL DEFAULT 'pending'",
+        "created_at": "REAL NOT NULL DEFAULT 0",
+        "updated_at": "REAL NOT NULL DEFAULT 0",
+    }
+    for column, spec in column_specs.items():
+        if column not in existing:
+            stmts.append(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+    if not stmts:
+        return
+    now = time.time()
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+        conn.execute(
+            text(
+                f"UPDATE {table} SET created_at = :now WHERE created_at IS NULL OR created_at = 0"
+            ),
+            {"now": now},
+        )
+        conn.execute(
+            text(
+                f"UPDATE {table} SET updated_at = :now WHERE updated_at IS NULL OR updated_at = 0"
+            ),
+            {"now": now},
+        )
+
+
 def _migrate_pbs_endpoint_columns() -> None:
     table = PBSEndpoint.__tablename__
     try:
@@ -375,6 +430,7 @@ def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_proxmox_endpoint_columns()
     _migrate_netbox_endpoint_columns()
+    _migrate_deletion_request_columns()
     _migrate_pbs_endpoint_columns()
 
 

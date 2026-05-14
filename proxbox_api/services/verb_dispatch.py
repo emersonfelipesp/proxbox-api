@@ -29,6 +29,7 @@ from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_create_async, rest_first_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
+from proxbox_api.utils.log_scrubbing import scrub_cloud_init
 
 Verb = Literal["start", "stop", "snapshot", "migrate"]
 VmType = Literal["qemu", "lxc"]
@@ -151,16 +152,19 @@ async def write_verb_journal_entry(
     comments: str,
 ) -> dict[str, object] | None:
     """POST a verb-dispatch journal entry to NetBox. Returns the entry or ``None`` on failure."""
+    payload = scrub_cloud_init(
+        {
+            "assigned_object_type": "virtualization.virtualmachine",
+            "assigned_object_id": netbox_vm_id,
+            "kind": kind,
+            "comments": comments,
+        }
+    )
     try:
         record = await rest_create_async(
             nb,
             "/api/extras/journal-entries/",
-            {
-                "assigned_object_type": "virtualization.virtualmachine",
-                "assigned_object_id": netbox_vm_id,
-                "kind": kind,
-                "comments": comments,
-            },
+            payload,
         )
     except Exception as error:  # noqa: BLE001
         logger.warning(
