@@ -11,9 +11,11 @@ Per the workspace rule, this module does NOT use
 types resolvable for the JSON-schema generator.
 """
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from proxbox_api.routes.intent.cloud_init import CloudInitPayload
 
 DiffOp = Literal["create", "update", "delete"]
 VMKind = Literal["virtualmachine", "lxc"]
@@ -128,7 +130,7 @@ class VMIntentPayload(BaseModel):
     disks: list[dict] = Field(default_factory=list)
     nics: list[dict] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
-    cloud_init: dict | None = None
+    cloud_init: Optional[CloudInitPayload] = None
     template_vmid: int | None = None
 
 
@@ -142,6 +144,7 @@ class LXCIntentPayload(BaseModel):
     disks: list[dict] = Field(default_factory=list)
     nics: list[dict] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    cloud_init: Optional[CloudInitPayload] = None
     ostemplate: str | None = None
     password: str | None = None
 

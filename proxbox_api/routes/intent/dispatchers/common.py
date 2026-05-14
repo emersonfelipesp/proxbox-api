@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from proxbox_api.logger import logger
 from proxbox_api.services.verb_dispatch import build_journal_comments, utcnow_iso
 from proxbox_api.session.netbox import get_netbox_async_session
+from proxbox_api.utils.log_scrubbing import scrub_cloud_init
 
-SENSITIVE_KEYS = {"password", "cipassword"}
+SENSITIVE_KEYS = {"password", "cipassword", "secret", "token"}
+PASSWORD_LINE_VALUE_RE = re.compile(r"(?im)\bpassword\s*:\s*([^\r\n]+)")
 
 
 @dataclass(frozen=True)
@@ -37,17 +39,7 @@ def coerce_endpoint_context(endpoint: object) -> IntentEndpointContext:
 
 
 def scrub_value(value: object) -> object:
-    if isinstance(value, Mapping):
-        scrubbed: dict[object, object] = {}
-        for key, item in value.items():
-            if str(key).lower() in SENSITIVE_KEYS:
-                scrubbed[key] = "***" if item else None
-            else:
-                scrubbed[key] = scrub_value(item)
-        return scrubbed
-    if isinstance(value, list):
-        return [scrub_value(item) for item in value]
-    return value
+    return scrub_cloud_init({"value": value})["value"]
 
 
 def collect_sensitive_values(value: object) -> list[str]:
@@ -61,15 +53,22 @@ def collect_sensitive_values(value: object) -> list[str]:
     elif isinstance(value, list):
         for item in value:
             found.extend(collect_sensitive_values(item))
+    elif isinstance(value, str):
+        for match in PASSWORD_LINE_VALUE_RE.finditer(value):
+            secret = match.group(1).strip().strip("\"'")
+            if secret and secret != "***":
+                found.append(secret)
     return found
 
 
 def scrub_message(message: str, payload: object | None = None) -> str:
     scrubbed = re.sub(
-        r"(?i)(password|cipassword)([\"']?\s*[:=]\s*[\"']?)([^,\"'\s}\]]+)",
+        r"(?i)(password|cipassword|secret|token)([\"']?\s*[:=]\s*[\"']?)([^,\"'\s}\]]+)",
         r"\1\2***",
         message,
     )
+    scrubbed_value = scrub_cloud_init({"message": scrubbed})["message"]
+    scrubbed = str(scrubbed_value)
     if payload is not None:
         for secret in collect_sensitive_values(payload):
             scrubbed = scrubbed.replace(secret, "***")

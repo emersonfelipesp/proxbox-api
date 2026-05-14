@@ -13,6 +13,7 @@ on ``ProxmoxEndpoint`` keeps gating writes uniformly.
 from __future__ import annotations
 
 from proxbox_api.routes.intent.apply import router as apply_router
+from proxbox_api.routes.intent.cloud_init import CloudInitPayload
 from proxbox_api.routes.intent.plan import router
 from proxbox_api.routes.intent.schemas import (
     ApplyDiff,
@@ -34,6 +35,7 @@ __all__ = [
     "ApplyRequest",
     "ApplyResponse",
     "ApplyResultItem",
+    "CloudInitPayload",
     "DeletionRequestExecuteResponse",
     "DeletionRequestReject",
     "DeletionRequestResponse",

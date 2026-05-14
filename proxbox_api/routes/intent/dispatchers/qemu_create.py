@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.routes.intent.cloud_init import build_proxmox_ci_args
 from proxbox_api.routes.intent.dispatchers.common import (
     coerce_endpoint_context,
     extract_upid,
@@ -30,6 +31,8 @@ def _build_qemu_create_params(payload: VMIntentPayload) -> dict[str, object]:
         params["memory"] = payload.memory_mib
     if payload.tags:
         params["tags"] = ";".join(payload.tags)
+    if payload.cloud_init is not None:
+        params.update(build_proxmox_ci_args(payload.cloud_init))
     merge_indexed_items(params, payload.disks, default_prefix="scsi")
     merge_indexed_items(params, payload.nics, default_prefix="net")
     return params
