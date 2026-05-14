@@ -410,6 +410,22 @@ jobs:
             postgres:16-alpine \
             postgres -c max_connections=300
 
+          echo "Waiting for netbox-e2e-postgres to accept connections from the proxbox-e2e network…"
+          for i in $(seq 1 60); do
+            if docker run --rm --network proxbox-e2e postgres:16-alpine \
+                 pg_isready -h netbox-e2e-postgres -U netbox -d netbox -t 5 -q; then
+              echo "Postgres is ready after ${i} attempts"
+              break
+            fi
+            sleep 1
+            if [ "$i" -eq 60 ]; then
+              echo "❌ netbox-e2e-postgres did not become reachable in 60s"
+              docker logs --tail 200 netbox-e2e-postgres || true
+              docker network inspect proxbox-e2e || true
+              exit 1
+            fi
+          done
+
           docker run -d --name netbox-e2e-redis --network proxbox-e2e \
             redis:7-alpine
 
@@ -514,6 +530,8 @@ jobs:
               -e SECRET_KEY="$SECRET_KEY" \
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
+              -e MAX_DB_WAIT_TIME=120 \
+              -e DB_WAIT_DEBUG=1 \
               --entrypoint /bin/bash \
               "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
           elif [ "${{ matrix.netbox_transport }}" = "https_nginx" ]; then
@@ -532,6 +550,8 @@ jobs:
               -e SECRET_KEY="$SECRET_KEY" \
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
+              -e MAX_DB_WAIT_TIME=120 \
+              -e DB_WAIT_DEBUG=1 \
               --entrypoint /bin/bash \
               "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
 
@@ -557,6 +577,8 @@ jobs:
               -e PYTHONPATH=/opt/netbox/netbox \
               -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian" \
               -e LOGIN_REQUIRED=False \
+              -e MAX_DB_WAIT_TIME=120 \
+              -e DB_WAIT_DEBUG=1 \
               --entrypoint /bin/bash \
               "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host '${NETBOX_GRANIAN_HOST}' --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
           fi
@@ -582,6 +604,7 @@ jobs:
               docker logs netbox-e2e-http || true
               docker logs netbox-e2e-nginx || true
               docker logs netbox-e2e-granian || true
+              docker logs --tail 200 netbox-e2e-postgres 2>/dev/null || true
               exit 1
             fi
           done
@@ -598,6 +621,7 @@ jobs:
               docker logs netbox-e2e-http || true
               docker logs netbox-e2e-nginx || true
               docker logs netbox-e2e-granian || true
+              docker logs --tail 200 netbox-e2e-postgres 2>/dev/null || true
               exit 1
             fi
           done
@@ -715,6 +739,8 @@ jobs:
           docker logs --tail 200 netbox-e2e-http 2>/dev/null || true
           docker logs --tail 200 netbox-e2e-nginx 2>/dev/null || true
           docker logs --tail 200 netbox-e2e-granian 2>/dev/null || true
+          echo "=== netbox postgres container logs (last 200 lines) ==="
+          docker logs --tail 200 netbox-e2e-postgres 2>/dev/null || true
 
       - name: Run E2E tests (Docker proxmox mock)
         env:
