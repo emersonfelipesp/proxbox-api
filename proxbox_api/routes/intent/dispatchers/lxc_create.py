@@ -78,6 +78,28 @@ async def dispatch_lxc_create(
             message="writes_disabled_for_endpoint",
         )
 
+    if payload.hostname is None:
+        await write_intent_journal(
+            journal_writer=write_verb_journal_entry,
+            endpoint_context=endpoint_context,
+            endpoint=gated,
+            verb="intent_create_lxc",
+            result="failed",
+            vmid=payload.vmid,
+            actor=actor,
+            run_uuid=run_uuid,
+            kind="warning",
+            error_detail="hostname required for LXC create",
+        )
+        return ApplyResultItem(
+            netbox_id=endpoint_context.netbox_id,
+            vmid=payload.vmid,
+            op="create",
+            kind="lxc",
+            status="failed",
+            message="hostname required for LXC create",
+        )
+
     if payload.ostemplate is None:
         await write_intent_journal(
             journal_writer=write_verb_journal_entry,

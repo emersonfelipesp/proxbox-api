@@ -13,7 +13,7 @@ types resolvable for the JSON-schema generator.
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DiffOp = Literal["create", "update", "delete"]
 VMKind = Literal["virtualmachine", "lxc"]
@@ -112,7 +112,7 @@ class PlanResponse(BaseModel):
 class VMIntentPayload(BaseModel):
     vmid: int
     node: str
-    name: str
+    name: str | None = None
     cores: int | None = None
     memory_mib: int | None = None
     storage: str | None = None
@@ -126,7 +126,7 @@ class VMIntentPayload(BaseModel):
 class LXCIntentPayload(BaseModel):
     vmid: int
     node: str
-    hostname: str
+    hostname: str | None = None
     cores: int | None = None
     memory_mib: int | None = None
     storage: str | None = None
@@ -143,6 +143,22 @@ class ApplyDiff(BaseModel):
     netbox_id: int | None = None
     payload: VMIntentPayload | LXCIntentPayload
 
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_payload_for_kind(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            return data
+        kind = data.get("kind")
+        coerced = dict(data)
+        if kind == "qemu":
+            coerced["payload"] = VMIntentPayload.model_validate(payload)
+        elif kind == "lxc":
+            coerced["payload"] = LXCIntentPayload.model_validate(payload)
+        return coerced
+
 
 class ApplyRequest(BaseModel):
     branch_id: int | None = None
@@ -157,6 +173,7 @@ class ApplyResultItem(BaseModel):
     op: str
     kind: str
     status: Literal["succeeded", "failed", "skipped", "not_implemented"]
+    reason: str | None = None
     message: str = ""
     proxmox_upid: str | None = None
 

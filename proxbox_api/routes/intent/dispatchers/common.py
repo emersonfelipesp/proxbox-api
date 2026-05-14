@@ -1,4 +1,4 @@
-"""Shared helpers for intent create dispatchers."""
+"""Shared helpers for intent apply dispatchers."""
 
 from __future__ import annotations
 
@@ -108,6 +108,116 @@ def merge_indexed_items(
                 continue
             value = ",".join(value_parts)
         params[str(key)] = value
+
+
+def mapping_from_response(value: object) -> dict[str, object]:
+    """Normalize SDK/Pydantic/dict response objects into a plain mapping."""
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="python", by_alias=True, exclude_none=True)
+        if isinstance(dumped, dict):
+            return mapping_from_response(dumped)
+    if isinstance(value, Mapping):
+        data = value.get("data")
+        if isinstance(data, Mapping):
+            return {str(key): item for key, item in data.items()}
+        return {str(key): item for key, item in value.items()}
+    return {}
+
+
+def sequence_from_response(value: object) -> list[dict[str, object]]:
+    """Normalize SDK/Pydantic/list response objects into record mappings."""
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="python", by_alias=True, exclude_none=True)
+        return sequence_from_response(dumped)
+    if isinstance(value, Mapping):
+        data = value.get("data")
+        if isinstance(data, list):
+            return sequence_from_response(data)
+        record = mapping_from_response(value)
+        return [record] if record else []
+    if isinstance(value, list):
+        records: list[dict[str, object]] = []
+        for item in value:
+            record = mapping_from_response(item)
+            if record:
+                records.append(record)
+        return records
+    return []
+
+
+def find_vmid_record(
+    records: list[dict[str, object]],
+    *,
+    vmid: int,
+    kind: str,
+) -> dict[str, object] | None:
+    for record in records:
+        try:
+            record_vmid = int(str(record.get("vmid")))
+        except (TypeError, ValueError):
+            continue
+        record_kind = str(record.get("type") or kind)
+        if record_vmid == vmid and record_kind == kind:
+            return record
+    return None
+
+
+def find_current_node(
+    records: list[dict[str, object]],
+    *,
+    vmid: int,
+    kind: str,
+) -> str:
+    record = find_vmid_record(records, vmid=vmid, kind=kind)
+    if record is None:
+        return "unknown"
+    node = record.get("node")
+    return str(node) if node else "unknown"
+
+
+def status_is_running(status_payload: object) -> bool:
+    status_map = mapping_from_response(status_payload)
+    return status_map.get("status") == "running"
+
+
+def tags_to_config(tags: list[str]) -> str:
+    return ";".join(tags)
+
+
+def values_match(current: object, desired: object) -> bool:
+    if current == desired:
+        return True
+    if isinstance(desired, int):
+        try:
+            return int(str(current)) == desired
+        except (TypeError, ValueError):
+            return False
+    if isinstance(desired, str):
+        return str(current) == desired
+    return False
+
+
+def set_delta_if_changed(
+    delta: dict[str, object],
+    current: Mapping[str, object],
+    key: str,
+    desired: object,
+) -> None:
+    if not values_match(current.get(key), desired):
+        delta[key] = desired
+
+
+def merge_indexed_delta(
+    delta: dict[str, object],
+    current: Mapping[str, object],
+    items: list[dict],
+    *,
+    default_prefix: str,
+) -> None:
+    indexed: dict[str, object] = {}
+    merge_indexed_items(indexed, items, default_prefix=default_prefix)
+    for key, desired in indexed.items():
+        set_delta_if_changed(delta, current, key, desired)
 
 
 async def write_intent_journal(

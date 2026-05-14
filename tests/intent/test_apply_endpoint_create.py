@@ -246,22 +246,6 @@ async def test_apply_lxc_create_missing_ostemplate_fails(
     assert body["results"][0]["message"] == "ostemplate required for LXC create"
 
 
-async def test_apply_update_returns_not_implemented(
-    auth_headers,
-    client_with_fake_netbox,
-    sync_async_db_override,
-):
-    update_diff = _qemu_diff()
-    update_diff["op"] = "update"
-
-    response = await _post_apply(_body(update_diff), auth_headers=auth_headers)
-
-    assert response.status_code == 200, response.text
-    result = response.json()["results"][0]
-    assert result["status"] == "not_implemented"
-    assert "Sub-PR G" in result["message"]
-
-
 async def test_apply_delete_returns_deletion_request_not_implemented(
     auth_headers,
     client_with_fake_netbox,

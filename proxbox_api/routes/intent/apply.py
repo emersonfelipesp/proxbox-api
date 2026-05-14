@@ -1,8 +1,9 @@
-"""``POST /intent/apply`` — CREATE-only NetBox→Proxmox intent apply."""
+"""``POST /intent/apply`` — NetBox→Proxmox intent apply."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.logger import logger
@@ -12,7 +13,9 @@ from proxbox_api.routes.intent.dispatchers.common import (
     write_intent_journal,
 )
 from proxbox_api.routes.intent.dispatchers.lxc_create import dispatch_lxc_create
+from proxbox_api.routes.intent.dispatchers.lxc_update import dispatch_lxc_update
 from proxbox_api.routes.intent.dispatchers.qemu_create import dispatch_qemu_create
+from proxbox_api.routes.intent.dispatchers.qemu_update import dispatch_qemu_update
 from proxbox_api.routes.intent.schemas import (
     ApplyDiff,
     ApplyRequest,
@@ -30,7 +33,7 @@ router = APIRouter()
 def _overall(results: list[ApplyResultItem]) -> str:
     if not results:
         return "no_op"
-    if all(item.status == "succeeded" for item in results):
+    if all(item.status in {"succeeded", "skipped"} for item in results):
         return "succeeded"
     if all(item.status == "failed" for item in results):
         return "failed"
@@ -71,6 +74,54 @@ async def _write_apply_failure_journal(
     )
 
 
+def _payload_failure(diff: ApplyDiff, message: str) -> ApplyResultItem:
+    return ApplyResultItem(
+        netbox_id=diff.netbox_id,
+        vmid=_vmid(diff),
+        op=diff.op,
+        kind=diff.kind,
+        status="failed",
+        message=message,
+    )
+
+
+def _writes_disabled_response(result: ApplyResultItem) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={
+            "reason": result.reason,
+            "detail": result.message,
+        },
+    )
+
+
+async def _dispatch_update_diff(
+    *,
+    diff: ApplyDiff,
+    endpoint_context: IntentEndpointContext,
+    actor: str | None,
+    run_uuid: str,
+) -> ApplyResultItem:
+    if diff.kind == "qemu":
+        if not isinstance(diff.payload, VMIntentPayload):
+            return _payload_failure(diff, "qemu update payload requires VMIntentPayload")
+        return await dispatch_qemu_update(
+            endpoint_context,
+            diff.payload,
+            run_uuid,
+            actor=actor,
+        )
+
+    if not isinstance(diff.payload, LXCIntentPayload):
+        return _payload_failure(diff, "lxc update payload requires LXCIntentPayload")
+    return await dispatch_lxc_update(
+        endpoint_context,
+        diff.payload,
+        run_uuid,
+        actor=actor,
+    )
+
+
 @router.post(
     "/apply",
     response_model=ApplyResponse,
@@ -81,7 +132,7 @@ async def apply_intent(
     body: ApplyRequest,
     session: SessionDep,
     endpoint_id: int | None = Query(default=None),
-) -> ApplyResponse:
+) -> ApplyResponse | JSONResponse:
     del request
     try:
         results: list[ApplyResultItem] = []
@@ -93,16 +144,7 @@ async def apply_intent(
             )
             if diff.op == "create" and diff.kind == "qemu":
                 if not isinstance(diff.payload, VMIntentPayload):
-                    results.append(
-                        ApplyResultItem(
-                            netbox_id=diff.netbox_id,
-                            vmid=_vmid(diff),
-                            op=diff.op,
-                            kind=diff.kind,
-                            status="failed",
-                            message="qemu create payload requires VMIntentPayload",
-                        )
-                    )
+                    results.append(_payload_failure(diff, "qemu create payload requires VMIntentPayload"))
                     continue
                 results.append(
                     await dispatch_qemu_create(
@@ -116,16 +158,7 @@ async def apply_intent(
 
             if diff.op == "create" and diff.kind == "lxc":
                 if not isinstance(diff.payload, LXCIntentPayload):
-                    results.append(
-                        ApplyResultItem(
-                            netbox_id=diff.netbox_id,
-                            vmid=_vmid(diff),
-                            op=diff.op,
-                            kind=diff.kind,
-                            status="failed",
-                            message="lxc create payload requires LXCIntentPayload",
-                        )
-                    )
+                    results.append(_payload_failure(diff, "lxc create payload requires LXCIntentPayload"))
                     continue
                 results.append(
                     await dispatch_lxc_create(
@@ -138,16 +171,15 @@ async def apply_intent(
                 continue
 
             if diff.op == "update":
-                results.append(
-                    ApplyResultItem(
-                        netbox_id=diff.netbox_id,
-                        vmid=_vmid(diff),
-                        op="update",
-                        kind=diff.kind,
-                        status="not_implemented",
-                        message="UPDATE lands in Sub-PR G (#384)",
-                    )
+                result = await _dispatch_update_diff(
+                    diff=diff,
+                    endpoint_context=endpoint_context,
+                    actor=body.actor,
+                    run_uuid=body.run_uuid,
                 )
+                if result.reason == "writes_disabled_for_endpoint":
+                    return _writes_disabled_response(result)
+                results.append(result)
                 continue
 
             results.append(

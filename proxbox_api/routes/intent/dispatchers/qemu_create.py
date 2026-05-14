@@ -66,6 +66,28 @@ async def dispatch_qemu_create(
             message="writes_disabled_for_endpoint",
         )
 
+    if payload.name is None:
+        await write_intent_journal(
+            journal_writer=write_verb_journal_entry,
+            endpoint_context=endpoint_context,
+            endpoint=gated,
+            verb="intent_create_qemu",
+            result="failed",
+            vmid=payload.vmid,
+            actor=actor,
+            run_uuid=run_uuid,
+            kind="warning",
+            error_detail="name required for QEMU create",
+        )
+        return ApplyResultItem(
+            netbox_id=endpoint_context.netbox_id,
+            vmid=payload.vmid,
+            op="create",
+            kind="qemu",
+            status="failed",
+            message="name required for QEMU create",
+        )
+
     if payload.template_vmid is not None:
         return ApplyResultItem(
             netbox_id=endpoint_context.netbox_id,
