@@ -144,7 +144,9 @@ async def apply_intent(
             )
             if diff.op == "create" and diff.kind == "qemu":
                 if not isinstance(diff.payload, VMIntentPayload):
-                    results.append(_payload_failure(diff, "qemu create payload requires VMIntentPayload"))
+                    results.append(
+                        _payload_failure(diff, "qemu create payload requires VMIntentPayload")
+                    )
                     continue
                 results.append(
                     await dispatch_qemu_create(
@@ -158,7 +160,9 @@ async def apply_intent(
 
             if diff.op == "create" and diff.kind == "lxc":
                 if not isinstance(diff.payload, LXCIntentPayload):
-                    results.append(_payload_failure(diff, "lxc create payload requires LXCIntentPayload"))
+                    results.append(
+                        _payload_failure(diff, "lxc create payload requires LXCIntentPayload")
+                    )
                     continue
                 results.append(
                     await dispatch_lxc_create(

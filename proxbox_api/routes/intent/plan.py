@@ -68,10 +68,7 @@ def _verdict_for(diff: IntentDiff) -> PlanVerdict:
         op=diff.op,
         verdict="permitted",
         reason="default_permit",
-        message=(
-            "Plan-time validation accepted. Per-op probes land in "
-            "Sub-PRs F/G/K."
-        ),
+        message=("Plan-time validation accepted. Per-op probes land in Sub-PRs F/G/K."),
     )
 
 
