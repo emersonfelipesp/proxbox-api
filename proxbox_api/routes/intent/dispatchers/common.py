@@ -265,3 +265,62 @@ async def write_intent_journal(
         kind=kind,
         comments=comments,
     )
+
+
+async def write_deletion_request_journal(
+    *,
+    journal_writer: JournalWriter,
+    session: object,
+    endpoint: object | None,
+    endpoint_id: int,
+    verb: str,
+    result: str,
+    vmid: int,
+    actor: str | None,
+    run_uuid: str,
+    target_kind: str,
+    journal_kind: str,
+    deletion_request_id: int | None = None,
+    proxmox_upid: str | None = None,
+    reason: str | None = None,
+    error_detail: str | None = None,
+) -> None:
+    try:
+        nb = await get_netbox_async_session(database_session=session)
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "intent.deletion_requests: NetBox session unavailable while journaling "
+            "verb=%s vmid=%s: %s",
+            verb,
+            vmid,
+            scrub_message(str(error)),
+        )
+        nb = object()
+
+    endpoint_name = getattr(endpoint, "name", None) or "unknown"
+    comments = build_journal_comments(
+        verb=verb,
+        actor=actor or "proxbox-api",
+        result=result,
+        endpoint_name=str(endpoint_name),
+        endpoint_id=endpoint_id,
+        dispatched_at=utcnow_iso(),
+        proxmox_task_upid=proxmox_upid,
+        error_detail=scrub_message(error_detail) if error_detail is not None else None,
+    )
+    extra_lines = [
+        f"- target_vmid: {vmid}",
+        f"- target_kind: {target_kind}",
+        f"- run_uuid: {run_uuid}",
+    ]
+    if deletion_request_id is not None:
+        extra_lines.append(f"- deletion_request_id: {deletion_request_id}")
+    if reason is not None:
+        extra_lines.append(f"- reason: {scrub_message(reason)}")
+    comments = f"{comments}\n" + "\n".join(extra_lines)
+    await journal_writer(
+        nb,
+        netbox_vm_id=vmid,
+        kind=journal_kind,
+        comments=comments,
+    )

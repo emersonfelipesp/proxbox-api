@@ -1,8 +1,9 @@
 """NetBox→Proxmox intent endpoints.
 
 Sub-PR D (#381) introduces the ``/intent/plan`` validator. Later sub-PRs
-hang ``/intent/apply`` (F/G) and ``/intent/deletion-requests`` (I) off the
-same router.
+hang ``/intent/apply`` (F/G) off the same router; the Sub-PR I
+``/intent/deletion-requests`` router is registered in the app factory under
+the same prefix.
 
 Every write route under this package MUST call ``_gate(session, endpoint_id)``
 from ``proxbox_api.routes.proxmox_actions`` so the ``allow_writes`` toggle
@@ -18,6 +19,10 @@ from proxbox_api.routes.intent.schemas import (
     ApplyRequest,
     ApplyResponse,
     ApplyResultItem,
+    DeletionRequestExecuteResponse,
+    DeletionRequestReject,
+    DeletionRequestResponse,
+    DeletionRequestTarget,
     LXCIntentPayload,
     VMIntentPayload,
 )
@@ -29,6 +34,10 @@ __all__ = [
     "ApplyRequest",
     "ApplyResponse",
     "ApplyResultItem",
+    "DeletionRequestExecuteResponse",
+    "DeletionRequestReject",
+    "DeletionRequestResponse",
+    "DeletionRequestTarget",
     "LXCIntentPayload",
     "VMIntentPayload",
     "router",

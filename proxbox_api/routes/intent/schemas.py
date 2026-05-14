@@ -18,6 +18,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DiffOp = Literal["create", "update", "delete"]
 VMKind = Literal["virtualmachine", "lxc"]
 Verdict = Literal["permitted", "blocked", "warning"]
+DeletionRequestKind = Literal["qemu", "lxc"]
+DeletionRequestState = Literal[
+    "pending",
+    "approved",
+    "rejected",
+    "executing",
+    "succeeded",
+    "failed",
+]
 
 
 class IntentDiff(BaseModel):
@@ -182,3 +191,29 @@ class ApplyResponse(BaseModel):
     run_uuid: str
     overall: Literal["succeeded", "failed", "partial", "no_op"]
     results: list[ApplyResultItem]
+
+
+class DeletionRequestTarget(BaseModel):
+    vmid: int
+    node: str
+    kind: DeletionRequestKind
+
+
+class DeletionRequestReject(BaseModel):
+    reason: str
+
+
+class DeletionRequestResponse(BaseModel):
+    id: int
+    endpoint_id: int
+    vmid: int
+    node: str
+    kind: DeletionRequestKind
+    state: DeletionRequestState
+    created_at: float
+    updated_at: float
+
+
+class DeletionRequestExecuteResponse(BaseModel):
+    upid: str | None = None
+    run_uuid: str

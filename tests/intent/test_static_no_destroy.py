@@ -6,11 +6,14 @@ import ast
 from pathlib import Path
 
 INTENT_ROOT = Path(__file__).parents[2] / "proxbox_api" / "routes" / "intent"
+DESTROY_DISPATCHERS = {
+    INTENT_ROOT / "dispatchers" / "qemu_destroy.py",
+    INTENT_ROOT / "dispatchers" / "lxc_destroy.py",
+}
 TEXT_FORBIDDEN = (
     "qemu/vmid",
     ".delete(",
     "requests.delete",
-    "destroy(",
     "vzdelete",
 )
 CALL_FORBIDDEN = {
@@ -25,7 +28,9 @@ def _source_files() -> list[Path]:
     return [
         path
         for path in INTENT_ROOT.rglob("*.py")
-        if "__pycache__" not in path.parts and not path.name.startswith("test_")
+        if "__pycache__" not in path.parts
+        and not path.name.startswith("test_")
+        and path not in DESTROY_DISPATCHERS
     ]
 
 
