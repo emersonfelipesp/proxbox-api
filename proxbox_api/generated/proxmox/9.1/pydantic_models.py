@@ -496,6 +496,7 @@ class PutAccessUsersUseridUnlockTfaResponse(RootModel[bool]):
 class PostAccessVncticketRequest(ProxmoxBaseModel):
     authid: str = Field(..., description='UserId or token')
     path: str = Field(..., description="Verify ticket, and check if user have access 'privs' on 'path'")
+    port: int | None = Field(None, description='Verify that the ticket is valid for this port.')
     privs: str = Field(..., description="Verify ticket, and check if user have access 'privs' on 'path'")
     vncticket: str = Field(..., description='The VNC ticket.')
 
@@ -619,7 +620,44 @@ class GetClusterAcmeTosResponse(RootModel[str]):
     root: str = Field(..., description='ACME TermsOfService URL.')
 
 class GetClusterBackupResponseItem(ProxmoxBaseModel):
+    all: bool | None = Field(None, description='Backup all known guest systems on this host.')
+    bwlimit: int | None = Field(None, description='Limit I/O bandwidth (in KiB/s).')
+    comment: str | None = Field(None, description='Description for the Job.')
+    compress: str | None = Field(None, description='Compress dump file.')
+    dumpdir: str | None = Field(None, description='Store resulting files to specified directory.')
+    enabled: bool | None = Field(None, description='Enable or disable the job.')
+    exclude: str | None = Field(None, description='Exclude specified guest systems (assumes --all)')
+    exclude_path: list[str] | None = Field(None, alias="exclude-path", description="Exclude certain files/directories (shell globs). Paths starting with '/' are anchored to the container's root, other paths match relative to each subdirectory.")
+    fleecing: dict[str, object] | None = Field(None, description='Options for backup fleecing (VM only).')
     id: str | None = Field(None, description='The job ID.')
+    ionice: int | None = Field(None, description='Set IO priority when using the BFQ scheduler. For snapshot and suspend mode backups of VMs, this only affects the compressor. A value of 8 means the idle priority is used, otherwise the best-effort priority is used with the specified value.')
+    lockwait: int | None = Field(None, description='Maximal time to wait for the global lock (minutes).')
+    mailnotification: str | None = Field(None, description='Deprecated: use notification targets/matchers instead. Specify when to send a notification mail')
+    mailto: str | None = Field(None, description='Deprecated: Use notification targets/matchers instead. Comma-separated list of email addresses or users that should receive email notifications.')
+    maxfiles: int | None = Field(None, description="Deprecated: use 'prune-backups' instead. Maximal number of backup files per guest system.")
+    mode: str | None = Field(None, description='Backup mode.')
+    next_run: int | None = Field(None, alias="next-run", description='UNIX timestamp when this backup job will be executed next')
+    node: str | None = Field(None, description='Only run if executed on this node.')
+    notes_template: str | None = Field(None, alias="notes-template", description="Template string for generating notes for the backup(s). It can contain variables which will be replaced by their values. Currently supported are {{cluster}}, {{guestname}}, {{node}}, and {{vmid}}, but more might be added in the future. Needs to be a single line, newline and backslash need to be escaped as '\\n' and '\\\\' respectively.")
+    notification_mode: str | None = Field(None, alias="notification-mode", description="Determine which notification system to use. If set to 'legacy-sendmail', vzdump will consider the mailto/mailnotification parameters and send emails to the specified address(es) via the 'sendmail' command. If set to 'notification-system', a notification will be sent via PVE's notification system, and the mailto and mailnotification will be ignored. If set to 'auto' (default setting), an email will be sent if mailto is set, and the notification system will be used if not.")
+    pbs_change_detection_mode: str | None = Field(None, alias="pbs-change-detection-mode", description='PBS mode used to detect file changes and switch encoding format for container backups.')
+    performance: dict[str, object] | None = Field(None, description='Other performance-related settings.')
+    pigz: int | None = Field(None, description='Use pigz instead of gzip when N>0. N=1 uses half of cores, N>1 uses N as thread count.')
+    pool: str | None = Field(None, description='Backup all known guest systems included in the specified pool.')
+    protected: bool | None = Field(None, description='If true, mark backup(s) as protected.')
+    prune_backups: dict[str, object] | None = Field(None, alias="prune-backups", description='Use these retention options instead of those from the storage configuration.')
+    quiet: bool | None = Field(None, description='Be quiet.')
+    remove: bool | None = Field(None, description="Prune older backups according to 'prune-backups'.")
+    repeat_missed: bool | None = Field(None, alias="repeat-missed", description='If true, the job will be run as soon as possible if it was missed while the scheduler was not running.')
+    schedule: str | None = Field(None, description='Backup schedule. The format is a subset of `systemd` calendar events.')
+    script: str | None = Field(None, description='Use specified hook script.')
+    stdexcludes: bool | None = Field(None, description='Exclude temporary files and logs.')
+    stop: bool | None = Field(None, description='Stop running backup jobs on this host.')
+    stopwait: int | None = Field(None, description='Maximal time to wait until a guest system is stopped (minutes).')
+    storage: str | None = Field(None, description='Store resulting file to this storage.')
+    tmpdir: str | None = Field(None, description='Store temporary files to specified directory.')
+    vmid: str | None = Field(None, description='The ID of the guest system you want to backup.')
+    zstd: int | None = Field(None, description='Zstd threads. N=0 uses half of the available cores, if N is set to a value bigger than 0, N is used as thread count.')
 
 class GetClusterBackupResponse(RootModel[list[GetClusterBackupResponseItem]]):
     root: list[GetClusterBackupResponseItem] = Field(...)
@@ -629,7 +667,7 @@ class PostClusterBackupRequest(ProxmoxBaseModel):
     bwlimit: int | None = Field(None, description='Limit I/O bandwidth (in KiB/s).')
     comment: str | None = Field(None, description='Description for the Job.')
     compress: str | None = Field(None, description='Compress dump file.')
-    dow: str | None = Field(None, description='Day of week selection.')
+    dow: str | None = Field(None, description="Deprecated: Use 'schedule' instead. Day of week selection. 'starttime' and 'dow' will be converted into 'schedule' if used.")
     dumpdir: str | None = Field(None, description='Store resulting files to specified directory.')
     enabled: bool | None = Field(None, description='Enable or disable the job.')
     exclude: str | None = Field(None, description='Exclude specified guest systems (assumes --all)')
@@ -656,7 +694,7 @@ class PostClusterBackupRequest(ProxmoxBaseModel):
     repeat_missed: bool | None = Field(None, alias="repeat-missed", description='If true, the job will be run as soon as possible if it was missed while the scheduler was not running.')
     schedule: str | None = Field(None, description='Backup schedule. The format is a subset of `systemd` calendar events.')
     script: str | None = Field(None, description='Use specified hook script.')
-    starttime: str | None = Field(None, description='Job Start time.')
+    starttime: str | None = Field(None, description="Deprecated: Use 'schedule' instead. Job Start time. 'starttime' and 'dow' will be converted into 'schedule' if used.")
     stdexcludes: bool | None = Field(None, description='Exclude temporary files and logs.')
     stop: bool | None = Field(None, description='Stop running backup jobs on this host.')
     stopwait: int | None = Field(None, description='Maximal time to wait until a guest system is stopped (minutes).')
@@ -688,8 +726,45 @@ class DeleteClusterBackupIdRequest(RootModel[dict[str, object]]):
 class DeleteClusterBackupIdResponse(RootModel[None]):
     root: None = Field(...)
 
-class GetClusterBackupIdResponse(RootModel[dict[str, object]]):
-    root: dict[str, object] = Field(...)
+class GetClusterBackupIdResponse(ProxmoxBaseModel):
+    all: bool | None = Field(None, description='Backup all known guest systems on this host.')
+    bwlimit: int | None = Field(None, description='Limit I/O bandwidth (in KiB/s).')
+    comment: str | None = Field(None, description='Description for the Job.')
+    compress: str | None = Field(None, description='Compress dump file.')
+    dumpdir: str | None = Field(None, description='Store resulting files to specified directory.')
+    enabled: bool | None = Field(None, description='Enable or disable the job.')
+    exclude: str | None = Field(None, description='Exclude specified guest systems (assumes --all)')
+    exclude_path: list[str] | None = Field(None, alias="exclude-path", description="Exclude certain files/directories (shell globs). Paths starting with '/' are anchored to the container's root, other paths match relative to each subdirectory.")
+    fleecing: dict[str, object] | None = Field(None, description='Options for backup fleecing (VM only).')
+    id: str = Field(..., description='The job ID.')
+    ionice: int | None = Field(None, description='Set IO priority when using the BFQ scheduler. For snapshot and suspend mode backups of VMs, this only affects the compressor. A value of 8 means the idle priority is used, otherwise the best-effort priority is used with the specified value.')
+    lockwait: int | None = Field(None, description='Maximal time to wait for the global lock (minutes).')
+    mailnotification: str | None = Field(None, description='Deprecated: use notification targets/matchers instead. Specify when to send a notification mail')
+    mailto: str | None = Field(None, description='Deprecated: Use notification targets/matchers instead. Comma-separated list of email addresses or users that should receive email notifications.')
+    maxfiles: int | None = Field(None, description="Deprecated: use 'prune-backups' instead. Maximal number of backup files per guest system.")
+    mode: str | None = Field(None, description='Backup mode.')
+    next_run: int | None = Field(None, alias="next-run", description='UNIX timestamp when this backup job will be executed next')
+    node: str | None = Field(None, description='Only run if executed on this node.')
+    notes_template: str | None = Field(None, alias="notes-template", description="Template string for generating notes for the backup(s). It can contain variables which will be replaced by their values. Currently supported are {{cluster}}, {{guestname}}, {{node}}, and {{vmid}}, but more might be added in the future. Needs to be a single line, newline and backslash need to be escaped as '\\n' and '\\\\' respectively.")
+    notification_mode: str | None = Field(None, alias="notification-mode", description="Determine which notification system to use. If set to 'legacy-sendmail', vzdump will consider the mailto/mailnotification parameters and send emails to the specified address(es) via the 'sendmail' command. If set to 'notification-system', a notification will be sent via PVE's notification system, and the mailto and mailnotification will be ignored. If set to 'auto' (default setting), an email will be sent if mailto is set, and the notification system will be used if not.")
+    pbs_change_detection_mode: str | None = Field(None, alias="pbs-change-detection-mode", description='PBS mode used to detect file changes and switch encoding format for container backups.')
+    performance: dict[str, object] | None = Field(None, description='Other performance-related settings.')
+    pigz: int | None = Field(None, description='Use pigz instead of gzip when N>0. N=1 uses half of cores, N>1 uses N as thread count.')
+    pool: str | None = Field(None, description='Backup all known guest systems included in the specified pool.')
+    protected: bool | None = Field(None, description='If true, mark backup(s) as protected.')
+    prune_backups: dict[str, object] | None = Field(None, alias="prune-backups", description='Use these retention options instead of those from the storage configuration.')
+    quiet: bool | None = Field(None, description='Be quiet.')
+    remove: bool | None = Field(None, description="Prune older backups according to 'prune-backups'.")
+    repeat_missed: bool | None = Field(None, alias="repeat-missed", description='If true, the job will be run as soon as possible if it was missed while the scheduler was not running.')
+    schedule: str | None = Field(None, description='Backup schedule. The format is a subset of `systemd` calendar events.')
+    script: str | None = Field(None, description='Use specified hook script.')
+    stdexcludes: bool | None = Field(None, description='Exclude temporary files and logs.')
+    stop: bool | None = Field(None, description='Stop running backup jobs on this host.')
+    stopwait: int | None = Field(None, description='Maximal time to wait until a guest system is stopped (minutes).')
+    storage: str | None = Field(None, description='Store resulting file to this storage.')
+    tmpdir: str | None = Field(None, description='Store temporary files to specified directory.')
+    vmid: str | None = Field(None, description='The ID of the guest system you want to backup.')
+    zstd: int | None = Field(None, description='Zstd threads. N=0 uses half of the available cores, if N is set to a value bigger than 0, N is used as thread count.')
 
 class PutClusterBackupIdRequest(ProxmoxBaseModel):
     all: bool | None = Field(None, description='Backup all known guest systems on this host.')
@@ -697,7 +772,7 @@ class PutClusterBackupIdRequest(ProxmoxBaseModel):
     comment: str | None = Field(None, description='Description for the Job.')
     compress: str | None = Field(None, description='Compress dump file.')
     delete: str | None = Field(None, description='A list of settings you want to delete.')
-    dow: str | None = Field(None, description='Day of week selection.')
+    dow: str | None = Field(None, description="Deprecated: Use 'schedule' instead. Day of week selection. 'starttime' and 'dow' will be converted into 'schedule' if used.")
     dumpdir: str | None = Field(None, description='Store resulting files to specified directory.')
     enabled: bool | None = Field(None, description='Enable or disable the job.')
     exclude: str | None = Field(None, description='Exclude specified guest systems (assumes --all)')
@@ -723,7 +798,7 @@ class PutClusterBackupIdRequest(ProxmoxBaseModel):
     repeat_missed: bool | None = Field(None, alias="repeat-missed", description='If true, the job will be run as soon as possible if it was missed while the scheduler was not running.')
     schedule: str | None = Field(None, description='Backup schedule. The format is a subset of `systemd` calendar events.')
     script: str | None = Field(None, description='Use specified hook script.')
-    starttime: str | None = Field(None, description='Job Start time.')
+    starttime: str | None = Field(None, description="Deprecated: Use 'schedule' instead. Job Start time. 'starttime' and 'dow' will be converted into 'schedule' if used.")
     stdexcludes: bool | None = Field(None, description='Exclude temporary files and logs.')
     stop: bool | None = Field(None, description='Stop running backup jobs on this host.')
     stopwait: int | None = Field(None, description='Maximal time to wait until a guest system is stopped (minutes).')
@@ -745,7 +820,8 @@ class GetClusterBulkActionGuestResponse(RootModel[list[dict[str, object]]]):
     root: list[dict[str, object]] = Field(...)
 
 class PostClusterBulkActionGuestMigrateRequest(ProxmoxBaseModel):
-    maxworkers: int | None = Field(None, description='How many parallel tasks at maximum should be started.')
+    max_workers: int | None = Field(None, alias="max-workers", description='Defines the maximum number of tasks running concurrently.')
+    maxworkers: int | None = Field(None, description="Defines the maximum number of tasks running concurrently. Deprecated, use 'max-workers' instead.")
     online: bool | None = Field(None, description='Enable live migration for VMs and restart migration for CTs.')
     target: str = Field(..., description='Target node.')
     vms: list[int] | None = Field(None, description='Only consider guests from this list of VMIDs.')
@@ -756,7 +832,8 @@ class PostClusterBulkActionGuestMigrateResponse(RootModel[str]):
 
 class PostClusterBulkActionGuestShutdownRequest(ProxmoxBaseModel):
     force_stop: bool | None = Field(None, alias="force-stop", description='Makes sure the Guest stops after the timeout.')
-    maxworkers: int | None = Field(None, description='How many parallel tasks at maximum should be started.')
+    max_workers: int | None = Field(None, alias="max-workers", description='Defines the maximum number of tasks running concurrently.')
+    maxworkers: int | None = Field(None, description="Defines the maximum number of tasks running concurrently. Deprecated, use 'max-workers' instead.")
     timeout: int | None = Field(None, description='Default shutdown timeout in seconds if none is configured for the guest.')
     vms: list[int] | None = Field(None, description='Only consider guests from this list of VMIDs.')
 
@@ -764,7 +841,8 @@ class PostClusterBulkActionGuestShutdownResponse(RootModel[str]):
     root: str = Field(..., description='UPID of the worker')
 
 class PostClusterBulkActionGuestStartRequest(ProxmoxBaseModel):
-    maxworkers: int | None = Field(None, description='How many parallel tasks at maximum should be started.')
+    max_workers: int | None = Field(None, alias="max-workers", description='Defines the maximum number of tasks running concurrently.')
+    maxworkers: int | None = Field(None, description="Defines the maximum number of tasks running concurrently. Deprecated, use 'max-workers' instead.")
     timeout: int | None = Field(None, description='Default start timeout in seconds. Only valid for VMs. (default depends on the guest configuration).')
     vms: list[int] | None = Field(None, description='Only consider guests from this list of VMIDs.')
 
@@ -772,7 +850,8 @@ class PostClusterBulkActionGuestStartResponse(RootModel[str]):
     root: str = Field(..., description='UPID of the worker')
 
 class PostClusterBulkActionGuestSuspendRequest(ProxmoxBaseModel):
-    maxworkers: int | None = Field(None, description='How many parallel tasks at maximum should be started.')
+    max_workers: int | None = Field(None, alias="max-workers", description='Defines the maximum number of tasks running concurrently.')
+    maxworkers: int | None = Field(None, description="Defines the maximum number of tasks running concurrently. Deprecated, use 'max-workers' instead.")
     statestorage: str | None = Field(None, description='The storage for the VM state.')
     to_disk: bool | None = Field(None, alias="to-disk", description='If set, suspends the guests to disk. Will be resumed on next start.')
     vms: list[int] | None = Field(None, description='Only consider guests from this list of VMIDs.')
@@ -833,6 +912,7 @@ class PostClusterConfigRequest(ProxmoxBaseModel):
     clustername: str = Field(..., description='The name of the cluster.')
     link_n: str | None = Field(None, alias="link[n]", description='Address and priority information of a single corosync link. (up to 8 links supported; link0..link7)')
     nodeid: int | None = Field(None, description='Node id for this node.')
+    token_coefficient: int | None = Field(None, alias="token-coefficient", description="Coefficient used to determine Corosync's token timeout. See the corosync.conf(5) manual for more details.")
     votes: int | None = Field(None, description='Number of votes for this node.')
 
 class PostClusterConfigResponse(RootModel[str]):
@@ -1267,8 +1347,8 @@ class PostClusterHaResourcesRequest(ProxmoxBaseModel):
     comment: str | None = Field(None, description='Description.')
     failback: bool | None = Field(None, description='Automatically migrate HA resource to the node with the highest priority according to their node affinity  rules, if a node with a higher priority than the current node comes online.')
     group: str | None = Field(None, description='The HA group identifier.')
-    max_relocate: int | None = Field(None, description='Maximal number of service relocate tries when a service failes to start.')
-    max_restart: int | None = Field(None, description='Maximal number of tries to restart the service on a node after its start failed.')
+    max_relocate: int | None = Field(None, description='Maximal number of resource relocate tries when a resource fails to start.')
+    max_restart: int | None = Field(None, description='Maximal number of tries to restart the resource on a node after its start failed. When reached, the HA manager will try to relocate the resource to an eligible node.')
     sid: str = Field(..., description='HA resource ID. This consists of a resource type followed by a resource specific name, separated with colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or CT id as a shortcut (example: 100).')
     state: str | None = Field(None, description='Requested resource state.')
     type: str | None = Field(None, description='Resource type.')
@@ -1287,7 +1367,7 @@ class GetClusterHaResourcesSidResponse(ProxmoxBaseModel):
     digest: str = Field(..., description='Can be used to prevent concurrent modifications.')
     failback: bool | None = Field(None, description='The HA resource is automatically migrated to the node with the highest priority according to their node affinity rule, if a node with a higher priority than the current node comes online.')
     group: str | None = Field(None, description='The HA group identifier.')
-    max_relocate: int | None = Field(None, description='Maximal number of service relocate tries when a service failes to start.')
+    max_relocate: int | None = Field(None, description='Maximal number of service relocate tries when a service fails to start.')
     max_restart: int | None = Field(None, description='Maximal number of tries to restart the service on a node after its start failed.')
     sid: str = Field(..., description='HA resource ID. This consists of a resource type followed by a resource specific name, separated with colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or CT id as a shortcut (example: 100).')
     state: str | None = Field(None, description='Requested resource state.')
@@ -1299,8 +1379,8 @@ class PutClusterHaResourcesSidRequest(ProxmoxBaseModel):
     digest: str | None = Field(None, description='Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.')
     failback: bool | None = Field(None, description='Automatically migrate HA resource to the node with the highest priority according to their node affinity  rules, if a node with a higher priority than the current node comes online.')
     group: str | None = Field(None, description='The HA group identifier.')
-    max_relocate: int | None = Field(None, description='Maximal number of service relocate tries when a service failes to start.')
-    max_restart: int | None = Field(None, description='Maximal number of tries to restart the service on a node after its start failed.')
+    max_relocate: int | None = Field(None, description='Maximal number of resource relocate tries when a resource fails to start.')
+    max_restart: int | None = Field(None, description='Maximal number of tries to restart the resource on a node after its start failed. When reached, the HA manager will try to relocate the resource to an eligible node.')
     state: str | None = Field(None, description='Requested resource state.')
 
 class PutClusterHaResourcesSidResponse(RootModel[None]):
@@ -1370,7 +1450,11 @@ class PutClusterHaRulesRuleResponse(RootModel[None]):
 class GetClusterHaStatusResponse(RootModel[list[dict[str, object]]]):
     root: list[dict[str, object]] = Field(...)
 
+class PostClusterHaStatusArmHaResponse(RootModel[None]):
+    root: None = Field(...)
+
 class GetClusterHaStatusCurrentResponseItem(ProxmoxBaseModel):
+    armed_state: str | None = Field(None, alias="armed-state", description="For type 'fencing'. Whether HA is armed, on standby, disarming or disarmed.")
     crm_state: str | None = Field(None, description="For type 'service'. Service state as seen by the CRM.")
     failback: bool | None = Field(None, description='The HA resource is automatically migrated to the node with the highest priority according to their node affinity rule, if a node with a higher priority than the current node comes online.')
     id: str | None = Field(None, description='Status entry ID (quorum, master, lrm:<node>, service:<sid>).')
@@ -1379,6 +1463,7 @@ class GetClusterHaStatusCurrentResponseItem(ProxmoxBaseModel):
     node: str | None = Field(None, description='Node associated to status entry.')
     quorate: bool | None = Field(None, description="For type 'quorum'. Whether the cluster is quorate or not.")
     request_state: str | None = Field(None, description="For type 'service'. Requested service state.")
+    resource_mode: str | None = Field(None, description="For type 'fencing'. How resources are handled while disarmed.")
     sid: str | None = Field(None, description="For type 'service'. Service ID.")
     state: str | None = Field(None, description="For type 'service'. Verbose service state.")
     status: str | None = Field(None, description='Status of the entry (value depends on type).')
@@ -1387,6 +1472,12 @@ class GetClusterHaStatusCurrentResponseItem(ProxmoxBaseModel):
 
 class GetClusterHaStatusCurrentResponse(RootModel[list[GetClusterHaStatusCurrentResponseItem]]):
     root: list[GetClusterHaStatusCurrentResponseItem] = Field(...)
+
+class PostClusterHaStatusDisarmHaRequest(ProxmoxBaseModel):
+    resource_mode: str = Field(..., alias="resource-mode", description="Controls how HA managed resources are handled while disarmed. The current state of resources is not affected. 'freeze': new commands and state changes are not applied. 'ignore': resources are removed from HA tracking and can be managed as if they were not HA managed.")
+
+class PostClusterHaStatusDisarmHaResponse(RootModel[None]):
+    root: None = Field(...)
 
 class GetClusterHaStatusManagerStatusResponse(RootModel[dict[str, object]]):
     root: dict[str, object] = Field(...)
@@ -2099,6 +2190,7 @@ class GetClusterResourcesResponseItem(ProxmoxBaseModel):
     pool: str | None = Field(None, description="The pool name (for types 'pool', 'qemu' and 'lxc').")
     protocol: str | None = Field(None, description="The protocol of a fabric (for type 'network', network-type 'fabric').")
     sdn: str | None = Field(None, description="The name of an SDN entity (for type 'sdn')")
+    shared: bool | None = Field(None, description='Determines whether the storage is shared')
     status: str | None = Field(None, description='Resource type dependent status.')
     storage: str | None = Field(None, description="The storage identifier (for type 'storage').")
     tags: str | None = Field(None, description="The guest's tags (for types 'qemu' and 'lxc')")
@@ -2119,7 +2211,7 @@ class GetClusterSdnResponse(RootModel[list[GetClusterSdnResponseItem]]):
 
 class PutClusterSdnRequest(ProxmoxBaseModel):
     lock_token: str | None = Field(None, alias="lock-token", description='the token for unlocking the global SDN configuration')
-    release_lock: bool | None = Field(None, alias="release-lock", description='When lock-token has been provided and configuration successfully commited, release the lock automatically afterwards')
+    release_lock: bool | None = Field(None, alias="release-lock", description='When lock-token has been provided and configuration successfully committed, release the lock automatically afterwards')
 
 class PutClusterSdnResponse(RootModel[str]):
     root: str = Field(...)
@@ -2247,6 +2339,10 @@ class PutClusterSdnDnsDnsRequest(ProxmoxBaseModel):
 
 class PutClusterSdnDnsDnsResponse(RootModel[None]):
     root: None = Field(...)
+
+class GetClusterSdnDryRunResponse(ProxmoxBaseModel):
+    frr_diff: str | None = Field(None, alias="frr-diff", description='The difference between the current and pending FRR configuration.')
+    interfaces_diff: str | None = Field(None, alias="interfaces-diff", description='The difference between the current and pending /etc/network/interfaces.d/sdn configuration.')
 
 class GetClusterSdnFabricsResponseItem(ProxmoxBaseModel):
     subdir: str | None = Field(None)
@@ -4373,6 +4469,7 @@ class PostNodesNodeLxcVmidVncproxyRequest(ProxmoxBaseModel):
 
 class PostNodesNodeLxcVmidVncproxyResponse(ProxmoxBaseModel):
     cert: str = Field(...)
+    password: str | None = Field(None, description="Password used for authentication within the VNC protocol. Consists of printable ASCII characters ('!' .. '~').")
     port: int = Field(...)
     ticket: str = Field(...)
     upid: str = Field(...)
@@ -4382,7 +4479,8 @@ class GetNodesNodeLxcVmidVncwebsocketResponse(ProxmoxBaseModel):
     port: str = Field(...)
 
 class PostNodesNodeMigrateallRequest(ProxmoxBaseModel):
-    maxworkers: int | None = Field(None, description="Maximal number of parallel migration job. If not set, uses'max_workers' from datacenter.cfg. One of both must be set!")
+    max_workers: int | None = Field(None, alias="max-workers", description="Maximal number of parallel migration job. If not set, uses'max_workers' from datacenter.cfg. One of both must be set!")
+    maxworkers: int | None = Field(None, description="Maximal number of parallel migration job. If not set, uses'max_workers' from datacenter.cfg. One of both must be set!Deprecated, use 'max-workers' instead.")
     target: str = Field(..., description='Target node.')
     vms: str | None = Field(None, description='Only consider Guests with these IDs.')
     with_local_disks: bool | None = Field(None, alias="with-local-disks", description='Enable live storage migration for local disk')
@@ -4542,8 +4640,8 @@ class GetNodesNodeQemuResponseItem(ProxmoxBaseModel):
     lock: str | None = Field(None, description='The current config lock, if any.')
     maxdisk: int | None = Field(None, description='Root disk size in bytes.')
     maxmem: int | None = Field(None, description='Maximum memory in bytes.')
-    mem: int | None = Field(None, description='Currently used memory in bytes.')
-    memhost: int | None = Field(None, description='Current memory usage on the host.')
+    mem: int | None = Field(None, description='Currently used memory in bytes. Does not take into account kernel same-page merging (KSM). Uses information from ballooning when available.')
+    memhost: int | None = Field(None, description='Current memory usage on the host. Does not take into account kernel same-page merging (KSM).')
     name: str | None = Field(None, description='VM (host)name.')
     netin: int | None = Field(None, description='The amount of traffic in bytes that was sent to the guest over the network since it was started.')
     netout: int | None = Field(None, description='The amount of traffic in bytes that was sent from the guest over the network since it was started.')
@@ -4573,12 +4671,12 @@ class PostNodesNodeQemuRequest(ProxmoxBaseModel):
     agent: str | None = Field(None, description='Enable/disable communication with the QEMU Guest Agent and its properties.')
     allow_ksm: bool | None = Field(None, alias="allow-ksm", description='Allow memory pages of this guest to be merged via KSM (Kernel Samepage Merging).')
     amd_sev: str | None = Field(None, alias="amd-sev", description='Secure Encrypted Virtualization (SEV) features by AMD CPUs')
-    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host.')
+    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host architecture.')
     archive: str | None = Field(None, description="The backup archive. Either the file system path to a .tar or .vma file (use '-' to pipe data from stdin) or a proxmox storage backup volume identifier.")
     args: str | None = Field(None, description='Arbitrary arguments passed to kvm.')
     audio0: str | None = Field(None, description='Configure a audio device, useful in combination with QXL/Spice.')
     autostart: bool | None = Field(None, description='Automatic restart after crash (currently ignored).')
-    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. Using zero disables the ballon driver.')
+    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. The balloon driver is enabled by default, unless it is explicitly disabled by setting the value to zero.')
     bios: str | None = Field(None, description='Select BIOS implementation.')
     boot: str | None = Field(None, description="Specify guest boot order. Use the 'order=' sub-property as usage with no key or 'legacy=' is deprecated.")
     bootdisk: str | None = Field(None, description="Enable booting from specified disk. Deprecated: Use 'boot: order=foo;bar' instead.")
@@ -4615,7 +4713,7 @@ class PostNodesNodeQemuRequest(ProxmoxBaseModel):
     lock: str | None = Field(None, description='Lock/unlock the VM.')
     machine: str | None = Field(None, description='Specify the QEMU machine.')
     memory: str | None = Field(None, description='Memory properties.')
-    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge.')
+    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge. Will be capped to 2000 seconds (maximum in QEMU).')
     migrate_speed: int | None = Field(None, description='Set maximum speed (in MB/s) for migrations. Value 0 is no limit.')
     name: str | None = Field(None, description='Set a name for the VM. Only used on the configuration web interface.')
     nameserver: str | None = Field(None, description='cloud-init: Sets DNS server IP address for a container. Create will automatically use the setting from the host if neither searchdomain nor nameserver are set.')
@@ -4705,7 +4803,7 @@ class GetNodesNodeQemuVmidAgentExecStatusResponse(ProxmoxBaseModel):
 
 class GetNodesNodeQemuVmidAgentFileReadResponse(ProxmoxBaseModel):
     content: str = Field(..., description='The content of the file, maximum 16777216')
-    truncated: bool | None = Field(None, description='If set to 1, the output is truncated and not complete')
+    truncated: bool | None = Field(None, description='If set to 1, the read did not reach the end of the file.')
 
 class PostNodesNodeQemuVmidAgentFileWriteRequest(ProxmoxBaseModel):
     content: str = Field(..., description='The content to write into the file.')
@@ -4849,11 +4947,11 @@ class GetNodesNodeQemuVmidConfigResponse(ProxmoxBaseModel):
     agent: str | None = Field(None, description='Enable/disable communication with the QEMU Guest Agent and its properties.')
     allow_ksm: bool | None = Field(None, alias="allow-ksm", description='Allow memory pages of this guest to be merged via KSM (Kernel Samepage Merging).')
     amd_sev: str | None = Field(None, alias="amd-sev", description='Secure Encrypted Virtualization (SEV) features by AMD CPUs')
-    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host.')
+    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host architecture.')
     args: str | None = Field(None, description='Arbitrary arguments passed to kvm.')
     audio0: str | None = Field(None, description='Configure a audio device, useful in combination with QXL/Spice.')
     autostart: bool | None = Field(None, description='Automatic restart after crash (currently ignored).')
-    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. Using zero disables the ballon driver.')
+    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. The balloon driver is enabled by default, unless it is explicitly disabled by setting the value to zero.')
     bios: str | None = Field(None, description='Select BIOS implementation.')
     boot: str | None = Field(None, description="Specify guest boot order. Use the 'order=' sub-property as usage with no key or 'legacy=' is deprecated.")
     bootdisk: str | None = Field(None, description="Enable booting from specified disk. Deprecated: Use 'boot: order=foo;bar' instead.")
@@ -4887,7 +4985,7 @@ class GetNodesNodeQemuVmidConfigResponse(ProxmoxBaseModel):
     machine: str | None = Field(None, description='Specify the QEMU machine.')
     memory: str | None = Field(None, description='Memory properties.')
     meta: str | None = Field(None, description='Some (read-only) meta-information about this guest.')
-    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge.')
+    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge. Will be capped to 2000 seconds (maximum in QEMU).')
     migrate_speed: int | None = Field(None, description='Set maximum speed (in MB/s) for migrations. Value 0 is no limit.')
     name: str | None = Field(None, description='Set a name for the VM. Only used on the configuration web interface.')
     nameserver: str | None = Field(None, description='cloud-init: Sets DNS server IP address for a container. Create will automatically use the setting from the host if neither searchdomain nor nameserver are set.')
@@ -4940,12 +5038,12 @@ class PostNodesNodeQemuVmidConfigRequest(ProxmoxBaseModel):
     agent: str | None = Field(None, description='Enable/disable communication with the QEMU Guest Agent and its properties.')
     allow_ksm: bool | None = Field(None, alias="allow-ksm", description='Allow memory pages of this guest to be merged via KSM (Kernel Samepage Merging).')
     amd_sev: str | None = Field(None, alias="amd-sev", description='Secure Encrypted Virtualization (SEV) features by AMD CPUs')
-    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host.')
+    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host architecture.')
     args: str | None = Field(None, description='Arbitrary arguments passed to kvm.')
     audio0: str | None = Field(None, description='Configure a audio device, useful in combination with QXL/Spice.')
     autostart: bool | None = Field(None, description='Automatic restart after crash (currently ignored).')
     background_delay: int | None = Field(None, description="Time to wait for the task to finish. We return 'null' if the task finish within that time.")
-    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. Using zero disables the ballon driver.')
+    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. The balloon driver is enabled by default, unless it is explicitly disabled by setting the value to zero.')
     bios: str | None = Field(None, description='Select BIOS implementation.')
     boot: str | None = Field(None, description="Specify guest boot order. Use the 'order=' sub-property as usage with no key or 'legacy=' is deprecated.")
     bootdisk: str | None = Field(None, description="Enable booting from specified disk. Deprecated: Use 'boot: order=foo;bar' instead.")
@@ -4981,7 +5079,7 @@ class PostNodesNodeQemuVmidConfigRequest(ProxmoxBaseModel):
     lock: str | None = Field(None, description='Lock/unlock the VM.')
     machine: str | None = Field(None, description='Specify the QEMU machine.')
     memory: str | None = Field(None, description='Memory properties.')
-    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge.')
+    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge. Will be capped to 2000 seconds (maximum in QEMU).')
     migrate_speed: int | None = Field(None, description='Set maximum speed (in MB/s) for migrations. Value 0 is no limit.')
     name: str | None = Field(None, description='Set a name for the VM. Only used on the configuration web interface.')
     nameserver: str | None = Field(None, description='cloud-init: Sets DNS server IP address for a container. Create will automatically use the setting from the host if neither searchdomain nor nameserver are set.')
@@ -5033,11 +5131,11 @@ class PutNodesNodeQemuVmidConfigRequest(ProxmoxBaseModel):
     agent: str | None = Field(None, description='Enable/disable communication with the QEMU Guest Agent and its properties.')
     allow_ksm: bool | None = Field(None, alias="allow-ksm", description='Allow memory pages of this guest to be merged via KSM (Kernel Samepage Merging).')
     amd_sev: str | None = Field(None, alias="amd-sev", description='Secure Encrypted Virtualization (SEV) features by AMD CPUs')
-    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host.')
+    arch: str | None = Field(None, description='Virtual processor architecture. Defaults to the host architecture.')
     args: str | None = Field(None, description='Arbitrary arguments passed to kvm.')
     audio0: str | None = Field(None, description='Configure a audio device, useful in combination with QXL/Spice.')
     autostart: bool | None = Field(None, description='Automatic restart after crash (currently ignored).')
-    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. Using zero disables the ballon driver.')
+    balloon: int | None = Field(None, description='Amount of target RAM for the VM in MiB. The balloon driver is enabled by default, unless it is explicitly disabled by setting the value to zero.')
     bios: str | None = Field(None, description='Select BIOS implementation.')
     boot: str | None = Field(None, description="Specify guest boot order. Use the 'order=' sub-property as usage with no key or 'legacy=' is deprecated.")
     bootdisk: str | None = Field(None, description="Enable booting from specified disk. Deprecated: Use 'boot: order=foo;bar' instead.")
@@ -5072,7 +5170,7 @@ class PutNodesNodeQemuVmidConfigRequest(ProxmoxBaseModel):
     lock: str | None = Field(None, description='Lock/unlock the VM.')
     machine: str | None = Field(None, description='Specify the QEMU machine.')
     memory: str | None = Field(None, description='Memory properties.')
-    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge.')
+    migrate_downtime: float | None = Field(None, description='Set maximum tolerated downtime (in seconds) for migrations. Should the migration not be able to converge in the very end, because too much newly dirtied RAM needs to be transferred, the limit will be increased automatically step-by-step until migration can converge. Will be capped to 2000 seconds (maximum in QEMU).')
     migrate_speed: int | None = Field(None, description='Set maximum speed (in MB/s) for migrations. Value 0 is no limit.')
     name: str | None = Field(None, description='Set a name for the VM. Only used on the configuration web interface.')
     nameserver: str | None = Field(None, description='cloud-init: Sets DNS server IP address for a container. Create will automatically use the setting from the host if neither searchdomain nor nameserver are set.')
@@ -5523,8 +5621,8 @@ class GetNodesNodeQemuVmidStatusCurrentResponse(ProxmoxBaseModel):
     lock: str | None = Field(None, description='The current config lock, if any.')
     maxdisk: int | None = Field(None, description='Root disk size in bytes.')
     maxmem: int | None = Field(None, description='Maximum memory in bytes.')
-    mem: int | None = Field(None, description='Currently used memory in bytes.')
-    memhost: int | None = Field(None, description='Current memory usage on the host.')
+    mem: int | None = Field(None, description='Currently used memory in bytes. Does not take into account kernel same-page merging (KSM). Uses information from ballooning when available.')
+    memhost: int | None = Field(None, description='Current memory usage on the host. Does not take into account kernel same-page merging (KSM).')
     name: str | None = Field(None, description='VM (host)name.')
     netin: int | None = Field(None, description='The amount of traffic in bytes that was sent to the guest over the network since it was started.')
     netout: int | None = Field(None, description='The amount of traffic in bytes that was sent from the guest over the network since it was started.')
@@ -5631,12 +5729,12 @@ class PutNodesNodeQemuVmidUnlinkResponse(RootModel[None]):
     root: None = Field(...)
 
 class PostNodesNodeQemuVmidVncproxyRequest(ProxmoxBaseModel):
-    generate_password: bool | None = Field(None, alias="generate-password", description='Generates a random password to be used as ticket instead of the API ticket.')
+    generate_password: bool | None = Field(None, alias="generate-password", description='Deprecated, do not use. Password is generated when required.')
     websocket: bool | None = Field(None, description='Prepare for websocket upgrade (only required when using serial terminal, otherwise upgrade is always possible).')
 
 class PostNodesNodeQemuVmidVncproxyResponse(ProxmoxBaseModel):
     cert: str = Field(...)
-    password: str | None = Field(None, description="Returned if requested with 'generate-password' param. Consists of printable ASCII characters ('!' .. '~').")
+    password: str | None = Field(None, description="Password used for authentication within the VNC protocol. Consists of printable ASCII characters ('!' .. '~').")
     port: int = Field(...)
     ticket: str = Field(...)
     upid: str = Field(...)
@@ -5886,6 +5984,7 @@ class PostNodesNodeSpiceshellResponse(ProxmoxBaseModel):
 
 class PostNodesNodeStartallRequest(ProxmoxBaseModel):
     force: bool | None = Field(None, description="Issue start command even if virtual guest have 'onboot' not set or set to off.")
+    max_workers: int | None = Field(None, alias="max-workers", description="Defines the maximum number of tasks running concurrently. If not set, uses 'max_workers' from datacenter.cfg, and if that's not set, the available CPU threads, clamped to a maximum of 8, are used.")
     vms: str | None = Field(None, description='Only consider guests from this comma separated list of VMIDs.')
 
 class PostNodesNodeStartallResponse(RootModel[str]):
@@ -5909,6 +6008,7 @@ class PostNodesNodeStatusResponse(RootModel[None]):
 
 class PostNodesNodeStopallRequest(ProxmoxBaseModel):
     force_stop: bool | None = Field(None, alias="force-stop", description='Force a hard-stop after the timeout.')
+    max_workers: int | None = Field(None, alias="max-workers", description="Defines the maximum number of tasks running concurrently. If  not set, uses 'max_workers' from datacenter.cfg, and if that's not set, the available CPU threads, clamped to a maximum of 8, are used.")
     timeout: int | None = Field(None, description='Timeout for each guest shutdown task. Depending on `force-stop`, the shutdown gets then simply aborted or a hard-stop is forced.')
     vms: str | None = Field(None, description='Only consider Guests with these IDs.')
 
@@ -6109,6 +6209,7 @@ class PutNodesNodeSubscriptionResponse(RootModel[None]):
     root: None = Field(...)
 
 class PostNodesNodeSuspendallRequest(ProxmoxBaseModel):
+    max_workers: int | None = Field(None, alias="max-workers", description="Maximal number of parallel migration job. If not set, uses'max_workers' from datacenter.cfg, and if that's not set the available'\n                    .' CPU threads, clamped to a maximum of 8, are used.")
     vms: str | None = Field(None, description='Only consider Guests with these IDs.')
 
 class PostNodesNodeSuspendallResponse(RootModel[str]):
@@ -6199,6 +6300,7 @@ class PostNodesNodeVncshellRequest(ProxmoxBaseModel):
 
 class PostNodesNodeVncshellResponse(ProxmoxBaseModel):
     cert: str = Field(...)
+    password: str | None = Field(None, description="Password used for authentication within the VNC protocol. Consists of printable ASCII characters ('!' .. '~').")
     port: int = Field(...)
     ticket: str = Field(...)
     upid: str = Field(...)
