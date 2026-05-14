@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from proxbox_api.services.proxmox import tag_styles as tag_styles_module
 from proxbox_api.services.proxmox.tag_styles import (
     fallback_color,
     fetch_tag_color_map,
@@ -65,6 +68,24 @@ def test_fallback_color_differs_per_tag() -> None:
     assert fallback_color("critical") != fallback_color("production")
 
 
+def test_fallback_color_handles_md5_without_usedforsecurity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_md5 = tag_styles_module.hashlib.md5
+    calls: list[dict[str, object]] = []
+
+    def _compat_md5(data: bytes, **kwargs: object):
+        calls.append(kwargs)
+        if "usedforsecurity" in kwargs:
+            raise TypeError("usedforsecurity is unsupported")
+        return real_md5(data)
+
+    monkeypatch.setattr(tag_styles_module.hashlib, "md5", _compat_md5)
+
+    assert fallback_color("critical") == real_md5(b"critical").hexdigest()[:6]
+    assert calls == [{"usedforsecurity": False}, {}]
+
+
 class _StubCluster:
     def __init__(self, options: object) -> None:
         self._options = options
@@ -116,3 +137,14 @@ async def test_fetch_tag_color_map_handles_session_error() -> None:
             raise RuntimeError("upstream offline")
 
     assert await fetch_tag_color_map(_BrokenSession()) == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_tag_color_map_propagates_cancellation() -> None:
+    class _CancelledSession:
+        @property
+        def session(self) -> object:
+            raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await fetch_tag_color_map(_CancelledSession())

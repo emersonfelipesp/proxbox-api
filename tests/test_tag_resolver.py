@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,6 +73,8 @@ async def test_resolve_empty_returns_empty_list(patch_ensure_tag: _TagRecorder) 
     assert await resolve_proxmox_tag_ids(object(), None) == []
     assert await resolve_proxmox_tag_ids(object(), "") == []
     assert await resolve_proxmox_tag_ids(object(), "   ") == []
+    assert await resolve_proxmox_tag_ids(object(), 123) == []
+    assert await resolve_proxmox_tag_ids(object(), []) == []
     assert patch_ensure_tag.calls == []
 
 
@@ -139,3 +142,14 @@ async def test_resolve_skips_failed_tags_but_keeps_going(
         "maintenance",
     ]
     assert len(ids) == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_propagates_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _cancelled_ensure(*args: object, **kwargs: object) -> object:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(tag_resolver_module, "ensure_tag_async", _cancelled_ensure)
+
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_proxmox_tag_ids(object(), "critical")

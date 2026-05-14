@@ -7,6 +7,7 @@ NetBox tag IDs preserving input order.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from proxbox_api.logger import logger
@@ -25,7 +26,7 @@ def _slugify_tag(value: str) -> str:
 
 async def resolve_proxmox_tag_ids(
     nb: object,
-    raw_tags: str | None,
+    raw_tags: object,
     *,
     color_map: dict[str, str] | None = None,
     description: str = DEFAULT_TAG_DESCRIPTION,
@@ -52,6 +53,8 @@ async def resolve_proxmox_tag_ids(
                 color=color,
                 description=description,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning("Failed to ensure NetBox tag for Proxmox tag '%s'", name, exc_info=True)
             continue

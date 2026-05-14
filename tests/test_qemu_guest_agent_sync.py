@@ -166,6 +166,72 @@ def _install_common_sync_patches(  # noqa: C901
     )
 
 
+def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkeypatch):
+    data = _vm_sync_inputs({"tags": "critical;production"})
+    base_resource = data["cluster_resources"][0]["lab"][0]
+    data["cluster_resources"][0]["lab"] = [
+        {**base_resource, "name": f"vm{i}", "vmid": 100 + i} for i in range(4)
+    ]
+    ip_payloads: list[dict] = []
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 4,
+    )
+
+    fetch_calls: list[object] = []
+    resolved_color_maps: list[dict[str, str] | None] = []
+
+    async def _fake_fetch_tag_color_map(px):
+        fetch_calls.append(px)
+        await asyncio.sleep(0.01)
+        return {"critical": "ff5722"}
+
+    async def _fake_resolve_proxmox_tag_ids(_nb, _raw, *, color_map=None):
+        resolved_color_maps.append(color_map)
+        return [201]
+
+    async def _fake_rest_create(_nb, _path, payload):
+        vmid = int(payload["custom_fields"]["proxmox_vm_id"])
+        return {"id": 1000 + vmid, **payload}
+
+    async def _fake_task_history(**_kwargs):
+        return 0
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_tag_color_map",
+        _fake_fetch_tag_color_map,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_proxmox_tag_ids",
+        _fake_resolve_proxmox_tag_ids,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_create_async",
+        _fake_rest_create,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
+        _fake_task_history,
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            sync_vm_network=False,
+        )
+    )
+
+    assert len(result) == 4
+    assert len(fetch_calls) == 1
+    assert resolved_color_maps == [{"critical": "ff5722"}] * 4
+
+
 def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
     data = _vm_sync_inputs(
         {

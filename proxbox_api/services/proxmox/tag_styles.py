@@ -16,6 +16,7 @@ the sync flow — returns ``{}`` on any failure.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 from typing import Any
@@ -60,7 +61,8 @@ def _extract_color_map_text(tag_style: str) -> str | None:
 def parse_tag_color_map(tag_style: str | None) -> dict[str, str]:
     """Parse a Proxmox ``tag-style`` field into ``{tag_lower: "rrggbb"}``.
 
-    Returns an empty dict on any malformed input. Background color is used
+    Invalid color-map entries are skipped. Returns an empty dict when input is
+    missing/invalid or no valid entries exist. Background color is used
     (Proxmox color-map foreground/weight are ignored for NetBox tag color).
     """
     if not tag_style or not isinstance(tag_style, str):
@@ -94,6 +96,8 @@ async def fetch_tag_color_map(proxmox_session: Any) -> dict[str, str]:
     """
     try:
         options = await resolve_async(proxmox_session.session.cluster.options.get())
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.debug("Failed to fetch /cluster/options for tag-style", exc_info=True)
         return {}
@@ -114,5 +118,9 @@ def fallback_color(tag_name: str) -> str:
     Stable across bulk and individual sync paths so re-syncs don't flip
     colors for tags that aren't in the Proxmox color-map.
     """
-    digest = hashlib.md5(tag_name.encode("utf-8"), usedforsecurity=False).hexdigest()
+    data = tag_name.encode("utf-8")
+    try:
+        digest = hashlib.md5(data, usedforsecurity=False).hexdigest()
+    except TypeError:
+        digest = hashlib.md5(data).hexdigest()
     return digest[:6]

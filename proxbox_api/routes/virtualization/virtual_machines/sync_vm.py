@@ -1317,16 +1317,21 @@ async def create_virtual_machines(  # noqa: C901
 
     # Per-cluster color-map cache: fetched once on first VM that needs it.
     tag_color_map_by_cluster: dict[str, dict[str, str]] = {}
+    tag_color_map_locks: dict[str, asyncio.Lock] = {}
 
     async def _get_cluster_tag_color_map(cluster_name: str) -> dict[str, str]:
         if cluster_name in tag_color_map_by_cluster:
             return tag_color_map_by_cluster[cluster_name]
-        px = px_by_cluster.get(cluster_name)
-        if px is None:
-            tag_color_map_by_cluster[cluster_name] = {}
+        lock = tag_color_map_locks.setdefault(cluster_name, asyncio.Lock())
+        async with lock:
+            if cluster_name in tag_color_map_by_cluster:
+                return tag_color_map_by_cluster[cluster_name]
+            px = px_by_cluster.get(cluster_name)
+            if px is None:
+                tag_color_map_by_cluster[cluster_name] = {}
+                return tag_color_map_by_cluster[cluster_name]
+            tag_color_map_by_cluster[cluster_name] = await fetch_tag_color_map(px)
             return tag_color_map_by_cluster[cluster_name]
-        tag_color_map_by_cluster[cluster_name] = await fetch_tag_color_map(px)
-        return tag_color_map_by_cluster[cluster_name]
 
     async def _resolve_vm_proxmox_tag_ids(cluster_name: str, vm_config: dict) -> list[int]:
         if not overwrite_flags.overwrite_vm_proxmox_tags:
