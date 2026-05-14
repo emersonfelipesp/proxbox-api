@@ -107,3 +107,61 @@ class PlanResponse(BaseModel):
     permitted: bool = Field(..., description="False if any diff is blocked.")
     verdicts: list[PlanVerdict] = Field(default_factory=list)
     summary: str = Field(..., description="One-line summary rendered as the merge button hint.")
+
+
+class VMIntentPayload(BaseModel):
+    vmid: int
+    node: str
+    name: str
+    cores: int | None = None
+    memory_mib: int | None = None
+    storage: str | None = None
+    disks: list[dict] = Field(default_factory=list)
+    nics: list[dict] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    cloud_init: dict | None = None
+    template_vmid: int | None = None
+
+
+class LXCIntentPayload(BaseModel):
+    vmid: int
+    node: str
+    hostname: str
+    cores: int | None = None
+    memory_mib: int | None = None
+    storage: str | None = None
+    disks: list[dict] = Field(default_factory=list)
+    nics: list[dict] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    ostemplate: str | None = None
+    password: str | None = None
+
+
+class ApplyDiff(BaseModel):
+    op: Literal["create", "update", "delete"]
+    kind: Literal["qemu", "lxc"]
+    netbox_id: int | None = None
+    payload: VMIntentPayload | LXCIntentPayload
+
+
+class ApplyRequest(BaseModel):
+    branch_id: int | None = None
+    actor: str | None = None
+    run_uuid: str
+    diffs: list[ApplyDiff]
+
+
+class ApplyResultItem(BaseModel):
+    netbox_id: int | None = None
+    vmid: int
+    op: str
+    kind: str
+    status: Literal["succeeded", "failed", "skipped", "not_implemented"]
+    message: str = ""
+    proxmox_upid: str | None = None
+
+
+class ApplyResponse(BaseModel):
+    run_uuid: str
+    overall: Literal["succeeded", "failed", "partial", "no_op"]
+    results: list[ApplyResultItem]
