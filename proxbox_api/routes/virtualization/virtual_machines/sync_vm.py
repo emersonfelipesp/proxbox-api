@@ -1328,9 +1328,7 @@ async def create_virtual_machines(  # noqa: C901
         tag_color_map_by_cluster[cluster_name] = await fetch_tag_color_map(px)
         return tag_color_map_by_cluster[cluster_name]
 
-    async def _resolve_vm_proxmox_tag_ids(
-        cluster_name: str, vm_config: dict
-    ) -> list[int]:
+    async def _resolve_vm_proxmox_tag_ids(cluster_name: str, vm_config: dict) -> list[int]:
         if not overwrite_flags.overwrite_vm_proxmox_tags:
             return []
         raw = vm_config.get("tags") if isinstance(vm_config, dict) else None

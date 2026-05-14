@@ -53,9 +53,7 @@ async def resolve_proxmox_tag_ids(
                 description=description,
             )
         except Exception:
-            logger.warning(
-                "Failed to ensure NetBox tag for Proxmox tag '%s'", name, exc_info=True
-            )
+            logger.warning("Failed to ensure NetBox tag for Proxmox tag '%s'", name, exc_info=True)
             continue
         tag_id = getattr(record, "id", None)
         if tag_id is None and isinstance(record, dict):

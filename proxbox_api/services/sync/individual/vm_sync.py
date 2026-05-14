@@ -356,9 +356,7 @@ async def sync_vm_individual(
             if discovery_id is not None:
                 tag_ids.append(discovery_id)
 
-        sync_proxmox_tags = (
-            overwrite_flags.overwrite_vm_proxmox_tags if overwrite_flags else True
-        )
+        sync_proxmox_tags = overwrite_flags.overwrite_vm_proxmox_tags if overwrite_flags else True
         proxmox_tag_ids: list[int] = []
         if sync_proxmox_tags:
             raw_proxmox_tags = (
