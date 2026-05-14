@@ -697,7 +697,7 @@ async def create_custom_fields(  # noqa: C901
             },
             {
                 "object_types": ["dcim.interface"],
-                "type": "decimal",
+                "type": "integer",
                 "name": "nic_speed_gbps",
                 "label": "NIC Speed (Gbps)",
                 "description": "Negotiated link speed reported by ethtool, in Gbps",
