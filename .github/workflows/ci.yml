@@ -706,6 +706,16 @@ jobs:
             "${{ matrix.proxbox_base_url }}/extras/extras/custom-fields/create" \
             -H "X-Proxbox-API-Key: ${PROXBOX_API_KEY}"
 
+      - name: Dump proxbox-api logs on custom-fields failure
+        if: failure()
+        run: |
+          echo "=== proxbox-api container logs (last 400 lines) ==="
+          docker logs --tail 400 proxbox-e2e || true
+          echo "=== netbox http container logs (last 200 lines) ==="
+          docker logs --tail 200 netbox-e2e-http 2>/dev/null || true
+          docker logs --tail 200 netbox-e2e-nginx 2>/dev/null || true
+          docker logs --tail 200 netbox-e2e-granian 2>/dev/null || true
+
       - name: Run E2E tests (Docker proxmox mock)
         env:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
