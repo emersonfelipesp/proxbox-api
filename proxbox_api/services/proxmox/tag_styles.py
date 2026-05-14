@@ -114,5 +114,5 @@ def fallback_color(tag_name: str) -> str:
     Stable across bulk and individual sync paths so re-syncs don't flip
     colors for tags that aren't in the Proxmox color-map.
     """
-    digest = hashlib.md5(tag_name.encode("utf-8")).hexdigest()
+    digest = hashlib.md5(tag_name.encode("utf-8"), usedforsecurity=False).hexdigest()
     return digest[:6]
