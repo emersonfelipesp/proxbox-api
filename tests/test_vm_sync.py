@@ -225,8 +225,13 @@ def test_virtual_machine_interface_state_accepts_choice_object_type():
 
 def test_build_payload_applies_description_metadata_when_enabled(monkeypatch):
     """End-to-end: ``parse_description_metadata=True`` plus a fenced JSON block
-    on the Proxmox VM description applies the parsed PKs to the resulting body
-    and strips the metadata block from the written description."""
+    on the Proxmox VM description applies known PKs to the resulting body and
+    strips the metadata block from the written description.
+
+    Issue #365: ``tenant`` is *not* a known VM create-body key — proxbox-api
+    leaves tenant assignment to the netbox-proxbox plugin's name-regex
+    mapping — so an inline ``tenant`` is silently dropped.
+    """
 
     monkeypatch.setattr(
         "proxbox_api.proxmox_to_netbox.normalize.resolve_netbox_schema_contract",
@@ -245,8 +250,8 @@ def test_build_payload_applies_description_metadata_when_enabled(monkeypatch):
         parse_description_metadata=True,
     )
 
-    assert payload["tenant"] == 13
     assert payload["site"] == 4
+    assert "tenant" not in payload
     assert "netbox-metadata" not in payload["description"]
     assert "Production database VM." in payload["description"]
 
@@ -277,8 +282,12 @@ def test_build_payload_ignores_metadata_when_flag_off(monkeypatch):
 
 
 def test_build_payload_respects_overwrite_vm_role_when_off(monkeypatch):
-    """Metadata key ``role`` is dropped when ``overwrite_vm_role=False``; other
-    keys (``tenant``) still apply because no per-field flag gates them."""
+    """Metadata key ``role`` is gated off when ``overwrite_vm_role=False`` and
+    the fallback PK resolves instead.
+
+    Issue #365: ``tenant`` is never a valid VM create-body key, regardless of
+    overwrite flags — it is always dropped.
+    """
 
     from proxbox_api.schemas.sync import SyncOverwriteFlags
 
@@ -302,4 +311,4 @@ def test_build_payload_respects_overwrite_vm_role_when_off(monkeypatch):
     )
 
     assert payload["role"] == 99
-    assert payload["tenant"] == 13
+    assert "tenant" not in payload
