@@ -44,6 +44,7 @@ from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 from proxbox_api.routes.proxmox_actions import router as proxmox_actions_router
+from proxbox_api.routes.sync.active import router as sync_active_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
@@ -245,7 +246,62 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         ", ".join(bundled) if bundled else "(none)",
     )
 
+    await _run_bootstrap_pass(app)
+
     yield
+
+
+async def _run_bootstrap_pass(app: FastAPI) -> None:
+    """Resolve the ``ensure_netbox_objects`` flag and run NetBox bootstrap.
+
+    Stores a :class:`BootstrapStatus` on ``app.state.bootstrap_status`` so the
+    full-update SSE stream can emit the ``bootstrap_done`` frame on every
+    subsequent run. NetBox-connectivity failures are logged but do not abort
+    startup — the existing inline ``_ensure_*`` helpers in the sync path stay
+    as a defensive fallback.
+    """
+    from proxbox_api.app.netbox_session import get_raw_netbox_session
+    from proxbox_api.runtime_settings import get_bool
+    from proxbox_api.services.netbox_bootstrap import BootstrapStatus, run_netbox_bootstrap
+
+    enabled = get_bool(
+        settings_key="ensure_netbox_objects",
+        env="PROXBOX_ENSURE_NETBOX_OBJECTS",
+        default=True,
+    )
+
+    if not enabled:
+        app.state.bootstrap_status = BootstrapStatus(
+            ok=True,
+            skipped=True,
+            reason="ensure_netbox_objects=false",
+        )
+        logger.info("NetBox bootstrap skipped via ensure_netbox_objects flag")
+        return
+
+    try:
+        nb = get_raw_netbox_session()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("NetBox bootstrap skipped: no NetBox session available (%s)", exc)
+        app.state.bootstrap_status = BootstrapStatus(
+            ok=False,
+            skipped=True,
+            reason=f"no_netbox_session: {exc}",
+        )
+        return
+
+    try:
+        status = await run_netbox_bootstrap(nb, enabled=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("NetBox bootstrap pass failed: %s", exc)
+        app.state.bootstrap_status = BootstrapStatus(
+            ok=False,
+            skipped=False,
+            reason=f"bootstrap_error: {exc}",
+        )
+        return
+
+    app.state.bootstrap_status = status
 
 
 def create_app() -> FastAPI:
@@ -329,32 +385,50 @@ def create_app() -> FastAPI:
 
     app.include_router(root_meta_router)
     app.include_router(auth_router)
-    register_cache_routes(app)
-    register_full_update_routes(app)
-    register_websocket_routes(app)
 
-    app.include_router(admin_router, prefix="/admin", tags=["admin"])
-    app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
-    app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
-    app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
-    app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
-    app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
-    app.include_router(
-        proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
-    )
-    app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
-    app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
-    app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
-    app.include_router(
-        virtual_machines_router,
-        prefix="/virtualization/virtual-machines",
-        tags=["virtualization / virtual-machines"],
-    )
-    app.include_router(extras_router, prefix="/extras", tags=["extras"])
-    app.include_router(intent_router, prefix="/intent", tags=["intent"])
-    app.include_router(deletion_requests_router, prefix="/intent", tags=["intent"])
-    app.include_router(
-        sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
-    )
+    features = {
+        token.strip().lower()
+        for token in os.environ.get("PROXBOX_FEATURES", "").split(",")
+        if token.strip()
+    }
+    pbs_only = features == {"pbs"}
+
+    if not pbs_only:
+        register_cache_routes(app)
+        register_full_update_routes(app)
+        register_websocket_routes(app)
+        app.include_router(admin_router, prefix="/admin", tags=["admin"])
+        app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
+        app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
+        app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
+        app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
+        app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
+        app.include_router(
+            proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
+        )
+        app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
+        app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
+        app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
+        app.include_router(
+            virtual_machines_router,
+            prefix="/virtualization/virtual-machines",
+            tags=["virtualization / virtual-machines"],
+        )
+        app.include_router(extras_router, prefix="/extras", tags=["extras"])
+        app.include_router(intent_router, prefix="/intent", tags=["intent"])
+        app.include_router(deletion_requests_router, prefix="/intent", tags=["intent"])
+        app.include_router(
+            sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
+        )
+        app.include_router(sync_active_router)
+
+    try:
+        from proxbox_api.pbs import admin_router as pbs_admin_router  # noqa: PLC0415
+        from proxbox_api.pbs import router as pbs_router  # noqa: PLC0415
+    except ImportError as exc:
+        logger.info("PBS subpackage unavailable; /pbs/* routes disabled (%s)", exc)
+    else:
+        app.include_router(pbs_admin_router, prefix="/pbs", tags=["pbs"])
+        app.include_router(pbs_router, prefix="/pbs", tags=["pbs"])
 
     return app

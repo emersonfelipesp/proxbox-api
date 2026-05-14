@@ -42,6 +42,8 @@ def build_virtual_machine_transform(
     last_updated: datetime | None = None,
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
+    parse_description_metadata: bool = False,
+    overwrite_flags: object | None = None,
 ) -> NetBoxVirtualMachineCreateBody:
     """Build validated NetBox VM create payload from Proxmox raw payload and config."""
 
@@ -69,6 +71,9 @@ def build_virtual_machine_transform(
         proxmox_url=proxmox_url,
     )
 
-    body = transform.as_netbox_create_body()
+    body = transform.as_netbox_create_body(
+        parse_description_metadata=parse_description_metadata,
+        overwrite_flags=overwrite_flags,
+    )
     _validate_netbox_contract(body)
     return body

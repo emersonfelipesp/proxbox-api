@@ -45,6 +45,10 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
         captured.update(kwargs)
         return SimpleNamespace(id=77)
 
+    async def _fake_first(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(device_ensure, "rest_first_async", _fake_first)
     monkeypatch.setattr(device_ensure, "rest_reconcile_async", _fake_reconcile)
 
     await device_ensure._ensure_cluster(
@@ -61,11 +65,15 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
     assert payload["scope_type"] == "dcim.site"
     assert payload["scope_id"] == 42
     assert payload["tenant"] == 9
+    # Issue #362: on create, the cluster discovery slug must be present.
+    tag_slugs = {ref.get("slug") for ref in payload["tags"] if isinstance(ref, dict)}
+    assert "proxbox-discovered-cluster" in tag_slugs
 
 
 def test_vm_payload_includes_endpoint_site_and_excludes_tenant() -> None:
-    # Issue #365: tenant assignment is owned by the netbox-proxbox plugin via
-    # name-regex mapping; the create body must never include tenant.
+    # Issue #365: VM tenant assignment is owned by the netbox-proxbox plugin
+    # via name-regex mapping. proxbox-api propagates the endpoint site to the
+    # VM create body but must never send `tenant` on it.
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource={
             "vmid": 101,

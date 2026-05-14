@@ -1,10 +1,15 @@
 """Tests for X-NetBox-Branch header propagation through netbox-sdk activate_branch().
 
 The plugin → proxbox-api branch header pass-through is implemented by calling
-`netbox_session.activate_branch(schema_id)` on the netbox-sdk Api facade, which
-opens a `header_scope(X-NetBox-Branch=...)` for the duration of the context.
-These tests pin that the header is set when a schema id is provided and absent
-when it is not.
+``netbox_session.activate_branch(schema_id)`` on the netbox-sdk Api facade,
+which opens a ``header_scope(X-NetBox-Branch=...)`` for the duration of the
+context. These tests pin that the header is set when a schema id is provided
+and absent when it is not.
+
+Port of PR #74 onto v0.0.11. The sync route on v0.0.11 calls only the public
+``create_*`` helpers from inside ``_full_update_sync_impl``, so the stub list
+matches the ``main``-branch original. The route is now reachable via the thin
+wrapper ``full_update_sync`` → ``_full_update_sync_run`` → ``_full_update_sync_impl``.
 """
 
 from __future__ import annotations
@@ -23,8 +28,8 @@ from unittest.mock import AsyncMock
 class _RecordingSession:
     """Stand-in for the netbox-sdk Api facade.
 
-    Captures the active branch schema_id while inside `activate_branch()` and
-    records every (header_active, value) seen at "request time" via `record_call()`.
+    Captures the active branch schema_id while inside ``activate_branch()`` and
+    records every (header_active, value) seen at "request time" via ``record_call()``.
     """
 
     def __init__(self) -> None:

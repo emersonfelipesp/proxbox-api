@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timezone
 
 from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
@@ -19,11 +20,16 @@ from proxbox_api.services.proxmox_helpers import (
     get_vm_config_individual,
     get_vm_resource_individual,
 )
+from proxbox_api.services.sync.discovery_tags import (
+    resolve_discovery_tag_id,
+    vm_discovery_tag_slug,
+)
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     normalize_current_virtual_machine_payload,
+    stamp_vm_last_run_id,
 )
 
 
@@ -131,6 +137,7 @@ def _build_netbox_vm_payload(
     proxmox_url: str | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -170,14 +177,13 @@ def _build_netbox_vm_payload(
         vmid = int(resource.get("vmid") or 0)
         vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
-    # Issue #365: tenant is owned by the netbox-proxbox plugin (name-regex
-    # mapping); proxbox-api must never send tenant on the create body.
     payload: dict[str, object] = {
         "name": str(resource.get("name", "")),
         "status": status,
         "cluster": cluster_id,
         "device": device_id,
         "site": site_id,
+        "tenant": tenant_id,
         "role": role_id,
         "vcpus": maxcpu,
         "memory": memory_mb,
@@ -201,6 +207,7 @@ async def sync_vm_individual(
     vmid: int,
     dry_run: bool = False,
     overwrite_flags: SyncOverwriteFlags | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Sync a single Virtual Machine from Proxmox to NetBox.
 
@@ -216,10 +223,14 @@ async def sync_vm_individual(
         vmid: Proxmox VM ID.
         dry_run: If True, return what would be synced without making changes.
         overwrite_flags: Per-field overwrite gates for existing VM updates.
+        run_id: Optional UUID stamped on the VM's proxbox_last_run_id custom field.
+            When omitted, a fresh UUID is generated. Pass a shared UUID to make
+            related individual syncs share the same stamp.
 
     Returns:
         IndividualSyncResponse dict.
     """
+    effective_run_id = run_id or str(uuid.uuid4())
     service = BaseIndividualSyncService(nb, px, tag, overwrite_flags=overwrite_flags)
     now = datetime.now(timezone.utc)
 
@@ -306,6 +317,8 @@ async def sync_vm_individual(
         role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
         site_id = int(getattr(_site, "id", 0) or 0) if _site else None
+        tenant = await service._get_or_create_tenant()
+        tenant_id = int(getattr(tenant, "id", 0) or 0) if tenant else None
 
         px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
         px_port = getattr(px, "http_port", 8006)
@@ -332,6 +345,14 @@ async def sync_vm_individual(
                     existing_tag_ids.append(int(tid))
                 except (TypeError, ValueError):
                     continue
+        else:
+            # First-discovery audit tag (issue #362) — stamp only on create.
+            # The merge below preserves it on subsequent syncs, and operator
+            # removal from NetBox is permanent because this branch is no
+            # longer reached once the VM exists.
+            discovery_id = await resolve_discovery_tag_id(nb, vm_discovery_tag_slug(vm_type))
+            if discovery_id is not None:
+                tag_ids.append(discovery_id)
         merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids))
 
         netbox_vm_payload = _build_netbox_vm_payload(
@@ -346,6 +367,7 @@ async def sync_vm_individual(
             proxmox_url=px_url,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
+            tenant_id=tenant_id,
         )
         netbox_version = await detect_netbox_version(nb)
         supports_vm_type = supports_virtual_machine_type(netbox_version)
@@ -378,6 +400,8 @@ async def sync_vm_individual(
                 supports_virtual_machine_type_field=supports_vm_type,
             ),
         )
+
+        await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
 
         netbox_object = (
             virtual_machine.serialize() if hasattr(virtual_machine, "serialize") else None
@@ -433,6 +457,7 @@ async def sync_vm_with_related(
     sync_interfaces: bool = True,
     sync_task_history: bool = True,
     overwrite_flags: SyncOverwriteFlags | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Sync a VM with its related objects (interfaces, task history) in parallel.
 
@@ -447,6 +472,7 @@ async def sync_vm_with_related(
         dry_run: If True, don't make changes.
         sync_interfaces: Whether to sync interfaces.
         sync_task_history: Whether to sync task history.
+        run_id: Optional UUID stamped on the VM's proxbox_last_run_id custom field.
 
     Returns:
         Dict with VM result and related sync results.
@@ -463,6 +489,7 @@ async def sync_vm_with_related(
         vmid,
         dry_run,
         overwrite_flags=overwrite_flags,
+        run_id=run_id,
     )
 
     related_results: list[dict] = []

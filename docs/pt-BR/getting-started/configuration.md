@@ -71,6 +71,10 @@ Regras de autenticacao para create/update:
 - `token_name` e `token_value` devem ser enviados juntos.
 - Os nomes dos endpoints devem ser unicos.
 
+### Campo `allow_writes`
+
+`ProxmoxEndpoint.allow_writes` (boolean, padrao `false`) atua como um gate de confianca para os [Verbos Operacionais de VM](../api/http-reference.md#verbos-operacionais-de-vm). Quando `false`, qualquer `POST` para `/proxmox/{qemu|lxc}/{vmid}/{start,stop,snapshot,migrate}` retorna `403` com `reason="writes_disabled_for_endpoint"`, mesmo que a chave de API e o `X-Proxbox-Actor` sejam validos. O campo so pode ser alterado por administradores e e auditado via journal entry. Adicionado na migracao `0037_proxmoxendpoint_allow_writes`.
+
 ### Exemplo com senha
 
 ```json
@@ -172,12 +176,19 @@ Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup. |
 | `PROXBOX_BULK_BATCH_SIZE` | `50` | Tamanho do lote para requisicoes em massa relacionadas a VMs (volumes, backups). |
 | `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay em milissegundos entre lotes em massa. |
+| `PROXBOX_NETBOX_GET_CACHE_TTL` | `60` | TTL em segundos do cache de GETs no NetBox. `0` desabilita o cache. |
+| `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `4096` | Maximo de entradas armazenadas no cache de GETs do NetBox antes de eviccao LRU. |
+| `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Tamanho total maximo em bytes do cache de GETs do NetBox. |
+| `PROXBOX_DEBUG_CACHE` | nao definido | Quando `1`, `true` ou `yes`, emite logs detalhados de hit/miss/evict do cache. |
+| `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `0.5` | Delay em segundos entre requisicoes na criacao de custom fields no NetBox, para evitar overruns no PostgreSQL. |
 | `PROXBOX_GENERATED_DIR` | `$XDG_DATA_HOME/proxbox/generated/proxmox` | Override do diretorio de saida da CLI geradora de schema (`proxbox-schema generate`). |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (vazio) | Lista de origens CORS extras, separadas por virgula. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | nao definido | Quando `1`, `true` ou `yes`, respostas HTTP 500 incluem detalhes internos da excecao. |
 | `PROXBOX_STRICT_STARTUP` | nao definido | Quando `1`, `true` ou `yes`, falha no mount de rotas Proxmox geradas interrompe o startup. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | nao definido | Quando `1`, `true` ou `yes`, nao cria o cliente NetBox padrao no startup. |
 | `PROXBOX_ENCRYPTION_KEY` | nao definido | Chave secreta para criptografar credenciais em repouso. Veja [Criptografia de credenciais](#criptografia-de-credenciais) abaixo. |
+| `PROXBOX_ENCRYPTION_KEY_FILE` | nao definido | Caminho para um arquivo contendo a chave Fernet. Alternativa a `PROXBOX_ENCRYPTION_KEY` para deploys onde a chave nao deve ficar no ambiente. |
+| `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | nao definido | Quando `1`, `true` ou `yes`, permite startup mesmo sem chave de criptografia configurada. Apenas para labs — emite log `CRITICAL` e nunca deve ser usado em producao. |
 
 ### Tratando erros de NetBox sobrecarregado
 

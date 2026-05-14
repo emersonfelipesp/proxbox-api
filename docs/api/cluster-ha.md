@@ -135,3 +135,9 @@ Run them with:
 ```bash
 uv run pytest tests/test_proxmox_ha_routes.py -q
 ```
+
+## See Also
+
+- [HTTP API Reference — High-Availability (read-only)](http-reference.md#high-availability-read-only) for the consolidated route listing alongside the rest of the `/proxmox/*` surface.
+- [HTTP API Reference — VM Operational Verbs](http-reference.md#vm-operational-verbs) for the companion write surface (start/stop/snapshot/migrate) that depends on `ProxmoxEndpoint.allow_writes`.
+- `netbox-proxbox/docs/api/ha.md` for the plugin-side consumer of these endpoints.

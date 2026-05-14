@@ -95,6 +95,64 @@ Endpoints agregados entre todos os clusters Proxmox configurados. Atendem a aba 
 - `GET /proxmox/cluster/ha/groups/{group}` - Detalhe de um grupo unico; retorna `null` quando nenhum cluster possui o grupo.
 - `GET /proxmox/cluster/ha/summary` - Envelope unico (`{status, groups, resources}`) composto em paralelo via `asyncio.gather`. Usado pela pagina HA do cluster para que cada render gere apenas um round-trip.
 
+### Verbos Operacionais de VM
+
+Verbos POST que atuam sobre uma unica VM QEMU ou container LXC. Implementados em `proxbox_api/routes/proxmox_actions.py`. Cada handler e protegido por [`ProxmoxEndpoint.allow_writes`](../getting-started/configuration.md#endpoints-proxmox); o gate roda antes de qualquer chamada ao NetBox ou ao Proxmox, entao um endpoint com escritas desabilitadas retorna 403 mesmo que os servicos a jusante estejam fora do ar.
+
+Todos os verbos aceitam:
+
+- `endpoint_id` (query parameter, obrigatorio) — seleciona o cluster Proxmox alvo entre varios.
+- `Idempotency-Key` (header, opcional) — janela de cache de 60 segundos por `(endpoint_id, verb, vmid)`. Um segundo POST com a mesma chave retorna o corpo em cache sem re-despachar.
+- `X-Proxbox-Actor` (header, opcional) — rotulo do ator gravado no journal entry do NetBox. Default: `proxbox-api`.
+
+Toda invocacao (sucesso, falha ou no-op) escreve exatamente um journal entry no `VirtualMachine` correspondente do NetBox, resolvido pelo custom field `proxmox_vm_id`.
+
+| Method | Path | Proposito |
+|---|---|---|
+| `POST` | `/proxmox/qemu/{vmid}/start` | Inicia uma VM QEMU. No-op por estado quando ja `running` (`result: "already_running"`). |
+| `POST` | `/proxmox/lxc/{vmid}/start` | Inicia um container LXC. Mesma regra de no-op. |
+| `POST` | `/proxmox/qemu/{vmid}/stop` | Para uma VM QEMU. No-op por estado quando ja `stopped` (`result: "already_stopped"`). |
+| `POST` | `/proxmox/lxc/{vmid}/stop` | Para um container LXC. Mesma regra de no-op. |
+| `POST` | `/proxmox/qemu/{vmid}/snapshot` | Cria snapshot QEMU. Corpo JSON opcional `{snapname, description}`; quando `snapname` e omitido a rota gera `proxbox-{idempotency_key[:8]}` ou `proxbox-{utc_stamp}`. Sempre despachado (sem no-op por estado). |
+| `POST` | `/proxmox/lxc/{vmid}/snapshot` | Cria snapshot LXC. Mesmas regras de corpo e default. |
+| `POST` | `/proxmox/qemu/{vmid}/migrate` | Migra uma VM QEMU. Corpo obrigatorio `{target, online}`. Executa um preflight contra `/nodes/{node}/qemu/{vmid}/migrate` e rejeita quando o target nao e permitido ou `online=true` esbarra em discos/recursos locais. Retorna **202 Accepted** com `proxmox_task_upid` e `sse_url` (endpoints de cancel/stream abaixo). |
+| `POST` | `/proxmox/lxc/{vmid}/migrate` | Migra um container LXC. Mesmo corpo e shape 202. |
+| `DELETE` | `/proxmox/qemu/{vmid}/migrate/{task_upid}` | Cancel best-effort de uma migracao em andamento. Audita a intencao de cancel mesmo que o Proxmox recuse. |
+| `DELETE` | `/proxmox/lxc/{vmid}/migrate/{task_upid}` | Cancel best-effort para migrate de LXC. |
+| `GET` | `/proxmox/qemu/{vmid}/migrate/{task_upid}/stream` | Stream SSE emitindo `migrate_dispatched`, varios `migrate_progress`, depois `migrate_succeeded` xor `migrate_failed`. |
+| `GET` | `/proxmox/lxc/{vmid}/migrate/{task_upid}/stream` | Stream SSE para progresso de migrate de LXC. |
+
+#### Gate `allow_writes` (formato do 403)
+
+Quando `endpoint_id` falta, o endpoint nao existe ou `ProxmoxEndpoint.allow_writes` esta `false`, o handler retorna HTTP 403 com um dos tres codigos em `reason`:
+
+```json
+{
+  "reason": "endpoint_writes_disabled",
+  "detail": "Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.",
+  "endpoint_id": 7
+}
+```
+
+Outros formatos de 403 usam `reason: "endpoint_id_required"` ou `reason: "endpoint_not_found"` e omitem `endpoint_id`. O gate e a fronteira de confianca documentada em `docs/design/operational-verbs.md` §2.3 layer 3 — deve permanecer como o primeiro check de cada handler.
+
+#### Shape da resposta (sucesso / no-op)
+
+```json
+{
+  "verb": "start",
+  "vmid": 100,
+  "vm_type": "qemu",
+  "endpoint_id": 7,
+  "result": "ok",
+  "dispatched_at": "2026-05-13T14:22:08Z",
+  "proxmox_task_upid": "UPID:pve1:00012E34:...",
+  "journal_entry_url": "/api/extras/journal-entries/42/"
+}
+```
+
+`result` e um de `ok`, `already_running`, `already_stopped`, `accepted` (dispatch de migrate), `cancel_requested`, `cancel_failed`, `rejected` ou `failed`. Caminhos de erro adicionam `reason` e `detail`. A resposta 202 do migrate carrega tambem `sse_url`, `target`, `online` e `source_node`.
+
 ### Helpers do viewer e do contrato gerado
 
 - `POST /proxmox/viewer/generate`

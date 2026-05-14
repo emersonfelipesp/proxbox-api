@@ -7,7 +7,12 @@ from fastapi import Depends, Query, Request
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import RestRecord, ensure_tag_async
-from proxbox_api.schemas.sync import SyncOverwriteFlags, overwrite_flags_from_query_params
+from proxbox_api.schemas.sync import (
+    SyncBehaviorFlags,
+    SyncOverwriteFlags,
+    behavior_flags_from_query_params,
+    overwrite_flags_from_query_params,
+)
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep  # noqa: F401
 
 
@@ -48,4 +53,17 @@ def resolved_sync_overwrite_flags(
 ResolvedSyncOverwriteFlagsDep = Annotated[
     SyncOverwriteFlags,
     Depends(resolved_sync_overwrite_flags),
+]
+
+
+def resolved_sync_behavior_flags(
+    request: Request,
+    behavior_flags: Annotated[SyncBehaviorFlags, Query()] = SyncBehaviorFlags(),
+) -> SyncBehaviorFlags:
+    return behavior_flags_from_query_params(request.query_params, behavior_flags)
+
+
+ResolvedSyncBehaviorFlagsDep = Annotated[
+    SyncBehaviorFlags,
+    Depends(resolved_sync_behavior_flags),
 ]

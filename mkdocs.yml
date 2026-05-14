@@ -70,7 +70,9 @@ nav:
   - Synchronization:
       - Workflows: sync/workflows.md
       - VM Reconciliation Architecture: sync/reconciliation-architecture.md
+      - Name Collision Resolver: sync/name-collision-resolver.md
       - Overwrite Flags: sync/overwrite-flags.md
+      - Scheduler Container: sync/scheduler-container.md
   - Operations:
       - Hardware Discovery: operations/hardware-discovery.md
   - Development:

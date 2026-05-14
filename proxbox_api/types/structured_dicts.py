@@ -34,6 +34,8 @@ class ProxboxSettingsDict(TypedDict):
     bulk_batch_delay_ms: int
     vm_sync_max_concurrency: int
     custom_fields_request_delay: float
+    ensure_netbox_objects: NotRequired[bool]
+    delete_orphans: NotRequired[bool]
     debug_cache: NotRequired[bool]
     expose_internal_errors: NotRequired[bool]
     proxmox_timeout: NotRequired[int]

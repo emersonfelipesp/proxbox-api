@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import unquote
 
 from pydantic import (
     BaseModel,
@@ -16,6 +17,9 @@ from pydantic import (
 
 from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.proxmox_to_netbox.schemas.disks import ProxmoxDiskEntry
+
+CLOUDINIT_SSHKEYS_MAX_BYTES = 10 * 1024
+CLOUDINIT_SSHKEYS_TRUNCATION_SENTINEL = "\n# truncated by proxbox-api at 10KB"
 
 
 def _as_bool(value: object) -> bool:
@@ -365,12 +369,20 @@ class NetBoxInterfaceSyncState(BaseModel):
 
 
 class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
+    """Desired state for `/api/virtualization/interfaces/` rows.
+
+    Note: `mac_address` is intentionally **not** declared here. NetBox 4.5/4.6
+    treat it as a read-only computed echo of `primary_mac_address`; writing it
+    is silently dropped, so including it in the desired payload would produce a
+    perpetual no-op diff. MAC reconciliation lives in
+    `proxbox_api.services.sync.mac_address` and runs as a per-interface post-step.
+    """
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     virtual_machine: int
     name: str
     enabled: bool | None = None
-    mac_address: str | None = None
     type: str | None = None
     description: str | None = None
     bridge: int | None = None
@@ -404,6 +416,43 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     @classmethod
     def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
+
+
+class NetBoxMACAddressSyncState(BaseModel):
+    """Desired state of a `dcim.MACAddress` row in NetBox.
+
+    NetBox 4.2+ stores MACs as first-class objects under `/api/dcim/mac-addresses/`
+    with a GFK to the assigned interface (DCIM or VMInterface). The legacy
+    inline `mac_address` string on `VMInterface` is `read_only=True` at NetBox
+    4.5/4.6 — writes to it are silently dropped, so the only way to record a
+    MAC is the model below plus a `primary_mac_address` FK PATCH on the
+    interface.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    mac_address: str
+    assigned_object_type: str
+    assigned_object_id: int
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+    custom_fields: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("mac_address", mode="before")
+    @classmethod
+    def normalize_mac(cls, value: object) -> str:
+        text = str(value or "").strip().replace("-", ":").upper()
+        # NetBox canonical form is colon-separated uppercase hex.
+        return text
+
+    @field_validator("assigned_object_id", mode="before")
+    @classmethod
+    def normalize_assigned_object_id(cls, value: object) -> object:
+        return _relation_id(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: object) -> list[dict[str, object]]:
+        return NetBoxNamedSlugTaggedState.normalize_tags(value)
 
 
 class NetBoxIpAddressSyncState(BaseModel):
@@ -510,6 +559,28 @@ class NetBoxBackupSyncState(BaseModel):
     @classmethod
     def normalize_choice_fields(cls, value: object) -> object:
         return _choice_value(value)
+
+
+class NetBoxCloudInitSyncState(BaseModel):
+    """Pinned schema for the ``/api/plugins/proxbox/vm-cloudinit/`` payload."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    virtual_machine: int
+    ciuser: str = ""
+    sshkeys: str = ""
+    ipconfig0: str = ""
+    sshkeys_truncated: bool = False
+
+    @field_validator("virtual_machine", mode="before")
+    @classmethod
+    def normalize_virtual_machine(cls, value: object) -> object:
+        return _relation_id(value)
+
+    @field_validator("ciuser", "sshkeys", "ipconfig0", mode="before")
+    @classmethod
+    def coerce_string(cls, value: object) -> str:
+        return "" if value is None else str(value)
 
 
 class NetBoxSnapshotSyncState(BaseModel):
@@ -876,6 +947,35 @@ class ProxmoxVmConfigInput(BaseModel):
     agent: int | str | bool | None = None
     unprivileged: int | str | bool | None = None
     searchdomain: str | None = None
+    ciuser: str | None = None
+    sshkeys: str | None = None
+    ipconfig0: str | None = None
+    sshkeys_truncated: bool = False
+
+    @field_validator("sshkeys", mode="before")
+    @classmethod
+    def decode_and_truncate_sshkeys(cls, value: object) -> str | None:
+        """Decode Proxmox's URL-encoded ``sshkeys`` (newlines as ``%0A``).
+
+        Proxmox stores the blob URL-encoded; if nothing decodes it before
+        the row is written, NetBox ends up with a single-line ``%0A``-laced
+        string. Truncate decoded payloads to 10 KB plus a sentinel suffix.
+        """
+        if value is None:
+            return None
+        text = value if isinstance(value, str) else str(value)
+        decoded = unquote(text)
+        encoded = decoded.encode("utf-8")
+        if len(encoded) <= CLOUDINIT_SSHKEYS_MAX_BYTES:
+            return decoded
+        truncated = encoded[:CLOUDINIT_SSHKEYS_MAX_BYTES].decode("utf-8", "ignore")
+        return truncated + CLOUDINIT_SSHKEYS_TRUNCATION_SENTINEL
+
+    @model_validator(mode="after")
+    def _mark_sshkeys_truncated(self) -> ProxmoxVmConfigInput:
+        if self.sshkeys and CLOUDINIT_SSHKEYS_TRUNCATION_SENTINEL in self.sshkeys:
+            self.sshkeys_truncated = True
+        return self
 
     @computed_field(return_type=bool)
     @property
@@ -899,6 +999,18 @@ class ProxmoxVmConfigInput(BaseModel):
         from proxbox_api.proxmox_to_netbox.schemas.disks import parse_vm_config_disks
 
         return parse_vm_config_disks(self.model_extra or {})
+
+    def cloudinit_payload(self) -> dict[str, object] | None:
+        """Return the cloud-init reflection payload, or ``None`` if absent."""
+        has_data = bool(self.ciuser or self.sshkeys or self.ipconfig0)
+        if not has_data:
+            return None
+        return {
+            "ciuser": self.ciuser or "",
+            "sshkeys": self.sshkeys or "",
+            "ipconfig0": self.ipconfig0 or "",
+            "sshkeys_truncated": self.sshkeys_truncated,
+        }
 
 
 class NetBoxVirtualMachineCreateBody(BaseModel):
@@ -1094,8 +1206,80 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             return 0
         return sum(max(int(getattr(disk, "size", 0) or 0), 0) for disk in disks)
 
-    def as_netbox_create_body(self) -> NetBoxVirtualMachineCreateBody:
-        """Return validated NetBox virtual machine create body."""
+    def _resolve_description_metadata(
+        self,
+        *,
+        overwrite_flags: object | None,
+    ) -> tuple[dict[str, int], str]:
+        """Parse and apply opt-in ``netbox-metadata`` JSON from the VM description.
+
+        Returns ``(applied_known_overrides, description_text)``. Logs applied,
+        gated, and unknown keys so operators can see why an override didn't
+        land without scanning the full sync output.
+        """
+        from proxbox_api.logger import logger
+        from proxbox_api.proxmox_to_netbox.description_metadata import (
+            filter_metadata_by_overwrite_flags,
+            parse_netbox_metadata,
+            strip_netbox_metadata,
+        )
+
+        default_description = f"Synced from Proxmox node {self.resource.node}"
+        raw_description = (
+            self.config.model_extra.get("description")
+            if isinstance(self.config.model_extra, dict)
+            else None
+        )
+        if not isinstance(raw_description, str):
+            return {}, default_description
+
+        parsed = parse_netbox_metadata(raw_description)
+        applied, dropped = filter_metadata_by_overwrite_flags(
+            parsed, overwrite_flags, object_kind="vm"
+        )
+        known_fields = set(NetBoxVirtualMachineCreateBody.model_fields)
+        applied_known = {k: v for k, v in applied.items() if k in known_fields}
+        unknown = sorted(set(applied) - known_fields)
+        stripped = strip_netbox_metadata(raw_description)
+        description_text = stripped or default_description
+
+        if applied_known:
+            logger.info(
+                "netbox-metadata applied to vm %s: %s",
+                self.resource.name,
+                sorted(applied_known),
+            )
+        if unknown:
+            logger.warning(
+                "netbox-metadata unknown keys dropped on vm %s: %s",
+                self.resource.name,
+                unknown,
+            )
+        if dropped:
+            logger.info(
+                "netbox-metadata keys gated off by overwrite flags on vm %s: %s",
+                self.resource.name,
+                dropped,
+            )
+        return applied_known, description_text
+
+    def as_netbox_create_body(
+        self,
+        *,
+        parse_description_metadata: bool = False,
+        overwrite_flags: object | None = None,
+    ) -> NetBoxVirtualMachineCreateBody:
+        """Return validated NetBox virtual machine create body.
+
+        When ``parse_description_metadata`` is true, the Proxmox VM
+        ``description`` is scanned for a ``netbox-metadata`` JSON block whose
+        positive-integer PK values override the resolved foreign keys on the
+        create body (see issue #366). Keys whose matching ``overwrite_vm_<key>``
+        flag is off are dropped; unknown keys are dropped with a warning log
+        because ``NetBoxVirtualMachineCreateBody`` is ``extra="forbid"``. The
+        block is stripped from the description that is actually written to
+        NetBox so the JSON noise does not leak into the rendered UI.
+        """
 
         # NetBox stores ``virtualmachine.disk`` in a 32-bit ``PositiveIntegerField``
         # (max 2_147_483_647). Clamp defensively so a future bytes-vs-MiB
@@ -1114,7 +1298,15 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             )
             disk_value = _NETBOX_DISK_MAX
 
-        return NetBoxVirtualMachineCreateBody(
+        if parse_description_metadata:
+            applied_known, description_text = self._resolve_description_metadata(
+                overwrite_flags=overwrite_flags,
+            )
+        else:
+            applied_known = {}
+            description_text = f"Synced from Proxmox node {self.resource.node}"
+
+        body_kwargs: dict[str, object] = dict(
             name=self.resource.name,
             status=self.resource.status,
             cluster=self.cluster_id,
@@ -1127,5 +1319,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             disk=disk_value,
             tags=[tag for tag in self.tag_ids if int(tag) > 0],
             custom_fields=self.vm_custom_fields,
-            description=f"Synced from Proxmox node {self.resource.node}",
+            description=description_text,
         )
+        body_kwargs.update(applied_known)
+        return NetBoxVirtualMachineCreateBody(**body_kwargs)
