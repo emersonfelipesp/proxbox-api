@@ -259,11 +259,13 @@ class ProxmoxSession:
         if self.domain:
             logger.info("Using %s to authenticate with Proxmox", auth_method)
             logger.info("Using domain %s to authenticate with Proxmox", self.domain)
+            proxmox_session = None
             try:
                 proxmox_session = _proxmox_api_factory()(self.domain, **kwargs)
                 self.version = await resolve_async(proxmox_session.version.get())
                 return proxmox_session
             except Exception as error:
+                await self._close_abandoned_sdk(proxmox_session)
                 logger.info(
                     "Proxmox connection using domain failed, trying IP %s: %s",
                     self.ip_address,
@@ -271,17 +273,74 @@ class ProxmoxSession:
                 )
 
         # Fallback to IP address
+        logger.info("Using IP %s to authenticate with Proxmox", self.ip_address)
+        proxmox_session = None
         try:
-            logger.info("Using IP %s to authenticate with Proxmox", self.ip_address)
             proxmox_session = _proxmox_api_factory()(self.ip_address, **kwargs)
             self.version = await resolve_async(proxmox_session.version.get())
             return proxmox_session
         except Exception as error:
+            await self._close_abandoned_sdk(proxmox_session)
+            detail = self._describe_auth_error(error)
             raise ProxboxException(
                 message=error_message,
-                detail="Unknown error.",
+                detail=detail,
                 python_exception=f"{error}",
             ) from error
+
+    @staticmethod
+    async def _close_abandoned_sdk(sdk: ProxmoxSDK | None) -> None:
+        """Close an SDK instance whose initial probe failed.
+
+        Mirrors :meth:`aclose` for an SDK that never became ``self.session``.
+        Without this, the underlying ``aiohttp.ClientSession`` leaks on every
+        retry and floods the log with ``Unclosed client session`` errors.
+        """
+        if sdk is None or not hasattr(sdk, "close"):
+            return
+        try:
+            close_result = sdk.close()
+            if inspect.isawaitable(close_result):
+                await close_result
+        except Exception as close_error:  # pragma: no cover - defensive
+            logger.debug("Error closing abandoned Proxmox SDK session: %s", close_error)
+
+    @staticmethod
+    def _describe_auth_error(error: Exception) -> str:
+        """Map a Proxmox SDK auth failure to a user-visible detail string.
+
+        When the SDK raises ``ResourceException``, surface the upstream
+        status code, the Proxmox response body, and any structured
+        ``errors`` dict so operators can distinguish wrong-realm,
+        expired-token, missing-privilege, and connection failures.
+        """
+        try:
+            from proxmox_sdk.sdk.exceptions import ResourceException
+        except Exception:  # pragma: no cover - defensive import guard
+            ResourceException = ()  # type: ignore[assignment]
+
+        if isinstance(error, ResourceException):
+            status_code = getattr(error, "status_code", None)
+            status_message = getattr(error, "status_message", "") or ""
+            content = (getattr(error, "content", "") or "").strip()
+            errors = getattr(error, "errors", None)
+            parts: list[str] = []
+            if status_code:
+                parts.append(f"HTTP {status_code} {status_message}".strip())
+            elif status_message:
+                parts.append(status_message)
+            if content:
+                parts.append(content)
+            if errors:
+                try:
+                    parts.append(json.dumps(errors, sort_keys=True))
+                except (TypeError, ValueError):
+                    parts.append(str(errors))
+            if parts:
+                return " — ".join(parts)
+
+        text = str(error).strip()
+        return text or "Unknown error."
 
     def _build_auth_kwargs(self, auth_method: str) -> dict[str, object]:
         """Build authentication kwargs for Proxmox API."""
