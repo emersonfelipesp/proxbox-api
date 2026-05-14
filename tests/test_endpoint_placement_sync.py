@@ -70,7 +70,10 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
     assert "proxbox-discovered-cluster" in tag_slugs
 
 
-def test_vm_payload_includes_endpoint_site_and_tenant() -> None:
+def test_vm_payload_includes_endpoint_site_and_excludes_tenant() -> None:
+    # Issue #365: VM tenant assignment is owned by the netbox-proxbox plugin
+    # via name-regex mapping. proxbox-api propagates the endpoint site to the
+    # VM create body but must never send `tenant` on it.
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource={
             "vmid": 101,
@@ -93,4 +96,4 @@ def test_vm_payload_includes_endpoint_site_and_tenant() -> None:
     )
 
     assert payload["site"] == 42
-    assert payload["tenant"] == 11
+    assert "tenant" not in payload
