@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from proxbox_api.proxmox_to_netbox import parse_proxmox_tags
 from proxbox_api.proxmox_to_netbox.models import (
     ProxmoxVmConfigInput,
     _parse_proxmox_kv_flag,
@@ -78,3 +79,48 @@ def test_qemu_agent_enabled_through_model(agent_value: object, expected: bool) -
 def test_qemu_agent_enabled_default_when_absent() -> None:
     config = ProxmoxVmConfigInput.model_validate({})
     assert config.qemu_agent_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, []),
+        ("", []),
+        ("   ", []),
+        (";;;", []),
+        ("critical", ["critical"]),
+        ("critical;production", ["critical", "production"]),
+        ("  critical ; production  ", ["critical", "production"]),
+        ("Critical;PRODUCTION", ["critical", "production"]),
+        # Duplicates collapse, preserving first-seen order
+        ("critical;critical;production", ["critical", "production"]),
+        ("critical;Production;production", ["critical", "production"]),
+        # Empties between separators are skipped
+        ("critical;;production", ["critical", "production"]),
+        # Wrong type returns empty
+        (123, []),
+        ([], []),
+    ],
+)
+def test_parse_proxmox_tags(raw: object, expected: list[str]) -> None:
+    assert parse_proxmox_tags(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, []),
+        ("", []),
+        ("critical;production", ["critical", "production"]),
+        ("  Critical ; production ; critical ", ["critical", "production"]),
+    ],
+)
+def test_proxmox_tags_through_model(raw: object, expected: list[str]) -> None:
+    """End-to-end through Pydantic: VM config exposes parsed ``proxmox_tags``."""
+    config = ProxmoxVmConfigInput.model_validate({"tags": raw})
+    assert config.proxmox_tags == expected
+
+
+def test_proxmox_tags_default_when_absent() -> None:
+    config = ProxmoxVmConfigInput.model_validate({})
+    assert config.proxmox_tags == []

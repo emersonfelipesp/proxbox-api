@@ -16,6 +16,7 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.name_collision import resolve_unique_vm_name
+from proxbox_api.services.proxmox.tag_styles import fetch_tag_color_map
 from proxbox_api.services.proxmox_helpers import (
     get_vm_config_individual,
     get_vm_resource_individual,
@@ -26,6 +27,7 @@ from proxbox_api.services.sync.discovery_tags import (
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     normalize_current_virtual_machine_payload,
@@ -58,6 +60,27 @@ def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return False
+
+
+async def _resolve_individual_proxmox_tag_ids(
+    nb: object,
+    px: object,
+    proxmox_config: object,
+    overwrite_flags: SyncOverwriteFlags | None,
+) -> list[int]:
+    """Resolve Proxmox `tags` from a VM config into NetBox tag IDs.
+
+    Returns an empty list when the overwrite flag is disabled, when the config
+    has no tags, or when the resolver short-circuits on an empty input.
+    """
+    sync_proxmox_tags = overwrite_flags.overwrite_vm_proxmox_tags if overwrite_flags else True
+    if not sync_proxmox_tags:
+        return []
+    raw_proxmox_tags = proxmox_config.get("tags") if isinstance(proxmox_config, dict) else None
+    if not raw_proxmox_tags:
+        return []
+    color_map = await fetch_tag_color_map(px)
+    return await resolve_proxmox_tag_ids(nb, raw_proxmox_tags, color_map=color_map)
 
 
 async def _apply_name_collision_resolution(
@@ -353,7 +376,11 @@ async def sync_vm_individual(
             discovery_id = await resolve_discovery_tag_id(nb, vm_discovery_tag_slug(vm_type))
             if discovery_id is not None:
                 tag_ids.append(discovery_id)
-        merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids))
+
+        proxmox_tag_ids = await _resolve_individual_proxmox_tag_ids(
+            nb, px, proxmox_config, overwrite_flags
+        )
+        merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids) | set(proxmox_tag_ids))
 
         netbox_vm_payload = _build_netbox_vm_payload(
             resource=proxmox_resource,
