@@ -62,6 +62,27 @@ def _as_bool(value: object) -> bool:
     return False
 
 
+async def _resolve_individual_proxmox_tag_ids(
+    nb: object,
+    px: object,
+    proxmox_config: object,
+    overwrite_flags: SyncOverwriteFlags | None,
+) -> list[int]:
+    """Resolve Proxmox `tags` from a VM config into NetBox tag IDs.
+
+    Returns an empty list when the overwrite flag is disabled, when the config
+    has no tags, or when the resolver short-circuits on an empty input.
+    """
+    sync_proxmox_tags = overwrite_flags.overwrite_vm_proxmox_tags if overwrite_flags else True
+    if not sync_proxmox_tags:
+        return []
+    raw_proxmox_tags = proxmox_config.get("tags") if isinstance(proxmox_config, dict) else None
+    if not raw_proxmox_tags:
+        return []
+    color_map = await fetch_tag_color_map(px)
+    return await resolve_proxmox_tag_ids(nb, raw_proxmox_tags, color_map=color_map)
+
+
 async def _apply_name_collision_resolution(
     nb: object,
     *,
@@ -356,20 +377,9 @@ async def sync_vm_individual(
             if discovery_id is not None:
                 tag_ids.append(discovery_id)
 
-        sync_proxmox_tags = overwrite_flags.overwrite_vm_proxmox_tags if overwrite_flags else True
-        proxmox_tag_ids: list[int] = []
-        if sync_proxmox_tags:
-            raw_proxmox_tags = (
-                proxmox_config.get("tags") if isinstance(proxmox_config, dict) else None
-            )
-            if raw_proxmox_tags:
-                color_map = await fetch_tag_color_map(px)
-                proxmox_tag_ids = await resolve_proxmox_tag_ids(
-                    nb,
-                    raw_proxmox_tags,
-                    color_map=color_map,
-                )
-
+        proxmox_tag_ids = await _resolve_individual_proxmox_tag_ids(
+            nb, px, proxmox_config, overwrite_flags
+        )
         merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids) | set(proxmox_tag_ids))
 
         netbox_vm_payload = _build_netbox_vm_payload(

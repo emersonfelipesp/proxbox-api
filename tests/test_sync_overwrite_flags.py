@@ -43,8 +43,8 @@ EXPECTED_FLAGS: tuple[str, ...] = (
 
 
 def test_overwrite_flags_field_count() -> None:
-    """Schema exposes exactly 24 fields, mirroring OVERWRITE_FIELDS in the plugin."""
-    assert len(SyncOverwriteFlags.model_fields) == 24
+    """Schema exposes exactly 25 fields, mirroring OVERWRITE_FIELDS in the plugin."""
+    assert len(SyncOverwriteFlags.model_fields) == 25
 
 
 def test_overwrite_flags_field_names_and_order() -> None:
