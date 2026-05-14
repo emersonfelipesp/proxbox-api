@@ -111,6 +111,21 @@ Resolution:
 - Confirm API user/token permissions in Proxmox.
 - For multi-endpoint deployments, confirm the correct `source` and endpoint target selection values are being passed.
 
+### Reading the new PVE 9 auth-failure detail (issue #417)
+
+Symptom:
+
+- `HTTP 401 Authentication failed!` against a Proxmox VE 9.x cluster, with a `Detail` field that used to read `"Unknown error."`.
+
+Resolution:
+
+- The `Detail` shown in the NetBox UI now mirrors the upstream PVE response. Read it as `HTTP <code> <status> — <body> — <errors JSON>`:
+  - `no such realm` → the `user@realm` you typed is wrong (`root@pam` vs `root@pve` vs the realm name configured on the cluster).
+  - `permission check failed` → role is missing `VM.GuestAgent.Audit` (PVE 9), `Datastore.Audit`, `Sys.Audit`, or `VM.Audit`.
+  - `authentication failure` → password or token value is wrong, or has expired / been rotated on the Proxmox side.
+- Stored credentials are no longer leaked into auth attempts after a credential switch: on the NetBox-side endpoint edit form, use the **"Clear stored API token on save"** and **"Clear stored password on save"** checkboxes to wipe the unused secret before saving. The form rejects rows that end up with neither a password nor a complete `(token name, token value)` pair.
+- The aiohttp `ClientSession` is now closed on every auth failure path (domain probe, IP fallback, both attempts failing). If you still see `Unclosed client session` warnings in proxbox-api logs after an auth failure, you are running an older build — re-check the installed package version.
+
 ## Sync endpoints return partial data
 
 Symptom:
