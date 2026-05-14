@@ -640,6 +640,23 @@ async def create_custom_fields(  # noqa: C901
                 "group_name": "Proxmox",
             },
             {
+                "object_types": [
+                    "dcim.device",
+                    "virtualization.cluster",
+                    "virtualization.virtualmachine",
+                ],
+                "type": "text",
+                "name": "proxbox_last_run_id",
+                "label": "Last Run ID",
+                "description": "UUID of the most recent Proxbox sync run that touched this object.",
+                "ui_visible": "if-set",
+                "ui_editable": "hidden",
+                "weight": 250,
+                "filter_logic": "loose",
+                "search_weight": 1000,
+                "group_name": "Proxbox",
+            },
+            {
                 "object_types": ["dcim.device"],
                 "type": "text",
                 "name": "hardware_chassis_serial",
@@ -680,7 +697,7 @@ async def create_custom_fields(  # noqa: C901
             },
             {
                 "object_types": ["dcim.interface"],
-                "type": "decimal",
+                "type": "integer",
                 "name": "nic_speed_gbps",
                 "label": "NIC Speed (Gbps)",
                 "description": "Negotiated link speed reported by ethtool, in Gbps",

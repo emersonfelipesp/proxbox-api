@@ -740,6 +740,223 @@ async def start_vm(
         )
 
 
+@_dual_mode
+async def stop_vm(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/{vm_type}/{vmid}/status/stop``.
+
+    Returns the Proxmox task ``UPID`` string. ``ProxmoxAPIError`` is
+    raised on timeout / connection failure per the existing convention.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).status.stop.post())
+        elif vm_type == "lxc":
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).status.stop.post())
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, str):
+                return data
+        return str(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM stop request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM stop", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM stop",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def create_vm_snapshot(  # noqa: C901
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    snapname: str,
+    description: str | None = None,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/{vm_type}/{vmid}/snapshot``.
+
+    Returns the Proxmox task ``UPID`` string. ``ProxmoxAPIError`` is
+    raised on timeout / connection failure per the existing convention.
+    """
+    body: dict[str, object] = {"snapname": snapname}
+    if description is not None:
+        body["description"] = description
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).snapshot.post(**body)
+            )
+        elif vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).snapshot.post(**body)
+            )
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, str):
+                return data
+        return str(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM snapshot request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM snapshot", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM snapshot",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def migrate_preflight(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> dict[str, object]:
+    """Wrap ``GET /nodes/{node}/{vm_type}/{vmid}/migrate``.
+
+    Returns a dict with ``allowed_nodes``, ``local_disks``,
+    ``local_resources`` and ``running`` per ``operational-verbs.md`` §9.
+    The route uses this to reject the migrate POST with 400 before any
+    state mutation when ``target`` is not in ``allowed_nodes`` or when
+    online migration is blocked by local disks / resources.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(session.session.nodes(node).qemu(vmid).migrate.get())
+        elif vm_type == "lxc":
+            payload = await resolve_async(session.session.nodes(node).lxc(vmid).migrate.get())
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox migrate preflight timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for migrate preflight",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox migrate preflight",
+            original_error=error,
+        )
+    # Proxmox wraps responses in either {data: ...} or returns the dict
+    # directly depending on the backend (HTTPS vs pvesh). Normalise so the
+    # caller can index allowed_nodes/local_disks/local_resources/running.
+    if isinstance(payload, dict) and "data" in payload and isinstance(payload["data"], dict):
+        payload = payload["data"]
+    return payload if isinstance(payload, dict) else {}
+
+
+@_dual_mode
+async def migrate_vm(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    target: str,
+    online: bool = False,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/{vm_type}/{vmid}/migrate``.
+
+    Returns the Proxmox task ``UPID`` string. For QEMU the ``online``
+    flag enables live migration; for LXC the equivalent flag is
+    ``restart`` (Proxmox restarts the container at the target node).
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node)
+                .qemu(vmid)
+                .migrate.post(target=target, online=1 if online else 0)
+            )
+        elif vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node)
+                .lxc(vmid)
+                .migrate.post(target=target, restart=1 if online else 0)
+            )
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, str):
+                return data
+        return str(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM migrate request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM migrate",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM migrate",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def cancel_task(
+    session: ProxmoxSession,
+    node: str,
+    upid: str,
+) -> None:
+    """Wrap ``DELETE /nodes/{node}/tasks/{upid}``.
+
+    Best-effort cancellation per ``operational-verbs.md`` §5: Proxmox
+    decides whether the in-flight task can be torn down.
+    """
+    try:
+        await resolve_async(session.session.nodes(node).tasks(upid).delete())
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox task cancel request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for task cancel",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error cancelling Proxmox task",
+            original_error=error,
+        )
+
+
 def dump_models(items: list[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 

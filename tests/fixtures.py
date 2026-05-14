@@ -20,6 +20,10 @@ PROXMOX_VM_CONFIG: dict[str, Any] = {
     "agent": 1,
     "unprivileged": 0,
     "searchdomain": "lab.local",
+    "ciuser": "ubuntu",
+    # URL-encoded newlines mirror Proxmox's wire format for sshkeys.
+    "sshkeys": "ssh-rsa%20AAAAB3NzaC1yc2E_TEST_KEY%20ubuntu@host%0A",
+    "ipconfig0": "ip=dhcp",
 }
 
 NETBOX_OPENAPI_SNAPSHOT: dict[str, Any] = {

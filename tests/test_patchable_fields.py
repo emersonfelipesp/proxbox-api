@@ -337,6 +337,8 @@ def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
 
     fields = _compute_vm_patchable_fields(SyncOverwriteFlags())
 
+    # `tenant` is intentionally excluded (issue #365). See
+    # test_vm_patchable_never_includes_tenant_* below.
     assert fields == {
         "name",
         "cluster",

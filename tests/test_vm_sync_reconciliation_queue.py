@@ -21,10 +21,7 @@ def _prepared_vm(*, cluster_name: str, vmid: int, memory: int) -> sync_vm._Prepa
         "memory": memory,
         "disk": 30,
         "tags": [99],
-        "custom_fields": {
-            "proxmox_vm_id": vmid,
-            "proxmox_last_synced_role_id": 20,
-        },
+        "custom_fields": {"proxmox_vm_id": vmid},
         "description": "Synced from Proxmox node pve01",
     }
     return sync_vm._PreparedVMState(
@@ -36,7 +33,6 @@ def _prepared_vm(*, cluster_name: str, vmid: int, memory: int) -> sync_vm._Prepa
         lookup={"cf_proxmox_vm_id": vmid, "cluster_id": 1},
         now=datetime.now(timezone.utc),
         vm_type="qemu",
-        desired_role_id=20,
     )
 
 
@@ -59,10 +55,7 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {
-                "proxmox_vm_id": 102,
-                "proxmox_last_synced_role_id": 20,
-            },
+            "custom_fields": {"proxmox_vm_id": 102},
             "description": "Synced from Proxmox node pve01",
         },
         {
@@ -76,10 +69,7 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
             "memory": 2048,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {
-                "proxmox_vm_id": 103,
-                "proxmox_last_synced_role_id": 20,
-            },
+            "custom_fields": {"proxmox_vm_id": 103},
             "description": "Synced from Proxmox node pve01",
         },
     ]
@@ -107,10 +97,7 @@ def test_build_vm_operation_queue_omits_vm_type_when_overwrite_disabled():
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {
-                "proxmox_vm_id": 104,
-                "proxmox_last_synced_role_id": 20,
-            },
+            "custom_fields": {"proxmox_vm_id": 104},
             "description": "Synced from Proxmox node pve01",
         }
     ]
@@ -141,10 +128,7 @@ def test_build_vm_operation_queue_omits_vm_type_when_netbox_lacks_native_field()
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {
-                "proxmox_vm_id": 105,
-                "proxmox_last_synced_role_id": 20,
-            },
+            "custom_fields": {"proxmox_vm_id": 105},
             "description": "Synced from Proxmox node pve01",
         }
     ]

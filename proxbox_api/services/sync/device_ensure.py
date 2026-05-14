@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from proxbox_api.constants import DISCOVERY_TAG_CLUSTER, DISCOVERY_TAG_NODE
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
     BulkReconcilePhase,
@@ -23,6 +24,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxSiteSyncState,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.sync.discovery_tags import discovery_tag_ref, merge_tag_refs
 from proxbox_api.types import NetBoxRecord
 
 
@@ -640,6 +642,27 @@ async def _ensure_cluster(
     site_id: int | None = None,
     tenant_id: int | None = None,
 ) -> NetBoxRecord:
+    # Pre-check existence so the first-discovery audit tag (issue #362) only
+    # lands in the create payload. On update we merge with the current tag
+    # set to keep the discovery slug and any operator-added tags intact.
+    existing_cluster = await rest_first_async(
+        nb,
+        "/api/virtualization/clusters/",
+        query={"name": cluster_name},
+    )
+    if existing_cluster is None:
+        effective_tag_refs: list[dict[str, object]] = [
+            *tag_refs,
+            discovery_tag_ref(DISCOVERY_TAG_CLUSTER),
+        ]
+    else:
+        existing_tags = (
+            existing_cluster.serialize().get("tags")
+            if hasattr(existing_cluster, "serialize")
+            else None
+        )
+        effective_tag_refs = merge_tag_refs(list(tag_refs), existing_tags)
+
     return await rest_reconcile_async(
         nb,
         "/api/virtualization/clusters/",
@@ -648,7 +671,7 @@ async def _ensure_cluster(
             cluster_name,
             cluster_type_id=cluster_type_id,
             mode=mode,
-            tag_refs=tag_refs,
+            tag_refs=effective_tag_refs,
             site_id=site_id,
             tenant_id=tenant_id,
         ),
@@ -816,9 +839,24 @@ async def _ensure_device(
     existing_device = _prefer_existing_device(existing_devices)
     site_id = _existing_device_site_pin(existing_device, site_id)
 
+    # First-discovery audit tag (issue #362). Stamp the node-discovery slug
+    # in the create payload only; on update, merge the desired tag refs with
+    # whatever the existing device already carries so neither the discovery
+    # tag nor operator-added tags get stripped.
+    if existing_device is None:
+        effective_tag_refs: list[dict[str, object]] = [
+            *tag_refs,
+            discovery_tag_ref(DISCOVERY_TAG_NODE),
+        ]
+    else:
+        effective_tag_refs = merge_tag_refs(
+            list(tag_refs),
+            existing_device.get("tags"),
+        )
+
     payload = {
         "name": device_name,
-        "tags": tag_refs,
+        "tags": effective_tag_refs,
         "cluster": cluster_id,
         "status": "active",
         "description": f"Proxmox Node {device_name}",

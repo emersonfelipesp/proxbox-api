@@ -22,6 +22,7 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.vm_helpers import (
+    _is_skippable_ip,
     all_guest_agent_ips,
     normalized_mac,
     preferred_primary_ip_order,
@@ -216,22 +217,15 @@ def build_vm_interface_payload(
 ) -> dict:
     """Build a VM interface payload dict for bulk operations (no NetBox writes).
 
-    Args:
-        resolved_name: Interface name
-        mac_address: MAC address
-        bridge_id: Node dcim.Interface ID for the bridge (stored as proxbox_bridge custom field)
-        vlan_id: VLAN ID (if applicable)
-        tag_refs: List of tag references
-        vm_id: Virtual machine ID
-        now: Current datetime for custom fields
-
-    Returns:
-        Payload dict for bulk reconciliation
+    The ``mac_address`` argument is accepted for backward-compatible call sites
+    but is no longer placed in the payload — NetBox 4.5/4.6 treat the inline
+    field as read-only, so the value must be written to ``dcim.MACAddress``
+    separately. See ``proxbox_api.services.sync.mac_address``.
     """
+    _ = mac_address  # kept in the signature for source-call compatibility
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "mac_address": mac_address,
         "untagged_vlan": vlan_id,
         "mode": "access" if vlan_id is not None else None,
         "tags": tag_refs,
@@ -251,21 +245,34 @@ def build_vm_interface_ip_payload(
     tag_refs: list[dict],
     now: datetime,
     dns_name: str | None = None,
-) -> dict:
+    ignore_ipv6_link_local: bool = True,
+) -> dict | None:
     """Build a VM interface IP payload dict for bulk operations (no NetBox writes).
 
+    Strips the IPv6 zone-ID suffix (``%eth0``) from ``address`` and returns
+    ``None`` when the address is empty, unparseable, loopback, or — when the
+    toggle is on — IPv6 link-local. Defends the bulk-reconcile path against
+    raw config-fallback IPs that bypass ``all_guest_agent_ips``.
+
     Args:
-        address: IP address with CIDR (e.g., "192.168.1.10/24")
+        address: IP address with optional CIDR (e.g., ``"192.168.1.10/24"``)
         interface_id: Interface ID
         tag_refs: List of tag references
         now: Current datetime for custom fields
         dns_name: Guest hostname to set as IPAM dns_name; empty/None becomes ""
+        ignore_ipv6_link_local: When True (default), skip ``fe80::/10`` hosts
 
     Returns:
-        Payload dict for bulk reconciliation
+        Payload dict for bulk reconciliation, or ``None`` if the address
+        should be skipped.
     """
+    host, _, prefix_part = str(address or "").partition("/")
+    skip, cleaned = _is_skippable_ip(host, ignore_ipv6_link_local=ignore_ipv6_link_local)
+    if skip or cleaned is None:
+        return None
+    cleaned_address = f"{cleaned}/{prefix_part}" if prefix_part else cleaned
     return {
-        "address": address,
+        "address": cleaned_address,
         "assigned_object_type": "virtualization.vminterface",
         "assigned_object_id": interface_id,
         "status": "active",
@@ -369,7 +376,6 @@ async def _reconcile_vm_interface_record(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "mac_address": mac_address,
         "bridge": None,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
@@ -396,7 +402,6 @@ async def _reconcile_vm_interface_record(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
             "bridge": record.get("bridge"),
@@ -415,6 +420,28 @@ async def _reconcile_vm_interface_record(
         if isinstance(vm_interface, dict)
         else getattr(vm_interface, "id", None)
     )
+
+    # Write the MAC to dcim.MACAddress and link primary_mac_address. The
+    # legacy inline field on VMInterface is read-only at NetBox 4.5/4.6, so
+    # this is the only write path that actually persists the MAC.
+    if interface_id is not None and mac_address:
+        from proxbox_api.services.sync.mac_address import reconcile_mac_for_vm_interface
+
+        try:
+            await reconcile_mac_for_vm_interface(
+                nb,
+                vminterface_id=int(interface_id),
+                mac=mac_address,
+                tag_refs=tag_refs,
+            )
+        except Exception as mac_exc:
+            logger.warning(
+                "Failed to reconcile MAC %s for VM interface %s: %s",
+                mac_address,
+                resolved_name,
+                mac_exc,
+            )
+
     return vm_interface, interface_id, resolved_name
 
 
@@ -484,11 +511,13 @@ async def bulk_reconcile_vm_interfaces(
     # custom_fields follow per-resource overwrite_vm_interface_* flags. When
     # overwrite_flags is None, all normalizer keys are patchable, preserving
     # the historical always-overwrite behavior.
+    # `mac_address` is intentionally absent: it is a read-only computed field
+    # at NetBox 4.5/4.6; the MAC is persisted via dcim.MACAddress in a
+    # follow-up post-step (see proxbox_api.services.sync.mac_address).
     _vm_interface_patchable: set[str] = {
         "name",
         "virtual_machine",
         "enabled",
-        "mac_address",
         "type",
         "description",
         "untagged_vlan",
@@ -513,7 +542,6 @@ async def bulk_reconcile_vm_interfaces(
                 "name": record.get("name"),
                 "virtual_machine": record.get("virtual_machine"),
                 "enabled": record.get("enabled"),
-                "mac_address": record.get("mac_address"),
                 "type": record.get("type"),
                 "description": record.get("description"),
                 "untagged_vlan": record.get("untagged_vlan"),
@@ -682,13 +710,26 @@ async def _resolve_vm_interface_ips(  # noqa: C901
     primary_ip_preference: str = "ipv4",
     tag_slug: str = "proxbox",
     dns_name: str | None = None,
+    bridge: object | None = None,
+    vm_name: str | None = None,
 ) -> list[tuple[int | None, str]]:
     """Create or update ALL IPs attached to a VM interface, then clean up stale ones.
 
     Returns list of (ip_id, ip_address) tuples for all synced IPs.
+
+    When ``bridge`` is provided and any guest-agent IPs were dropped by
+    ``_is_skippable_ip`` (link-local under the toggle, loopback, or
+    unparseable after zone-ID stripping), emits a single aggregated
+    ``phase_summary`` SSE frame for this interface.
     """
     if not create_ip or interface_id is None:
         return []
+
+    raw_guest_ip_count = 0
+    if isinstance(guest_iface, dict):
+        raw_guest_ip_count = sum(
+            1 for addr in (guest_iface.get("ip_addresses") or []) if isinstance(addr, dict)
+        )
 
     all_ips: list[str] = []
     if guest_iface:
@@ -697,6 +738,25 @@ async def _resolve_vm_interface_ips(  # noqa: C901
             ignore_ipv6_link_local,
             primary_ip_preference=primary_ip_preference,
         )
+
+    skipped_guest_ips = max(0, raw_guest_ip_count - len(all_ips))
+    if skipped_guest_ips and bridge is not None and hasattr(bridge, "emit_phase_summary"):
+        target = f"{vm_name}.{interface_name}" if vm_name else interface_name
+        try:
+            await bridge.emit_phase_summary(
+                phase="vm-ip-addresses",
+                skipped=skipped_guest_ips,
+                message=(
+                    f"Skipped {skipped_guest_ips} link-local/zone-scoped/loopback IPs on {target}"
+                ),
+            )
+        except Exception as emit_exc:
+            logger.debug(
+                "emit_phase_summary failed for interface %s: %s",
+                interface_name,
+                emit_exc,
+            )
+
     if not all_ips:
         config_ip = interface_config.get("ip")
         if config_ip and config_ip != "dhcp":
@@ -714,6 +774,11 @@ async def _resolve_vm_interface_ips(  # noqa: C901
     for ip_addr in all_ips:
         if ip_addr == "dhcp":
             continue
+        host, _, prefix_part = str(ip_addr).partition("/")
+        skip, cleaned_host = _is_skippable_ip(host, ignore_ipv6_link_local=ignore_ipv6_link_local)
+        if skip or cleaned_host is None:
+            continue
+        ip_addr = f"{cleaned_host}/{prefix_part}" if prefix_part else cleaned_host
         try:
             ip_record = await rest_reconcile_async(
                 nb,

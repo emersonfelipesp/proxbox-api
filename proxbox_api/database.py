@@ -109,6 +109,38 @@ class ProxmoxEndpoint(SQLModel, table=True):
         self.token_value = encrypt_value(value)
 
 
+class PBSEndpoint(SQLModel, table=True):
+    """Proxmox Backup Server (PBS) endpoint record.
+
+    Read-only integration in v1: credentials authorize PBS GET calls only.
+    ``allow_writes`` is reserved for a future write surface and stays False.
+    """
+
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    host: str = Field(index=True)
+    port: int = Field(default=8007)
+    token_id: str = Field()
+    token_secret: str = Field()
+    fingerprint: str | None = Field(default=None)
+    verify_ssl: bool = Field(default=True)
+    allow_writes: bool = Field(default=False)
+    timeout_seconds: int = Field(default=30)
+    last_seen_at: float | None = Field(default=None)
+
+    @property
+    def url(self) -> str:
+        return f"https://{self.host}:{self.port}"
+
+    def get_decrypted_token_secret(self) -> str | None:
+        return decrypt_value(self.token_secret)
+
+    def set_encrypted_token_secret(self, value: str) -> None:
+        self.token_secret = encrypt_value(value) or value
+
+
 class AuthLockout(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
@@ -266,8 +298,6 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
         stmts.append(f"ALTER TABLE {table} ADD COLUMN max_retries INTEGER")
     if "retry_backoff" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN retry_backoff REAL")
-    if "allow_writes" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
     if "site_id" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN site_id INTEGER")
     if "site_slug" not in existing:
@@ -280,6 +310,8 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
         stmts.append(f"ALTER TABLE {table} ADD COLUMN tenant_slug VARCHAR")
     if "tenant_name" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN tenant_name VARCHAR")
+    if "allow_writes" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
     if not stmts:
         return
     with engine.begin() as conn:
@@ -314,10 +346,36 @@ def _migrate_netbox_endpoint_columns() -> None:
         )
 
 
+def _migrate_pbs_endpoint_columns() -> None:
+    table = PBSEndpoint.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    stmts: list[str] = []
+    if "fingerprint" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN fingerprint VARCHAR")
+    if "allow_writes" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
+    if "timeout_seconds" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 30")
+    if "last_seen_at" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN last_seen_at REAL")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_proxmox_endpoint_columns()
     _migrate_netbox_endpoint_columns()
+    _migrate_pbs_endpoint_columns()
 
 
 def get_session() -> Generator[Session, None, None]:

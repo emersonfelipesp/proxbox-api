@@ -244,10 +244,11 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session(monkeypatch
     result = asyncio.run(create_custom_fields(netbox_session=session))
 
     assert len(result) >= 6
-    assert all(field["group_name"] == "Proxmox" for field in result)
+    assert all(field["group_name"] in {"Proxmox", "Proxbox"} for field in result)
     field_names = {field["name"] for field in result}
     assert "proxmox_vm_id" in field_names
     assert "proxmox_vm_type" in field_names
+    assert "proxbox_last_run_id" in field_names
     first_post = next(
         payload
         for method, path, _query, payload, _expect_json in session.client.calls
@@ -1188,8 +1189,10 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
         _fake_snapshots,
     )
 
+    fake_request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     response = asyncio.run(
         full_update_sync_stream(
+            fake_request,
             netbox_session=object(),
             pxs=[],
             cluster_status=[],

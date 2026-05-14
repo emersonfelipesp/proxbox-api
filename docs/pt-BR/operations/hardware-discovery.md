@@ -96,7 +96,7 @@ existente **Proxmox**:
 | `hardware_chassis_serial` | `dcim.device` | text |
 | `hardware_chassis_manufacturer` | `dcim.device` | text |
 | `hardware_chassis_product` | `dcim.device` | text |
-| `nic_speed_gbps` | `dcim.interface` | decimal |
+| `nic_speed_gbps` | `dcim.interface` | integer |
 | `nic_duplex` | `dcim.interface` | text |
 | `nic_link` | `dcim.interface` | boolean |
 

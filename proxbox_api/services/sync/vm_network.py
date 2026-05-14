@@ -193,7 +193,9 @@ async def sync_vm_interfaces(  # noqa: C901
                         vlan_exc,
                     )
 
-            # Create VM interface
+            # Create VM interface. MAC is persisted via dcim.MACAddress in a
+            # post-step below — the inline field is read-only at NetBox 4.5+.
+            iface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
             vm_interface = await rest_reconcile_async(
                 nb,
                 "/api/virtualization/interfaces/",
@@ -205,7 +207,6 @@ async def sync_vm_interfaces(  # noqa: C901
                     "virtual_machine": vm_id,
                     "name": resolved_interface_name,
                     "enabled": True,
-                    "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
                     "bridge": None,
                     "untagged_vlan": vlan_nb_id,
                     "mode": "access" if vlan_nb_id is not None else None,
@@ -220,7 +221,6 @@ async def sync_vm_interfaces(  # noqa: C901
                     "name": record.get("name"),
                     "virtual_machine": record.get("virtual_machine"),
                     "enabled": record.get("enabled"),
-                    "mac_address": record.get("mac_address"),
                     "type": record.get("type"),
                     "description": record.get("description"),
                     "bridge": record.get("bridge"),
@@ -237,6 +237,25 @@ async def sync_vm_interfaces(  # noqa: C901
             netbox_vm_interfaces.append(vm_interface)
 
             interface_id_for_ip = vm_interface.get("id")
+            if interface_id_for_ip is not None and iface_mac:
+                from proxbox_api.services.sync.mac_address import (
+                    reconcile_mac_for_vm_interface,
+                )
+
+                try:
+                    await reconcile_mac_for_vm_interface(
+                        nb,
+                        vminterface_id=int(interface_id_for_ip),
+                        mac=iface_mac,
+                        tag_refs=tag_refs,
+                    )
+                except Exception as mac_exc:
+                    logger.warning(
+                        "Failed to reconcile MAC %s for VM interface %s: %s",
+                        iface_mac,
+                        resolved_interface_name,
+                        mac_exc,
+                    )
             ip_results = await _resolve_vm_interface_ips(
                 nb,
                 config_dict,

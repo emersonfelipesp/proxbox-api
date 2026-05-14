@@ -71,6 +71,17 @@ Authentication rules for create and update:
 - `token_name` and `token_value` must be provided together.
 - Endpoint names must be unique.
 
+### `allow_writes` field
+
+`ProxmoxEndpoint.allow_writes` (boolean, default `false`) is the trust boundary
+for the [VM operational verbs](../api/http-reference.md#vm-operational-verbs)
+(`start`, `stop`, `snapshot`, `migrate`). The gate runs before any NetBox or
+Proxmox call: with the flag off, every write verb returns HTTP 403 with
+`reason: "endpoint_writes_disabled"`. Read-only sync paths are not affected.
+Toggle the flag from the NetBox plugin's ProxmoxEndpoint detail page; the
+column was added by migration `0037_proxmoxendpoint_allow_writes` and is
+backfilled to `false` for existing rows.
+
 ### Password-based example
 
 ```json
@@ -183,12 +194,19 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay in milliseconds between backup batches. |
 | `PROXBOX_BULK_BATCH_SIZE` | `50` | Per-batch size for bulk VM-related sync requests (volumes, backups). |
 | `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay in milliseconds between bulk batches. |
+| `PROXBOX_NETBOX_GET_CACHE_TTL` | `60` | TTL (seconds) for the in-memory NetBox GET response cache. Set `0` to disable caching. |
+| `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `4096` | Maximum entries kept in the NetBox GET cache before LRU eviction kicks in. |
+| `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Maximum total bytes held in the NetBox GET cache before LRU eviction kicks in. |
+| `PROXBOX_DEBUG_CACHE` | unset | When set to `1`, `true`, or `yes`, the NetBox GET cache emits per-hit/miss debug log lines. |
+| `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `0.5` | Per-request pause (seconds) between custom-field creations during the extras bootstrap to avoid hammering NetBox. |
 | `PROXBOX_GENERATED_DIR` | `$XDG_DATA_HOME/proxbox/generated/proxmox` | Override output directory for the schema generator CLI (`proxbox-schema generate`). |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (empty) | Comma-separated extra CORS origins added to the runtime allowlist. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | unset | When set to `1`, `true`, or `yes`, HTTP 500 responses include internal exception details. |
 | `PROXBOX_STRICT_STARTUP` | unset | When set to `1`, `true`, or `yes`, startup fails if generated Proxmox routes cannot be mounted. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | unset | When set to `1`, `true`, or `yes`, skips creating the default NetBox client during app startup. |
 | `PROXBOX_ENCRYPTION_KEY` | unset | Secret key for encrypting credentials at rest. See [Credential Encryption](#credential-encryption) below. |
+| `PROXBOX_ENCRYPTION_KEY_FILE` | unset | Path to a file containing the Fernet encryption key. Takes precedence over `PROXBOX_ENCRYPTION_KEY` when set; lets operators mount the key as a file/secret instead of an environment variable. |
+| `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | unset | When set to `1`, `true`, or `yes`, the backend boots even with no encryption key configured. Off by default — the backend refuses to start so credentials are never written plaintext in production. |
 
 ### Handling NetBox Overwhelmed Errors
 

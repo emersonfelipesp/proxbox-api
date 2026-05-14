@@ -1,9 +1,16 @@
 """Tests that the /full-update/stream SSE entry point activates the netbox-sdk
-branch context when `netbox_branch_schema_id` is supplied as a query parameter.
+branch context when ``netbox_branch_schema_id`` is supplied as a query parameter.
 
-The stream wraps its event loop in `netbox_session.activate_branch(schema_id)` so
-the X-NetBox-Branch header is attached to every NetBox write performed during
-the run. These tests pin that contract without needing a live FastAPI client.
+The stream wraps its event loop in ``netbox_session.activate_branch(schema_id)``
+so the X-NetBox-Branch header is attached to every NetBox write performed
+during the run. These tests pin that contract without needing a live FastAPI
+client.
+
+Port of PR #74 (`feat(#370): thread netbox_branch_schema_id ...`) onto
+v0.0.11. v0.0.11's stream route takes ``request: Request`` as its first
+positional argument and uses the ``_create_*`` private helpers for backups
+and snapshots, so the stub list and call signature differ from the
+``main``-branch original.
 """
 
 from __future__ import annotations
@@ -28,8 +35,13 @@ def _stub_dependencies(monkeypatch):
             ),
         ),
         ("create_all_virtual_machine_backups", lambda **kw: asyncio.sleep(0, result=[])),
+        ("_create_all_virtual_machine_backups", lambda **kw: asyncio.sleep(0, result=[])),
         (
             "create_all_virtual_machine_snapshots",
+            lambda **kw: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0}),
+        ),
+        (
+            "_create_all_virtual_machine_snapshots",
             lambda **kw: asyncio.sleep(0, result={"count": 0, "created": 0, "skipped": 0}),
         ),
         (
@@ -52,6 +64,11 @@ def _stub_dependencies(monkeypatch):
         monkeypatch.setattr(f"proxbox_api.app.full_update.{name}", fn)
 
 
+def _fake_request() -> SimpleNamespace:
+    """Mimic just enough of starlette.Request for the stream route."""
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(bootstrap_status=None)))
+
+
 async def _drain_stream(response) -> None:
     """Consume the StreamingResponse body so the inner context manager exits."""
     async for _ in response.body_iterator:
@@ -67,6 +84,7 @@ def test_stream_does_not_activate_branch_when_schema_id_missing(monkeypatch):
 
     response = asyncio.run(
         full_update_sync_stream(
+            request=_fake_request(),
             netbox_session=session,
             pxs=[],
             cluster_status=[],
@@ -103,6 +121,7 @@ def test_stream_activates_branch_with_schema_id(monkeypatch):
 
     response = asyncio.run(
         full_update_sync_stream(
+            request=_fake_request(),
             netbox_session=session,
             pxs=[],
             cluster_status=[],
@@ -129,6 +148,7 @@ def test_stream_does_not_activate_branch_when_schema_id_empty(monkeypatch):
 
     response = asyncio.run(
         full_update_sync_stream(
+            request=_fake_request(),
             netbox_session=session,
             pxs=[],
             cluster_status=[],

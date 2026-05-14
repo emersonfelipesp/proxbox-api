@@ -23,7 +23,8 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 | `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
 | `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`). |
 | `websockets.py` | WebSocket connection manager — tracks active connections and broadcasts sync progress messages. |
-| `full_update.py` | `POST /full-update` endpoint — orchestrates a full Proxmox-to-NetBox sync run with SSE or WebSocket streaming. |
+| `full_update.py` | `POST /full-update` endpoint — orchestrates a full Proxmox-to-NetBox sync run with SSE or WebSocket streaming. Each handler registers its `operation_id` via `sync_state` so `GET /sync/active` reflects in-flight work. |
+| `sync_state.py` | Process-local registry of in-flight sync runs. Exposes `register_active_sync` (async context manager), `acquire_active_sync` / `release_active_sync` (for non-`with` call sites), and `get_active_sync` / `is_active` for the `/sync/active` probe. |
 | `root_meta.py` | Root metadata router — version, health, and standalone-mode info endpoints. |
 | `netbox_session.py` | Helpers for retrieving the raw NetBox session outside of dependency injection. |
 | `__init__.py` | Re-exports `create_app` for import convenience. |

@@ -86,6 +86,27 @@ Nao permitido em paralelo:
 - Reconciliar estado da VM no NetBox antes de buscar os dados da VM no Proxmox.
 - Criar device antes de manufacturer/device type/site/cluster estarem prontos.
 
+### Reflexao das chaves do cloud-init
+
+Para VMs QEMU que bootam com cloud-init, o sync de VM reflete as chaves SSH
+configuradas, o usuario e o bag de IP/Gateway/DNS para a metadata Proxbox da
+VM no NetBox para que operadores auditem o estado do cloud-init sem abrir a
+UI do Proxmox. O mapeamento fica em `proxbox_api/proxmox_to_netbox/` e e
+coberto por `tests/test_vm_cloudinit_mapping.py`; a aba correspondente no
+plugin NetBox renderiza o mesmo payload. Rastreado em
+[netbox-proxbox#363](https://github.com/emersonfelipesp/netbox-proxbox/issues/363).
+
+### Parsing de `netbox-metadata` a partir das descricoes do Proxmox
+
+Operadores podem embutir um bloco JSON com cerca (`netbox-metadata`) dentro
+da descricao da VM no Proxmox. O sync extrai o bloco, valida-o por um schema
+Pydantic permissivo e usa o resultado para semear campos do NetBox geridos
+por usuario (description, tags, custom fields) antes do payload Proxmox-derivado
+normal mesclar. A logica de parsing fica centralizada em
+`proxbox_api/proxmox_to_netbox/description_metadata.py` e e travada por
+`tests/test_description_metadata.py`. JSON invalido ou violacoes de schema
+sao logadas mas nao falham o sync — o sync cai para a string bruta da descricao.
+
 ## Fluxo de Backup
 
 Endpoints:

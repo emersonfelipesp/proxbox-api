@@ -21,6 +21,7 @@ rtk ruff format --check .
 uv run python -m compileall proxbox_api tests
 uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
 rtk pytest tests
 ```
 

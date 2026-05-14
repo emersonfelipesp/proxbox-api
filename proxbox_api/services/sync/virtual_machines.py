@@ -26,6 +26,8 @@ def build_netbox_virtual_machine_payload(
     last_updated: datetime | None = None,
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
+    parse_description_metadata: bool = False,
+    overwrite_flags: object | None = None,
 ) -> VMPayloadDict:
     """Build NetBox virtual machine payload from Proxmox raw resource/config payloads.
 
@@ -60,4 +62,6 @@ def build_netbox_virtual_machine_payload(
         last_updated=last_updated,
         cluster_name=cluster_name,
         proxmox_url=proxmox_url,
+        parse_description_metadata=parse_description_metadata,
+        overwrite_flags=overwrite_flags,
     )

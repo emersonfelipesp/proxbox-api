@@ -56,6 +56,9 @@ class VMConfig(BaseModel):
     arch: str | None = None
     hostname: str | None = None
     features: str | None = None
+    ciuser: str | None = None
+    sshkeys: str | None = None
+    ipconfig0: str | None = None
 
     @field_validator("numa", "onboot", "agent", "unprivileged", "nesting", mode="before")
     @classmethod

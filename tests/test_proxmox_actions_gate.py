@@ -35,16 +35,9 @@ VERB_PATHS = [
     ("/proxmox/lxc/100/migrate"),
 ]
 
-# Verbs still on the sub-PR B 501 stub. As sub-PRs C–F land, their paths move
-# off this list (their own test modules cover the wired dispatch path).
-STUB_VERB_PATHS = [
-    ("/proxmox/qemu/100/stop"),
-    ("/proxmox/lxc/100/stop"),
-    ("/proxmox/qemu/100/snapshot"),
-    ("/proxmox/lxc/100/snapshot"),
-    ("/proxmox/qemu/100/migrate"),
-    ("/proxmox/lxc/100/migrate"),
-]
+# All four verbs were wired by sub-PRs C–F; no paths remain on the sub-PR
+# B 501 stub. The fallthrough-to-501 test that used STUB_VERB_PATHS is
+# removed because there is nothing left to fall through.
 
 
 @pytest.fixture
@@ -119,18 +112,6 @@ def test_endpoint_with_writes_disabled_returns_403(client: TestClient, path: str
     body = resp.json()
     assert body["reason"] == "endpoint_writes_disabled"
     assert body["endpoint_id"] == endpoint_id
-
-
-@pytest.mark.parametrize("path", STUB_VERB_PATHS)
-def test_endpoint_with_writes_enabled_falls_through_to_not_implemented(
-    client: TestClient, path: str
-):
-    """Once the gate is open, sub-PR B's stub returns 501; sub-PRs C–F replace this."""
-    endpoint_id = _make_endpoint(client, allow_writes=True)
-    resp = client.post(path, params={"endpoint_id": endpoint_id})
-    assert resp.status_code == 501
-    body = resp.json()
-    assert body["reason"] == "verb_not_yet_implemented"
 
 
 def test_allow_writes_field_defaults_to_false():

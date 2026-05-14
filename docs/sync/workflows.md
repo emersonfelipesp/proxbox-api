@@ -90,6 +90,28 @@ Not allowed in parallel:
 
 When `overwrite_vm_tags=False` (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The `Proxbox` tag is always retained so the plugin can identify objects it owns. Setting `overwrite_vm_tags=True` switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, and `overwrite_ip_tags`. See [Overwrite Flags](./overwrite-flags.md).
 
+### Cloud-init key reflection
+
+For QEMU VMs that boot with cloud-init, the VM sync reflects the configured
+SSH keys, user, and IP/Gateway/DNS bag into the NetBox VM's Proxbox metadata
+so operators can audit cloud-init state without opening the Proxmox UI. The
+mapping lives in `proxbox_api/proxmox_to_netbox/` and is covered by
+`tests/test_vm_cloudinit_mapping.py`; the corresponding NetBox plugin tab
+renders the same payload. Tracked under
+[netbox-proxbox#363](https://github.com/emersonfelipesp/netbox-proxbox/issues/363).
+
+### `netbox-metadata` JSON parsing from Proxmox descriptions
+
+Operators can stash a fenced JSON block (`netbox-metadata`) inside the Proxmox
+VM description. The sync extracts the block, validates it through a permissive
+Pydantic schema, and uses it to seed user-managed NetBox fields (description,
+tags, custom fields) before the normal Proxmox-derived payload merges in. The
+parsing logic is centralized in
+`proxbox_api/proxmox_to_netbox/description_metadata.py` and locked in by
+`tests/test_description_metadata.py`. Invalid JSON or schema violations are
+logged but do not fail the sync — the sync falls back to the raw description
+string.
+
 ## Backup Sync Flow
 
 Endpoints:

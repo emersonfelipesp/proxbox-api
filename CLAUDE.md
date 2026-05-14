@@ -13,6 +13,18 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 `proxbox-api` is a FastAPI backend that connects Proxmox inventory and lifecycle data to NetBox objects. It serves REST, SSE, and WebSocket endpoints for discovery, synchronization, endpoint management, and generated Proxmox proxy routes. The same repository also includes a standalone `nextjs-ui/` frontend for endpoint administration.
 
+### Companion repos (cross-link map)
+
+- **`netbox-proxbox` v0.0.15+** — the NetBox plugin that consumes this backend.
+  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The HA tab,
+  cluster-wide HA Status page, and the runtime tunables surface all require
+  `proxbox-api >= 0.0.11`.
+- **Workspace note**:
+  `personal-context/claude-reference/proxbox-api.md` (deep-dive index of this
+  repo) and `personal-context/claude-reference/netbox-proxbox.md` (deep-dive
+  index of the plugin) live in the AI workspace and should be kept in sync
+  when route prefixes, env vars, or required dependency floors change.
+
 ## Use This Index First
 
 Open the nearest scoped guide for the code you are changing.

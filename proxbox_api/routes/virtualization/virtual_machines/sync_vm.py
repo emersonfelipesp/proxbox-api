@@ -3,6 +3,7 @@
 # FastAPI Imports
 import asyncio
 import inspect
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
@@ -15,6 +16,7 @@ from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
 from proxbox_api.dependencies import (
     NetBoxSessionDep,
     ProxboxTagDep,
+    ResolvedSyncBehaviorFlagsDep,
     ResolvedSyncOverwriteFlagsDep,
 )
 from proxbox_api.exception import ProxboxException
@@ -44,7 +46,7 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
     resolve_vm_sync_concurrency,
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
-from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.name_collision import (
     NameResolution,
     resolve_unique_vm_name,
@@ -70,12 +72,6 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
 )
-from proxbox_api.services.sync.role_resolution import (
-    LAST_SYNCED_ROLE_CUSTOM_FIELD,
-    compute_role_snapshot_decision,
-    extract_snapshot_id,
-    resolve_default_role_id,
-)
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -95,6 +91,7 @@ from proxbox_api.services.sync.vm_helpers import (
     parse_comma_separated_ints,
     parse_key_value_string,
     preferred_primary_ip_order,
+    stamp_vm_last_run_id,
 )
 from proxbox_api.services.sync.vm_helpers import (
     relation_id as _relation_id,
@@ -124,7 +121,6 @@ class _PreparedVMState:
     lookup: dict[str, object]
     now: datetime
     vm_type: str
-    desired_role_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -429,6 +425,8 @@ def _build_vm_operation_queue(
             if current_payload.get(field_name) != desired_value
         }
 
+        if not overwrite_vm_role and _relation_id(existing_record.get("role")) is not None:
+            patch_payload.pop("role", None)
         if (
             not overwrite_vm_type
             and _relation_id(existing_record.get("virtual_machine_type")) is not None
@@ -457,37 +455,6 @@ def _build_vm_operation_queue(
                 patch_payload.pop("tags", None)
             else:
                 patch_payload["tags"] = merged
-
-        existing_role_id = _relation_id(existing_record.get("role"))
-        existing_snapshot_id = extract_snapshot_id(existing_record)
-        decision = compute_role_snapshot_decision(
-            existing_role_id=existing_role_id,
-            existing_snapshot_id=existing_snapshot_id,
-            desired_role_id=prepared.desired_role_id,
-            overwrite_vm_role=overwrite_vm_role,
-        )
-        if decision.write_role:
-            patch_payload["role"] = decision.role_value
-        else:
-            patch_payload.pop("role", None)
-
-        cf_payload = patch_payload.get("custom_fields")
-        if not isinstance(cf_payload, dict):
-            cf_payload = None
-        if decision.write_snapshot:
-            cf_payload = dict(cf_payload) if cf_payload else {}
-            cf_payload[LAST_SYNCED_ROLE_CUSTOM_FIELD] = decision.snapshot_value
-            patch_payload["custom_fields"] = cf_payload
-        elif isinstance(cf_payload, dict) and LAST_SYNCED_ROLE_CUSTOM_FIELD in cf_payload:
-            trimmed = {
-                key: value
-                for key, value in cf_payload.items()
-                if key != LAST_SYNCED_ROLE_CUSTOM_FIELD
-            }
-            if trimmed:
-                patch_payload["custom_fields"] = trimmed
-            else:
-                patch_payload.pop("custom_fields", None)
 
         if patch_payload:
             operation_queue.append(
@@ -869,7 +836,6 @@ async def _create_vm_interface_parallel(
     payload: dict = {
         "name": resolved_name,
         "enabled": True,
-        "mac_address": mac_address,
         "bridge": None,
         "untagged_vlan": vlan_nb_id,
         "mode": "access" if vlan_nb_id is not None else None,
@@ -896,7 +862,6 @@ async def _create_vm_interface_parallel(
             "name": record.get("name"),
             "virtual_machine": record.get("virtual_machine"),
             "enabled": record.get("enabled"),
-            "mac_address": record.get("mac_address"),
             "type": record.get("type"),
             "description": record.get("description"),
             "bridge": record.get("bridge"),
@@ -917,6 +882,26 @@ async def _create_vm_interface_parallel(
         else getattr(vm_interface, "id", None)
     )
     result["interface"] = vm_interface
+
+    if interface_id is not None and mac_address:
+        from proxbox_api.services.sync.mac_address import (
+            reconcile_mac_for_vm_interface,
+        )
+
+        try:
+            await reconcile_mac_for_vm_interface(
+                nb,
+                vminterface_id=int(interface_id),
+                mac=mac_address,
+                tag_refs=tag_refs,
+            )
+        except Exception as mac_exc:
+            logger.warning(
+                "Failed to reconcile MAC %s for VM interface %s: %s",
+                mac_address,
+                interface_id,
+                mac_exc,
+            )
 
     from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 
@@ -1233,6 +1218,16 @@ async def create_virtual_machines(  # noqa: C901
         ),
     ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
+    behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
+    run_id: str | None = Query(
+        default=None,
+        title="Run ID",
+        description=(
+            "UUID stamped on each touched VM's proxbox_last_run_id custom field. "
+            "When omitted, a fresh UUID is generated. Pass the full-update operation_id "
+            "to make every VM touched in a single run share the same stamp."
+        ),
+    ),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -1290,6 +1285,7 @@ async def create_virtual_machines(  # noqa: C901
             supports_virtual_machine_type_field=supports_vm_type,
         )
     )
+    effective_run_id = run_id or str(uuid.uuid4())
 
     filtered_cluster_resources = cluster_resources
     bridge: WebSocketSSEBridge | None = (
@@ -1600,21 +1596,13 @@ async def create_virtual_machines(  # noqa: C901
         vm_type_obj = await _get_vm_type(vm_type_key)
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
 
-        cluster_id_int = int(getattr(cluster, "id", 0) or 0)
-        desired_role_id = await resolve_default_role_id(
-            nb,
-            vm_type=vm_type_key,
-            node_name=node_name,
-            cluster_id=cluster_id_int or None,
-        )
-
         now = datetime.now(timezone.utc)
         desired_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
-            cluster_id=cluster_id_int,
+            cluster_id=int(getattr(cluster, "id", 0) or 0),
             device_id=int(getattr(device, "id", 0) or 0),
-            role_id=desired_role_id,
+            role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
             site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
@@ -1622,16 +1610,12 @@ async def create_virtual_machines(  # noqa: C901
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
+            parse_description_metadata=behavior_flags.parse_description_metadata,
+            overwrite_flags=effective_vm_overwrite_flags,
         )
-        if desired_role_id is not None:
-            cf_block = desired_payload.get("custom_fields")
-            if not isinstance(cf_block, dict):
-                cf_block = {}
-            cf_block[LAST_SYNCED_ROLE_CUSTOM_FIELD] = desired_role_id
-            desired_payload["custom_fields"] = cf_block
         lookup = {
             "cf_proxmox_vm_id": int(resource.get("vmid")),
-            "cluster_id": cluster_id_int,
+            "cluster_id": int(getattr(cluster, "id", 0) or 0),
         }
 
         return _PreparedVMState(
@@ -1643,7 +1627,6 @@ async def create_virtual_machines(  # noqa: C901
             lookup=lookup,
             now=now,
             vm_type=vm_type,
-            desired_role_id=desired_role_id,
         )
 
     async def _run_full_update_vm_batch() -> list[dict[str, object]]:  # noqa: C901
@@ -1938,21 +1921,13 @@ async def create_virtual_machines(  # noqa: C901
                 python_exception=f"Error: {str(error)}",
             )
 
-        cluster_id_int = int(getattr(cluster, "id", 0) or 0)
-        desired_role_id = await resolve_default_role_id(
-            nb,
-            vm_type=vm_type_key,
-            node_name=node_name,
-            cluster_id=cluster_id_int or None,
-        )
-
         now = datetime.now(timezone.utc)
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
-            cluster_id=cluster_id_int,
+            cluster_id=int(getattr(cluster, "id", 0) or 0),
             device_id=int(getattr(device, "id", 0) or 0),
-            role_id=desired_role_id,
+            role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
             tag_ids=[int(getattr(tag, "id", 0) or 0)],
             site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
@@ -1960,60 +1935,9 @@ async def create_virtual_machines(  # noqa: C901
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
+            parse_description_metadata=behavior_flags.parse_description_metadata,
+            overwrite_flags=effective_vm_overwrite_flags,
         )
-
-        vm_lookup = {
-            "cf_proxmox_vm_id": int(resource.get("vmid")),
-            "cluster_id": cluster_id_int,
-        }
-        try:
-            existing_vm_record = await rest_first_async(
-                nb,
-                "/api/virtualization/virtual-machines/",
-                query={**vm_lookup, "limit": 2},
-            )
-        except Exception as exc:
-            logger.debug(
-                "VM prefetch for role-snapshot decision failed (vmid=%s): %s",
-                resource.get("vmid"),
-                exc,
-            )
-            existing_vm_record = None
-        existing_vm_dict = _to_mapping(existing_vm_record) if existing_vm_record else None
-
-        decision = compute_role_snapshot_decision(
-            existing_role_id=_relation_id(existing_vm_dict.get("role"))
-            if existing_vm_dict
-            else None,
-            existing_snapshot_id=extract_snapshot_id(existing_vm_dict)
-            if existing_vm_dict
-            else None,
-            desired_role_id=desired_role_id,
-            overwrite_vm_role=overwrite_vm_role,
-        )
-
-        if decision.write_role:
-            netbox_vm_payload["role"] = decision.role_value
-        else:
-            netbox_vm_payload.pop("role", None)
-
-        cf_block = netbox_vm_payload.get("custom_fields")
-        if not isinstance(cf_block, dict):
-            cf_block = None
-        if decision.write_snapshot:
-            cf_block = dict(cf_block) if cf_block else {}
-            cf_block[LAST_SYNCED_ROLE_CUSTOM_FIELD] = decision.snapshot_value
-            netbox_vm_payload["custom_fields"] = cf_block
-        elif isinstance(cf_block, dict) and LAST_SYNCED_ROLE_CUSTOM_FIELD in cf_block:
-            trimmed = {
-                key: value
-                for key, value in cf_block.items()
-                if key != LAST_SYNCED_ROLE_CUSTOM_FIELD
-            }
-            if trimmed:
-                netbox_vm_payload["custom_fields"] = trimmed
-            else:
-                netbox_vm_payload.pop("custom_fields", None)
 
         if bridge:
             await bridge.emit_substep(
@@ -2027,7 +1951,10 @@ async def create_virtual_machines(  # noqa: C901
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            lookup=vm_lookup,
+            lookup={
+                "cf_proxmox_vm_id": int(resource.get("vmid")),
+                "cluster_id": int(getattr(cluster, "id", 0) or 0),
+            },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=vm_patchable_fields,
@@ -2036,6 +1963,8 @@ async def create_virtual_machines(  # noqa: C901
                 supports_virtual_machine_type_field=supports_vm_type,
             ),
         )
+
+        await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)
         if bridge:
@@ -2548,11 +2477,11 @@ async def create_only_vm_interfaces(  # noqa: C901
                     )
 
                 try:
+                    iface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                     # Collect interface payload info for later bulk processing
                     payload = {
                         "name": resolved_name,
                         "enabled": True,
-                        "mac_address": config_dict.get("virtio") or config_dict.get("hwaddr"),
                         "bridge": None,
                         "untagged_vlan": None,
                         "mode": None,
@@ -2569,6 +2498,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                     key = f"{netbox_vm.get('id')}:{resolved_name}"
                     interface_info[key] = {
                         "payload": payload,
+                        "mac_address": iface_mac,
                         "vlan_tag": vlan_tag,
                         "bridge_name": bridge_name,
                         "vm_id": netbox_vm.get("id"),
@@ -2717,6 +2647,40 @@ async def create_only_vm_interfaces(  # noqa: C901
                 "Bulk interface reconciliation completed: %d interfaces processed",
                 len(all_interface_payloads),
             )
+
+            # Per-interface MAC reconcile: NetBox 4.2+ stores MACs as a separate
+            # dcim.MACAddress row referenced by VMInterface.primary_mac_address.
+            from proxbox_api.services.sync.mac_address import (
+                reconcile_mac_for_vm_interface,
+            )
+
+            for key, info in all_interface_info.items():
+                mac_value = info.get("mac_address")
+                if not mac_value:
+                    continue
+                vm_id_for_mac = info.get("vm_id")
+                iface_name_for_mac = info.get("resolved_name")
+                if not vm_id_for_mac or not iface_name_for_mac:
+                    continue
+                iface_id_for_mac = interface_name_vm_to_id.get(
+                    (iface_name_for_mac, int(vm_id_for_mac))
+                )
+                if not iface_id_for_mac:
+                    continue
+                try:
+                    await reconcile_mac_for_vm_interface(
+                        nb,
+                        vminterface_id=int(iface_id_for_mac),
+                        mac=mac_value,
+                        tag_refs=tag_refs,
+                    )
+                except Exception as mac_exc:
+                    logger.warning(
+                        "Failed to reconcile MAC %s for VM interface %s: %s",
+                        mac_value,
+                        iface_id_for_mac,
+                        mac_exc,
+                    )
 
             # Emit WebSocket progress for each created interface
             if use_websocket and websocket:
@@ -3049,6 +3013,14 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     from proxbox_api.services.sync.network import build_vm_interface_ip_payload
                     from proxbox_api.services.sync.vm_helpers import all_guest_agent_ips
 
+                    raw_guest_ip_count = 0
+                    if isinstance(guest_iface, dict):
+                        raw_guest_ip_count = sum(
+                            1
+                            for addr in (guest_iface.get("ip_addresses") or [])
+                            if isinstance(addr, dict)
+                        )
+
                     all_ips_for_iface: list[str] = []
                     if guest_iface:
                         all_ips_for_iface = all_guest_agent_ips(
@@ -3056,6 +3028,26 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                             ignore_ipv6_link_local_addresses,
                             primary_ip_preference=primary_ip_preference,
                         )
+
+                    skipped_guest_ips = max(0, raw_guest_ip_count - len(all_ips_for_iface))
+                    if skipped_guest_ips and isinstance(websocket, WebSocketSSEBridge):
+                        try:
+                            await websocket.emit_phase_summary(
+                                phase="vm-ip-addresses",
+                                skipped=skipped_guest_ips,
+                                message=(
+                                    f"Skipped {skipped_guest_ips} link-local/zone-scoped/"
+                                    f"loopback IPs on {vm_name}.{resolved_name}"
+                                ),
+                            )
+                        except Exception as emit_exc:
+                            logger.debug(
+                                "emit_phase_summary failed for VM %s interface %s: %s",
+                                vm_name,
+                                resolved_name,
+                                emit_exc,
+                            )
+
                     if not all_ips_for_iface:
                         config_ip = config_dict.get("ip")
                         if config_ip and str(config_ip) != "dhcp":
@@ -3076,7 +3068,10 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 tag_refs,
                                 now,
                                 dns_name=vm_dns_name,
+                                ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
                             )
+                            if payload is None:
+                                continue
                             ip_payloads.append(payload)
 
                             # Track first IP for primary assignment

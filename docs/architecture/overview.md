@@ -35,12 +35,17 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
   - `/ws`
   - `/ws/virtual-machines`
   - `/admin`
+  - `/admin/encryption` — encryption key inspection and rotation surface.
+  - `/auth` — bootstrap and API-key management.
   - `/netbox`
   - `/proxmox`
+  - `/proxmox/cluster/ha/*` — read-only High-Availability aggregation across configured clusters; see [Cluster HA API](../api/cluster-ha.md).
+  - `/proxmox/{qemu,lxc}/{vmid}/{start,stop,snapshot,migrate}` — operational write verbs (plus DELETE-to-cancel and GET-stream for migrate). Gated by `ProxmoxEndpoint.allow_writes`. See [HTTP API Reference — VM Operational Verbs](../api/http-reference.md#vm-operational-verbs).
   - `/dcim`
   - `/virtualization`
   - `/extras`
   - `/sync/individual`
+  - `/sync/active` — process-local probe for an in-flight `/full-update` run.
 - SQLite-backed endpoint configuration and bootstrap state.
 - NetBox API access via `netbox-sdk` sync and async clients.
 - Proxmox API access via `proxmox-sdk` sync SDK sessions and typed helper wrappers.

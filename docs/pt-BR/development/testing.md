@@ -34,6 +34,23 @@ Para a superficie atual de rotas e contratos de docs:
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
 ```
 
+Para os modulos novos da v0.0.11 (HA, verbos operacionais, sync-active, parsing de metadata e resolucao de colisao de nomes):
+
+```bash
+pytest \
+  tests/test_proxmox_ha_routes.py \
+  tests/test_proxmox_actions_gate.py \
+  tests/test_proxmox_actions_start.py \
+  tests/test_proxmox_actions_stop.py \
+  tests/test_proxmox_actions_snapshot.py \
+  tests/test_proxmox_actions_migrate_verb.py \
+  tests/test_verb_dispatch_helpers.py \
+  tests/test_sync_active.py \
+  tests/test_name_collision.py \
+  tests/test_vm_cloudinit_mapping.py \
+  tests/test_description_metadata.py
+```
+
 ## Testes com Mock Proxmox
 
 Todos os testes usam recursos mock do `proxmox-sdk` para validar a integracao com a API Proxmox. A suite de testes suporta tres modos mock:

@@ -157,25 +157,47 @@ def parse_key_value_string(value: object) -> dict[str, str]:
     return parsed
 
 
+def _is_skippable_ip(ip_text: str, ignore_ipv6_link_local: bool = True) -> tuple[bool, str | None]:
+    """Decide whether an IP should be skipped before reaching NetBox IPAM.
+
+    Strips the IPv6 zone-ID suffix (``%eth0``, ``%vmbr0``...) unconditionally,
+    since NetBox IPAM rejects zone-scoped addresses with a 400. Then checks
+    whether the address is empty, unparseable, loopback, or (when the toggle
+    is on) IPv6 link-local.
+
+    Returns ``(True, None)`` when the address should be skipped, and
+    ``(False, cleaned)`` with the canonical compressed form when it should
+    be kept.
+    """
+    cleaned = str(ip_text or "").strip()
+    if not cleaned:
+        return (True, None)
+    cleaned = cleaned.split("%", 1)[0]
+    if not cleaned:
+        return (True, None)
+    try:
+        parsed = ip_address(cleaned)
+    except ValueError:
+        return (True, None)
+    if parsed.is_loopback:
+        return (True, None)
+    if ignore_ipv6_link_local and parsed.is_link_local:
+        return (True, None)
+    return (False, parsed.compressed)
+
+
 def guest_agent_ip_with_prefix(
     addr: dict[str, object], ignore_ipv6_link_local: bool = True
 ) -> str | None:
     """Extract and format guest agent IP with prefix."""
     ip_text = str(addr.get("ip_address") or "").strip()
-    if not ip_text:
-        return None
-    try:
-        parsed = ip_address(ip_text)
-    except ValueError:
-        return None
-    if parsed.is_loopback:
-        return None
-    if ignore_ipv6_link_local and parsed.is_link_local:
+    skip, cleaned = _is_skippable_ip(ip_text, ignore_ipv6_link_local=ignore_ipv6_link_local)
+    if skip or cleaned is None:
         return None
     prefix = addr.get("prefix")
     if isinstance(prefix, int) and 0 <= prefix <= 128:
-        return f"{parsed.compressed}/{prefix}"
-    return parsed.compressed
+        return f"{cleaned}/{prefix}"
+    return cleaned
 
 
 def best_guest_agent_ip(
@@ -307,3 +329,83 @@ def filter_cluster_resources_for_vm(
             if selected:
                 filtered.append({cluster_key_str: selected})
     return filtered
+
+
+LAST_RUN_ID_CUSTOM_FIELD = "proxbox_last_run_id"
+
+
+def _coerce_vm_record_to_dict(vm_record: object) -> dict[str, object] | None:
+    """Coerce a NetBox VM record (dict or pynetbox-style) into a plain dict."""
+    if isinstance(vm_record, dict):
+        return vm_record
+    if hasattr(vm_record, "dict"):
+        try:
+            coerced = vm_record.dict()
+        except Exception as error:
+            logger.debug("Failed to coerce VM record for stamping: %s", error)
+            return None
+        return coerced if isinstance(coerced, dict) else None
+    return None
+
+
+def _extract_vm_id(record: dict[str, object]) -> int | None:
+    """Extract an integer id from a NetBox VM record dict."""
+    raw_id = record.get("id")
+    if isinstance(raw_id, int):
+        return raw_id
+    if raw_id is None:
+        return None
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError):
+        return None
+
+
+async def stamp_vm_last_run_id(
+    nb: object,
+    vm_record: object,
+    run_id: str | None,
+) -> None:
+    """Stamp `custom_fields.proxbox_last_run_id` on a NetBox VM after reconcile.
+
+    Idempotent: if the record already carries the same run_id, no PATCH is issued.
+    Operator-set custom_fields keys are preserved by merging on top of the
+    current custom_fields dict. This runs as a separate narrow PATCH so the
+    stamp is written regardless of the operator's `overwrite_vm_custom_fields`
+    gate (which controls whether the main reconciler diffs `custom_fields` at all).
+    """
+    if not run_id or not vm_record:
+        return
+
+    record = _coerce_vm_record_to_dict(vm_record)
+    if record is None:
+        return
+
+    record_id = _extract_vm_id(record)
+    if not record_id:
+        return
+
+    current_cf = record.get("custom_fields")
+    if not isinstance(current_cf, dict):
+        current_cf = {}
+
+    if current_cf.get(LAST_RUN_ID_CUSTOM_FIELD) == run_id:
+        return
+
+    from proxbox_api.netbox_rest import rest_patch_async
+
+    merged_cf = {**current_cf, LAST_RUN_ID_CUSTOM_FIELD: run_id}
+    try:
+        await rest_patch_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            record_id,
+            {"custom_fields": merged_cf},
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Failed to stamp proxbox_last_run_id on VM id=%s name=%s: %s",
+            record_id,
+            record.get("name"),
+            error,
+        )

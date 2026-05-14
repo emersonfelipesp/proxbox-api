@@ -101,6 +101,64 @@ out of scope and may be added in a follow-up release.
 - `GET /proxmox/cluster/ha/groups/{group}` - Single group detail across clusters; returns `null` when no cluster has the group.
 - `GET /proxmox/cluster/ha/summary` - Single envelope (`{status, groups, resources}`) composed in parallel via `asyncio.gather`. Used by the NetBox cluster-wide HA page so a render only triggers one round-trip.
 
+### VM Operational Verbs
+
+POST verbs that act on a single QEMU VM or LXC container. Implemented in `proxbox_api/routes/proxmox_actions.py`. Each handler is gated by [`ProxmoxEndpoint.allow_writes`](../getting-started/configuration.md#proxmox-endpoints); the gate runs before any NetBox or Proxmox call, so a write-disabled endpoint returns 403 even when the downstream services are unreachable.
+
+All verb routes accept:
+
+- `endpoint_id` (query parameter, required) — selects the target Proxmox cluster among many.
+- `Idempotency-Key` (header, optional) — 60-second cache window per `(endpoint_id, verb, vmid)`. A second POST with the same key returns the cached body without re-dispatching.
+- `X-Proxbox-Actor` (header, optional) — actor label written to the NetBox journal entry. Defaults to `proxbox-api`.
+
+Every invocation (success, failure, or no-op) writes exactly one journal entry on the linked NetBox `VirtualMachine` resolved by the `proxmox_vm_id` custom field.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/proxmox/qemu/{vmid}/start` | Start a QEMU VM. State-based no-op when already `running` (`result: "already_running"`). |
+| `POST` | `/proxmox/lxc/{vmid}/start` | Start an LXC container. Same no-op rule. |
+| `POST` | `/proxmox/qemu/{vmid}/stop` | Stop a QEMU VM. State-based no-op when already `stopped` (`result: "already_stopped"`). |
+| `POST` | `/proxmox/lxc/{vmid}/stop` | Stop an LXC container. Same no-op rule. |
+| `POST` | `/proxmox/qemu/{vmid}/snapshot` | Create a QEMU snapshot. Optional JSON body `{snapname, description}`; when `snapname` is omitted the route generates `proxbox-{idempotency_key[:8]}` or `proxbox-{utc_stamp}`. Always dispatched (no state-based no-op). |
+| `POST` | `/proxmox/lxc/{vmid}/snapshot` | Create an LXC snapshot. Same body and default rules. |
+| `POST` | `/proxmox/qemu/{vmid}/migrate` | Migrate a QEMU VM. Required body `{target, online}`. Runs a preflight against `/nodes/{node}/qemu/{vmid}/migrate` and rejects when the target is not allowed or `online=true` would hit local disks/resources. Returns **202 Accepted** with `proxmox_task_upid` and `sse_url` (the cancel/stream endpoints below). |
+| `POST` | `/proxmox/lxc/{vmid}/migrate` | Migrate an LXC container. Same body and 202 shape. |
+| `DELETE` | `/proxmox/qemu/{vmid}/migrate/{task_upid}` | Best-effort cancel of an in-flight migrate task. Journals the cancel intent even if Proxmox refuses. |
+| `DELETE` | `/proxmox/lxc/{vmid}/migrate/{task_upid}` | Best-effort cancel for LXC migrate. |
+| `GET` | `/proxmox/qemu/{vmid}/migrate/{task_upid}/stream` | SSE stream emitting `migrate_dispatched`, repeated `migrate_progress`, then `migrate_succeeded` xor `migrate_failed`. |
+| `GET` | `/proxmox/lxc/{vmid}/migrate/{task_upid}/stream` | SSE stream for LXC migrate task progress. |
+
+#### `allow_writes` gate (403 shape)
+
+When `endpoint_id` is missing, the endpoint does not exist, or `ProxmoxEndpoint.allow_writes` is `false`, the handler returns HTTP 403 with one of three `reason` codes:
+
+```json
+{
+  "reason": "endpoint_writes_disabled",
+  "detail": "Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.",
+  "endpoint_id": 7
+}
+```
+
+Other 403 shapes use `reason: "endpoint_id_required"` or `reason: "endpoint_not_found"` and omit `endpoint_id`. The gate is the load-bearing trust boundary documented in `docs/design/operational-verbs.md` §2.3 layer 3 — it must remain the first check in every handler.
+
+#### Response shape (success / no-op)
+
+```json
+{
+  "verb": "start",
+  "vmid": 100,
+  "vm_type": "qemu",
+  "endpoint_id": 7,
+  "result": "ok",
+  "dispatched_at": "2026-05-13T14:22:08Z",
+  "proxmox_task_upid": "UPID:pve1:00012E34:...",
+  "journal_entry_url": "/api/extras/journal-entries/42/"
+}
+```
+
+`result` is one of `ok`, `already_running`, `already_stopped`, `accepted` (migrate dispatch), `cancel_requested`, `cancel_failed`, `rejected`, or `failed`. Error paths add `reason` and `detail`. The migrate 202 response also carries `sse_url`, `target`, `online`, and `source_node`.
+
 ### Viewer and generated contract helpers
 
 - `POST /proxmox/viewer/generate` - Crawl the Proxmox API Viewer and generate OpenAPI + Pydantic artifacts. Accepts `version_tag`, `workers`, `persist`, and other tuning query parameters.
@@ -245,6 +303,28 @@ See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaul
 
 - `GET /full-update` - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.
 - `GET /full-update/stream` - SSE streaming variant.
+
+## Sync State Probe
+
+- `GET /sync/active` - Returns `{ active, started_at, id, kind, runs }` reporting whether this API replica currently has a `/full-update` or `/full-update/stream` request in flight. Use this to fast-fail a cron / single-exec invocation when a sync is already running.
+
+The registry is **process-local and memory-only**, so the probe answers for the worker that handles the request. With multiple uvicorn workers, callers may see disagreeing answers across workers; treat the response as advisory and keep the scheduling interval larger than the typical sync duration. The endpoint is covered by the standard `X-Proxbox-API-Key` middleware.
+
+Response shape:
+
+```json
+{
+  "active": true,
+  "started_at": "2026-05-12T17:53:28.122Z",
+  "id": "9b6c0408-...",
+  "kind": "full-update",
+  "runs": [
+    { "id": "9b6c0408-...", "kind": "full-update", "started_at": "2026-05-12T17:53:28.122Z" }
+  ]
+}
+```
+
+`started_at` / `id` / `kind` report the oldest in-flight run (FIFO). `runs` lists every registered run on the local replica for diagnostics.
 
 ## WebSocket
 
