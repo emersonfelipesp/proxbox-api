@@ -89,7 +89,9 @@ async def _run_scenario(name: str, *, sabotage_token: bool = False) -> dict[str,
         result["ok"] = True
         result["version"] = session.version
         result["auth_method"] = (
-            "token" if cluster_config["token"]["name"] and cluster_config["token"]["value"] else "password"
+            "token"
+            if cluster_config["token"]["name"] and cluster_config["token"]["value"]
+            else "password"
         )
     except Exception as exc:
         result["exception_type"] = type(exc).__name__

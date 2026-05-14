@@ -149,9 +149,7 @@ def test_auth_failure_surfaces_upstream_pve_error(monkeypatch):
 
 
 def test_abandoned_sdk_is_closed_on_domain_fallback(monkeypatch):
-    monkeypatch.setattr(
-        "proxbox_api.session.proxmox.ProxmoxAPI", FakeDomainFailsThenIpSucceedsAPI
-    )
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeDomainFailsThenIpSucceedsAPI)
 
     session = ProxmoxSession(
         {
