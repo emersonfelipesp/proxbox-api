@@ -80,6 +80,16 @@ def _has_cloudinit_drive(config_payload: object) -> bool:
     return False
 
 
+def _pick_unused_ide_slot(config_payload: object | None) -> str | None:
+    if config_payload is None:
+        return "ide2"
+    config = mapping_from_response(config_payload)
+    for slot in ("ide2", "ide0", "ide1", "ide3"):
+        if slot not in config:
+            return slot
+    return None
+
+
 def _infer_default_storage(config_payload: object | None) -> str:
     if config_payload is not None:
         for value in mapping_from_response(config_payload).values():
@@ -185,6 +195,15 @@ async def _journal_provision(
 
 
 async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionRequest) -> str | None:
+    template_node = await resolve_proxmox_node(proxmox, "qemu", req.template_vmid)
+    if not isinstance(template_node, str) or not template_node:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "template_vmid_not_found",
+                "template_vmid": req.template_vmid,
+            },
+        )
     clone_payload: dict[str, object] = {
         "newid": req.new_vmid,
         "name": req.new_name,
@@ -194,11 +213,11 @@ async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionReque
     if req.storage:
         clone_payload["storage"] = req.storage
     clone_result = await _maybe_await(
-        proxmox.session.nodes(req.target_node).qemu(req.template_vmid).clone.post(**clone_payload)
+        proxmox.session.nodes(template_node).qemu(req.template_vmid).clone.post(**clone_payload)
     )
     clone_upid = _extract_task_id(clone_result)
     if _is_upid(clone_upid):
-        await _wait_for_upid(proxmox, req.target_node, clone_upid)
+        await _wait_for_upid(proxmox, template_node, clone_upid)
     return clone_upid
 
 
@@ -217,8 +236,17 @@ async def _configure_cloud_init_vm(
     if req.cores is not None:
         ci_args["cores"] = req.cores
     if existing_config is None or not _has_cloudinit_drive(existing_config):
+        slot = _pick_unused_ide_slot(existing_config)
+        if slot is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "reason": "no_unused_ide_slot",
+                    "vmid": req.new_vmid,
+                },
+            )
         storage = req.storage or _infer_default_storage(existing_config)
-        ci_args["ide2"] = f"{storage}:cloudinit"
+        ci_args[slot] = f"{storage}:cloudinit"
 
     config_result = await _maybe_await(
         proxmox.session.nodes(req.target_node).qemu(req.new_vmid).config.put(**ci_args)

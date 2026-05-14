@@ -18,7 +18,11 @@ class CloudVMProvisionRequest(BaseModel):
     cloud_init: CloudInitPayload
     start_after_provision: bool = True
     storage: Optional[str] = Field(None, description="Clone destination storage pool")
-    memory_mb: Optional[int] = Field(None, ge=64)
+    memory_mb: Optional[int] = Field(
+        None,
+        ge=64,
+        description="VM memory in MiB (Proxmox 'memory' convention; field name kept for API compatibility)",
+    )
     cores: Optional[int] = Field(None, ge=1)
     full_clone: bool = True
 
@@ -28,7 +32,7 @@ class CloudVMProvisionResponse(BaseModel):
     clone_upid: Optional[str] = None
     config_upid: Optional[str] = None
     start_upid: Optional[str] = None
-    status: str  # "started" | "stopped" | "failed"
+    status: str  # "started" | "stopped" (failures raise HTTPException)
     detail: Optional[str] = None
 
 

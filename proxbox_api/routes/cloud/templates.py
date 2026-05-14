@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.schemas.cloud_provision import CloudTemplateListResponse, CloudTemplateSummary
 from proxbox_api.session.netbox import get_netbox_async_session
@@ -51,16 +52,34 @@ def _tenant_ids(value: object) -> list[int]:
     return tenant_ids
 
 
-def _summary_from_record(record: object) -> CloudTemplateSummary:
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _summary_from_record(record: object) -> CloudTemplateSummary | None:
     data = _record_dict(record)
+    template_id = _coerce_int(data.get("id"))
+    source_vmid = _coerce_int(data.get("source_vmid"))
+    if template_id is None or source_vmid is None:
+        logger.warning(
+            "cloud templates: skipping record with invalid id=%r or source_vmid=%r",
+            data.get("id"),
+            data.get("source_vmid"),
+        )
+        return None
     cluster = data.get("cluster")
     return CloudTemplateSummary(
-        id=int(data["id"]),
+        id=template_id,
         name=str(data.get("name") or ""),
         slug=str(data.get("slug") or ""),
         cluster_id=_nested_int(cluster),
         cluster_name=_nested_name(cluster),
-        source_vmid=int(data["source_vmid"]),
+        source_vmid=source_vmid,
         os_family=str(data.get("os_family") or ""),
         os_release=str(data.get("os_release") or ""),
         default_ciuser=str(data.get("default_ciuser") or "cloud-user"),
@@ -84,5 +103,9 @@ async def list_cloud_templates(session: SessionDep) -> CloudTemplateListResponse
             detail={"reason": "netbox_templates_unavailable", "error": str(error)},
         ) from error
 
-    results = [_summary_from_record(record) for record in records]
+    results = [
+        summary
+        for summary in (_summary_from_record(record) for record in records)
+        if summary is not None
+    ]
     return CloudTemplateListResponse(count=len(results), results=results)
