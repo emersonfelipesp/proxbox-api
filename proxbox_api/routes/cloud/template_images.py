@@ -17,6 +17,7 @@ from proxbox_api.schemas.cloud_provision import (
     CloudImageTemplateBuildResponse,
 )
 from proxbox_api.session.proxmox import ProxmoxSession
+from proxbox_api.ssrf import validate_endpoint_url
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
@@ -111,6 +112,14 @@ async def build_cloud_image_template(
 
     filename = _filename_from_request(req)
     image_volid = f"{req.image_storage}:import/{filename}"
+
+    safe, reason = validate_endpoint_url(req.image_url)
+    if not safe:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"image_url rejected by SSRF protection: {reason}",
+        )
+
     proxmox: ProxmoxSession | None = None
     try:
         proxmox = await _open_proxmox_session(gated)
