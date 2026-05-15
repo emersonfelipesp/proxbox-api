@@ -514,8 +514,32 @@ jobs:
           }
           EOF
 
+          mkdir -p .ci-netbox-config
+          cat > .ci-netbox-config/plugins.py <<'PY'
+          import os
+
+          from netbox_branching.utilities import DynamicSchemaDict
+
+          PLUGINS = ["netbox_proxbox", "netbox_branching"]
+          DATABASES = DynamicSchemaDict(
+              {
+                  "default": {
+                      "ENGINE": "django.db.backends.postgresql",
+                      "HOST": os.environ.get("DB_HOST", "localhost"),
+                      "PORT": os.environ.get("DB_PORT", ""),
+                      "NAME": os.environ.get("DB_NAME", "netbox"),
+                      "USER": os.environ.get("DB_USER", ""),
+                      "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+                      "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "300")),
+                  }
+              }
+          )
+          DATABASE_ROUTERS = ["netbox_branching.database.BranchAwareRouter"]
+          PY
+
           if [ "${{ matrix.netbox_transport }}" = "http_manage" ]; then
             docker run -d --name netbox-e2e-http --network proxbox-e2e -p "${HOST_BIND}18080:8000" \
+              -v "$PWD/.ci-netbox-config/plugins.py:/etc/netbox/config/plugins.py:ro" \
               -e DB_HOST=netbox-e2e-postgres \
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
@@ -533,9 +557,10 @@ jobs:
               -e MAX_DB_WAIT_TIME=120 \
               -e DB_WAIT_DEBUG=1 \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' netboxlabs-netbox-branching && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
           elif [ "${{ matrix.netbox_transport }}" = "https_nginx" ]; then
             docker run -d --name netbox-e2e-http --network proxbox-e2e \
+              -v "$PWD/.ci-netbox-config/plugins.py:/etc/netbox/config/plugins.py:ro" \
               -e DB_HOST=netbox-e2e-postgres \
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
@@ -553,7 +578,7 @@ jobs:
               -e MAX_DB_WAIT_TIME=120 \
               -e DB_WAIT_DEBUG=1 \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' netboxlabs-netbox-branching && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
 
             docker run -d --name netbox-e2e-nginx --network proxbox-e2e -p "${HOST_BIND}18443:8443" \
               -v "$PWD/.ci-tls:/certs:ro" \
@@ -562,6 +587,7 @@ jobs:
           else
             docker run -d --name netbox-e2e-granian --network proxbox-e2e -p "${HOST_BIND}18443:8443" \
               -v "$PWD/.ci-tls:/certs:ro" \
+              -v "$PWD/.ci-netbox-config/plugins.py:/etc/netbox/config/plugins.py:ro" \
               -e DB_HOST=netbox-e2e-postgres \
               -e DB_NAME=netbox \
               -e DB_USER=netbox \
@@ -580,7 +606,7 @@ jobs:
               -e MAX_DB_WAIT_TIME=120 \
               -e DB_WAIT_DEBUG=1 \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' granian && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host '${NETBOX_GRANIAN_HOST}' --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' netboxlabs-netbox-branching granian && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host '${NETBOX_GRANIAN_HOST}' --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
           fi
 
       - name: Trust E2E NetBox CA on runner
