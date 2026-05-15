@@ -10,7 +10,7 @@ proxbox_api = ["static/*", "static/**/*", "generated/**/*.json", "generated/**/*
 
 [project]
 name = "proxbox_api"
-version = "0.0.11rc6"
+version = "0.0.11rc7"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
