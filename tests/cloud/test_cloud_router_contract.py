@@ -15,8 +15,9 @@ from proxbox_api.schemas.cloud_provision import CloudVMProvisionRequest
 
 def test_cloud_package_exposes_both_routers():
     assert cloud.provision_router is not None
+    assert cloud.template_images_router is not None
     assert cloud.templates_router is not None
-    assert cloud.__all__ == ("provision_router", "templates_router")
+    assert cloud.__all__ == ("provision_router", "template_images_router", "templates_router")
 
 
 def test_cloud_routes_are_registered_on_app(monkeypatch):
@@ -30,6 +31,10 @@ def test_cloud_routes_are_registered_on_app(monkeypatch):
     )
     assert any(
         route.path == "/cloud/templates" and "GET" in (route.methods or set())
+        for route in test_app.routes
+    )
+    assert any(
+        route.path == "/cloud/templates/images" and "POST" in (route.methods or set())
         for route in test_app.routes
     )
 
@@ -68,3 +73,5 @@ def test_cloud_provision_route_reuses_required_helpers():
 
     assert "build_proxmox_ci_args" in source
     assert "_gate" in source
+    assert "await _wait_for_upid(proxmox, req.target_node, config_upid)" in source
+    assert "await _wait_for_upid(proxmox, req.target_node, start_upid)" in source

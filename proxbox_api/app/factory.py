@@ -33,6 +33,7 @@ from proxbox_api.openapi_custom import custom_openapi_builder
 from proxbox_api.routes.admin import router as admin_router
 from proxbox_api.routes.auth import router as auth_router
 from proxbox_api.routes.cloud import provision_router as cloud_provision_router
+from proxbox_api.routes.cloud import template_images_router as cloud_template_images_router
 from proxbox_api.routes.cloud import templates_router as cloud_templates_router
 from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.routes.extras import router as extras_router
@@ -423,6 +424,7 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(intent_router, prefix="/intent", tags=["intent"])
         app.include_router(deletion_requests_router, prefix="/intent", tags=["intent"])
         app.include_router(cloud_provision_router, prefix="/cloud", tags=["cloud"])
+        app.include_router(cloud_template_images_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_templates_router, prefix="/cloud", tags=["cloud"])
         app.include_router(
             sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
