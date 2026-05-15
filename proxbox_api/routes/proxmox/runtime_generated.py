@@ -721,5 +721,4 @@ def clear_generated_proxmox_route_cache() -> None:
     """Remove the persisted runtime-generated Proxmox route cache artifact."""
 
     cache_path = _generated_route_cache_path()
-    if cache_path.exists():
-        cache_path.unlink()
+    cache_path.unlink(missing_ok=True)
