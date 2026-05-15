@@ -304,7 +304,7 @@ async def _run_bootstrap_pass(app: FastAPI) -> None:
     app.state.bootstrap_status = status
 
 
-def create_app() -> FastAPI:
+def create_app() -> FastAPI:  # noqa: C901
     """Build and configure the Proxbox FastAPI application."""
     bootstrap.init_database_and_netbox()
 
@@ -391,9 +391,12 @@ def create_app() -> FastAPI:
         for token in os.environ.get("PROXBOX_FEATURES", "").split(",")
         if token.strip()
     }
-    pbs_only = features == {"pbs"}
+    sidecar_features = {"pbs", "ceph"}
+    sidecar_only = bool(features) and features.issubset(sidecar_features)
+    include_pbs = not features or "pbs" in features
+    include_ceph = not features or "ceph" in features
 
-    if not pbs_only:
+    if not sidecar_only:
         register_cache_routes(app)
         register_full_update_routes(app)
         register_websocket_routes(app)
@@ -422,13 +425,22 @@ def create_app() -> FastAPI:
         )
         app.include_router(sync_active_router)
 
-    try:
-        from proxbox_api.pbs import admin_router as pbs_admin_router  # noqa: PLC0415
-        from proxbox_api.pbs import router as pbs_router  # noqa: PLC0415
-    except ImportError as exc:
-        logger.info("PBS subpackage unavailable; /pbs/* routes disabled (%s)", exc)
-    else:
-        app.include_router(pbs_admin_router, prefix="/pbs", tags=["pbs"])
-        app.include_router(pbs_router, prefix="/pbs", tags=["pbs"])
+    if include_pbs:
+        try:
+            from proxbox_api.pbs import admin_router as pbs_admin_router  # noqa: PLC0415
+            from proxbox_api.pbs import router as pbs_router  # noqa: PLC0415
+        except ImportError as exc:
+            logger.info("PBS subpackage unavailable; /pbs/* routes disabled (%s)", exc)
+        else:
+            app.include_router(pbs_admin_router, prefix="/pbs", tags=["pbs"])
+            app.include_router(pbs_router, prefix="/pbs", tags=["pbs"])
+
+    if include_ceph:
+        try:
+            from proxbox_api.ceph import router as ceph_router  # noqa: PLC0415
+        except ImportError as exc:
+            logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
+        else:
+            app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
 
     return app
