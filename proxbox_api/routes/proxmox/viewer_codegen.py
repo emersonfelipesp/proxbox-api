@@ -23,8 +23,26 @@ from proxbox_api.routes.proxmox.runtime_generated import (
     generated_proxmox_route_state,
     register_generated_proxmox_routes,
 )
+from proxbox_api.settings_client import get_settings
+from proxbox_api.ssrf import validate_endpoint_url
 
 router = APIRouter()
+
+
+def _enforce_codegen_source_url(source_url: str) -> None:
+    """Block codegen `source_url` values that resolve to internal/reserved hosts.
+
+    Refuses the request before any DNS lookup is followed by Playwright or
+    `urlopen`, preventing the codegen endpoint from being abused as an SSRF
+    pivot toward cloud metadata services or RFC1918 hosts.
+    """
+
+    is_safe, reason = validate_endpoint_url(source_url, get_settings())
+    if not is_safe:
+        raise ProxboxException(
+            message="Refusing codegen request: source_url is not allowed.",
+            detail=reason,
+        )
 
 
 @router.post("/generate")
@@ -68,6 +86,7 @@ async def generate_viewer_codegen_artifacts(
 ):
     """Run Proxmox API Viewer to OpenAPI and Pydantic generation pipeline."""
 
+    _enforce_codegen_source_url(source_url)
     try:
         output_dir = None
         if persist:
@@ -163,6 +182,7 @@ async def proxmox_viewer_openapi(
         output_dir.mkdir(parents=True, exist_ok=True)
         openapi_path = proxmox_generated_openapi_path(version_tag=version_tag)
         if regenerate or not openapi_path.exists():
+            _enforce_codegen_source_url(source_url)
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,
                 source_url=source_url,
@@ -314,6 +334,7 @@ async def proxmox_viewer_pydantic_models(
             if bundled.exists():
                 models_path = bundled
         if regenerate or not models_path.exists():
+            _enforce_codegen_source_url(source_url)
             bundle = await generate_proxmox_codegen_bundle_async(
                 output_dir=output_dir,
                 source_url=source_url,

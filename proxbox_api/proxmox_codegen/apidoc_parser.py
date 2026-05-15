@@ -4,16 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import ssl
 from urllib.error import URLError
 from urllib.request import urlopen
+
+logger = logging.getLogger(__name__)
 
 PROXMOX_API_VIEWER_URL = "https://pve.proxmox.com/pve-docs/api-viewer/"
 PROXMOX_APIDOC_JS_URL = "https://pve.proxmox.com/pve-docs/api-viewer/apidoc.js"
 
 
-def fetch_apidoc_js(url: str = PROXMOX_APIDOC_JS_URL, timeout: int = 60) -> str:
-    """Download the upstream Proxmox `apidoc.js` source file."""
+def fetch_apidoc_js(
+    url: str = PROXMOX_APIDOC_JS_URL,
+    timeout: int = 60,
+    allow_insecure_ssl: bool = False,
+) -> str:
+    """Download the upstream Proxmox `apidoc.js` source file.
+
+    SSL certificate validation is enforced. To support self-signed Proxmox lab
+    nodes, pass ``allow_insecure_ssl=True`` explicitly; a CRITICAL log is then
+    emitted on each downgrade so operators can audit it.
+    """
 
     try:
         with urlopen(url, timeout=timeout) as response:
@@ -21,24 +33,26 @@ def fetch_apidoc_js(url: str = PROXMOX_APIDOC_JS_URL, timeout: int = 60) -> str:
     except URLError as error:
         if not isinstance(getattr(error, "reason", None), ssl.SSLError):
             raise
+        if not allow_insecure_ssl:
+            raise
+        logger.critical(
+            "SSL verification disabled for apidoc fetch from %s (allow_insecure_ssl=True)",
+            url,
+        )
         insecure_context = ssl._create_unverified_context()
         with urlopen(url, timeout=timeout, context=insecure_context) as response:
             return response.read().decode("utf-8")
 
 
-async def fetch_apidoc_js_async(url: str = PROXMOX_APIDOC_JS_URL, timeout: int = 60) -> str:
+async def fetch_apidoc_js_async(
+    url: str = PROXMOX_APIDOC_JS_URL,
+    timeout: int = 60,
+    allow_insecure_ssl: bool = False,
+) -> str:
     """Async version: Download the upstream Proxmox `apidoc.js` source file."""
 
     def _fetch():
-        try:
-            with urlopen(url, timeout=timeout) as response:
-                return response.read().decode("utf-8")
-        except URLError as error:
-            if not isinstance(getattr(error, "reason", None), ssl.SSLError):
-                raise
-            insecure_context = ssl._create_unverified_context()
-            with urlopen(url, timeout=timeout, context=insecure_context) as response:
-                return response.read().decode("utf-8")
+        return fetch_apidoc_js(url=url, timeout=timeout, allow_insecure_ssl=allow_insecure_ssl)
 
     return await asyncio.to_thread(_fetch)
 
