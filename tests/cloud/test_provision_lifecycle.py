@@ -13,7 +13,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlmodel import Session
 
-from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.database import ProxmoxEndpoint, get_async_session
 from proxbox_api.main import app
 from proxbox_api.testing.proxmox_mock import reset_mock_state
 
@@ -32,6 +32,17 @@ def _make_endpoint(db_session: Session, *, allow_writes: bool) -> int:
     db_session.refresh(endpoint)
     assert endpoint.id is not None
     return endpoint.id
+
+
+@pytest.fixture
+def sync_async_db_override(db_engine):
+    async def _override_get_async_session():
+        with Session(db_engine) as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = _override_get_async_session
+    yield
+    app.dependency_overrides.pop(get_async_session, None)
 
 
 async def _seed_template() -> None:
@@ -67,6 +78,7 @@ async def test_cloud_provision_clones_configures_cloudinit_and_starts(
     auth_headers,
     db_session,
     monkeypatch,
+    sync_async_db_override,
 ):
     monkeypatch.setenv("PROXMOX_API_MODE", "mock")
     reset_mock_state()
@@ -113,6 +125,7 @@ async def test_cloud_provision_clones_configures_cloudinit_and_starts(
 async def test_cloud_provision_writes_disabled_returns_gate_reason(
     auth_headers,
     db_session,
+    sync_async_db_override,
 ):
     endpoint_id = _make_endpoint(db_session, allow_writes=False)
 

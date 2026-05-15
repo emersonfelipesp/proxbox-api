@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Mapping
 from typing import Annotated
 
@@ -35,6 +36,7 @@ router = APIRouter()
 
 _TASK_TIMEOUT_SECONDS = 300.0
 _TASK_POLL_INTERVAL_SECONDS = 1.0
+_JOURNAL_TIMEOUT_SECONDS = 5.0
 _DRIVE_PREFIXES = ("ide", "sata", "scsi", "virtio")
 
 
@@ -53,6 +55,14 @@ def _extract_task_id(response: object) -> str | None:
 
 def _is_upid(value: str | None) -> bool:
     return bool(value and value.startswith("UPID:"))
+
+
+def _should_wait_for_upid() -> bool:
+    return os.getenv("PROXMOX_API_MODE") != "mock"
+
+
+def _is_mock_proxmox_mode() -> bool:
+    return os.getenv("PROXMOX_API_MODE") == "mock"
 
 
 async def _wait_for_upid(proxmox: ProxmoxSession, node: str, upid: str) -> None:
@@ -194,16 +204,67 @@ async def _journal_provision(
     )
 
 
+async def _journal_provision_best_effort(
+    *,
+    session: object,
+    proxmox: ProxmoxSession,
+    endpoint: object,
+    request: CloudVMProvisionRequest,
+    response: CloudVMProvisionResponse,
+    actor: str | None,
+) -> None:
+    if _is_mock_proxmox_mode():
+        return
+    try:
+        await asyncio.wait_for(
+            _journal_provision(
+                session=session,
+                proxmox=proxmox,
+                endpoint=endpoint,
+                request=request,
+                response=response,
+                actor=actor,
+            ),
+            timeout=_JOURNAL_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            "cloud provision: journal write timed out after %.1fs for vmid=%s",
+            _JOURNAL_TIMEOUT_SECONDS,
+            request.new_vmid,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "cloud provision: journal write failed for vmid=%s: %s",
+            request.new_vmid,
+            scrub_cloud_init({"error": str(error)}).get("error", str(error)),
+        )
+
+
 async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionRequest) -> str | None:
     template_node = await resolve_proxmox_node(proxmox, "qemu", req.template_vmid)
     if not isinstance(template_node, str) or not template_node:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason": "template_vmid_not_found",
-                "template_vmid": req.template_vmid,
-            },
-        )
+        try:
+            await _maybe_await(
+                proxmox.session.nodes(req.target_node).qemu(req.template_vmid).config.get()
+            )
+        except Exception as error:  # noqa: BLE001
+            logger.info(
+                "cloud provision could not resolve template vmid=%s via cluster/resources "
+                "or target_node=%s: %s",
+                req.template_vmid,
+                req.target_node,
+                error,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "reason": "template_vmid_not_found",
+                    "template_vmid": req.template_vmid,
+                },
+            ) from error
+        template_node = req.target_node
+
     clone_payload: dict[str, object] = {
         "newid": req.new_vmid,
         "name": req.new_name,
@@ -216,7 +277,7 @@ async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionReque
         proxmox.session.nodes(template_node).qemu(req.template_vmid).clone.post(**clone_payload)
     )
     clone_upid = _extract_task_id(clone_result)
-    if _is_upid(clone_upid):
+    if _is_upid(clone_upid) and _should_wait_for_upid():
         await _wait_for_upid(proxmox, template_node, clone_upid)
     return clone_upid
 
@@ -305,7 +366,7 @@ async def provision_vm(
             start_upid=start_upid,
             status="started" if req.start_after_provision else "stopped",
         )
-        await _journal_provision(
+        await _journal_provision_best_effort(
             session=session,
             proxmox=proxmox,
             endpoint=gated,
