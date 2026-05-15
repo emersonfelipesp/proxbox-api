@@ -43,7 +43,7 @@ def test_netbox_e2e_readiness_is_long_enough_for_migrations_and_api_status():
     assert "NetBox API did not become ready" in ci_workflow
 
     assert publish_workflow.count("timeout-minutes: 45") >= 2
-    assert publish_workflow.count("for i in $(seq 1 600); do") >= 2
+    assert publish_workflow.count("for i in $(seq 1 900); do") >= 2
     assert publish_workflow.count("NetBox API did not become ready") >= 2
 
 
