@@ -1703,7 +1703,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.12"
+version = "0.0.11rc1"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1765,7 +1765,7 @@ requires-dist = [
     { name = "netbox-sdk", specifier = "==0.0.8.post1" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "proxmox-sdk", specifier = "==0.0.4.post2" },
+    { name = "proxmox-sdk", specifier = "==0.0.4.post3" },
     { name = "pydantic", specifier = "==2.13.3" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
@@ -1807,7 +1807,7 @@ dev = [{ name = "ruff", specifier = ">=0.15.8" }]
 
 [[package]]
 name = "proxmox-sdk"
-version = "0.0.4.post2"
+version = "0.0.4.post3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1816,9 +1816,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "slowapi" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a9/b5/84e9a2da1b8a73dc1a92721f88d282307c19718bf78bba820b1af8ea0486/proxmox_sdk-0.0.4.post2.tar.gz", hash = "sha256:ea96283c1b3c875956483f8abe207bb8b368e0d31f552ef799e54bca5fdf972e", size = 794712, upload-time = "2026-05-14T20:03:38.036Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/6d/845925bd37f3b6717728af6372834f91771c974386ba3e27f9d0fbe33c57/proxmox_sdk-0.0.4.post3.tar.gz", hash = "sha256:3a7fe066d60b7c78c47dad0b70c1940f04dc9601f5dd9727d6e605522d437929", size = 802445, upload-time = "2026-05-15T02:50:14.326Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/59/80fbc2ea6be88aeb745094938f51bcf82d7d30dffe55e30e3a5f99683264/proxmox_sdk-0.0.4.post2-py3-none-any.whl", hash = "sha256:9196d73bdc06b68c96e7c7bb796a24a2b4a2d71f2a06dfc79ffa83ca1cb02b08", size = 856575, upload-time = "2026-05-14T20:03:36.722Z" },
+    { url = "https://files.pythonhosted.org/packages/93/d3/4df714a034705aab9ac37185117289f2635b71c6060097ea885d0bf51ff9/proxmox_sdk-0.0.4.post3-py3-none-any.whl", hash = "sha256:a43698d4fe1f996b8079bd5c660ab1ee3e5bda7915804c735aa74e93344a84d3", size = 867111, upload-time = "2026-05-15T02:50:12.9Z" },
 ]
 
 [[package]]
