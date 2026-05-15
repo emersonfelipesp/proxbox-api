@@ -359,7 +359,7 @@ jobs:
           set -eux
           docker network create proxbox-e2e || true
           SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
-          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15rc4.tar.gz'
+          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15.tar.gz'
           DEV_OVERRIDES='git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main'
 
           docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
@@ -407,7 +407,7 @@ jobs:
             -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http" \
             -e LOGIN_REQUIRED=False \
             --entrypoint /bin/bash \
-            "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${NETBOX_PROXBOX_TARGET}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+            "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${NETBOX_PROXBOX_TARGET}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && i=0 && until /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py migrate --no-input; do i=\$((i+1)); if [ \$i -ge 120 ]; then echo 'migrate exhausted retries'; exit 1; fi; sleep 2; done && /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
 
           docker build --target raw \
             --build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}" \
@@ -630,7 +630,7 @@ jobs:
           set -eux
           docker network create proxbox-e2e || true
           SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
-          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15rc4.tar.gz'
+          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15.tar.gz'
 
           docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
 
@@ -677,7 +677,7 @@ jobs:
             -e ALLOWED_HOSTS="* localhost 127.0.0.1 ::1 netbox-e2e-http" \
             -e LOGIN_REQUIRED=False \
             --entrypoint /bin/bash \
-            "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${NETBOX_PROXBOX_TARGET}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
+            "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${NETBOX_PROXBOX_TARGET}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && i=0 && until /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py migrate --no-input; do i=\$((i+1)); if [ \$i -ge 120 ]; then echo 'migrate exhausted retries'; exit 1; fi; sleep 2; done && /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
 
           docker pull "${PROXBOX_API_IMAGE}:${RELEASE_VERSION}"
           docker run -d --name proxbox-e2e --network proxbox-e2e -p 18081:8000 \
