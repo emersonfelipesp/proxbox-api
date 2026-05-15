@@ -393,6 +393,7 @@ jobs:
 
           docker run -d --name netbox-e2e-http --network proxbox-e2e -p 18080:8000 \
             -e DB_HOST=netbox-e2e-postgres \
+            -e DB_WAIT_TIMEOUT=600 \
             -e DB_NAME=netbox \
             -e DB_USER=netbox \
             -e DB_PASSWORD=netbox \
@@ -661,6 +662,7 @@ jobs:
 
           docker run -d --name netbox-e2e-http --network proxbox-e2e -p 18080:8000 \
             -e DB_HOST=netbox-e2e-postgres \
+            -e DB_WAIT_TIMEOUT=600 \
             -e DB_NAME=netbox \
             -e DB_USER=netbox \
             -e DB_PASSWORD=netbox \
