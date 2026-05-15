@@ -344,7 +344,7 @@ jobs:
         id: proxbox_pkg
         run: |
           if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
-            echo "target=https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15rc12.tar.gz" >> "$GITHUB_OUTPUT"
+            echo "target=https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15.tar.gz" >> "$GITHUB_OUTPUT"
           else
             echo "target=netbox-proxbox" >> "$GITHUB_OUTPUT"
           fi

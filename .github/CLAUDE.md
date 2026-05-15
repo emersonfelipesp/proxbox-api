@@ -35,7 +35,7 @@ ci.yml (push/PR — dev mode E2E only)
 ├── setup             (generates E2E matrix)
 ├── build-netbox-image (only uploads an artifact when the public NetBox image cannot be pulled)
 └── e2e-docker        (needs: test + setup + build-netbox-image; transport × NetBox version matrix)
-    - dev mode:  netbox-proxbox from GitHub develop tarball
+    - dev mode:  netbox-proxbox from pinned GitHub release tag tarball (currently v0.0.15)
                  proxbox-api built from local checkout with DEV_OVERRIDES (netbox-sdk + proxmox-sdk from GitHub)
     - pypi mode: netbox-proxbox from PyPI; proxbox-api built from local checkout without overrides
     - NetBox image handling: each E2E job pulls the public image first and only downloads the source-built artifact when the registry pull fails.
