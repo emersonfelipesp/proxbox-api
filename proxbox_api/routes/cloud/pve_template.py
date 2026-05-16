@@ -279,9 +279,7 @@ async def build_pve_template(
         create_result = await _maybe_await(
             proxmox.session.nodes(req.target_node).qemu.post(**create_kwargs)
         )
-        create_upid = await _wait_for_task(
-            proxmox, node=req.target_node, response=create_result
-        )
+        create_upid = await _wait_for_task(proxmox, node=req.target_node, response=create_result)
 
         return PVETemplateBuildResponse(
             endpoint_id=req.endpoint_id,
