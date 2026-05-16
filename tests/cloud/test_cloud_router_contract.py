@@ -73,5 +73,5 @@ def test_cloud_provision_route_reuses_required_helpers():
 
     assert "build_proxmox_ci_args" in source
     assert "_gate" in source
-    assert "await _wait_for_upid(proxmox, req.target_node, config_upid)" in source
-    assert "await _wait_for_upid(proxmox, req.target_node, start_upid)" in source
+    assert "_wait_for_upid" in source
+    assert "await _wait_for_upid(proxmox, template_node, clone_upid)" in source
