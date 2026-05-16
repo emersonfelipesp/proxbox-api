@@ -375,11 +375,11 @@ def create_app() -> FastAPI:  # noqa: C901
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(APIKeyAuthMiddleware)
 
-    rate_limit_str = os.environ.get("PROXBOX_RATE_LIMIT", "60")
+    rate_limit_str = os.environ.get("PROXBOX_RATE_LIMIT", "300")
     try:
         rate_limit = max(1, int(rate_limit_str))
     except ValueError:
-        rate_limit = 60
+        rate_limit = 300
     app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit)
 
     register_exception_handlers(app)

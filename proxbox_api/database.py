@@ -10,7 +10,7 @@ from typing import Annotated
 
 import bcrypt
 from fastapi import Depends
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -30,6 +30,24 @@ async_engine = create_async_engine(async_sqlite_url, connect_args=connect_args)
 async_session_factory = async_sessionmaker(
     async_engine, class_=AsyncSession, expire_on_commit=False
 )
+
+
+def _apply_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ARG001
+    """Enable WAL journal mode and a 5-second busy timeout on every new connection.
+
+    WAL mode allows concurrent readers alongside a single writer, which prevents
+    'database is locked' errors when multiple requests hit the auth-lockout check
+    simultaneously.  The busy timeout makes writers wait up to 5 s before raising
+    instead of failing immediately.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
+event.listen(engine, "connect", _apply_sqlite_pragmas)
+event.listen(async_engine.sync_engine, "connect", _apply_sqlite_pragmas)
 
 
 class NetBoxEndpoint(SQLModel, table=True):
