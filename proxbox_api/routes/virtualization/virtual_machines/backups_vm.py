@@ -883,16 +883,21 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 all_payloads.append(payload)
 
         if not all_payloads:
-            error_msg = "No backups found to process"
+            warning_msg = "No backups found to process"
             if use_websocket and websocket:
                 await websocket.send_json(
                     {
                         "step": "backups",
                         "status": "warning",
-                        "message": error_msg,
+                        "message": warning_msg,
                     }
                 )
-            raise ProxboxException(message=error_msg)
+            # An empty cluster (no backups configured, or no backups matched to a
+            # NetBox VM) is a valid operational state — not an error.  Return early
+            # so the SSE stream emits complete with ok=True and the full-sync job
+            # continues to the next stage.
+            logger.info("Backup sync: %s — skipping reconcile", warning_msg)
+            return
 
         if use_websocket and websocket:
             await websocket.send_json(
