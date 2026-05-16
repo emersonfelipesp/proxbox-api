@@ -17,7 +17,13 @@ def test_cloud_package_exposes_both_routers():
     assert cloud.provision_router is not None
     assert cloud.template_images_router is not None
     assert cloud.templates_router is not None
-    assert cloud.__all__ == ("provision_router", "template_images_router", "templates_router")
+    assert cloud.pve_template_router is not None
+    assert cloud.__all__ == (
+        "provision_router",
+        "pve_template_router",
+        "template_images_router",
+        "templates_router",
+    )
 
 
 def test_cloud_routes_are_registered_on_app(monkeypatch):

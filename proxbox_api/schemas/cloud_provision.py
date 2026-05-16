@@ -100,3 +100,81 @@ class CloudImageTemplateBuildResponse(BaseModel):
     boot: Optional[str] = None
     scsi0: Optional[str] = None
     ide2: Optional[str] = None
+
+
+class PVETemplateBuildRequest(BaseModel):
+    """Build an unattended Proxmox VE installer template on a Proxmox host.
+
+    The resulting VM, once booted, runs cloud-init against a Debian 12 cloud
+    image and installs a pinned ``proxmox-ve`` release on top. The endpoint
+    handles the parts it can do through the Proxmox API directly (image
+    download + VM create with ``--cicustom``) and returns the rendered
+    cloud-init snippet content alongside the operator-side instructions
+    needed to drop the snippets into ``/var/lib/vz/snippets/`` on the host.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_id: int = Field(..., description="ProxmoxEndpoint primary key")
+    vmid: int = Field(..., ge=100, description="Template VMID to create")
+    name: str = Field("debian12-pve-tmpl", min_length=1, max_length=128)
+    target_node: str = Field(..., min_length=1)
+    debian_image_url: str = Field(
+        "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
+        min_length=1,
+        description="HTTP(S) URL for the Debian 12 generic cloud image",
+    )
+    image_filename: str | None = Field(
+        None,
+        description="Filename to store in Proxmox import storage; .img is normalized to .qcow2",
+    )
+    image_storage: str = Field("local", min_length=1)
+    vm_storage: str = Field("local-lvm", min_length=1)
+    snippets_storage: str = Field("local", min_length=1)
+    bridge: str = Field("vmbr0", min_length=1)
+    memory_mb: int = Field(4096, ge=512)
+    cores: int = Field(4, ge=1)
+    nic_name: str = Field("ens18", min_length=1)
+    hostname: str = Field("pve-node-01", min_length=1)
+    domain: str = Field("nmulti.local", min_length=1)
+    node_cidr: str = Field("10.0.30.50/24", min_length=1)
+    gateway: str = Field("10.0.30.1", min_length=1)
+    nameservers: list[str] = Field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])
+    pve_version_pin: str = Field("9.1.11", min_length=1)
+    debian_release: str = Field("bookworm", min_length=1)
+    ssh_authorized_keys: list[str] = Field(
+        default_factory=list,
+        description="Operator SSH public keys to inject as root authorized_keys",
+    )
+    verify_image_certificates: bool = True
+    create_vm: bool = Field(
+        True,
+        description="If false, only render cloud-init payloads and do not touch Proxmox.",
+    )
+
+
+class PVETemplateBuildResponse(BaseModel):
+    """Result of a PVE template build request.
+
+    The response always carries the rendered cloud-init payloads so callers
+    (UI or operator) can persist them into the host's snippets directory.
+    ``status`` summarizes whether the API created the VM, or just rendered
+    the payloads (``create_vm=false``), or detected an existing VMID.
+    """
+
+    endpoint_id: int
+    target_node: str
+    vmid: int
+    name: str
+    status: str
+    image_volid: str
+    snippet_user_data_path: str
+    snippet_network_config_path: str
+    snippet_meta_data_path: str
+    user_data: str
+    network_config: str
+    meta_data: str
+    qm_cicustom: str
+    operator_instructions: str
+    download_upid: Optional[str] = None
+    create_upid: Optional[str] = None
