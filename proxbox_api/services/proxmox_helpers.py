@@ -187,6 +187,12 @@ async def get_ha_groups(
     With no ``group``, returns the list of HA group rows. With a ``group``
     name, returns the full group detail dictionary (the upstream schema is
     a permissive ``dict[str, object]``).
+
+    PVE 9.x note: ``cluster/ha/groups`` was removed in favour of
+    ``cluster/ha/rules`` and returns HTTP 500 with "ha groups have been
+    migrated to rules".  When that specific error is detected the helper
+    returns an empty result (list or dict) at DEBUG level so callers degrade
+    gracefully instead of surfacing a noisy ERROR traceback.
     """
     try:
         if group is None:
@@ -202,9 +208,53 @@ async def get_ha_groups(
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for HA groups", original_error=error
         )
+    except ResourceException as exc:
+        # PVE 9.x removed cluster/ha/groups — degrade gracefully instead of surfacing an error.
+        if exc.status_code == 500 and "migrated to rules" in str(exc).lower():
+            logger.debug(
+                "cluster/ha/groups not available on this node (PVE 9.x+, migrated to rules): %s",
+                exc,
+            )
+            return [] if group is None else {}
+        raise ProxmoxAPIError(
+            message="Proxmox HA groups request failed",
+            original_error=exc,
+        )
     except Exception as error:
         raise ProxmoxAPIError(
             message="Error fetching Proxmox HA groups",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def get_ha_rules(
+    session: ProxmoxSession,
+    rule: str | None = None,
+) -> list[dict[str, object]] | dict[str, object]:
+    """Get HA rules from Proxmox (PVE 9.x+).
+
+    ``cluster/ha/groups`` was replaced by ``cluster/ha/rules`` in PVE 9.x.
+    With no ``rule``, returns the list of rule rows.  With a ``rule``
+    identifier, returns the full rule detail dictionary.
+    """
+    try:
+        if rule is None:
+            result = await resolve_async(session.session("cluster/ha/rules").get())
+            return result if isinstance(result, list) else []
+        result = await resolve_async(session.session(f"cluster/ha/rules/{rule}").get())
+        return result if isinstance(result, dict) else {}
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox HA rules request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for HA rules", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox HA rules",
             original_error=error,
         )
 

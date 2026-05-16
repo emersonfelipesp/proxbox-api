@@ -1,8 +1,16 @@
 """Proxmox cluster High-Availability endpoints (read-only).
 
-Surfaces `/cluster/ha/status/current`, `/cluster/ha/resources`, and
-`/cluster/ha/groups` from Proxmox so the netbox-proxbox plugin can render
-HA state on the NetBox VM detail page and a cluster-wide HA page.
+Surfaces `/cluster/ha/status/current`, `/cluster/ha/resources`,
+`/cluster/ha/groups` (PVE ≤ 8.x), and `/cluster/ha/rules` (PVE 9.x+)
+from Proxmox so the netbox-proxbox plugin can render HA state on the
+NetBox VM detail page and a cluster-wide HA page.
+
+PVE 9.x removed `cluster/ha/groups` in favour of `cluster/ha/rules`.
+The `/ha/groups` endpoint degrades to an empty list on PVE 9.x clusters
+(the helper detects the "migrated to rules" HTTP 500 and returns `[]`
+silently).  Use the new `/ha/rules` endpoint for PVE 9.x HA rule data.
+`/ha/summary` now includes both `groups` and `rules` so consumers can
+handle mixed-version clusters.
 
 All endpoints are read-only by design. HA mutations (add/remove/migrate)
 are intentionally out of scope and will land in a follow-up release.
@@ -19,6 +27,7 @@ from proxbox_api.logger import logger
 from proxbox_api.services.proxmox_helpers import (
     get_ha_groups,
     get_ha_resources,
+    get_ha_rules,
     get_ha_status_current,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -70,7 +79,7 @@ class HaResourceSchema(BaseModel):
 
 
 class HaGroupSchema(BaseModel):
-    """An HA group definition."""
+    """An HA group definition (PVE ≤ 8.x)."""
 
     cluster_name: str | None = None
     group: str | None = None
@@ -82,17 +91,42 @@ class HaGroupSchema(BaseModel):
     digest: str | None = None
 
 
+class HaRuleSchema(BaseModel):
+    """An HA rule definition (PVE 9.x+).
+
+    PVE 9.x replaced ``cluster/ha/groups`` with ``cluster/ha/rules``.
+    Rules carry ``type`` (``node-affinity`` / ``resource-affinity``),
+    optional ``affinity`` (``positive`` / ``negative``), and a
+    ``resources`` selector string instead of a plain group name.
+    """
+
+    cluster_name: str | None = None
+    rule: str | None = None
+    type: str | None = None
+    affinity: str | None = None
+    nodes: str | None = None
+    resources: str | None = None
+    strict: bool | None = None
+    disable: bool | None = None
+    comment: str | None = None
+
+
 class HaSummarySchema(BaseModel):
     """Single-call payload for the cluster-wide HA page.
 
-    Aggregates status/groups/resources across every configured Proxmox
-    cluster so the NetBox plugin doesn't fan out four HTTP requests per
-    page render.
+    Aggregates status/groups/resources/rules across every configured
+    Proxmox cluster so the NetBox plugin doesn't fan out multiple HTTP
+    requests per page render.
+
+    ``groups`` is populated for PVE ≤ 8.x clusters; ``rules`` is
+    populated for PVE 9.x+ clusters.  Both default to ``[]`` so
+    mixed-version and single-version deployments work without changes.
     """
 
-    status: list[HaStatusItemSchema]
-    groups: list[HaGroupSchema]
-    resources: list[HaResourceSchema]
+    status: list[HaStatusItemSchema] = []
+    groups: list[HaGroupSchema] = []
+    resources: list[HaResourceSchema] = []
+    rules: list[HaRuleSchema] = []
 
 
 def _coerce_int(value: object) -> int | None:
@@ -182,6 +216,20 @@ def _group_to_schema(cluster_name: str, row: dict[str, object]) -> HaGroupSchema
         nofailback=_coerce_bool(row.get("nofailback")),
         comment=row.get("comment") if isinstance(row.get("comment"), str) else None,
         digest=row.get("digest") if isinstance(row.get("digest"), str) else None,
+    )
+
+
+def _rule_to_schema(cluster_name: str, row: dict[str, object]) -> HaRuleSchema:
+    return HaRuleSchema(
+        cluster_name=cluster_name,
+        rule=row.get("rule") if isinstance(row.get("rule"), str) else None,
+        type=row.get("type") if isinstance(row.get("type"), str) else None,
+        affinity=row.get("affinity") if isinstance(row.get("affinity"), str) else None,
+        nodes=row.get("nodes") if isinstance(row.get("nodes"), str) else None,
+        resources=row.get("resources") if isinstance(row.get("resources"), str) else None,
+        strict=_coerce_bool(row.get("strict")),
+        disable=_coerce_bool(row.get("disable")),
+        comment=row.get("comment") if isinstance(row.get("comment"), str) else None,
     )
 
 
@@ -310,23 +358,65 @@ async def ha_group_detail(pxs: ProxmoxSessionsDep, group: str) -> HaGroupSchema 
     return None
 
 
+@router.get("/ha/rules", response_model=list[HaRuleSchema])
+async def ha_rules(pxs: ProxmoxSessionsDep) -> list[HaRuleSchema]:
+    """List configured HA rules across all clusters (PVE 9.x+).
+
+    PVE 9.x replaced ``cluster/ha/groups`` with ``cluster/ha/rules``.
+    Returns an empty list on pre-9.x clusters where the endpoint does not
+    exist.
+    """
+    aggregated: list[HaRuleSchema] = []
+    for px in pxs:
+        try:
+            rows = await get_ha_rules(px)
+        except Exception:  # noqa: BLE001
+            logger.exception("Error fetching HA rules for Proxmox cluster %s", px.name)
+            continue
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            rule_id = row.get("rule")
+            detail: dict[str, object] = dict(row)
+            if isinstance(rule_id, str):
+                try:
+                    detail_payload = await get_ha_rules(px, rule=rule_id)
+                    if isinstance(detail_payload, dict):
+                        detail = {**detail, **detail_payload}
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "HA rule detail fetch failed for %s on %s",
+                        rule_id,
+                        px.name,
+                    )
+            aggregated.append(_rule_to_schema(px.name, detail))
+    return aggregated
+
+
 @router.get("/ha/summary", response_model=HaSummarySchema)
 async def ha_summary(pxs: ProxmoxSessionsDep) -> HaSummarySchema:
-    """Return a single envelope of status, groups, and resources.
+    """Return a single envelope of status, groups, resources, and rules.
 
-    Calls the three underlying handlers in parallel via `asyncio.gather`
+    Calls the four underlying handlers in parallel via `asyncio.gather`
     so the NetBox cluster-wide HA page only triggers one round-trip.
+    ``groups`` is populated for PVE ≤ 8.x; ``rules`` is populated for
+    PVE 9.x+.  Both default to ``[]`` when the node type does not support
+    the respective endpoint.
     """
     status_task = asyncio.create_task(ha_status(pxs))
     groups_task = asyncio.create_task(ha_groups(pxs))
     resources_task = asyncio.create_task(ha_resources(pxs))
-    status_rows, group_rows, resource_rows = await asyncio.gather(
-        status_task, groups_task, resources_task
+    rules_task = asyncio.create_task(ha_rules(pxs))
+    status_rows, group_rows, resource_rows, rule_rows = await asyncio.gather(
+        status_task, groups_task, resources_task, rules_task
     )
     return HaSummarySchema(
         status=status_rows,
         groups=group_rows,
         resources=resource_rows,
+        rules=rule_rows,
     )
 
 
