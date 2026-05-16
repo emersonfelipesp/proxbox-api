@@ -22,6 +22,6 @@ def test_cloud_template_image_build_route_creates_bootable_cloudinit_template() 
         "import-from",
         '"boot": "order=scsi0"',
         '"ide2": f"{req.vm_storage}:cloudinit"',
-        ".template.post(disk=\"scsi0\")",
+        '.template.post(disk="scsi0")',
     ):
         assert token in src

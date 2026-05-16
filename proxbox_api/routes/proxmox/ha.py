@@ -19,6 +19,8 @@ are intentionally out of scope and will land in a follow-up release.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -30,7 +32,9 @@ from proxbox_api.services.proxmox_helpers import (
     get_ha_rules,
     get_ha_status_current,
 )
-from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
+
+_T = TypeVar("_T")
 
 router = APIRouter()
 
@@ -155,6 +159,11 @@ def _coerce_bool(value: object) -> bool | None:
     return None
 
 
+def _str(row: dict[str, object], key: str) -> str | None:
+    v = row.get(key)
+    return v if isinstance(v, str) else None
+
+
 def _status_item_to_schema(cluster_name: str, item: object) -> HaStatusItemSchema:
     if hasattr(item, "model_dump"):
         data = item.model_dump(mode="python", by_alias=True, exclude_none=True)
@@ -209,27 +218,27 @@ def _resource_to_schema(
 def _group_to_schema(cluster_name: str, row: dict[str, object]) -> HaGroupSchema:
     return HaGroupSchema(
         cluster_name=cluster_name,
-        group=row.get("group") if isinstance(row.get("group"), str) else None,
-        type=row.get("type") if isinstance(row.get("type"), str) else None,
-        nodes=row.get("nodes") if isinstance(row.get("nodes"), str) else None,
+        group=_str(row, "group"),
+        type=_str(row, "type"),
+        nodes=_str(row, "nodes"),
         restricted=_coerce_bool(row.get("restricted")),
         nofailback=_coerce_bool(row.get("nofailback")),
-        comment=row.get("comment") if isinstance(row.get("comment"), str) else None,
-        digest=row.get("digest") if isinstance(row.get("digest"), str) else None,
+        comment=_str(row, "comment"),
+        digest=_str(row, "digest"),
     )
 
 
 def _rule_to_schema(cluster_name: str, row: dict[str, object]) -> HaRuleSchema:
     return HaRuleSchema(
         cluster_name=cluster_name,
-        rule=row.get("rule") if isinstance(row.get("rule"), str) else None,
-        type=row.get("type") if isinstance(row.get("type"), str) else None,
-        affinity=row.get("affinity") if isinstance(row.get("affinity"), str) else None,
-        nodes=row.get("nodes") if isinstance(row.get("nodes"), str) else None,
-        resources=row.get("resources") if isinstance(row.get("resources"), str) else None,
+        rule=_str(row, "rule"),
+        type=_str(row, "type"),
+        affinity=_str(row, "affinity"),
+        nodes=_str(row, "nodes"),
+        resources=_str(row, "resources"),
         strict=_coerce_bool(row.get("strict")),
         disable=_coerce_bool(row.get("disable")),
-        comment=row.get("comment") if isinstance(row.get("comment"), str) else None,
+        comment=_str(row, "comment"),
     )
 
 
@@ -311,36 +320,52 @@ async def ha_resource_by_vm(pxs: ProxmoxSessionsDep, vmid: int) -> HaResourceSch
     return None
 
 
-@router.get("/ha/groups", response_model=list[HaGroupSchema])
-async def ha_groups(pxs: ProxmoxSessionsDep) -> list[HaGroupSchema]:
-    """List configured HA groups across all clusters."""
-    aggregated: list[HaGroupSchema] = []
+async def _aggregate_ha_items(
+    pxs: ProxmoxSessionsDep,
+    list_fn: Callable[[ProxmoxSession], Awaitable[object]],
+    detail_fn: Callable[[ProxmoxSession, str], Awaitable[object]],
+    id_key: str,
+    to_schema: Callable[[str, dict[str, object]], _T],
+    error_label: str,
+) -> list[_T]:
+    aggregated: list[_T] = []
     for px in pxs:
         try:
-            rows = await get_ha_groups(px)
-        except Exception:
-            logger.exception("Error fetching HA groups for Proxmox cluster %s", px.name)
+            rows = await list_fn(px)
+        except Exception:  # noqa: BLE001
+            logger.exception("Error fetching %s for Proxmox cluster %s", error_label, px.name)
             continue
         if not isinstance(rows, list):
             continue
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            group_name = row.get("group")
+            item_id = row.get(id_key)
             detail: dict[str, object] = dict(row)
-            if isinstance(group_name, str):
+            if isinstance(item_id, str):
                 try:
-                    detail_payload = await get_ha_groups(px, group=group_name)
+                    detail_payload = await detail_fn(px, item_id)
                     if isinstance(detail_payload, dict):
                         detail = {**detail, **detail_payload}
                 except Exception:  # noqa: BLE001
                     logger.debug(
-                        "HA group detail fetch failed for %s on %s",
-                        group_name,
-                        px.name,
+                        "%s detail fetch failed for %s on %s", error_label, item_id, px.name
                     )
-            aggregated.append(_group_to_schema(px.name, detail))
+            aggregated.append(to_schema(px.name, detail))
     return aggregated
+
+
+@router.get("/ha/groups", response_model=list[HaGroupSchema])
+async def ha_groups(pxs: ProxmoxSessionsDep) -> list[HaGroupSchema]:
+    """List configured HA groups across all clusters."""
+    return await _aggregate_ha_items(
+        pxs,
+        list_fn=lambda px: get_ha_groups(px),
+        detail_fn=lambda px, v: get_ha_groups(px, group=v),
+        id_key="group",
+        to_schema=_group_to_schema,
+        error_label="HA groups",
+    )
 
 
 @router.get("/ha/groups/{group}", response_model=HaGroupSchema | None)
@@ -366,33 +391,14 @@ async def ha_rules(pxs: ProxmoxSessionsDep) -> list[HaRuleSchema]:
     Returns an empty list on pre-9.x clusters where the endpoint does not
     exist.
     """
-    aggregated: list[HaRuleSchema] = []
-    for px in pxs:
-        try:
-            rows = await get_ha_rules(px)
-        except Exception:  # noqa: BLE001
-            logger.exception("Error fetching HA rules for Proxmox cluster %s", px.name)
-            continue
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            rule_id = row.get("rule")
-            detail: dict[str, object] = dict(row)
-            if isinstance(rule_id, str):
-                try:
-                    detail_payload = await get_ha_rules(px, rule=rule_id)
-                    if isinstance(detail_payload, dict):
-                        detail = {**detail, **detail_payload}
-                except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "HA rule detail fetch failed for %s on %s",
-                        rule_id,
-                        px.name,
-                    )
-            aggregated.append(_rule_to_schema(px.name, detail))
-    return aggregated
+    return await _aggregate_ha_items(
+        pxs,
+        list_fn=lambda px: get_ha_rules(px),
+        detail_fn=lambda px, v: get_ha_rules(px, rule=v),
+        id_key="rule",
+        to_schema=_rule_to_schema,
+        error_label="HA rules",
+    )
 
 
 @router.get("/ha/summary", response_model=HaSummarySchema)

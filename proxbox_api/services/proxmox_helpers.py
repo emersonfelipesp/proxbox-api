@@ -252,6 +252,13 @@ async def get_ha_rules(
         raise ProxmoxAPIError(
             message="Unable to connect to Proxmox for HA rules", original_error=error
         )
+    except ResourceException as exc:
+        # cluster/ha/rules does not exist on PVE < 9.x — degrade gracefully.
+        logger.debug(
+            "cluster/ha/rules not available on this node (PVE < 9.x or endpoint absent): %s",
+            exc,
+        )
+        return [] if rule is None else {}
     except Exception as error:
         raise ProxmoxAPIError(
             message="Error fetching Proxmox HA rules",
