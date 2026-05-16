@@ -1,5 +1,6 @@
 """Cloud Portal provisioning routes."""
 
+from proxbox_api.routes.cloud.cloud_init_templates import versions_router
 from proxbox_api.routes.cloud.provision import router as provision_router
 from proxbox_api.routes.cloud.pve_template import router as pve_template_router
 from proxbox_api.routes.cloud.template_images import router as template_images_router
@@ -10,4 +11,5 @@ __all__ = (
     "pve_template_router",
     "template_images_router",
     "templates_router",
+    "versions_router",
 )

@@ -127,6 +127,7 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 "proxbox_api/routes/proxmox/cluster.py" = ["F403", "F405", "ANN201", "D103"]
 # C901: inherently complex retry/ reconcile functions
 "proxbox_api/netbox_rest.py" = ["C901"]
+"proxbox_api/routes/cloud/template_images.py" = ["C901"]
 "proxbox_api/routes/virtualization/virtual_machines/sync_vm.py" = ["C901"]
 "proxbox_api/services/sync/vm_coordinator.py" = ["C901"]
 

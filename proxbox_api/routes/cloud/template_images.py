@@ -10,11 +10,16 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
+from proxbox_api.routes.cloud.cloud_init_templates import (
+    find_product_version,
+    generate_cloud_init_userdata,
+)
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.schemas.cloud_provision import (
     CloudImageTemplateBuildRequest,
     CloudImageTemplateBuildResponse,
+    ProxmoxProductType,
 )
 from proxbox_api.session.proxmox import ProxmoxSession
 from proxbox_api.ssrf import validate_endpoint_url
@@ -120,6 +125,19 @@ async def build_cloud_image_template(
             detail=f"image_url rejected by SSRF protection: {reason}",
         )
 
+    generated_userdata: str | None = None
+    if req.product_type != ProxmoxProductType.pve:
+        pv = find_product_version(req.product_type, req.product_version)
+        if pv is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"No catalog entry for product_type={req.product_type.value!r}"
+                    f" version={req.product_version!r}."
+                ),
+            )
+        generated_userdata = generate_cloud_init_userdata(req.product_type, pv)
+
     proxmox: ProxmoxSession | None = None
     try:
         proxmox = await _open_proxmox_session(gated)
@@ -140,6 +158,7 @@ async def build_cloud_image_template(
                     boot=existing.get("boot"),
                     scsi0=existing.get("scsi0"),
                     ide2=existing.get("ide2"),
+                    generated_userdata=generated_userdata,
                 )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -189,8 +208,11 @@ async def build_cloud_image_template(
         }
         if req.cpu:
             create_kwargs["cpu"] = req.cpu
-        if req.description:
-            create_kwargs["description"] = req.description
+        description_parts = [req.description] if req.description else []
+        if generated_userdata:
+            description_parts.append(f"cloud-init user-data:\n{generated_userdata}")
+        if description_parts:
+            create_kwargs["description"] = "\n\n".join(description_parts)
         create_result = await _maybe_await(
             proxmox.session.nodes(req.target_node).qemu.post(**create_kwargs)
         )
@@ -224,6 +246,7 @@ async def build_cloud_image_template(
             boot=config.get("boot"),
             scsi0=config.get("scsi0"),
             ide2=config.get("ide2"),
+            generated_userdata=generated_userdata,
         )
     finally:
         if proxmox is not None:
