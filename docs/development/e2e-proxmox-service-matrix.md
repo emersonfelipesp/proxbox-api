@@ -250,5 +250,5 @@ exposes the requested service tag.
 - The pytest marker gating changes — update
   [Pytest Markers and CI Wiring](#pytest-markers-and-ci-wiring).
 
-Keep [`docs/pt-BR/development/e2e-proxmox-service-matrix.md`](../pt-BR/development/e2e-proxmox-service-matrix.md)
-in sync with this file when content changes.
+Keep `docs/pt-BR/development/e2e-proxmox-service-matrix.md` in sync with this
+file when content changes.

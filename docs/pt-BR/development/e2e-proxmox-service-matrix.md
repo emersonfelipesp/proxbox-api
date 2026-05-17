@@ -252,5 +252,5 @@ expoe a tag de servico solicitada.
 - A protecao por marker do pytest mudar — atualize
   [Markers pytest e cabos do CI](#markers-pytest-e-cabos-do-ci).
 
-Mantenha [`docs/development/e2e-proxmox-service-matrix.md`](../../development/e2e-proxmox-service-matrix.md)
-sincronizado com este arquivo quando o conteudo mudar.
+Mantenha `docs/development/e2e-proxmox-service-matrix.md` sincronizado com este
+arquivo quando o conteudo mudar.
