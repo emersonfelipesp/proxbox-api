@@ -1,10 +1,17 @@
 """Cloud-init driven VM provisioning schemas."""
 
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from proxbox_api.routes.intent.cloud_init import CloudInitPayload
+
+
+class ProxmoxProductType(str, Enum):
+    pve = "pve"
+    pbs = "pbs"
+    pdm = "pdm"
 
 
 class CloudVMProvisionRequest(BaseModel):
@@ -85,6 +92,8 @@ class CloudImageTemplateBuildRequest(BaseModel):
     cpu: str | None = Field("host")
     verify_image_certificates: bool = True
     description: str | None = Field(None, max_length=8192)
+    product_type: ProxmoxProductType = ProxmoxProductType.pve
+    product_version: str | None = Field(None, description="Proxmox product version; None = latest in catalog")
 
 
 class CloudImageTemplateBuildResponse(BaseModel):
@@ -100,6 +109,7 @@ class CloudImageTemplateBuildResponse(BaseModel):
     boot: Optional[str] = None
     scsi0: Optional[str] = None
     ide2: Optional[str] = None
+    generated_userdata: Optional[str] = None
 
 
 class PVETemplateBuildRequest(BaseModel):

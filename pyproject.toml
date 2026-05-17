@@ -51,11 +51,9 @@ docs = [
 granian = [
     "granian>=2.7.4",
 ]
-# NOTE: the `pbs` optional extra will land once proxmox-sdk 0.0.4 (which adds
-# the `proxmox_sdk.pbs` namespace and its own `[pbs]` extra) is published. The
-# subpackage at `proxbox_api/pbs/` already ships in the wheel; importing
-# `proxbox_api.pbs.session` raises ImportError until the SDK release exposes
-# the namespace, at which point routes start serving against a real PBS.
+pbs = [
+    "proxmox-sdk[pbs]==0.0.5.post1",
+]
 
 [dependency-groups]
 dev = [
@@ -127,6 +125,7 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 "proxbox_api/routes/proxmox/cluster.py" = ["F403", "F405", "ANN201", "D103"]
 # C901: inherently complex retry/ reconcile functions
 "proxbox_api/netbox_rest.py" = ["C901"]
+"proxbox_api/routes/cloud/template_images.py" = ["C901"]
 "proxbox_api/routes/virtualization/virtual_machines/sync_vm.py" = ["C901"]
 "proxbox_api/services/sync/vm_coordinator.py" = ["C901"]
 

@@ -6,6 +6,7 @@ for testing the proxbox-api sync functionality.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -130,6 +131,17 @@ class MockProxmoxCluster:
         return self
 
 
+def _resolve_proxmox_service(service: str = "pve") -> str:
+    """Resolve the active Proxmox mock service for E2E fixture data."""
+    selected = os.environ.get("PROXMOX_SERVICE", service) if service == "pve" else service
+    return (selected or "pve").strip().lower() or "pve"
+
+
+def _empty_cluster(name: str, service: str) -> MockProxmoxCluster:
+    """Return a service-labeled cluster shell for non-PVE mock services."""
+    return MockProxmoxCluster(name=name, mode=service)
+
+
 class MockProxmoxBackup:
     """Represents a Proxmox VM backup."""
 
@@ -168,17 +180,21 @@ class MockProxmoxBackup:
         }
 
 
-def create_minimal_cluster(prefix: str = "e2e-minimal") -> MockProxmoxCluster:
+def create_minimal_cluster(prefix: str = "e2e-minimal", service: str = "pve") -> MockProxmoxCluster:
     """Create a minimal cluster for e2e testing.
 
     Single node with 2 VMs (1 QEMU, 1 LXC).
     """
+    service = _resolve_proxmox_service(service)
     node_name = f"{prefix}-node-01"
     cluster_name = f"{prefix}-cluster"
 
+    if service != "pve":
+        return _empty_cluster(cluster_name, service)
+
     cluster = MockProxmoxCluster(
         name=cluster_name,
-        mode="pve",
+        mode=service,
         nodes=[
             MockProxmoxNode(
                 name=node_name,
@@ -224,18 +240,24 @@ def create_minimal_cluster(prefix: str = "e2e-minimal") -> MockProxmoxCluster:
     return cluster
 
 
-def create_multi_cluster(prefix: str = "e2e-multi") -> list[MockProxmoxCluster]:
+def create_multi_cluster(
+    prefix: str = "e2e-multi", service: str = "pve"
+) -> list[MockProxmoxCluster]:
     """Create multiple clusters for e2e testing.
 
     Two clusters, each with 2 nodes and 3 VMs.
     """
+    service = _resolve_proxmox_service(service)
+    if service != "pve":
+        return [_empty_cluster(f"{prefix}-cluster", service)]
+
     clusters = []
 
     for i in range(1, 3):
         cluster_name = f"{prefix}-cluster-{i:02d}"
         cluster = MockProxmoxCluster(
             name=cluster_name,
-            mode="pve",
+            mode=service,
             nodes=[
                 MockProxmoxNode(
                     name=f"{prefix}-node-{i:02d}-01",
@@ -280,10 +302,12 @@ def create_multi_cluster(prefix: str = "e2e-multi") -> list[MockProxmoxCluster]:
 
 
 def create_cluster_with_backups(
-    prefix: str = "e2e-backup",
+    prefix: str = "e2e-backup", service: str = "pve"
 ) -> tuple[MockProxmoxCluster, list[MockProxmoxBackup]]:
     """Create a cluster with VMs that have backup metadata."""
-    cluster = create_minimal_cluster(prefix)
+    cluster = create_minimal_cluster(prefix, service=service)
+    if cluster.mode != "pve":
+        return cluster, []
 
     backups = []
     base_time = int(time.time())
@@ -321,6 +345,7 @@ def create_custom_cluster(
     nodes_spec: list[tuple[str, str, int]],
     vms_spec: list[tuple[int, str, str, str, int, int, int]],
     prefix: str = "e2e",
+    service: str = "pve",
 ) -> MockProxmoxCluster:
     """Create a custom cluster with specified nodes and VMs.
 
@@ -329,11 +354,16 @@ def create_custom_cluster(
         nodes_spec: List of (node_name, status, uptime) tuples.
         vms_spec: List of (vmid, name, node, type, maxcpu, maxmem, maxdisk) tuples.
         prefix: Prefix for resource naming.
+        service: Proxmox mock service name. Non-PVE services return an empty shell.
 
     Returns:
         MockProxmoxCluster with specified configuration.
     """
-    cluster = MockProxmoxCluster(name=name, mode="pve")
+    service = _resolve_proxmox_service(service)
+    if service != "pve":
+        return _empty_cluster(name, service)
+
+    cluster = MockProxmoxCluster(name=name, mode=service)
 
     for node_name, status, uptime in nodes_spec:
         cluster.nodes.append(

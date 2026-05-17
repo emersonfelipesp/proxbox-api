@@ -283,3 +283,26 @@ See `proxbox_api/types/CLAUDE.md` for complete typing guidelines.
 3. Keep route modules focused on request orchestration and response shaping.
 4. Add or update tests for new behavior.
 5. Regenerate generated artifacts instead of editing them by hand.
+
+## Branch Cleanup Policy
+
+Always delete a feature branch (locally and on the remote) immediately after it
+has been merged into its target branch. This applies to every branch — feature,
+fix, security, chore, release-prep — and to merges done locally or via a pull
+request.
+
+After a merge:
+
+1. Remove the task worktree first if one exists:
+   `git worktree remove ../proxbox-api.worktrees/<slug>`.
+2. Delete the local branch: `git branch -d <branch>` (use `-D` only if Git
+   reports the branch as unmerged after you have confirmed it really is merged).
+3. Delete the remote branch if it was ever pushed:
+   `git push origin --delete <branch>`. If `git ls-remote --heads origin <branch>`
+   returns nothing, the remote already has no copy and this step is a no-op.
+4. Run `git fetch --prune` (or `git remote prune origin`) so stale
+   `origin/<branch>` refs disappear from local listings.
+
+Never leave merged branches lingering. The only branches that should persist
+long-term are `main`, active release branches, and any branch the user has
+explicitly asked to keep.

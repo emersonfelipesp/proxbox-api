@@ -1731,6 +1731,9 @@ e2e = [
 granian = [
     { name = "granian" },
 ]
+pbs = [
+    { name = "proxmox-sdk" },
+]
 playwright = [
     { name = "playwright" },
 ]
@@ -1776,7 +1779,7 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.6.1" },
     { name = "sqlmodel", specifier = "==0.0.38" },
 ]
-provides-extras = ["test", "e2e", "playwright", "docs", "granian"]
+provides-extras = ["test", "e2e", "playwright", "docs", "granian", "pbs"]
 
 [package.metadata.requires-dev]
 dev = [
