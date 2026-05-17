@@ -142,9 +142,7 @@ async def _sync_one(  # noqa: C901 — explicit branching keeps the loop linear
                     stores = await client.pbs.datastores(str(remote_id))
                     ds_total += len(stores)
                 except Exception as exc:  # noqa: BLE001
-                    summary.errors.append(
-                        f"remote {remote_id}: {type(exc).__name__}: {exc}"
-                    )
+                    summary.errors.append(f"remote {remote_id}: {type(exc).__name__}: {exc}")
             if resource == "datastores":
                 summary.fetched = ds_total
             else:

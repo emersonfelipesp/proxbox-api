@@ -154,7 +154,9 @@ def render_packer_workdir(
     request: PackerImageBuildRequest,
     workdir: Path,
 ) -> RenderedPackerWorkdir:
-    provisioner_path = _copy_static_assets(workdir, request.provisioner_recipe, builder_type=request.builder_type)
+    provisioner_path = _copy_static_assets(
+        workdir, request.provisioner_recipe, builder_type=request.builder_type
+    )
     variables = build_packer_variables(request)
     var_file = workdir / "build.auto.pkrvars.json"
     var_file.write_text(json.dumps(variables, indent=2, sort_keys=True) + "\n")
