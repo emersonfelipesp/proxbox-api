@@ -1703,7 +1703,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.11.post1"
+version = "0.0.11.post2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1769,7 +1769,6 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
     { name = "proxmox-sdk", specifier = "==0.0.5.post1" },
-    { name = "proxmox-sdk", extras = ["pbs"], marker = "extra == 'pbs'", specifier = "==0.0.5.post1" },
     { name = "pydantic", specifier = "==2.13.3" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
