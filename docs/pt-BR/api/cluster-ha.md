@@ -2,7 +2,7 @@
 
 Endpoints somente leitura de Alta Disponibilidade do Proxmox, agregados entre todos os clusters configurados. Atendem a aba **HA** na pagina de detalhe da VM e a pagina **HA Status** no nivel de cluster, adicionadas pelo `netbox-proxbox` v0.0.15+ para a [issue #243](https://github.com/emersonfelipesp/netbox-proxbox/issues/243).
 
-- **Disponivel desde:** proxbox-api `v0.0.11`. O floor correspondente do consumidor e `netbox-proxbox >= 0.0.15` — versoes anteriores do plugin nao chamam estes paths.
+- **Disponivel desde:** proxbox-api `v0.0.11`. O floor correspondente do consumidor e `netbox-proxbox >= 0.0.16` — versoes anteriores do plugin nao chamam estes paths.
 - **Mutacoes ficam fora do escopo intencionalmente.** Adicionar/remover recurso, migrar/realocar e CRUD de grupos HA nao sao expostos aqui e podem entrar em uma release seguinte.
 - **Paths de origem no Proxmox:** `/cluster/ha/status/current`, `/cluster/ha/resources`, `/cluster/ha/groups`. O router agrega resultados de cada `ProxmoxSession` configurada no backend; uma unica requisicao gera uma chamada por cluster.
 

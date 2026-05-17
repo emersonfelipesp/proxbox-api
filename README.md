@@ -74,7 +74,7 @@ docker run -d -p 8000:8000 proxbox-api:raw
 Plain HTTP requests to the TLS port return a structured JSON `400` body
 (`{"error":"plain_http_on_https_port", ...}`) instead of nginx's stock 400 page,
 so clients can detect the misconfiguration. When wiring this image into the
-NetBox `netbox-proxbox` plugin (>= 0.0.15), set **Use HTTPS** ✓ and (if using
+NetBox `netbox-proxbox` plugin (>= 0.0.16), set **Use HTTPS** ✓ and (if using
 the bundled mkcert cert) **Verify SSL** ✗ on the FastAPI endpoint —
 [netbox-proxbox#352](https://github.com/emersonfelipesp/netbox-proxbox/issues/352).
 

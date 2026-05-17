@@ -2,7 +2,7 @@
 
 Read-only Proxmox High-Availability endpoints aggregated across every configured cluster. Power the **HA tab** on the NetBox VM detail page and the **cluster-wide HA Status** page added by `netbox-proxbox` v0.0.15+ for [issue #243](https://github.com/emersonfelipesp/netbox-proxbox/issues/243).
 
-- **Available since:** proxbox-api `v0.0.11`. The matching consumer floor is `netbox-proxbox >= 0.0.15` — older plugin builds do not call these paths.
+- **Available since:** proxbox-api `v0.0.11`. The matching consumer floor is `netbox-proxbox >= 0.0.16` — older plugin builds do not call these paths.
 - **Mutations are intentionally out of scope.** Adding/removing a resource, migrating, relocating, or any HA group CRUD is not exposed here and may land in a follow-up release.
 - **Source paths on Proxmox:** `/cluster/ha/status/current`, `/cluster/ha/resources`, `/cluster/ha/groups`. The router merges results across every `ProxmoxSession` configured in the backend, so a single request fans out one call per cluster.
 

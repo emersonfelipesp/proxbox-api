@@ -17,12 +17,12 @@ on:
           - pypi
         default: testpypi
       source_ref:
-        description: "Version tag to publish, for example v0.0.15 or v0.0.15rc1. Empty uses the workflow ref."
+        description: "Version tag to publish, for example v0.0.16 or v0.0.16rc1. Empty uses the workflow ref."
         required: false
         type: string
         default: ""
       expected_version:
-        description: "Optional guard without the leading v, for example 0.0.15."
+        description: "Optional guard without the leading v, for example 0.0.16."
         required: false
         type: string
         default: ""
@@ -361,7 +361,7 @@ jobs:
           set -eux
           docker network create proxbox-e2e || true
           SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
-          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15.tar.gz'
+          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.16.tar.gz'
           DEV_OVERRIDES='git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main'
 
           docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
@@ -634,7 +634,7 @@ jobs:
           set -eux
           docker network create proxbox-e2e || true
           SECRET_KEY='proxbox-e2e-secret-key-proxbox-e2e-secret-key-proxbox-e2e-secret-key'
-          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.15.tar.gz'
+          NETBOX_PROXBOX_TARGET='https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.16.tar.gz'
 
           docker rm -f netbox-e2e-postgres netbox-e2e-redis netbox-e2e-http proxmox-e2e-mock proxbox-e2e 2>/dev/null || true
 

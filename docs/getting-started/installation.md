@@ -59,7 +59,7 @@ NetBox `netbox-proxbox` plugin, set:
 | **Port** | the host port mapped to container `8000` (typically `8800` or `8443`) |
 
 The `Use HTTPS` and `Verify SSL` toggles are independent in
-`netbox-proxbox >= 0.0.15` — see
+`netbox-proxbox >= 0.0.16` — see
 [issue #352](https://github.com/emersonfelipesp/netbox-proxbox/issues/352) for
 context. Earlier plugin releases couple the two flags, which makes the
 nginx-image + self-signed-cert combination unreachable.
