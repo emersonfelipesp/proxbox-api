@@ -163,9 +163,7 @@ def generate_cloud_init_userdata(
     services = pv.extra_services
 
     enable_cmds = "\n".join(f"  - systemctl enable {svc}" for svc in services)
-    gpg_url = (
-        f"https://enterprise.proxmox.com/debian/proxmox-release-{codename}.gpg"
-    )
+    gpg_url = f"https://enterprise.proxmox.com/debian/proxmox-release-{codename}.gpg"
 
     product_label = {
         ProxmoxProductType.pve: "Proxmox VE",

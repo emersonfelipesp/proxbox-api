@@ -93,7 +93,9 @@ class CloudImageTemplateBuildRequest(BaseModel):
     verify_image_certificates: bool = True
     description: str | None = Field(None, max_length=8192)
     product_type: ProxmoxProductType = ProxmoxProductType.pve
-    product_version: str | None = Field(None, description="Proxmox product version; None = latest in catalog")
+    product_version: str | None = Field(
+        None, description="Proxmox product version; None = latest in catalog"
+    )
 
 
 class CloudImageTemplateBuildResponse(BaseModel):
