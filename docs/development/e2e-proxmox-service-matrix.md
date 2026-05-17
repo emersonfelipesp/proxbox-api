@@ -17,7 +17,7 @@ TestPyPI/PyPI publication lanes, and the Docker image variants — see
 | Service | Image tag | Coverage |
 |---|---|---|
 | `pve` | `emersonfelipesp/proxmox-sdk:latest-pve` | Full Proxmox VE OpenAPI surface (646 endpoints). Drives the historical sync pipeline. |
-| `pbs` | `emersonfelipesp/proxmox-sdk:latest-pbs` | Proxmox Backup Server stub. `/health` + service identifier only; PVE-shaped routes are intentionally absent. |
+| `pbs` | `emersonfelipesp/proxmox-sdk:latest-pbs` | Proxmox Backup Server stub. `/health` (generic) + `/` (service identifier) only; PVE-shaped routes are intentionally absent. |
 | `pdm` | `emersonfelipesp/proxmox-sdk:latest-pdm` | Proxmox Datacenter Manager stub. Same shape as PBS today. |
 
 Running the same backend, the same NetBox container, and the same fixtures
@@ -145,13 +145,14 @@ fixture import explodes when a stub is loaded.
 ## Service Smoke Test
 
 A dedicated module verifies that the right service tag is actually mounted.
-`tests/e2e/test_proxmox_mock_health.py` runs on PBS and PDM cells only and
-checks that `/health` returns the loaded service identifier:
+`tests/e2e/test_proxmox_mock_health.py` runs on PBS and PDM cells only. It
+asserts `/health` is reachable (generic readiness probe) and that the mock's
+root `/` payload identifies the loaded service stub:
 
 ```python
 @pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.mock_http
-async def test_pbs_pdm_mock_health_reports_loaded_service(proxmox_service: str):
+async def test_pbs_pdm_mock_root_reports_loaded_service(proxmox_service: str):
     if proxmox_service == "pve":
         pytest.skip("PBS/PDM service smoke only")
 
@@ -159,14 +160,17 @@ async def test_pbs_pdm_mock_health_reports_loaded_service(proxmox_service: str):
         "PROXMOX_MOCK_PUBLISHED_URL", "http://localhost:8006"
     ).rstrip("/")
     async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
-        response = await client.get("/health")
+        health = await client.get("/health")
+        root = await client.get("/")
 
-    assert response.status_code == 200
-    assert proxmox_service in response.text.lower()
+    assert health.status_code == 200
+    assert root.status_code == 200
+    assert proxmox_service in root.text.lower()
 ```
 
 This is the test that would catch the wrong image tag being pulled, or a
-service stub regressing its `/health` payload.
+service stub regressing the `service` field in its root payload. (`/health`
+itself is intentionally generic across all `proxmox-sdk` mock variants.)
 
 ## Pytest Markers and CI Wiring
 
@@ -201,7 +205,7 @@ container itself, so running it for `pbs` / `pdm` would add no signal.
 | Verification | `pve` | `pbs` | `pdm` |
 |---|:---:|:---:|:---:|
 | Stack readiness (NetBox API, proxbox-api API, proxmox-sdk `/openapi.json`) | yes | yes | yes |
-| Mock `/health` reports the loaded service identifier | (smoke skipped) | yes | yes |
+| Mock root `/` reports the loaded service identifier | (smoke skipped) | yes | yes |
 | `auth/register-key` + `netbox/endpoint` + `netbox/status` smoke | yes | yes | yes |
 | `extras/custom-fields/create` smoke | yes | yes | yes |
 | `test_backups_sync.py` (`requires_pve_schema`) | yes | skip | skip |
@@ -250,5 +254,5 @@ exposes the requested service tag.
 - The pytest marker gating changes — update
   [Pytest Markers and CI Wiring](#pytest-markers-and-ci-wiring).
 
-Keep [`docs/pt-BR/development/e2e-proxmox-service-matrix.md`](../pt-BR/development/e2e-proxmox-service-matrix.md)
-in sync with this file when content changes.
+Keep `docs/pt-BR/development/e2e-proxmox-service-matrix.md` in sync with this
+file when content changes.
