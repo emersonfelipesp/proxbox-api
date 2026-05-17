@@ -4,6 +4,9 @@ from pydantic import field_validator
 
 from proxbox_api.schemas._base import ProxboxBaseModel
 
+from .image_factory import ImageFactoryBuildMode as ImageFactoryBuildMode
+from .image_factory import PackerImageBuildRequest as PackerImageBuildRequest
+from .image_factory import PackerImageBuildResponse as PackerImageBuildResponse
 from .netbox import NetboxSessionSchema
 from .proxmox import ProxmoxSessionSchema
 

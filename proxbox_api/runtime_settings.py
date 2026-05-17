@@ -112,6 +112,22 @@ def get_bool(*, settings_key: str, env: str, default: bool) -> bool:
     return default
 
 
+def get_str(*, settings_key: str, env: str, default: str) -> str:
+    raw = os.environ.get(env, "").strip()
+    if raw:
+        return raw
+
+    settings = _load_settings()
+    if settings is not None:
+        value = settings.get(settings_key)
+        if value is not None:
+            text = str(value).strip()
+            if text:
+                return text
+
+    return default
+
+
 def _clamp_int(value: int, minimum: int | None, maximum: int | None) -> int:
     if minimum is not None and value < minimum:
         return minimum
@@ -128,4 +144,4 @@ def _clamp_float(value: float, minimum: float | None, maximum: float | None) -> 
     return value
 
 
-__all__ = ["get_int", "get_float", "get_bool"]
+__all__ = ["get_int", "get_float", "get_bool", "get_str"]

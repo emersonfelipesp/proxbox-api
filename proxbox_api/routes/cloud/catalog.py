@@ -10,7 +10,6 @@ from proxbox_api.schemas.cloud_provision import (
     CloudImageVersionEntry,
 )
 
-
 versions_router = APIRouter()
 
 

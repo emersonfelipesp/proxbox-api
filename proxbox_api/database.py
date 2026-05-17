@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncGenerator, Generator
+from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, ClassVar
+from uuid import uuid4
 
 import bcrypt
 from fastapi import Depends
-from sqlalchemy import event, inspect, text
+from sqlalchemy import JSON, Column, event, inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -125,6 +127,35 @@ class ProxmoxEndpoint(SQLModel, table=True):
 
     def set_encrypted_token_value(self, value: str | None) -> None:
         self.token_value = encrypt_value(value)
+
+
+class ImageBuildRun(SQLModel, table=True):
+    """Persisted lifecycle record for image factory Packer runs."""
+
+    __tablename__: ClassVar[str] = "image_build_run"
+    __table_args__ = {"extend_existing": True}
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    uuid: str | None = Field(default=None, index=True)
+    status: str = Field(default="queued", index=True)
+    endpoint_id: int = Field(index=True)
+    target_node: str = Field(index=True)
+    builder_type: str = Field(index=True)
+    source_template_vmid: int = Field(index=True)
+    output_vmid: int = Field(index=True)
+    output_name: str = Field(index=True)
+    os_family: str
+    os_release: str
+    image_version: str
+    workdir: str
+    started_at: datetime | None = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
+    exit_code: int | None = Field(default=None)
+    error: str | None = Field(default=None)
+    artifact_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
 
 
 class DeletionRequestRecord(SQLModel, table=True):
@@ -444,12 +475,55 @@ def _migrate_pbs_endpoint_columns() -> None:
             conn.execute(text(stmt))
 
 
+def _migrate_image_build_run_columns() -> None:
+    table = ImageBuildRun.__tablename__
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(f"PRAGMA table_info({table})")).mappings().all()
+        if not rows:
+            return
+        existing = {str(row["name"]) for row in rows}
+    except Exception:
+        return
+
+    column_specs = {
+        "uuid": "VARCHAR",
+        "status": "VARCHAR NOT NULL DEFAULT 'queued'",
+        "endpoint_id": "INTEGER NOT NULL DEFAULT 0",
+        "target_node": "VARCHAR NOT NULL DEFAULT ''",
+        "builder_type": "VARCHAR NOT NULL DEFAULT 'proxmox-clone'",
+        "source_template_vmid": "INTEGER NOT NULL DEFAULT 0",
+        "output_vmid": "INTEGER NOT NULL DEFAULT 0",
+        "output_name": "VARCHAR NOT NULL DEFAULT ''",
+        "os_family": "VARCHAR NOT NULL DEFAULT ''",
+        "os_release": "VARCHAR NOT NULL DEFAULT ''",
+        "image_version": "VARCHAR NOT NULL DEFAULT ''",
+        "workdir": "VARCHAR NOT NULL DEFAULT ''",
+        "started_at": "DATETIME",
+        "completed_at": "DATETIME",
+        "exit_code": "INTEGER",
+        "error": "VARCHAR",
+        "artifact_metadata": "JSON NOT NULL DEFAULT '{}'",
+    }
+    stmts = [
+        f"ALTER TABLE {table} ADD COLUMN {column} {spec}"
+        for column, spec in column_specs.items()
+        if column not in existing
+    ]
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_proxmox_endpoint_columns()
     _migrate_netbox_endpoint_columns()
     _migrate_deletion_request_columns()
     _migrate_pbs_endpoint_columns()
+    _migrate_image_build_run_columns()
 
 
 def get_session() -> Generator[Session, None, None]:
