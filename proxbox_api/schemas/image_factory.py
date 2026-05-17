@@ -20,8 +20,9 @@ class PackerImageBuildRequest(BaseModel):
 
     endpoint_id: int
     target_node: str
-    builder_type: Literal["proxmox-clone"]
-    template_vmid: int
+    builder_type: Literal["proxmox-clone", "proxmox-iso"] = "proxmox-clone"
+    # clone-specific (required for proxmox-clone)
+    template_vmid: int | None = None
     output_vmid: int
     output_name: str
     os_family: str
@@ -37,6 +38,10 @@ class PackerImageBuildRequest(BaseModel):
     variables: dict[str, str | int | bool] = Field(default_factory=dict)
     force: bool = False
     dry_run: bool = False
+    # iso-specific (required when builder_type == "proxmox-iso")
+    iso_file: str | None = None
+    iso_checksum: str | None = None
+    iso_storage: str | None = None
 
 
 class PackerImageBuildResponse(BaseModel):

@@ -11,7 +11,7 @@ from typing import Any
 
 from proxbox_api.schemas.image_factory import PackerImageBuildRequest
 
-HCL_DECLARED_VARIABLES = {
+CLONE_HCL_DECLARED_VARIABLES = {
     "proxmox_url",
     "node",
     "clone_vm_id",
@@ -26,7 +26,27 @@ HCL_DECLARED_VARIABLES = {
     "cloud_init_storage_pool",
 }
 
-PKRVARS_WRITABLE_VARIABLES = HCL_DECLARED_VARIABLES - {"proxmox_url"}
+ISO_HCL_DECLARED_VARIABLES = {
+    "proxmox_url",
+    "node",
+    "vm_id",
+    "vm_name",
+    "template_name",
+    "vm_storage",
+    "bridge",
+    "memory",
+    "cores",
+    "cpu_type",
+    "cloud_init_storage_pool",
+    "iso_file",
+    "iso_checksum",
+}
+
+# Keep the old name as an alias for backwards compatibility.
+HCL_DECLARED_VARIABLES = CLONE_HCL_DECLARED_VARIABLES
+
+PKRVARS_WRITABLE_VARIABLES = CLONE_HCL_DECLARED_VARIABLES - {"proxmox_url"}
+ISO_PKRVARS_WRITABLE_VARIABLES = ISO_HCL_DECLARED_VARIABLES - {"proxmox_url"}
 
 ALLOWED_PROVISIONER_RECIPES = {
     "ubuntu-base": "ubuntu-base.sh",
@@ -49,15 +69,21 @@ def _template_root() -> Path:
     return Path(str(resources.files("proxbox_api") / "packer_templates"))
 
 
-def _copy_static_assets(workdir: Path, recipe: str) -> Path:
+def _copy_static_assets(workdir: Path, recipe: str, *, builder_type: str = "proxmox-clone") -> Path:
     recipe_file = ALLOWED_PROVISIONER_RECIPES.get(recipe)
     if recipe_file is None:
         allowed = ", ".join(sorted(ALLOWED_PROVISIONER_RECIPES))
         raise ValueError(f"provisioner_recipe must be one of: {allowed}")
 
     template_root = _template_root()
-    template_src = template_root / "proxmox" / "clone-cloud-init.pkr.hcl"
-    template_dst = workdir / "clone-cloud-init.pkr.hcl"
+
+    if builder_type == "proxmox-iso":
+        hcl_name = "iso-cloud-init.pkr.hcl"
+    else:
+        hcl_name = "clone-cloud-init.pkr.hcl"
+
+    template_src = template_root / "proxmox" / hcl_name
+    template_dst = workdir / hcl_name
     shutil.copy2(template_src, template_dst)
 
     provisioner_dir = workdir / "provisioners"
@@ -70,13 +96,17 @@ def _copy_static_assets(workdir: Path, recipe: str) -> Path:
 def build_packer_variables(
     request: PackerImageBuildRequest,
 ) -> dict[str, str | int | bool]:
-    unknown = sorted(set(request.variables) - PKRVARS_WRITABLE_VARIABLES)
+    if request.builder_type == "proxmox-iso":
+        return _build_iso_variables(request)
+
+    writable = PKRVARS_WRITABLE_VARIABLES
+    unknown = sorted(set(request.variables) - writable)
     if unknown:
         raise ValueError(f"Unsupported Packer variable(s): {', '.join(unknown)}")
 
     variables: dict[str, str | int | bool] = {
         "node": request.target_node,
-        "clone_vm_id": request.template_vmid,
+        "clone_vm_id": request.template_vmid or 0,
         "vm_id": request.output_vmid,
         "vm_name": request.output_name,
         "template_name": request.output_name,
@@ -93,18 +123,50 @@ def build_packer_variables(
     return variables
 
 
+def _build_iso_variables(request: PackerImageBuildRequest) -> dict[str, str | int | bool]:
+    writable = ISO_PKRVARS_WRITABLE_VARIABLES
+    unknown = sorted(set(request.variables) - writable)
+    if unknown:
+        raise ValueError(f"Unsupported Packer variable(s) for ISO builder: {', '.join(unknown)}")
+
+    variables: dict[str, str | int | bool] = {
+        "node": request.target_node,
+        "vm_id": request.output_vmid,
+        "vm_name": request.output_name,
+        "template_name": request.output_name,
+        "vm_storage": request.vm_storage,
+        "bridge": request.bridge,
+        "memory": request.memory_mb,
+        "cores": request.cores,
+        "cpu_type": request.cpu_type,
+        "cloud_init_storage_pool": request.cloud_init_storage or request.vm_storage,
+        "iso_file": request.iso_file or "",
+        "iso_checksum": request.iso_checksum or "none",
+    }
+    for key, value in request.variables.items():
+        if key in variables:
+            variables[key] = value
+    return variables
+
+
 def render_packer_workdir(
     *,
     request: PackerImageBuildRequest,
     workdir: Path,
 ) -> RenderedPackerWorkdir:
-    provisioner_path = _copy_static_assets(workdir, request.provisioner_recipe)
+    provisioner_path = _copy_static_assets(workdir, request.provisioner_recipe, builder_type=request.builder_type)
     variables = build_packer_variables(request)
     var_file = workdir / "build.auto.pkrvars.json"
     var_file.write_text(json.dumps(variables, indent=2, sort_keys=True) + "\n")
+
+    if request.builder_type == "proxmox-iso":
+        hcl_name = "iso-cloud-init.pkr.hcl"
+    else:
+        hcl_name = "clone-cloud-init.pkr.hcl"
+
     return RenderedPackerWorkdir(
         workdir=workdir,
-        template_path=workdir / "clone-cloud-init.pkr.hcl",
+        template_path=workdir / hcl_name,
         var_file=var_file,
         variables=variables,
         provisioner_path=provisioner_path,

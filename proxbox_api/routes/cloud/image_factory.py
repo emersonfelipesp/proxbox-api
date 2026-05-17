@@ -121,17 +121,36 @@ def _result_summary(result: CommandResult) -> dict[str, Any]:
     }
 
 
+def _validate_builder_fields(request: PackerImageBuildRequest) -> None:
+    """Raise HTTPException if builder-type-specific required fields are missing."""
+    if request.builder_type == "proxmox-clone":
+        if request.template_vmid is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="template_vmid is required for proxmox-clone builder.",
+            )
+    elif request.builder_type == "proxmox-iso":
+        missing = [f for f in ("iso_file", "iso_checksum") if not getattr(request, f)]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"ISO builder requires: {', '.join(missing)}.",
+            )
+
+
 async def _prepare_build(
     request: PackerImageBuildRequest,
     session: SessionDep,
     *,
     register_live: bool,
 ) -> tuple[str, LiveImageBuildRun, PackerImageBuildResponse]:
+    _validate_builder_fields(request)
     endpoint_or_error = await _gated_endpoint(session, request.endpoint_id)
     if isinstance(endpoint_or_error, JSONResponse):
         raise _JsonResponseException(endpoint_or_error)
     endpoint = endpoint_or_error
-    await _ensure_template_vmid_exists(endpoint, request)
+    if request.builder_type == "proxmox-clone":
+        await _ensure_template_vmid_exists(endpoint, request)
     env, secrets = _packer_env(endpoint)
     build_id = str(uuid4())
     workdir = create_workdir(build_id)
