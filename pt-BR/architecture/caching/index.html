@@ -1452,6 +1452,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -2123,8 +2151,8 @@
 </ul>
 <h2 id="log-de-debug">Log de Debug<a class="headerlink" href="#log-de-debug" title="Permanent link">&para;</a></h2>
 <p>Habilite o logging detalhado de cache com:</p>
-<p><code>bash
-export PROXBOX_DEBUG_CACHE=1</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXBOX_DEBUG_CACHE</span><span class="o">=</span><span class="m">1</span>
+</code></pre></div>
 <p>Isso registra:
 - Eventos de Cache HIT/MISS
 - Cache DESABILITADO (TTL=0)
@@ -2153,10 +2181,9 @@ export PROXBOX_DEBUG_CACHE=1</code></p>
 <p>O limite de bytes previne crescimento ilimitado de memória. Monitore a métrica <code>current_bytes</code> para garantir folga adequada.</p>
 <h3 id="benchmarking">Benchmarking<a class="headerlink" href="#benchmarking" title="Permanent link">&para;</a></h3>
 <p>Execute benchmarks de performance na CI para detectar regressões:</p>
-<p>```bash</p>
-<h1 id="exemplo-de-comando-de-benchmark">Exemplo de comando de benchmark<a class="headerlink" href="#exemplo-de-comando-de-benchmark" title="Permanent link">&para;</a></h1>
-<p>uv run pytest tests/ --benchmark-only</p>
-<p>```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Exemplo de comando de benchmark</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w"> </span>--benchmark-only
+</code></pre></div>
 <p>Veja o workflow do GitHub Actions para benchmark automatizado.</p>
 
 

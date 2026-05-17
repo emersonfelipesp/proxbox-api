@@ -1413,6 +1413,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -1879,28 +1907,28 @@
 <li><code>verify_ssl</code>: controla a verificacao do certificado TLS em todas as chamadas HTTPS ao NetBox, incluindo buscas de runtime settings em <code>ProxboxPluginSettings</code>. Use <code>false</code> apenas em labs ou ambientes privados com certificados self-signed.</li>
 </ul>
 <h3 id="exemplo-de-token-netbox-v1">Exemplo de token NetBox v1<a class="headerlink" href="#exemplo-de-token-netbox-v1" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "netbox-primary",
-  "ip_address": "10.0.0.20",
-  "domain": "netbox.local",
-  "port": 443,
-  "token_version": "v1",
-  "token": "&lt;NETBOX_API_TOKEN&gt;",
-  "verify_ssl": true
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;netbox-primary&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;ip_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.20&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;netbox.local&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">&quot;port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">443</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">&quot;token_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;v1&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;NETBOX_API_TOKEN&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">&quot;verify_ssl&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">}</span>
+</code></pre></div>
 <h3 id="exemplo-de-token-netbox-v2">Exemplo de token NetBox v2<a class="headerlink" href="#exemplo-de-token-netbox-v2" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "netbox-secondary",
-  "ip_address": "10.0.0.21",
-  "domain": "netbox.local",
-  "port": 443,
-  "token_version": "v2",
-  "token_key": "token-name",
-  "token": "&lt;NETBOX_API_TOKEN_SECRET&gt;",
-  "verify_ssl": true
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;netbox-secondary&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;ip_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.21&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;netbox.local&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">443</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">&quot;token_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;v2&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">&quot;token_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;token-name&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;NETBOX_API_TOKEN_SECRET&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">&quot;verify_ssl&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
+</code></pre></div>
 <h2 id="endpoints-proxmox">Endpoints Proxmox<a class="headerlink" href="#endpoints-proxmox" title="Permanent link">&para;</a></h2>
 <p>Os registros de endpoint Proxmox sao gerenciados por:</p>
 <ul>
@@ -1919,28 +1947,28 @@
 <h3 id="campo-allow_writes">Campo <code>allow_writes</code><a class="headerlink" href="#campo-allow_writes" title="Permanent link">&para;</a></h3>
 <p><code>ProxmoxEndpoint.allow_writes</code> (boolean, padrao <code>false</code>) atua como um gate de confianca para os <a href="../../api/http-reference/#verbos-operacionais-de-vm">Verbos Operacionais de VM</a>. Quando <code>false</code>, qualquer <code>POST</code> para <code>/proxmox/{qemu|lxc}/{vmid}/{start,stop,snapshot,migrate}</code> retorna <code>403</code> com <code>reason="writes_disabled_for_endpoint"</code>, mesmo que a chave de API e o <code>X-Proxbox-Actor</code> sejam validos. O campo so pode ser alterado por administradores e e auditado via journal entry. Adicionado na migracao <code>0037_proxmoxendpoint_allow_writes</code>.</p>
 <h3 id="exemplo-com-senha">Exemplo com senha<a class="headerlink" href="#exemplo-com-senha" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "pve-lab-1",
-  "ip_address": "10.0.0.10",
-  "domain": "pve-lab-1.local",
-  "port": 8006,
-  "username": "root@pam",
-  "password": "&lt;PASSWORD&gt;",
-  "verify_ssl": false
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pve-lab-1&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;ip_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.10&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pve-lab-1.local&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">8006</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;root@pam&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;password&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;PASSWORD&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">&quot;verify_ssl&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+</code></pre></div>
 <h3 id="exemplo-com-token">Exemplo com token<a class="headerlink" href="#exemplo-com-token" title="Permanent link">&para;</a></h3>
-<p><code>json
-{
-  "name": "pve-lab-token",
-  "ip_address": "10.0.0.11",
-  "domain": "pve-lab-token.local",
-  "port": 8006,
-  "username": "root@pam",
-  "token_name": "api-token",
-  "token_value": "&lt;TOKEN_VALUE&gt;",
-  "verify_ssl": true
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pve-lab-token&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;ip_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.11&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pve-lab-token.local&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">&quot;port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">8006</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;root@pam&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">&quot;token_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;api-token&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="nt">&quot;token_value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;TOKEN_VALUE&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">&quot;verify_ssl&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
+</code></pre></div>
 <h3 id="privilegios-minimos-do-papel-proxmox">Privilegios minimos do papel Proxmox<a class="headerlink" href="#privilegios-minimos-do-papel-proxmox" title="Permanent link">&para;</a></h3>
 <p>O usuario/token usado pelo <code>proxbox-api</code> precisa de leitura em cluster,
 datastore e VMs, alem do endpoint de leitura do guest-agent QEMU para que os
@@ -1977,15 +2005,15 @@ IPs das VMs sejam sincronizados com o NetBox.</p>
 </tbody>
 </table>
 <p>Criar ou atualizar um papel somente-leitura a partir de qualquer no:</p>
-<p>```bash
-pveum role add NetBoxReadOnly --privs \
-  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"</p>
-<p>pveum role modify NetBoxReadOnly --privs \
-  "Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit"
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pveum<span class="w"> </span>role<span class="w"> </span>add<span class="w"> </span>NetBoxReadOnly<span class="w"> </span>--privs<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="s2">&quot;Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit&quot;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>pveum<span class="w"> </span>role<span class="w"> </span>modify<span class="w"> </span>NetBoxReadOnly<span class="w"> </span>--privs<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="s2">&quot;Datastore.Audit,Sys.Audit,VM.Audit,VM.Monitor,VM.GuestAgent.Audit&quot;</span>
+</code></pre></div>
 <p>Vincular o papel ao usuario/token na raiz, com propagacao:</p>
-<p><code>bash
-pveum acl modify / --users netbox@pam --roles NetBoxReadOnly --propagate 1</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pveum<span class="w"> </span>acl<span class="w"> </span>modify<span class="w"> </span>/<span class="w"> </span>--users<span class="w"> </span>netbox@pam<span class="w"> </span>--roles<span class="w"> </span>NetBoxReadOnly<span class="w"> </span>--propagate<span class="w"> </span><span class="m">1</span>
+</code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">PVE 9 separou <code>VM.GuestAgent.*</code></p>
 <p>O Proxmox VE 9 introduziu privilegios separados <code>VM.GuestAgent.Audit</code>,
@@ -2172,11 +2200,11 @@ correcao e adicionar <code>VM.GuestAgent.Audit</code> ao papel.</p>
 </ol>
 <h3 id="definindo-a-chave">Definindo a chave<a class="headerlink" href="#definindo-a-chave" title="Permanent link">&para;</a></h3>
 <p>Gere uma chave segura:</p>
-<p><code>bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;</span>
+</code></pre></div>
 <p>Defina via variavel de ambiente:</p>
-<p><code>bash
-export PROXBOX_ENCRYPTION_KEY="&lt;cole a chave aqui&gt;"</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXBOX_ENCRYPTION_KEY</span><span class="o">=</span><span class="s2">&quot;&lt;cole a chave aqui&gt;&quot;</span>
+</code></pre></div>
 <p>Ou defina na pagina de configuracoes do plugin no NetBox em <strong>Encryption</strong> → <strong>Encryption key</strong>.</p>
 <h3 id="compatibilidade-retroativa">Compatibilidade retroativa<a class="headerlink" href="#compatibilidade-retroativa" title="Permanent link">&para;</a></h3>
 <p>Se as credenciais ja estavam armazenadas em texto puro antes da criptografia ser ligada, elas continuam funcionando — <code>decrypt_value</code> retorna o valor inalterado quando nenhum prefixo <code>enc:</code> esta presente. Elas sao recriptografadas na proxima vez que o endpoint for salvo.</p>

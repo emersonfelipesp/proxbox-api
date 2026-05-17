@@ -1462,6 +1462,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -1991,10 +2019,10 @@
 </ul>
 <h3 id="regra-singleton-do-netbox">Regra singleton do NetBox<a class="headerlink" href="#regra-singleton-do-netbox" title="Permanent link">&para;</a></h3>
 <p>Tentar criar um segundo endpoint retorna HTTP 400 com:</p>
-<p><code>json
-{
-  "detail": "Only one NetBox endpoint is allowed"
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Only one NetBox endpoint is allowed&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
+</code></pre></div>
 <h2 id="rotas-proxmox-proxmox">Rotas Proxmox (<code>/proxmox</code>)<a class="headerlink" href="#rotas-proxmox-proxmox" title="Permanent link">&para;</a></h2>
 <h3 id="crud-de-configuracao-de-endpoints">CRUD de configuracao de endpoints<a class="headerlink" href="#crud-de-configuracao-de-endpoints" title="Permanent link">&para;</a></h3>
 <ul>
@@ -2121,25 +2149,25 @@
 </table>
 <h4 id="gate-allow_writes-formato-do-403">Gate <code>allow_writes</code> (formato do 403)<a class="headerlink" href="#gate-allow_writes-formato-do-403" title="Permanent link">&para;</a></h4>
 <p>Quando <code>endpoint_id</code> falta, o endpoint nao existe ou <code>ProxmoxEndpoint.allow_writes</code> esta <code>false</code>, o handler retorna HTTP 403 com um dos tres codigos em <code>reason</code>:</p>
-<p><code>json
-{
-  "reason": "endpoint_writes_disabled",
-  "detail": "Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.",
-  "endpoint_id": 7
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;endpoint_writes_disabled&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;endpoint_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
+</code></pre></div>
 <p>Outros formatos de 403 usam <code>reason: "endpoint_id_required"</code> ou <code>reason: "endpoint_not_found"</code> e omitem <code>endpoint_id</code>. O gate e a fronteira de confianca documentada em <code>docs/design/operational-verbs.md</code> §2.3 layer 3 — deve permanecer como o primeiro check de cada handler.</p>
 <h4 id="shape-da-resposta-sucesso-no-op">Shape da resposta (sucesso / no-op)<a class="headerlink" href="#shape-da-resposta-sucesso-no-op" title="Permanent link">&para;</a></h4>
-<p><code>json
-{
-  "verb": "start",
-  "vmid": 100,
-  "vm_type": "qemu",
-  "endpoint_id": 7,
-  "result": "ok",
-  "dispatched_at": "2026-05-13T14:22:08Z",
-  "proxmox_task_upid": "UPID:pve1:00012E34:...",
-  "journal_entry_url": "/api/extras/journal-entries/42/"
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;verb&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;start&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;vmid&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;vm_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;qemu&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;endpoint_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;dispatched_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-13T14:22:08Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">&quot;proxmox_task_upid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;UPID:pve1:00012E34:...&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">&quot;journal_entry_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/api/extras/journal-entries/42/&quot;</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
+</code></pre></div>
 <p><code>result</code> e um de <code>ok</code>, <code>already_running</code>, <code>already_stopped</code>, <code>accepted</code> (dispatch de migrate), <code>cancel_requested</code>, <code>cancel_failed</code>, <code>rejected</code> ou <code>failed</code>. Caminhos de erro adicionam <code>reason</code> e <code>detail</code>. A resposta 202 do migrate carrega tambem <code>sse_url</code>, <code>target</code>, <code>online</code> e <code>source_node</code>.</p>
 <h3 id="helpers-do-viewer-e-do-contrato-gerado">Helpers do viewer e do contrato gerado<a class="headerlink" href="#helpers-do-viewer-e-do-contrato-gerado" title="Permanent link">&para;</a></h3>
 <ul>

@@ -1319,6 +1319,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -1675,61 +1703,61 @@
 <li>Acesso de rede aos destinos NetBox e Proxmox</li>
 </ul>
 <h2 id="opcao-1-docker">Opcao 1: Docker<a class="headerlink" href="#opcao-1-docker" title="Permanent link">&para;</a></h2>
-<p><code>bash
-docker pull emersonfelipesp/proxbox-api:latest
-docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>emersonfelipesp/proxbox-api:latest
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api<span class="w"> </span>emersonfelipesp/proxbox-api:latest
+</code></pre></div>
 <h3 id="bind-em-ipv6-dual-stack">Bind em IPv6 / dual-stack<a class="headerlink" href="#bind-em-ipv6-dual-stack" title="Permanent link">&para;</a></h3>
 <p>Para escutar simultaneamente em IPv4 e IPv6, defina <code>PROXBOX_BIND_HOST=::</code>:</p>
-<p><code>bash
-docker run -d -p 8000:8000 -e PROXBOX_BIND_HOST=:: \
-  emersonfelipesp/proxbox-api:latest</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>-e<span class="w"> </span><span class="nv">PROXBOX_BIND_HOST</span><span class="o">=</span>::<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest
+</code></pre></div>
 <h4 id="cuidado-com-aspas-no-docker-compose">Cuidado com aspas no Docker Compose<a class="headerlink" href="#cuidado-com-aspas-no-docker-compose" title="Permanent link">&para;</a></h4>
 <p>No formato <strong>lista</strong> de <code>environment:</code> do Compose, o valor e usado literalmente — as aspas <strong>nao</strong> sao removidas. Ou seja, <code>- PROXBOX_BIND_HOST="::"</code> chega ao container como a string de 4 caracteres <code>"::"</code>, o que ja causou o erro <code>[Errno -2] Name does not resolve</code>. O container hoje normaliza aspas defensivamente, mas as formas recomendadas sao:</p>
-<p><code>yaml
-environment:
-  - PROXBOX_BIND_HOST=::          # formato lista: SEM aspas</code></p>
-<p><code>yaml
-environment:
-  PROXBOX_BIND_HOST: "::"         # formato mapa: o YAML remove as aspas</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">PROXBOX_BIND_HOST=:</span><span class="p">:</span><span class="w">          </span><span class="c1"># formato lista: SEM aspas</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">PROXBOX_BIND_HOST</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;::&quot;</span><span class="w">         </span><span class="c1"># formato mapa: o YAML remove as aspas</span>
+</code></pre></div>
 <h2 id="opcao-2-pypi">Opcao 2: PyPI<a class="headerlink" href="#opcao-2-pypi" title="Permanent link">&para;</a></h2>
 <p>O pacote esta publicado no <a href="https://pypi.org/project/proxbox-api/">PyPI</a> como <code>proxbox-api</code>.</p>
-<p><code>bash
-pip install proxbox-api</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox-api
+</code></pre></div>
 <p>Ou com <code>uv</code>:</p>
-<p><code>bash
-uv add proxbox-api</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>uv<span class="w"> </span>add<span class="w"> </span>proxbox-api
+</code></pre></div>
 <p>Inicie o servidor apos instalar:</p>
-<p><code>bash
-python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
 <h2 id="opcao-3-codigo-fonte-local">Opcao 3: Codigo-fonte local<a class="headerlink" href="#opcao-3-codigo-fonte-local" title="Permanent link">&para;</a></h2>
-<p><code>bash
-git clone https://github.com/emersonfelipesp/proxbox-api.git
-cd proxbox-api
-pip install -e .
-uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
 <p>Alternativa:</p>
-<p><code>bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
+</code></pre></div>
 <p>O comando <code>fastapi run</code> nao expoe opcoes de TLS; para HTTPS no proprio processo use <strong>uvicorn</strong> com <code>--ssl-certfile</code> / <code>--ssl-keyfile</code>, ou <strong>nginx/Caddy</strong> na frente (recomendado para certificados reais).</p>
 <h2 id="tls-sem-docker">TLS sem Docker<a class="headerlink" href="#tls-sem-docker" title="Permanent link">&para;</a></h2>
 <h3 id="certificados-locais-mkcert">Certificados locais (mkcert)<a class="headerlink" href="#certificados-locais-mkcert" title="Permanent link">&para;</a></h3>
-<p><code>bash
-mkcert -install
-mkcert proxbox.backend.local localhost 127.0.0.1 ::1
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
-  --ssl-keyfile=./proxbox.backend.local+3-key.pem \
-  --ssl-certfile=./proxbox.backend.local+3.pem</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>mkcert<span class="w"> </span>-install
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>mkcert<span class="w"> </span>proxbox.backend.local<span class="w"> </span>localhost<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>::1
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>./proxbox.backend.local+3-key.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>./proxbox.backend.local+3.pem
+</code></pre></div>
 <p>Ajuste os nomes dos arquivos conforme a saida do <code>mkcert</code>.</p>
 <h3 id="certificado-publico-lets-encrypt-ou-corporativo">Certificado publico (Let's Encrypt) ou corporativo<a class="headerlink" href="#certificado-publico-lets-encrypt-ou-corporativo" title="Permanent link">&para;</a></h3>
 <p><strong>Recomendado:</strong> terminar TLS no <strong>nginx</strong> ou <strong>Caddy</strong> e manter a API em HTTP em <code>127.0.0.1:8000</code>:</p>
-<p><code>bash
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
 <p>Configure o proxy com <code>fullchain.pem</code> e <code>privkey.pem</code> (Let's Encrypt em <code>/etc/letsencrypt/live/&lt;dominio&gt;/</code>) e cabecalhos <code>X-Forwarded-Proto</code> (e afins). Exemplo completo de bloco <code>server</code> do nginx no <strong>README</strong> do repositorio.</p>
 <p><strong>Uvicorn com TLS direto</strong> (implantacoes menores): use a <strong>cadeia completa</strong> em <code>--ssl-certfile</code> e a chave em <code>--ssl-keyfile</code>:</p>
-<p><code>bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
-  --ssl-certfile=/etc/letsencrypt/live/api.exemplo.com/fullchain.pem \
-  --ssl-keyfile=/etc/letsencrypt/live/api.exemplo.com/privkey.pem</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8443</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>/etc/letsencrypt/live/api.exemplo.com/fullchain.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>/etc/letsencrypt/live/api.exemplo.com/privkey.pem
+</code></pre></div>
 <p>Garanta permissoes de leitura para o usuario do processo e renove/recarregue apos atualizar o certificado.</p>
 <h2 id="verificar-instalacao">Verificar instalacao<a class="headerlink" href="#verificar-instalacao" title="Permanent link">&para;</a></h2>
 <p>Abra:</p>

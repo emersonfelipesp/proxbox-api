@@ -1144,6 +1144,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../deployment/" class="md-nav__link">
         
   
@@ -1658,6 +1686,50 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#testing-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing Verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Impact
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#future-opportunities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Future Opportunities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conclusion
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2071,6 +2143,50 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#testing-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing Verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Impact
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#future-opportunities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Future Opportunities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conclusion
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2443,25 +2559,28 @@
 <p>No action required. All existing code continues to work as before.</p>
 <h3 id="for-new-code">For New Code<a class="headerlink" href="#for-new-code" title="Permanent link">&para;</a></h3>
 <p>Use the new utilities:</p>
-<p>```python</p>
-<h1 id="error-handling-with-retry">Error handling with retry<a class="headerlink" href="#error-handling-with-retry" title="Permanent link">&para;</a></h1>
-<p>from proxbox_api.utils.sync_error_handling import with_retry, validate_netbox_response</p>
-<p>@with_retry(max_attempts=3, backoff_seconds=1.0)
-async def my_sync_function():
-    response = await fetch_from_netbox()
-    validated = validate_netbox_response(response, "my_operation")
-    return validated</p>
-<h1 id="structured-logging">Structured logging<a class="headerlink" href="#structured-logging" title="Permanent link">&para;</a></h1>
-<p>from proxbox_api.utils.structured_logging import SyncPhaseLogger</p>
-<p>logger = SyncPhaseLogger("my_sync", resource_id=123)
-logger.log_phase("filtering", "Starting filter phase")</p>
-<h1 id="filtering-logic">... filtering logic ...<a class="headerlink" href="#filtering-logic" title="Permanent link">&para;</a></h1>
-<p>logger.log_phase_complete("filtering", resource_count=10)
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Error handling with retry</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">proxbox_api.utils.sync_error_handling</span><span class="w"> </span><span class="kn">import</span> <span class="n">with_retry</span><span class="p">,</span> <span class="n">validate_netbox_response</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nd">@with_retry</span><span class="p">(</span><span class="n">max_attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">backoff_seconds</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">my_sync_function</span><span class="p">():</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch_from_netbox</span><span class="p">()</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">validated</span> <span class="o">=</span> <span class="n">validate_netbox_response</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;my_operation&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="k">return</span> <span class="n">validated</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># Structured logging</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="kn">from</span><span class="w"> </span><span class="nn">proxbox_api.utils.structured_logging</span><span class="w"> </span><span class="kn">import</span> <span class="n">SyncPhaseLogger</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">logger</span> <span class="o">=</span> <span class="n">SyncPhaseLogger</span><span class="p">(</span><span class="s2">&quot;my_sync&quot;</span><span class="p">,</span> <span class="n">resource_id</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="n">logger</span><span class="o">.</span><span class="n">log_phase</span><span class="p">(</span><span class="s2">&quot;filtering&quot;</span><span class="p">,</span> <span class="s2">&quot;Starting filter phase&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="c1"># ... filtering logic ...</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">logger</span><span class="o">.</span><span class="n">log_phase_complete</span><span class="p">(</span><span class="s2">&quot;filtering&quot;</span><span class="p">,</span> <span class="n">resource_count</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+</code></pre></div>
 <hr />
 <h2 id="testing-verification">Testing Verification<a class="headerlink" href="#testing-verification" title="Permanent link">&para;</a></h2>
 <p>All tests pass:
-<code>======================== 25 passed, 2 warnings in 0.35s ========================</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>======================== 25 passed, 2 warnings in 0.35s ========================
+</code></pre></div></p>
 <p>Coverage includes:
 - SyncPhaseLogger initialization and all methods (6 tests)
 - log_sync_operation and log_sync_result (3 tests)

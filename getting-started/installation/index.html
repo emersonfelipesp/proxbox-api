@@ -1391,6 +1391,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -1848,19 +1876,19 @@
 </table>
 <h3 id="raw-image-http-only-default">Raw image — HTTP only (default)<a class="headerlink" href="#raw-image-http-only-default" title="Permanent link">&para;</a></h3>
 <p>Simplest option. No proxy in front, plain HTTP. Ideal for local development or behind your own reverse proxy.</p>
-<p><code>bash
-docker pull emersonfelipesp/proxbox-api:latest
-docker run -d -p 8000:8000 --name proxbox-api emersonfelipesp/proxbox-api:latest</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>emersonfelipesp/proxbox-api:latest
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api<span class="w"> </span>emersonfelipesp/proxbox-api:latest
+</code></pre></div>
 <p>Service URL:</p>
 <ul>
 <li><a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a></li>
 </ul>
 <h3 id="nginx-image-https-with-mkcert">Nginx image — HTTPS with mkcert<a class="headerlink" href="#nginx-image-https-with-mkcert" title="Permanent link">&para;</a></h3>
 <p>nginx terminates HTTPS using auto-generated <a href="https://github.com/FiloSottile/mkcert">mkcert</a> certificates and proxies to uvicorn inside the container.</p>
-<p><code>bash
-docker pull emersonfelipesp/proxbox-api:latest-nginx
-docker run -d -p 8443:8000 --name proxbox-api-nginx \
-  emersonfelipesp/proxbox-api:latest-nginx</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>emersonfelipesp/proxbox-api:latest-nginx
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8443</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-nginx<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest-nginx
+</code></pre></div>
 <p>Service URL:</p>
 <ul>
 <li><a href="https://127.0.0.1:8443">https://127.0.0.1:8443</a> (self-signed, trusted on the container host)</li>
@@ -1899,10 +1927,10 @@ context. Earlier plugin releases couple the two flags, which makes the
 nginx-image + self-signed-cert combination unreachable.</p>
 <h3 id="granian-image-https-with-mkcert-no-nginx">Granian image — HTTPS with mkcert (no nginx)<a class="headerlink" href="#granian-image-https-with-mkcert-no-nginx" title="Permanent link">&para;</a></h3>
 <p><a href="https://github.com/emmett-framework/granian">Granian</a> is a Rust-based ASGI server with native TLS and HTTP/2. A single process handles everything — no nginx or supervisord required.</p>
-<p><code>bash
-docker pull emersonfelipesp/proxbox-api:latest-granian
-docker run -d -p 8443:8000 --name proxbox-api-granian \
-  emersonfelipesp/proxbox-api:latest-granian</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>emersonfelipesp/proxbox-api:latest-granian
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8443</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-granian<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest-granian
+</code></pre></div>
 <p>Service URL:</p>
 <ul>
 <li><a href="https://127.0.0.1:8443">https://127.0.0.1:8443</a></li>
@@ -1958,79 +1986,79 @@ docker run -d -p 8443:8000 --name proxbox-api-granian \
 </tbody>
 </table>
 <p>Example with extra SANs:</p>
-<p><code>bash
-docker run -d -p 8443:8000 --name proxbox-api-tls \
-  -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
-  emersonfelipesp/proxbox-api:latest-nginx</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8443</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-tls<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">MKCERT_EXTRA_NAMES</span><span class="o">=</span><span class="s1">&#39;myhost.local,192.168.1.10&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest-nginx
+</code></pre></div>
 <h3 id="binding-to-ipv6-dual-stack">Binding to IPv6 / dual-stack<a class="headerlink" href="#binding-to-ipv6-dual-stack" title="Permanent link">&para;</a></h3>
 <p>To listen on both IPv4 and IPv6, set <code>PROXBOX_BIND_HOST=::</code>:</p>
-<p><code>bash
-docker run -d -p 8000:8000 -e PROXBOX_BIND_HOST=:: \
-  emersonfelipesp/proxbox-api:latest</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>-e<span class="w"> </span><span class="nv">PROXBOX_BIND_HOST</span><span class="o">=</span>::<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest
+</code></pre></div>
 <h4 id="docker-compose-quoting-caveat">Docker Compose quoting caveat<a class="headerlink" href="#docker-compose-quoting-caveat" title="Permanent link">&para;</a></h4>
 <p>In Compose <code>environment:</code> <strong>list-form</strong>, values are taken verbatim — the quotes are NOT stripped — so <code>- PROXBOX_BIND_HOST="::"</code> ends up as the literal 4-character string <code>"::"</code> inside the container, which used to crash binding with <code>[Errno -2] Name does not resolve</code>. The container now sanitizes surrounding quotes defensively, but the recommended forms are:</p>
-<p><code>yaml
-environment:
-  - PROXBOX_BIND_HOST=::          # list-form: NO quotes</code></p>
-<p><code>yaml
-environment:
-  PROXBOX_BIND_HOST: "::"         # map-form: YAML strips the quotes</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">PROXBOX_BIND_HOST=:</span><span class="p">:</span><span class="w">          </span><span class="c1"># list-form: NO quotes</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">PROXBOX_BIND_HOST</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;::&quot;</span><span class="w">         </span><span class="c1"># map-form: YAML strips the quotes</span>
+</code></pre></div>
 <h3 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">&para;</a></h3>
-<p>```bash
-git clone https://github.com/emersonfelipesp/proxbox-api.git
-cd proxbox-api</p>
-<p>docker build -t proxbox-api:raw .                          # raw (default)
-docker build --target nginx -t proxbox-api:nginx .         # nginx
-docker build --target granian -t proxbox-api:granian .     # granian
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>proxbox-api:raw<span class="w"> </span>.<span class="w">                          </span><span class="c1"># raw (default)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>docker<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </span>proxbox-api:nginx<span class="w"> </span>.<span class="w">         </span><span class="c1"># nginx</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>docker<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>granian<span class="w"> </span>-t<span class="w"> </span>proxbox-api:granian<span class="w"> </span>.<span class="w">     </span><span class="c1"># granian</span>
+</code></pre></div>
 <h2 id="option-2-pypi">Option 2: PyPI<a class="headerlink" href="#option-2-pypi" title="Permanent link">&para;</a></h2>
 <p>The package is published to <a href="https://pypi.org/project/proxbox-api/">PyPI</a> as <code>proxbox-api</code>.</p>
-<p><code>bash
-pip install proxbox-api</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox-api
+</code></pre></div>
 <p>Or with <code>uv</code>:</p>
-<p><code>bash
-uv add proxbox-api</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>uv<span class="w"> </span>add<span class="w"> </span>proxbox-api
+</code></pre></div>
 <p>Start the server:</p>
-<p><code>bash
-python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
 <h2 id="option-3-local-development-from-source">Option 3: Local development from source<a class="headerlink" href="#option-3-local-development-from-source" title="Permanent link">&para;</a></h2>
 <p>Clone repository:</p>
-<p><code>bash
-git clone https://github.com/emersonfelipesp/proxbox-api.git
-cd proxbox-api</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
+</code></pre></div>
 <p>Install runtime dependencies:</p>
-<p><code>bash
-pip install -e .</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+</code></pre></div>
 <p>Or use <code>uv</code>:</p>
-<p><code>bash
-uv sync</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>uv<span class="w"> </span>sync
+</code></pre></div>
 <p>Run API:</p>
-<p><code>bash
-uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
 <p>Alternative with uvicorn:</p>
-<p><code>bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
+</code></pre></div>
 <p><code>fastapi run</code> does not expose TLS flags; for HTTPS from the app process, use <strong>uvicorn</strong> with <code>--ssl-certfile</code> / <code>--ssl-keyfile</code> below, or put <strong>nginx/Caddy</strong> in front (recommended for real certificates).</p>
 <h2 id="tls-without-docker">TLS without Docker<a class="headerlink" href="#tls-without-docker" title="Permanent link">&para;</a></h2>
 <h3 id="local-certificates-mkcert">Local certificates (mkcert)<a class="headerlink" href="#local-certificates-mkcert" title="Permanent link">&para;</a></h3>
 <p>For trusted HTTPS on your own machine only:</p>
-<p><code>bash
-mkcert -install
-mkcert proxbox.backend.local localhost 127.0.0.1 ::1
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
-  --ssl-keyfile=./proxbox.backend.local+3-key.pem \
-  --ssl-certfile=./proxbox.backend.local+3.pem</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>mkcert<span class="w"> </span>-install
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>mkcert<span class="w"> </span>proxbox.backend.local<span class="w"> </span>localhost<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>::1
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>./proxbox.backend.local+3-key.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>./proxbox.backend.local+3.pem
+</code></pre></div>
 <p>Adjust file names to match what <code>mkcert</code> created.</p>
 <h3 id="publicly-trusted-or-corporate-certificates">Publicly trusted or corporate certificates<a class="headerlink" href="#publicly-trusted-or-corporate-certificates" title="Permanent link">&para;</a></h3>
 <p><strong>Recommended:</strong> terminate TLS in <strong>nginx</strong> or <strong>Caddy</strong>, run the API on <strong>HTTP</strong> on <code>127.0.0.1:8000</code>:</p>
-<p><code>bash
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
 <p>Point the proxy at <code>http://127.0.0.1:8000</code> and set <code>ssl_certificate</code> / <code>ssl_certificate_key</code> to your PEM paths (for Let's Encrypt: <code>fullchain.pem</code> and <code>privkey.pem</code> under <code>/etc/letsencrypt/live/&lt;domain&gt;/</code>). Set <code>X-Forwarded-Proto</code> and related headers so the app sees the original scheme. See the repository <strong>README</strong> for a complete nginx <code>server</code> example.</p>
 <p><strong>Direct uvicorn TLS</strong> (small deployments): use the <strong>full certificate chain</strong> as <code>--ssl-certfile</code> and the private key as <code>--ssl-keyfile</code>:</p>
-<p><code>bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
-  --ssl-certfile=/etc/letsencrypt/live/api.example.com/fullchain.pem \
-  --ssl-keyfile=/etc/letsencrypt/live/api.example.com/privkey.pem</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8443</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/fullchain.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/privkey.pem
+</code></pre></div>
 <p>Ensure the process user can read those files, and renew/reload after certificate updates.</p>
 <h2 id="verify-installation">Verify installation<a class="headerlink" href="#verify-installation" title="Permanent link">&para;</a></h2>
 <p>Open:</p>

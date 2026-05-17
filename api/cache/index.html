@@ -773,6 +773,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#metrics-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment Variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-prometheus-scraping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Prometheus Scraping
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1252,6 +1285,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -1507,6 +1568,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#metrics-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment Variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-prometheus-scraping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Prometheus Scraping
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1564,60 +1658,59 @@
 <h2 id="response-schemas">Response Schemas<a class="headerlink" href="#response-schemas" title="Permanent link">&para;</a></h2>
 <h3 id="get-cache">GET /cache<a class="headerlink" href="#get-cache" title="Permanent link">&para;</a></h3>
 <p>Returns a combined view of all caches:</p>
-<p><code>json
-{
-  "proxbox_cache": { ... },
-  "netbox_get_cache_metrics": {
-    "hits": 150,
-    "misses": 50,
-    "hit_rate": 75.0,
-    "invalidations": 10,
-    "evictions_ttl": 5,
-    "evictions_size": 3,
-    "evictions_bytes": 2500,
-    "current_entries": 50,
-    "current_bytes": 5242880,
-    "max_entries": 4096,
-    "max_bytes": 52428800,
-    "ttl_seconds": 60.0,
-    "oldest_entry_age_seconds": 45.2
-  },
-  "netbox_get_cache_sample": [
-    {"api_id": 123456, "path": "/api/dcim/devices/", "query": ""}
-  ]
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;proxbox_cache&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;netbox_get_cache_metrics&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;hits&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">150</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">&quot;misses&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">&quot;hit_rate&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">75.0</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">&quot;invalidations&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">&quot;evictions_ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">&quot;evictions_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">&quot;evictions_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2500</span><span class="p">,</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">&quot;current_entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="p">,</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">&quot;current_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5242880</span><span class="p">,</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">&quot;max_entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4096</span><span class="p">,</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">&quot;max_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">52428800</span><span class="p">,</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">&quot;ttl_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">60.0</span><span class="p">,</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="nt">&quot;oldest_entry_age_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">45.2</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">  </span><span class="nt">&quot;netbox_get_cache_sample&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;api_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/api/dcim/devices/&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">}</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="p">}</span>
+</code></pre></div>
 <h3 id="get-cachemetrics">GET /cache/metrics<a class="headerlink" href="#get-cachemetrics" title="Permanent link">&para;</a></h3>
 <p>Returns NetBox GET cache metrics:</p>
-<p><code>json
-{
-  "hits": 150,
-  "misses": 50,
-  "hit_rate": 75.0,
-  "invalidations": 10,
-  "evictions_ttl": 5,
-  "evictions_size": 3,
-  "evictions_bytes": 2500,
-  "current_entries": 50,
-  "current_bytes": 5242880,
-  "max_entries": 4096,
-  "max_bytes": 52428800,
-  "ttl_seconds": 60.0,
-  "oldest_entry_age_seconds": 45.2
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;hits&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">150</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;misses&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;hit_rate&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">75.0</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;invalidations&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">&quot;evictions_ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">&quot;evictions_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nt">&quot;evictions_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2500</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">&quot;current_entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="p">,</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span><span class="nt">&quot;current_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5242880</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span><span class="nt">&quot;max_entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4096</span><span class="p">,</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="nt">&quot;max_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">52428800</span><span class="p">,</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">  </span><span class="nt">&quot;ttl_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">60.0</span><span class="p">,</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">  </span><span class="nt">&quot;oldest_entry_age_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">45.2</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="p">}</span>
+</code></pre></div>
 <h3 id="get-cachemetricsprometheus">GET /cache/metrics/prometheus<a class="headerlink" href="#get-cachemetricsprometheus" title="Permanent link">&para;</a></h3>
 <p>Returns cache metrics in Prometheus format:</p>
-<p>```</p>
-<h1 id="help-proxbox_cache_hits-total-number-of-cache-hits">HELP proxbox_cache_hits Total number of cache hits<a class="headerlink" href="#help-proxbox_cache_hits-total-number-of-cache-hits" title="Permanent link">&para;</a></h1>
-<h1 id="type-proxbox_cache_hits-counter">TYPE proxbox_cache_hits counter<a class="headerlink" href="#type-proxbox_cache_hits-counter" title="Permanent link">&para;</a></h1>
-<p>proxbox_cache_hits 150</p>
-<h1 id="help-proxbox_cache_misses-total-number-of-cache-misses">HELP proxbox_cache_misses Total number of cache misses<a class="headerlink" href="#help-proxbox_cache_misses-total-number-of-cache-misses" title="Permanent link">&para;</a></h1>
-<h1 id="type-proxbox_cache_misses-counter">TYPE proxbox_cache_misses counter<a class="headerlink" href="#type-proxbox_cache_misses-counter" title="Permanent link">&para;</a></h1>
-<p>proxbox_cache_misses 50</p>
-<h1 id="help-proxbox_cache_hit_rate-cache-hit-rate-percentage">HELP proxbox_cache_hit_rate Cache hit rate percentage<a class="headerlink" href="#help-proxbox_cache_hit_rate-cache-hit-rate-percentage" title="Permanent link">&para;</a></h1>
-<h1 id="type-proxbox_cache_hit_rate-gauge">TYPE proxbox_cache_hit_rate gauge<a class="headerlink" href="#type-proxbox_cache_hit_rate-gauge" title="Permanent link">&para;</a></h1>
-<p>proxbox_cache_hit_rate 75.0
-...
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a># HELP proxbox_cache_hits Total number of cache hits
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a># TYPE proxbox_cache_hits counter
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>proxbox_cache_hits 150
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a># HELP proxbox_cache_misses Total number of cache misses
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a># TYPE proxbox_cache_misses counter
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>proxbox_cache_misses 50
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a># HELP proxbox_cache_hit_rate Cache hit rate percentage
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a># TYPE proxbox_cache_hit_rate gauge
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>proxbox_cache_hit_rate 75.0
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>...
+</code></pre></div>
 <h2 id="metrics-reference">Metrics Reference<a class="headerlink" href="#metrics-reference" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1729,12 +1822,12 @@
 </table>
 <h2 id="example-prometheus-scraping">Example: Prometheus Scraping<a class="headerlink" href="#example-prometheus-scraping" title="Permanent link">&para;</a></h2>
 <p>Add this to your Prometheus configuration:</p>
-<p><code>yaml
-scrape_configs:
-  - job_name: 'proxbox-api'
-    static_configs:
-      - targets: ['proxbox-api:8000']
-    metrics_path: '/cache/metrics/prometheus'</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">scrape_configs</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">job_name</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;proxbox-api&#39;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">static_configs</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">targets</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&#39;proxbox-api:8000&#39;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">metrics_path</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;/cache/metrics/prometheus&#39;</span>
+</code></pre></div>
 
 
 

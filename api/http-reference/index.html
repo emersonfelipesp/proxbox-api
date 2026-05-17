@@ -1490,6 +1490,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -2049,10 +2077,10 @@
 </ul>
 <h3 id="netbox-singleton-rule">NetBox singleton rule<a class="headerlink" href="#netbox-singleton-rule" title="Permanent link">&para;</a></h3>
 <p>Attempting to create a second endpoint returns HTTP 400 with:</p>
-<p><code>json
-{
-  "detail": "Only one NetBox endpoint is allowed"
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Only one NetBox endpoint is allowed&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
+</code></pre></div>
 <h2 id="proxmox-routes-proxmox">Proxmox Routes (<code>/proxmox</code>)<a class="headerlink" href="#proxmox-routes-proxmox" title="Permanent link">&para;</a></h2>
 <h3 id="endpoint-configuration-crud">Endpoint configuration CRUD<a class="headerlink" href="#endpoint-configuration-crud" title="Permanent link">&para;</a></h3>
 <ul>
@@ -2183,25 +2211,25 @@ out of scope and may be added in a follow-up release.</p>
 </table>
 <h4 id="allow_writes-gate-403-shape"><code>allow_writes</code> gate (403 shape)<a class="headerlink" href="#allow_writes-gate-403-shape" title="Permanent link">&para;</a></h4>
 <p>When <code>endpoint_id</code> is missing, the endpoint does not exist, or <code>ProxmoxEndpoint.allow_writes</code> is <code>false</code>, the handler returns HTTP 403 with one of three <code>reason</code> codes:</p>
-<p><code>json
-{
-  "reason": "endpoint_writes_disabled",
-  "detail": "Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.",
-  "endpoint_id": 7
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;endpoint_writes_disabled&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Operational verbs are disabled on this endpoint. Enable ProxmoxEndpoint.allow_writes on the NetBox side after granting core.run_proxmox_action to the operator group.&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;endpoint_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
+</code></pre></div>
 <p>Other 403 shapes use <code>reason: "endpoint_id_required"</code> or <code>reason: "endpoint_not_found"</code> and omit <code>endpoint_id</code>. The gate is the load-bearing trust boundary documented in <code>docs/design/operational-verbs.md</code> §2.3 layer 3 — it must remain the first check in every handler.</p>
 <h4 id="response-shape-success-no-op">Response shape (success / no-op)<a class="headerlink" href="#response-shape-success-no-op" title="Permanent link">&para;</a></h4>
-<p><code>json
-{
-  "verb": "start",
-  "vmid": 100,
-  "vm_type": "qemu",
-  "endpoint_id": 7,
-  "result": "ok",
-  "dispatched_at": "2026-05-13T14:22:08Z",
-  "proxmox_task_upid": "UPID:pve1:00012E34:...",
-  "journal_entry_url": "/api/extras/journal-entries/42/"
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;verb&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;start&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;vmid&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;vm_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;qemu&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;endpoint_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;dispatched_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-13T14:22:08Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">&quot;proxmox_task_upid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;UPID:pve1:00012E34:...&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">&quot;journal_entry_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/api/extras/journal-entries/42/&quot;</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
+</code></pre></div>
 <p><code>result</code> is one of <code>ok</code>, <code>already_running</code>, <code>already_stopped</code>, <code>accepted</code> (migrate dispatch), <code>cancel_requested</code>, <code>cancel_failed</code>, <code>rejected</code>, or <code>failed</code>. Error paths add <code>reason</code> and <code>detail</code>. The migrate 202 response also carries <code>sse_url</code>, <code>target</code>, <code>online</code>, and <code>source_node</code>.</p>
 <h3 id="viewer-and-generated-contract-helpers">Viewer and generated contract helpers<a class="headerlink" href="#viewer-and-generated-contract-helpers" title="Permanent link">&para;</a></h3>
 <ul>
@@ -2350,16 +2378,16 @@ out of scope and may be added in a follow-up release.</p>
 </ul>
 <p>The registry is <strong>process-local and memory-only</strong>, so the probe answers for the worker that handles the request. With multiple uvicorn workers, callers may see disagreeing answers across workers; treat the response as advisory and keep the scheduling interval larger than the typical sync duration. The endpoint is covered by the standard <code>X-Proxbox-API-Key</code> middleware.</p>
 <p>Response shape:</p>
-<p><code>json
-{
-  "active": true,
-  "started_at": "2026-05-12T17:53:28.122Z",
-  "id": "9b6c0408-...",
-  "kind": "full-update",
-  "runs": [
-    { "id": "9b6c0408-...", "kind": "full-update", "started_at": "2026-05-12T17:53:28.122Z" }
-  ]
-}</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;started_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-12T17:53:28.122Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9b6c0408-...&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;full-update&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">&quot;runs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9b6c0408-...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;full-update&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;started_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-12T17:53:28.122Z&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">}</span>
+</code></pre></div>
 <p><code>started_at</code> / <code>id</code> / <code>kind</code> report the oldest in-flight run (FIFO). <code>runs</code> lists every registered run on the local replica for diagnostics.</p>
 <h2 id="websocket">WebSocket<a class="headerlink" href="#websocket" title="Permanent link">&para;</a></h2>
 <ul>

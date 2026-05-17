@@ -1140,6 +1140,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../development/deployment/" class="md-nav__link">
         
   
@@ -1378,6 +1406,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#content-guidelines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content Guidelines
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1413,28 +1452,30 @@ Submodule layout and cross-repo links: <code>/root/personal-context/claude-refer
 <h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
 <p>MkDocs Material documentation for <code>proxbox-api</code>, published in English and Brazilian Portuguese. The <code>mkdocs.yml</code> at the repo root configures the site with <code>mkdocs-static-i18n</code> for bilingual support.</p>
 <h2 id="directory-structure">Directory Structure<a class="headerlink" href="#directory-structure" title="Permanent link">&para;</a></h2>
-<p><code>docs/
-├── index.md                    # Main landing page (English)
-├── getting-started/            # Installation and configuration guides
-├── development/                # Contributing, deployment, troubleshooting, testing
-├── architecture/               # System overview and design patterns
-├── api/                        # HTTP and WebSocket API reference
-├── sync/                       # Sync workflow documentation
-└── pt-BR/                      # Brazilian Portuguese translations
-    ├── api/
-    ├── architecture/
-    ├── development/
-    ├── getting-started/
-    └── sync/</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docs/
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── index.md                    # Main landing page (English)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── getting-started/            # Installation and configuration guides
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├── development/                # Contributing, deployment, troubleshooting, testing
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── architecture/               # System overview and design patterns
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── api/                        # HTTP and WebSocket API reference
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── sync/                       # Sync workflow documentation
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>└── pt-BR/                      # Brazilian Portuguese translations
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    ├── api/
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    ├── architecture/
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    ├── development/
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    ├── getting-started/
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    └── sync/
+</code></pre></div>
 <h2 id="building-and-serving-docs">Building and Serving Docs<a class="headerlink" href="#building-and-serving-docs" title="Permanent link">&para;</a></h2>
-<p>```bash</p>
-<h1 id="install-docs-dependencies">Install docs dependencies<a class="headerlink" href="#install-docs-dependencies" title="Permanent link">&para;</a></h1>
-<p>uv sync --extra docs</p>
-<h1 id="serve-locally-with-live-reload">Serve locally with live reload<a class="headerlink" href="#serve-locally-with-live-reload" title="Permanent link">&para;</a></h1>
-<p>uv run mkdocs serve</p>
-<h1 id="build-static-site">Build static site<a class="headerlink" href="#build-static-site" title="Permanent link">&para;</a></h1>
-<p>uv run mkdocs build
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Install docs dependencies</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>docs
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Serve locally with live reload</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>uv<span class="w"> </span>run<span class="w"> </span>mkdocs<span class="w"> </span>serve
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Build static site</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>uv<span class="w"> </span>run<span class="w"> </span>mkdocs<span class="w"> </span>build
+</code></pre></div>
 <h2 id="content-guidelines">Content Guidelines<a class="headerlink" href="#content-guidelines" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Keep English (<code>docs/</code>) and Portuguese (<code>docs/pt-BR/</code>) files in sync when updating content.</li>

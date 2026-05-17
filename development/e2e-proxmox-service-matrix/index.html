@@ -10,19 +10,19 @@
       
       
       
-        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/development/schema-management/">
+        <link rel="canonical" href="https://emersonfelipesp.github.io/proxbox-api/development/e2e-proxmox-service-matrix/">
       
       
-        <link rel="prev" href="../../operations/hardware-discovery/">
+        <link rel="prev" href="../ci-e2e-workflows/">
       
       
-        <link rel="next" href="../testing/">
+        <link rel="next" href="../deployment/">
       
       
         
           <link rel="alternate" href="./" hreflang="en">
         
-          <link rel="alternate" href="../../pt-BR/development/schema-management/" hreflang="pt-BR">
+          <link rel="alternate" href="../../pt-BR/development/e2e-proxmox-service-matrix/" hreflang="pt-BR">
         
       
       
@@ -31,7 +31,7 @@
     
     
       
-        <title>Schema Management - proxbox-api</title>
+        <title>E2E Proxmox Service Matrix - proxbox-api</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#proxmox-schema-management" class="md-skip">
+        <a href="#e2e-proxmox-service-matrix" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Schema Management
+              E2E Proxmox Service Matrix
             
           </span>
         </div>
@@ -135,7 +135,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../pt-BR/development/schema-management/" hreflang="pt-BR" class="md-select__link">
+            <a href="../../pt-BR/development/e2e-proxmox-service-matrix/" hreflang="pt-BR" class="md-select__link">
               Portugues (Brasil)
             </a>
           </li>
@@ -1057,37 +1057,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Schema Management
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../schema-management/" class="md-nav__link">
         
   
   
@@ -1103,209 +1076,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#bundled-schemas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Bundled schemas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#automatic-version-detection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Automatic version detection
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cli-proxbox-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CLI: proxbox-schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="CLI: proxbox-schema">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#list-available-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        List available versions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#check-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#generate-a-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Generate a schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Generate a schema">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#regenerate-an-existing-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Regenerate an existing schema
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-output-directory" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom output directory
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#tune-crawl-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tune crawl performance
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#http-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HTTP API
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="HTTP API">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#check-schema-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check schema status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#trigger-generation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Trigger generation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#refresh-routes-at-runtime" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Refresh routes at runtime
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#version-naming-convention" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Version naming convention
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1371,10 +1141,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../e2e-proxmox-service-matrix/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1390,6 +1187,164 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-a-service-axis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why a Service Axis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#matrix-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matrix Shape
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Matrix Shape">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ciyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ci.yml
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publish-testpypiyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        publish-testpypi.yml
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixture-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixture Layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skip-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skip Policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Smoke Test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pytest-markers-and-ci-wiring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pytest Markers and CI Wiring
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-cell-verifies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Each Cell Verifies
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-a-single-cell-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running a Single Cell Locally
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-edit-this-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When To Edit This Page
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1597,10 +1552,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#bundled-schemas" class="md-nav__link">
+  <a href="#why-a-service-axis" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bundled schemas
+        Why a Service Axis
       
     </span>
   </a>
@@ -1608,33 +1563,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-version-detection" class="md-nav__link">
+  <a href="#matrix-shape" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic version detection
+        Matrix Shape
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cli-proxbox-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CLI: proxbox-schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="CLI: proxbox-schema">
+    <nav class="md-nav" aria-label="Matrix Shape">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#list-available-versions" class="md-nav__link">
+  <a href="#ciyml" class="md-nav__link">
     <span class="md-ellipsis">
       
-        List available versions
+        ci.yml
       
     </span>
   </a>
@@ -1642,110 +1586,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#check-status" class="md-nav__link">
+  <a href="#publish-testpypiyml" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Check status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#generate-a-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Generate a schema
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Generate a schema">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#regenerate-an-existing-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Regenerate an existing schema
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-output-directory" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom output directory
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#tune-crawl-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tune crawl performance
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#http-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HTTP API
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="HTTP API">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#check-schema-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check schema status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#trigger-generation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Trigger generation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#refresh-routes-at-runtime" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Refresh routes at runtime
+        publish-testpypi.yml
       
     </span>
   </a>
@@ -1758,10 +1602,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
+  <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Requirements
+        Architecture
       
     </span>
   </a>
@@ -1769,10 +1613,76 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#version-naming-convention" class="md-nav__link">
+  <a href="#fixture-layer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Version naming convention
+        Fixture Layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skip-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skip Policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Smoke Test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pytest-markers-and-ci-wiring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pytest Markers and CI Wiring
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-cell-verifies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Each Cell Verifies
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-a-single-cell-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running a Single Cell Locally
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-edit-this-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When To Edit This Page
       
     </span>
   </a>
@@ -1796,7 +1706,7 @@
 
 
   
-    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/development/schema-management.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/emersonfelipesp/proxbox-api/edit/master/docs/development/e2e-proxmox-service-matrix.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1804,187 +1714,331 @@
   
 
 
-<h1 id="proxmox-schema-management">Proxmox Schema Management<a class="headerlink" href="#proxmox-schema-management" title="Permanent link">&para;</a></h1>
-<p><code>proxbox-api</code> ships bundled Proxmox OpenAPI schemas for the latest three stable PVE release lines. These schemas drive the runtime-generated proxy routes under <code>/proxmox/api2/*</code>. This page explains how to list, check, and generate schemas from the command line or via the HTTP API.</p>
-<h2 id="bundled-schemas">Bundled schemas<a class="headerlink" href="#bundled-schemas" title="Permanent link">&para;</a></h2>
-<p>The following versions are included with the package under <code>proxbox_api/generated/proxmox/</code>:</p>
+<h1 id="e2e-proxmox-service-matrix">E2E Proxmox Service Matrix<a class="headerlink" href="#e2e-proxmox-service-matrix" title="Permanent link">&para;</a></h1>
+<p>The <code>proxbox-api</code> E2E suite runs every Docker-backed cell against a dedicated
+<code>proxmox-sdk</code> mock container. The mock is split by Proxmox service
+(<code>pve</code>, <code>pbs</code>, <code>pdm</code>) and CI fans the suite across all three so a single push
+exercises every supported service stub in parallel.</p>
+<p>For the surrounding workflow layout — CI jobs, dependency modes, the staged
+TestPyPI/PyPI publication lanes, and the Docker image variants — see
+<a href="../ci-e2e-workflows/">CI and E2E Workflows</a>.</p>
+<h2 id="why-a-service-axis">Why a Service Axis<a class="headerlink" href="#why-a-service-axis" title="Permanent link">&para;</a></h2>
+<p><code>proxmox-sdk</code> publishes three service-specific image tags from
+<a href="https://github.com/emersonfelipesp/proxmox-sdk"><code>emersonfelipesp/proxmox-sdk</code></a>:</p>
 <table>
 <thead>
 <tr>
-<th>Version tag</th>
-<th>Proxmox release</th>
+<th>Service</th>
+<th>Image tag</th>
+<th>Coverage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>8.1</code></td>
-<td>PVE 8.1.x</td>
+<td><code>pve</code></td>
+<td><code>emersonfelipesp/proxmox-sdk:latest-pve</code></td>
+<td>Full Proxmox VE OpenAPI surface (646 endpoints). Drives the historical sync pipeline.</td>
 </tr>
 <tr>
-<td><code>8.2</code></td>
-<td>PVE 8.2.x</td>
+<td><code>pbs</code></td>
+<td><code>emersonfelipesp/proxmox-sdk:latest-pbs</code></td>
+<td>Proxmox Backup Server stub. <code>/health</code> + service identifier only; PVE-shaped routes are intentionally absent.</td>
 </tr>
 <tr>
-<td><code>8.3</code></td>
-<td>PVE 8.3.x</td>
-</tr>
-<tr>
-<td><code>latest</code></td>
-<td>Current API Viewer snapshot</td>
+<td><code>pdm</code></td>
+<td><code>emersonfelipesp/proxmox-sdk:latest-pdm</code></td>
+<td>Proxmox Datacenter Manager stub. Same shape as PBS today.</td>
 </tr>
 </tbody>
 </table>
-<p>On startup the app loads all available version directories and mounts routes for each. The startup log confirms which versions were found:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>[INFO] Bundled Proxmox OpenAPI schema versions available: 8.1, 8.2, 8.3, latest
-</code></pre></div>
-<h2 id="automatic-version-detection">Automatic version detection<a class="headerlink" href="#automatic-version-detection" title="Permanent link">&para;</a></h2>
-<p>When you call <code>GET /proxmox/sessions</code>, the app checks the connected Proxmox cluster's version against the bundled schemas. Each session entry in the response includes a <code>schema_status</code> field:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pve-cluster&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;proxmox_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;8.3.2&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;release&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;8.3&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;repoid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123&quot;</span><span class="p">},</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;schema_release&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;8.3&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;schema_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;available&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;version_tag&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;8.3&quot;</span><span class="p">}</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
-</code></pre></div>
-<p>If the connected version has no matching bundled schema (for example, a future PVE 8.4 cluster), generation starts automatically in the background:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;schema_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;generating&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;version_tag&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;8.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;No bundled schema found for Proxmox 8.4. Background generation started. This may take several minutes.&quot;</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">}</span>
-</code></pre></div>
-<p>Routes for the new version are registered at runtime once generation completes — no restart needed.</p>
-<h2 id="cli-proxbox-schema">CLI: <code>proxbox-schema</code><a class="headerlink" href="#cli-proxbox-schema" title="Permanent link">&para;</a></h2>
-<p>The <code>proxbox-schema</code> command is the recommended way to manage schemas manually.</p>
-<h3 id="list-available-versions">List available versions<a class="headerlink" href="#list-available-versions" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>proxbox-schema<span class="w"> </span>list
-</code></pre></div>
-<p>Output:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Available Proxmox OpenAPI schema versions (4):
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>         8.1   6.4 MB   /opt/proxbox_api/generated/proxmox/8.1/openapi.json
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>         8.2   6.4 MB   /opt/proxbox_api/generated/proxmox/8.2/openapi.json
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>         8.3   6.4 MB   /opt/proxbox_api/generated/proxmox/8.3/openapi.json
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>      latest   7.3 MB   /opt/proxbox_api/generated/proxmox/latest/openapi.json
-</code></pre></div>
-<h3 id="check-status">Check status<a class="headerlink" href="#check-status" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>proxbox-schema<span class="w"> </span>status
-</code></pre></div>
-<p>Shows available versions and any active or recently completed generation tasks:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Bundled versions: 8.1, 8.2, 8.3, latest
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>No active or recent generation tasks.
-</code></pre></div>
-<h3 id="generate-a-schema">Generate a schema<a class="headerlink" href="#generate-a-schema" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>proxbox-schema<span class="w"> </span>generate<span class="w"> </span><span class="m">8</span>.4
-</code></pre></div>
-<p>This crawls the Proxmox API Viewer, parses all endpoints, and writes the generated artifacts under <code>proxbox_api/generated/proxmox/8.4/</code>. The command prints progress and a completion summary:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Generating Proxmox OpenAPI schema for version &#39;8.4&#39;...
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Output directory: proxbox_api/generated/proxmox/8.4
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>Source URL: https://pve.proxmox.com/pve-docs/api-viewer/
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>Workers: 10
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>This may take several minutes. The pipeline crawls the Proxmox API Viewer,
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>parses all endpoints, and generates OpenAPI + Pydantic artifacts.
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>Generation completed for Proxmox 8.4
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>  Endpoints:  493
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>  Operations: 1284
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>  Duration:   187.3s
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>  Output:     proxbox_api/generated/proxmox/8.4
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>
-<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>Schema is ready. Restart the app or call POST /proxmox/viewer/routes/refresh
-<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>to register the new routes at runtime.
-</code></pre></div>
-<p>After generation, register the new routes without restarting:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8800/proxmox/viewer/routes/refresh<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-Proxbox-API-Key: YOUR_KEY&quot;</span>
-</code></pre></div>
-<h4 id="regenerate-an-existing-schema">Regenerate an existing schema<a class="headerlink" href="#regenerate-an-existing-schema" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>proxbox-schema<span class="w"> </span>generate<span class="w"> </span><span class="m">8</span>.3<span class="w"> </span>--force
-</code></pre></div>
-<p>Without <code>--force</code>, the command exits early when a schema already exists.</p>
-<h4 id="custom-output-directory">Custom output directory<a class="headerlink" href="#custom-output-directory" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>proxbox-schema<span class="w"> </span>generate<span class="w"> </span><span class="m">8</span>.4<span class="w"> </span>--output-dir<span class="w"> </span>/data/proxmox-schemas
-</code></pre></div>
-<p>The app only loads schemas from <code>proxbox_api/generated/proxmox/</code> by default. Use a custom directory only if you mount it there or adjust the load path.</p>
-<h4 id="tune-crawl-performance">Tune crawl performance<a class="headerlink" href="#tune-crawl-performance" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>proxbox-schema<span class="w"> </span>generate<span class="w"> </span><span class="m">8</span>.4<span class="w"> </span>--workers<span class="w"> </span><span class="m">5</span><span class="w"> </span>--retry-count<span class="w"> </span><span class="m">3</span><span class="w"> </span>--retry-backoff<span class="w"> </span><span class="m">0</span>.5
-</code></pre></div>
+<p>Running the same backend, the same NetBox container, and the same fixtures
+against all three tags is the cheapest way to catch a regression that would
+break a real PBS or PDM connection — even before the upstream OpenAPI surface
+is fully generated.</p>
+<h2 id="matrix-shape">Matrix Shape<a class="headerlink" href="#matrix-shape" title="Permanent link">&para;</a></h2>
+<h3 id="ciyml"><code>ci.yml</code><a class="headerlink" href="#ciyml" title="Permanent link">&para;</a></h3>
+<p>The CI matrix is generated dynamically by the <code>setup</code> job. The generator emits
+the cross-product of:</p>
 <table>
 <thead>
 <tr>
-<th>Flag</th>
+<th>Axis</th>
+<th>Source</th>
 <th>Default</th>
-<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>--workers</code></td>
-<td><code>10</code></td>
-<td>Number of async Playwright browser workers</td>
+<td><code>base</code> (transport bundle)</td>
+<td>Hard-coded list in <code>setup.gen</code></td>
+<td>7 transport combinations covering <code>http_manage</code>, <code>https_nginx</code>, <code>https_granian</code>, and IPv6 dual-stack</td>
 </tr>
 <tr>
-<td><code>--retry-count</code></td>
-<td><code>2</code></td>
-<td>Retries per endpoint on transient failures</td>
+<td><code>netbox_proxbox_mode</code></td>
+<td><code>INPUT_NETBOX_PROXBOX_MODE</code> (workflow input) and the event type</td>
+<td><code>dev</code> for push/PR, <code>[dev, pypi]</code> on release</td>
 </tr>
 <tr>
-<td><code>--retry-backoff</code></td>
-<td><code>0.35</code></td>
-<td>Base exponential backoff in seconds</td>
+<td><code>netbox_version</code></td>
+<td><code>.github/netbox-versions.json</code></td>
+<td>Currently three certified NetBox tags</td>
 </tr>
 <tr>
-<td><code>--checkpoint-every</code></td>
-<td><code>50</code></td>
-<td>Write a resume checkpoint every N endpoints</td>
+<td><code>proxmox_service</code></td>
+<td>Hard-coded <code>["pve", "pbs", "pdm"]</code></td>
+<td>All three services on every run</td>
 </tr>
 </tbody>
 </table>
-<p>Lower <code>--workers</code> if the crawl machine has limited resources. Increase <code>--retry-count</code> on flaky networks.</p>
-<h2 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
-<p>Use the HTTP API when you want to trigger generation or poll status from scripts or automation pipelines.</p>
-<h3 id="check-schema-status">Check schema status<a class="headerlink" href="#check-schema-status" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="err">GET /proxmox/viewer/schema-status</span>
+<p>The full cross-product is therefore <strong>7 (transport) × 1–2 (mode) × 3 (NetBox) × 3 (service) = 63–126 cells</strong>.
+Each cell uses <code>fail-fast: false</code>, so an unrelated cell failure does not abort
+the rest of the run.</p>
+<p>The image tag is rendered into the runner environment from the matrix and used
+both for <code>docker pull</code> and for the live <code>proxmox-e2e-mock</code> container:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">env</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">PROXMOX_OPENAPI_IMAGE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">emersonfelipesp/proxmox-sdk:latest-${{ matrix.proxmox_service }}</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">PROXMOX_SERVICE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ matrix.proxmox_service }}</span>
 </code></pre></div>
-<p>Response:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">&quot;available_versions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;8.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;8.2&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;8.3&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;latest&quot;</span><span class="p">],</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">&quot;generation_tasks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="p">}</span>
+<h3 id="publish-testpypiyml"><code>publish-testpypi.yml</code><a class="headerlink" href="#publish-testpypiyml" title="Permanent link">&para;</a></h3>
+<p>The pre- and post-publish E2E jobs pin the same axis statically with
+<code>proxmox_service: [pve, pbs, pdm]</code> so the published artifacts (TestPyPI dist,
+Docker Hub image) are validated against every service stub before the release
+is finalized.</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<p>Every cell stands up the same physical layout on its runner. The only difference
+between cells is which <code>proxmox-sdk</code> tag is loaded into <code>proxmox-e2e-mock</code>.</p>
+<pre class="mermaid"><code>flowchart LR
+  A[GitHub Actions Runner]
+
+  subgraph D[Docker network: proxbox-e2e]
+    NB[NetBox container&lt;br&gt;netbox-proxbox installed]
+    NGINX[Optional HTTPS nginx]
+    API[proxbox-api container&lt;br&gt;raw / nginx / granian target]
+    PM[proxmox-sdk mock&lt;br&gt;tag latest-pve / latest-pbs / latest-pdm]
+    PG[(PostgreSQL)]
+    RD[(Redis)]
+  end
+
+  A --&gt; NB
+  A --&gt; API
+  A --&gt; PM
+  NB --&gt; PG
+  NB --&gt; RD
+
+  API --&gt;|Proxmox-shaped reads| PM
+  API --&gt;|NetBox REST writes| NB
+  NGINX --&gt; NB</code></pre>
+<h2 id="fixture-layer">Fixture Layer<a class="headerlink" href="#fixture-layer" title="Permanent link">&para;</a></h2>
+<p>The Python fixture layer lives in <code>proxbox_api/e2e/fixtures/proxmox_sdk_mock.py</code>
+and is the single place that decides "is this run PVE-shaped, or a service stub
+that has no VM/cluster data?".</p>
+<table>
+<thead>
+<tr>
+<th>Helper</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_resolve_proxmox_service(service="pve")</code></td>
+<td>Env-aware resolver. Reads <code>PROXMOX_SERVICE</code> when the caller did not pass an explicit service, lower-cases the value, and falls back to <code>pve</code>.</td>
+</tr>
+<tr>
+<td><code>_empty_cluster(name, service)</code></td>
+<td>Returns a service-labeled cluster with no nodes/VMs. Used for PBS and PDM cells.</td>
+</tr>
+<tr>
+<td><code>create_minimal_cluster(prefix, service="pve")</code></td>
+<td>One node, two VMs (QEMU + LXC) on PVE; an empty shell on non-PVE.</td>
+</tr>
+<tr>
+<td><code>create_multi_cluster(prefix, service="pve")</code></td>
+<td>Two PVE clusters with multiple nodes/VMs; a single empty shell on non-PVE.</td>
+</tr>
+<tr>
+<td><code>create_cluster_with_backups(prefix, service="pve")</code></td>
+<td>PVE cluster + backup metadata; on non-PVE returns the empty cluster and an empty backup list.</td>
+</tr>
+<tr>
+<td><code>create_custom_cluster(name, nodes_spec, vms_spec, prefix, service="pve")</code></td>
+<td>PVE custom topology; an empty shell on non-PVE.</td>
+</tr>
+</tbody>
+</table>
+<p>Tests do <strong>not</strong> need to know which service is loaded — they ask for a fixture,
+and the fixture either returns realistic PVE state or a labeled empty cluster.
+What changes between services is the <em>test selection</em>, not the fixture surface.</p>
+<h2 id="skip-policy">Skip Policy<a class="headerlink" href="#skip-policy" title="Permanent link">&para;</a></h2>
+<p><code>tests/e2e/conftest.py</code> exposes two session-scoped fixtures that own service
+routing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">proxmox_service</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="k">return</span> <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;PROXMOX_SERVICE&quot;</span><span class="p">,</span> <span class="s2">&quot;pve&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">or</span> <span class="s2">&quot;pve&quot;</span><span class="p">)</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">requires_pve_schema</span><span class="p">(</span><span class="n">proxmox_service</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="k">if</span> <span class="n">proxmox_service</span> <span class="o">!=</span> <span class="s2">&quot;pve&quot;</span><span class="p">:</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>        <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;requires PVE schema; service=</span><span class="si">{</span><span class="n">proxmox_service</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
-<p>Check a specific version:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="err">GET /proxmox/viewer/schema-status?version_tag=8.4</span>
+<p>Test modules that drive the full PVE sync pipeline declare the fixture
+requirement at module level:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">pytestmark</span> <span class="o">=</span> <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s2">&quot;requires_pve_schema&quot;</span><span class="p">)</span>
 </code></pre></div>
-<p>Response when generation is in progress:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">&quot;version_tag&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;8.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span><span class="nt">&quot;schema_available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span><span class="nt">&quot;generation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;running&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="p">}</span>
+<p>This applies today in:</p>
+<ul>
+<li><code>tests/e2e/test_backups_sync.py</code></li>
+<li><code>tests/e2e/test_devices_sync.py</code></li>
+<li><code>tests/e2e/test_vm_sync.py</code></li>
+</ul>
+<p>When <code>PROXMOX_SERVICE</code> is <code>pbs</code> or <code>pdm</code> those entire modules are auto-skipped
+with a visible reason in CI logs. The <code>minimal_cluster</code> / <code>multi_cluster</code> /
+<code>mock_proxmox_session</code> fixtures still build their labeled empty cluster, so no
+fixture import explodes when a stub is loaded.</p>
+<h2 id="service-smoke-test">Service Smoke Test<a class="headerlink" href="#service-smoke-test" title="Permanent link">&para;</a></h2>
+<p>A dedicated module verifies that the right service tag is actually mounted.
+<code>tests/e2e/test_proxmox_mock_health.py</code> runs on PBS and PDM cells only and
+checks that <code>/health</code> returns the loaded service identifier:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">asyncio</span><span class="p">(</span><span class="n">loop_scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_pbs_pdm_mock_health_reports_loaded_service</span><span class="p">(</span><span class="n">proxmox_service</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">if</span> <span class="n">proxmox_service</span> <span class="o">==</span> <span class="s2">&quot;pve&quot;</span><span class="p">:</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;PBS/PDM service smoke only&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">base_url</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="s2">&quot;PROXMOX_MOCK_PUBLISHED_URL&quot;</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8006&quot;</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="p">)</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="k">async</span> <span class="k">with</span> <span class="n">httpx</span><span class="o">.</span><span class="n">AsyncClient</span><span class="p">(</span><span class="n">base_url</span><span class="o">=</span><span class="n">base_url</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">10.0</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/health&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="k">assert</span> <span class="n">proxmox_service</span> <span class="ow">in</span> <span class="n">response</span><span class="o">.</span><span class="n">text</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
 </code></pre></div>
-<p>Possible <code>status</code> values: <code>pending</code>, <code>running</code>, <code>completed</code>, <code>failed</code>.</p>
-<h3 id="trigger-generation">Trigger generation<a class="headerlink" href="#trigger-generation" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="err">POST /proxmox/viewer/generate?version_tag=8.4</span>
+<p>This is the test that would catch the wrong image tag being pulled, or a
+service stub regressing its <code>/health</code> payload.</p>
+<h2 id="pytest-markers-and-ci-wiring">Pytest Markers and CI Wiring<a class="headerlink" href="#pytest-markers-and-ci-wiring" title="Permanent link">&para;</a></h2>
+<p>Two markers gate the Docker-backed E2E layer:</p>
+<ul>
+<li><code>mock_http</code> — runs against the real <code>proxmox-sdk</code> container on the
+  <code>proxbox-e2e</code> Docker network. Every cell runs this layer.</li>
+<li><code>mock_backend</code> — runs against the in-process <code>MockBackend</code>. Only used as a
+  separate pass.</li>
+</ul>
+<p>The CI workflow runs them in two steps inside each cell:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Run E2E tests (Docker proxmox mock)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">env</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">PROXMOX_SERVICE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ matrix.proxmox_service }}</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">uv run pytest tests/e2e/ -m &quot;mock_http&quot; --tb=short -v</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Run E2E tests with in-process MockBackend</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">if</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">github.ref == &#39;refs/heads/main&#39; &amp;&amp; matrix.proxmox_service == &#39;pve&#39;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">env</span><span class="p">:</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="nt">PROXMOX_SERVICE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ matrix.proxmox_service }}</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">uv run pytest tests/e2e/ -m &quot;mock_backend&quot; --tb=short -v</span>
 </code></pre></div>
-<p>This is a long-running synchronous request — it blocks until generation completes or fails. For background generation, prefer <code>proxbox-schema generate</code> or let auto-detection trigger it via <code>GET /proxmox/sessions</code>.</p>
-<h3 id="refresh-routes-at-runtime">Refresh routes at runtime<a class="headerlink" href="#refresh-routes-at-runtime" title="Permanent link">&para;</a></h3>
-<p>After generating a new schema, register its routes without restarting:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="err">POST /proxmox/viewer/routes/refresh</span>
+<p>The <code>mock_backend</code> step is gated to <code>main</code> <strong>and</strong> to <code>pve</code>. The in-process
+backend reuses the PVE-shaped fixtures and is not meant to validate the service
+container itself, so running it for <code>pbs</code> / <code>pdm</code> would add no signal.</p>
+<h2 id="what-each-cell-verifies">What Each Cell Verifies<a class="headerlink" href="#what-each-cell-verifies" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Verification</th>
+<th style="text-align: center;"><code>pve</code></th>
+<th style="text-align: center;"><code>pbs</code></th>
+<th style="text-align: center;"><code>pdm</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stack readiness (NetBox API, proxbox-api API, proxmox-sdk <code>/openapi.json</code>)</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">yes</td>
+</tr>
+<tr>
+<td>Mock <code>/health</code> reports the loaded service identifier</td>
+<td style="text-align: center;">(smoke skipped)</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">yes</td>
+</tr>
+<tr>
+<td><code>auth/register-key</code> + <code>netbox/endpoint</code> + <code>netbox/status</code> smoke</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">yes</td>
+</tr>
+<tr>
+<td><code>extras/custom-fields/create</code> smoke</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">yes</td>
+</tr>
+<tr>
+<td><code>test_backups_sync.py</code> (<code>requires_pve_schema</code>)</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">skip</td>
+<td style="text-align: center;">skip</td>
+</tr>
+<tr>
+<td><code>test_devices_sync.py</code> (<code>requires_pve_schema</code>)</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">skip</td>
+<td style="text-align: center;">skip</td>
+</tr>
+<tr>
+<td><code>test_vm_sync.py</code> (<code>requires_pve_schema</code>)</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">skip</td>
+<td style="text-align: center;">skip</td>
+</tr>
+<tr>
+<td>In-process <code>mock_backend</code> pass (main branch only)</td>
+<td style="text-align: center;">yes</td>
+<td style="text-align: center;">skip</td>
+<td style="text-align: center;">skip</td>
+</tr>
+</tbody>
+</table>
+<p>PVE cells therefore continue to certify the full sync pipeline, while PBS and
+PDM cells certify that the plugin, the backend, NetBox, and the mock can coexist
+and reach each other under those service tags.</p>
+<h2 id="running-a-single-cell-locally">Running a Single Cell Locally<a class="headerlink" href="#running-a-single-cell-locally" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Pick the service you want to reproduce</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXMOX_SERVICE</span><span class="o">=</span>pbs
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Pull the matching mock and start it on the standard port</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>docker<span class="w"> </span>pull<span class="w"> </span><span class="s2">&quot;emersonfelipesp/proxmox-sdk:latest-</span><span class="si">${</span><span class="nv">PROXMOX_SERVICE</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>proxmox-e2e-mock<span class="w"> </span>-p<span class="w"> </span><span class="m">8006</span>:8000<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">PROXMOX_API_MODE</span><span class="o">=</span>mock<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="s2">&quot;emersonfelipesp/proxmox-sdk:latest-</span><span class="si">${</span><span class="nv">PROXMOX_SERVICE</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;exec uvicorn ${APP_MODULE} --host 0.0.0.0 --port 8000&#39;</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c1"># Run the E2E suite the way CI runs it</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXBOX_E2E_NETBOX_URL</span><span class="o">=</span>http://127.0.0.1:8000
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXBOX_E2E_NETBOX_TOKEN</span><span class="o">=</span>&lt;your<span class="w"> </span><span class="nb">local</span><span class="w"> </span>NetBox<span class="w"> </span>token&gt;
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXMOX_MOCK_PUBLISHED_URL</span><span class="o">=</span>http://localhost:8006
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/e2e/<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;mock_http&quot;</span><span class="w"> </span>--tb<span class="o">=</span>short<span class="w"> </span>-v
 </code></pre></div>
-<p>Or for a specific version:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="err">POST /proxmox/viewer/routes/refresh?version_tag=8.4</span>
-</code></pre></div>
-<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<p>Schema generation uses <a href="https://playwright.dev/python/">Playwright</a> to headlessly crawl the Proxmox API Viewer. Install the extra:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox_api<span class="o">[</span>playwright<span class="o">]</span>
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>playwright<span class="w"> </span>install<span class="w"> </span>chromium
-</code></pre></div>
-<p>Without Playwright, the pipeline falls back to <code>apidoc.js</code> parsing. The fallback covers all endpoints but misses rendered descriptions from the interactive viewer.</p>
-<h2 id="version-naming-convention">Version naming convention<a class="headerlink" href="#version-naming-convention" title="Permanent link">&para;</a></h2>
-<p>Version tags use the <code>major.minor</code> format from the Proxmox <code>release</code> field (e.g. <code>"8.3"</code> from <code>{"release": "8.3", "version": "8.3.2"}</code>). The <code>latest</code> tag is a special alias for the most recent official API Viewer snapshot.</p>
-<p>When a connected Proxmox cluster reports a release (e.g. <code>"8.3"</code>) that matches a bundled schema directory exactly, that schema is used. If no exact match is found, the app falls back to the highest same-major bundled version, then to <code>latest</code>.</p>
+<p>On <code>pbs</code> or <code>pdm</code> the <code>requires_pve_schema</code>-gated modules report
+<code>SKIPPED [requires PVE schema; service=...]</code> and the
+<code>test_proxmox_mock_health.py</code> smoke verifies the running container actually
+exposes the requested service tag.</p>
+<h2 id="when-to-edit-this-page">When To Edit This Page<a class="headerlink" href="#when-to-edit-this-page" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A new <code>proxmox_service</code> value is added (or one is removed) — update the image
+  tag table and the per-cell verification table.</li>
+<li>A new fixture helper gains a <code>service</code> parameter — list it under
+  <a href="#fixture-layer">Fixture Layer</a>.</li>
+<li>A new test module either requires or stops requiring PVE schema — update
+  <a href="#skip-policy">Skip Policy</a>.</li>
+<li>The pytest marker gating changes — update
+  <a href="#pytest-markers-and-ci-wiring">Pytest Markers and CI Wiring</a>.</li>
+</ul>
+<p>Keep <code>docs/pt-BR/development/e2e-proxmox-service-matrix.md</code> in sync with this
+file when content changes.</p>
 
 
 

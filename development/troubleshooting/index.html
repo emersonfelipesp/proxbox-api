@@ -1144,6 +1144,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../deployment/" class="md-nav__link">
         
   
@@ -1904,8 +1932,8 @@
 <li>NetBox UI shows old values after sync completes.</li>
 </ul>
 <p>Resolution:</p>
-<p><code>bash
-curl http://localhost:8000/clear-cache</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>curl<span class="w"> </span>http://localhost:8000/clear-cache
+</code></pre></div>
 <h3 id="high-cache-miss-rate">High cache miss rate<a class="headerlink" href="#high-cache-miss-rate" title="Permanent link">&para;</a></h3>
 <p>Symptom:</p>
 <ul>
@@ -1914,15 +1942,15 @@ curl http://localhost:8000/clear-cache</code></p>
 <p>Resolution:</p>
 <ol>
 <li>Increase <code>PROXBOX_NETBOX_GET_CACHE_TTL</code>:
-   <code>bash
-   export PROXBOX_NETBOX_GET_CACHE_TTL=300  # 5 minutes</code></li>
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXBOX_NETBOX_GET_CACHE_TTL</span><span class="o">=</span><span class="m">300</span><span class="w">  </span><span class="c1"># 5 minutes</span>
+</code></pre></div></li>
 <li>Check query patterns: identical queries are required for cache hits (same path, same query params).</li>
 <li>Monitor with: <code>curl http://localhost:8000/cache/metrics</code></li>
 </ol>
 <h3 id="cache-performance-debugging">Cache performance debugging<a class="headerlink" href="#cache-performance-debugging" title="Permanent link">&para;</a></h3>
 <p>Enable debug logging:</p>
-<p><code>bash
-export PROXBOX_DEBUG_CACHE=1</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PROXBOX_DEBUG_CACHE</span><span class="o">=</span><span class="m">1</span>
+</code></pre></div>
 <p>Then check application logs for cache HIT/MISS/INVALIDATE messages.</p>
 <h2 id="proxmox-connection-failures">Proxmox connection failures<a class="headerlink" href="#proxmox-connection-failures" title="Permanent link">&para;</a></h2>
 <p>Symptom:</p>

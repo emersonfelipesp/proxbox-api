@@ -1279,6 +1279,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../development/e2e-proxmox-service-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Proxmox Service Matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/deployment/" class="md-nav__link">
         
   
@@ -1648,15 +1676,15 @@ grouped by NetBox resource:</p>
 <code>netbox_proxbox.constants.OVERWRITE_FIELDS</code> on the plugin side.</p>
 <h2 id="how-it-reaches-the-routes">How it reaches the routes<a class="headerlink" href="#how-it-reaches-the-routes" title="Permanent link">&para;</a></h2>
 <p>Each sync route accepts the schema as a flattened query group:</p>
-<p>```python
-from proxbox_api.dependencies import ResolvedSyncOverwriteFlagsDep
-from proxbox_api.schemas.sync import SyncOverwriteFlags</p>
-<p>@router.get("/devices/create/stream")
-async def create_devices_stream(
-    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
-):
-    ...
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">proxbox_api.dependencies</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedSyncOverwriteFlagsDep</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">proxbox_api.schemas.sync</span><span class="w"> </span><span class="kn">import</span> <span class="n">SyncOverwriteFlags</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nd">@router</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/devices/create/stream&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">create_devices_stream</span><span class="p">(</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">overwrite_flags</span><span class="p">:</span> <span class="n">ResolvedSyncOverwriteFlagsDep</span> <span class="o">=</span> <span class="n">SyncOverwriteFlags</span><span class="p">(),</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">):</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="o">...</span>
+</code></pre></div>
 <p>FastAPI flattens the model: the URL <code>?overwrite_device_tags=false</code> is
 equivalent to constructing <code>SyncOverwriteFlags(overwrite_device_tags=False)</code>.
 Routes also pass the bound model through the shared
@@ -1683,20 +1711,20 @@ in <code>role</code> being omitted from existing-device PATCH payloads.</p>
 own <code>patchable_fields</code> set — typically all "scalar" identity fields
 unconditionally, plus optional keys gated on the per-resource flag — and
 passes it into the reconciler:</p>
-<p>```python
-patchable: set[str] = {"name", "virtual_machine", "enabled", ...}
-if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_tags:
-    patchable.add("tags")
-if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields:
-    patchable.add("custom_fields")</p>
-<p>await rest_bulk_reconcile_async(
-    nb,
-    "/api/virtualization/interfaces/",
-    payloads=interface_payloads,
-    patchable_fields=frozenset(patchable),
-    ...,
-)
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">patchable</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;virtual_machine&quot;</span><span class="p">,</span> <span class="s2">&quot;enabled&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">}</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">if</span> <span class="n">overwrite_flags</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">overwrite_flags</span><span class="o">.</span><span class="n">overwrite_vm_interface_tags</span><span class="p">:</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">patchable</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">&quot;tags&quot;</span><span class="p">)</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">if</span> <span class="n">overwrite_flags</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">overwrite_flags</span><span class="o">.</span><span class="n">overwrite_vm_interface_custom_fields</span><span class="p">:</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">patchable</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">&quot;custom_fields&quot;</span><span class="p">)</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="k">await</span> <span class="n">rest_bulk_reconcile_async</span><span class="p">(</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">nb</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="s2">&quot;/api/virtualization/interfaces/&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">payloads</span><span class="o">=</span><span class="n">interface_payloads</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">patchable_fields</span><span class="o">=</span><span class="nb">frozenset</span><span class="p">(</span><span class="n">patchable</span><span class="p">),</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="o">...</span><span class="p">,</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="p">)</span>
+</code></pre></div>
 <p>Setting <code>overwrite_flags=None</code> (or omitting it) keeps every key patchable,
 which preserves the historical always-overwrite semantics required by
 older callers.</p>
