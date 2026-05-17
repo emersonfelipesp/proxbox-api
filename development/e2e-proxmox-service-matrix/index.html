@@ -1742,7 +1742,7 @@ TestPyPI/PyPI publication lanes, and the Docker image variants — see
 <tr>
 <td><code>pbs</code></td>
 <td><code>emersonfelipesp/proxmox-sdk:latest-pbs</code></td>
-<td>Proxmox Backup Server stub. <code>/health</code> + service identifier only; PVE-shaped routes are intentionally absent.</td>
+<td>Proxmox Backup Server stub. <code>/health</code> (generic) + <code>/</code> (service identifier) only; PVE-shaped routes are intentionally absent.</td>
 </tr>
 <tr>
 <td><code>pdm</code></td>
@@ -1898,11 +1898,12 @@ with a visible reason in CI logs. The <code>minimal_cluster</code> / <code>multi
 fixture import explodes when a stub is loaded.</p>
 <h2 id="service-smoke-test">Service Smoke Test<a class="headerlink" href="#service-smoke-test" title="Permanent link">&para;</a></h2>
 <p>A dedicated module verifies that the right service tag is actually mounted.
-<code>tests/e2e/test_proxmox_mock_health.py</code> runs on PBS and PDM cells only and
-checks that <code>/health</code> returns the loaded service identifier:</p>
+<code>tests/e2e/test_proxmox_mock_health.py</code> runs on PBS and PDM cells only. It
+asserts <code>/health</code> is reachable (generic readiness probe) and that the mock's
+root <code>/</code> payload identifies the loaded service stub:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">asyncio</span><span class="p">(</span><span class="n">loop_scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_pbs_pdm_mock_health_reports_loaded_service</span><span class="p">(</span><span class="n">proxmox_service</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_pbs_pdm_mock_root_reports_loaded_service</span><span class="p">(</span><span class="n">proxmox_service</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">if</span> <span class="n">proxmox_service</span> <span class="o">==</span> <span class="s2">&quot;pve&quot;</span><span class="p">:</span>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;PBS/PDM service smoke only&quot;</span><span class="p">)</span>
 <a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
@@ -1910,13 +1911,16 @@ checks that <code>/health</code> returns the loaded service identifier:</p>
 <a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="s2">&quot;PROXMOX_MOCK_PUBLISHED_URL&quot;</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8006&quot;</span>
 <a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="p">)</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
 <a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="k">async</span> <span class="k">with</span> <span class="n">httpx</span><span class="o">.</span><span class="n">AsyncClient</span><span class="p">(</span><span class="n">base_url</span><span class="o">=</span><span class="n">base_url</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">10.0</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/health&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="k">assert</span> <span class="n">proxmox_service</span> <span class="ow">in</span> <span class="n">response</span><span class="o">.</span><span class="n">text</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        <span class="n">health</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/health&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>        <span class="n">root</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="k">assert</span> <span class="n">health</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>    <span class="k">assert</span> <span class="n">root</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>    <span class="k">assert</span> <span class="n">proxmox_service</span> <span class="ow">in</span> <span class="n">root</span><span class="o">.</span><span class="n">text</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
 </code></pre></div>
 <p>This is the test that would catch the wrong image tag being pulled, or a
-service stub regressing its <code>/health</code> payload.</p>
+service stub regressing the <code>service</code> field in its root payload. (<code>/health</code>
+itself is intentionally generic across all <code>proxmox-sdk</code> mock variants.)</p>
 <h2 id="pytest-markers-and-ci-wiring">Pytest Markers and CI Wiring<a class="headerlink" href="#pytest-markers-and-ci-wiring" title="Permanent link">&para;</a></h2>
 <p>Two markers gate the Docker-backed E2E layer:</p>
 <ul>
@@ -1958,7 +1962,7 @@ container itself, so running it for <code>pbs</code> / <code>pdm</code> would ad
 <td style="text-align: center;">yes</td>
 </tr>
 <tr>
-<td>Mock <code>/health</code> reports the loaded service identifier</td>
+<td>Mock root <code>/</code> reports the loaded service identifier</td>
 <td style="text-align: center;">(smoke skipped)</td>
 <td style="text-align: center;">yes</td>
 <td style="text-align: center;">yes</td>
