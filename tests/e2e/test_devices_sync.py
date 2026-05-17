@@ -30,6 +30,8 @@ from proxbox_api.proxmox_to_netbox.models import (
     _relation_id,
 )
 
+pytestmark = pytest.mark.usefixtures("requires_pve_schema")
+
 
 @pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.mock_backend

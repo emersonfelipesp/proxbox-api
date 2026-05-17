@@ -57,6 +57,19 @@ def event_loop_policy():
 
 
 @pytest.fixture(scope="session")
+def proxmox_service() -> str:
+    """Return the active proxmox-sdk mock service for this E2E run."""
+    return os.environ.get("PROXMOX_SERVICE", "pve").strip().lower() or "pve"
+
+
+@pytest.fixture(scope="session")
+def requires_pve_schema(proxmox_service: str) -> None:
+    """Skip tests that require the PVE OpenAPI schema on service stubs."""
+    if proxmox_service != "pve":
+        pytest.skip(f"requires PVE schema; service={proxmox_service}")
+
+
+@pytest.fixture(scope="session")
 def netbox_e2e_config() -> dict[str, str]:
     """Get NetBox E2E configuration from environment variables.
 
@@ -186,7 +199,7 @@ def unique_prefix() -> str:
 
 
 @pytest.fixture
-def minimal_cluster(unique_prefix: str) -> MockProxmoxCluster:
+def minimal_cluster(unique_prefix: str, proxmox_service: str) -> MockProxmoxCluster:
     """Create a minimal cluster for testing.
 
     Args:
@@ -195,11 +208,11 @@ def minimal_cluster(unique_prefix: str) -> MockProxmoxCluster:
     Returns:
         MockProxmoxCluster with single node and 2 VMs.
     """
-    return create_minimal_cluster(prefix=unique_prefix)
+    return create_minimal_cluster(prefix=unique_prefix, service=proxmox_service)
 
 
 @pytest.fixture
-def multi_cluster(unique_prefix: str) -> list[MockProxmoxCluster]:
+def multi_cluster(unique_prefix: str, proxmox_service: str) -> list[MockProxmoxCluster]:
     """Create multiple clusters for testing.
 
     Args:
@@ -208,7 +221,7 @@ def multi_cluster(unique_prefix: str) -> list[MockProxmoxCluster]:
     Returns:
         List of 2 MockProxmoxCluster instances.
     """
-    return create_multi_cluster(prefix=unique_prefix)
+    return create_multi_cluster(prefix=unique_prefix, service=proxmox_service)
 
 
 @pytest.fixture

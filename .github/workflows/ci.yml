@@ -244,6 +244,7 @@ jobs:
           else:
               modes = ["dev"]
 
+          proxmox_services = ["pve", "pbs", "pdm"]
           base = [
             {"netbox_transport":"https_nginx","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-nginx","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
             {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
@@ -255,10 +256,16 @@ jobs:
           ]
 
           includes = [
-              dict(**entry, netbox_proxbox_mode=mode, netbox_version=ver)
+              dict(
+                  **entry,
+                  netbox_proxbox_mode=mode,
+                  netbox_version=ver,
+                  proxmox_service=service,
+              )
               for entry in base
               for mode in modes
               for ver in netbox_versions
+              for service in proxmox_services
           ]
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
               fh.write(f"matrix={json.dumps({'include': includes})}\n")
@@ -310,7 +317,7 @@ jobs:
           retention-days: 1
 
   e2e-docker:
-    name: E2E Docker / NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }} [${{ matrix.network_stack }}] [${{ matrix.netbox_version }}] (${{ matrix.netbox_proxbox_mode }})
+    name: E2E Docker / PX:${{ matrix.proxmox_service }} NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }} [${{ matrix.network_stack }}] [${{ matrix.netbox_version }}] (${{ matrix.netbox_proxbox_mode }})
     runs-on: ubuntu-latest
     needs: [test, setup, build-netbox-image]
     if: |
@@ -324,7 +331,7 @@ jobs:
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox_version }}
-      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
+      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest-${{ matrix.proxmox_service }}
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
       UV_HTTP_TIMEOUT: "120"
     steps:
@@ -773,16 +780,18 @@ jobs:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
           PROXBOX_E2E_NETBOX_TOKEN: ${{ env.NETBOX_API_TOKEN }}
           PROXMOX_API_MODE: mock
+          PROXMOX_SERVICE: ${{ matrix.proxmox_service }}
           PROXMOX_MOCK_PUBLISHED_URL: ${{ env.PROXMOX_MOCK_HOST_URL }}
         run: |
           uv run pytest tests/e2e/ -m "mock_http" --tb=short -v
 
       - name: Run E2E tests with in-process MockBackend
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && matrix.proxmox_service == 'pve'
         env:
           PROXBOX_E2E_NETBOX_URL: ${{ matrix.netbox_public_url }}
           PROXBOX_E2E_NETBOX_TOKEN: ${{ env.NETBOX_API_TOKEN }}
           PROXMOX_API_MODE: mock
+          PROXMOX_SERVICE: ${{ matrix.proxmox_service }}
         run: |
           uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v
 

@@ -323,7 +323,7 @@ jobs:
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_ignore_ipv6_link_local_false_includes_fe80
 
   e2e-pre-publish:
-    name: E2E pre-publish (dev deps) [${{ matrix.netbox-version }}]
+    name: E2E pre-publish (dev deps) / PX:${{ matrix.proxmox_service }} [${{ matrix.netbox-version }}]
     if: needs.prepare-release.outputs.publish_target == 'pypi'
     runs-on: ubuntu-latest
     needs: [prepare-release]
@@ -332,9 +332,11 @@ jobs:
       fail-fast: false
       matrix:
         netbox-version: ${{ fromJSON(needs.prepare-release.outputs.netbox_versions) }}
+        proxmox_service: [pve, pbs, pdm]
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
-      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
+      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest-${{ matrix.proxmox_service }}
+      PROXMOX_SERVICE: ${{ matrix.proxmox_service }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -591,7 +593,7 @@ jobs:
       mode: publish
 
   e2e-post-publish:
-    name: E2E post-publish (published artifacts) [${{ matrix.netbox-version }}]
+    name: E2E post-publish (published artifacts) / PX:${{ matrix.proxmox_service }} [${{ matrix.netbox-version }}]
     runs-on: ubuntu-latest
     if: needs.prepare-release.outputs.publish_target == 'pypi'
     needs: [publish-docker, prepare-release]
@@ -600,9 +602,11 @@ jobs:
       fail-fast: false
       matrix:
         netbox-version: ${{ fromJSON(needs.prepare-release.outputs.netbox_versions) }}
+        proxmox_service: [pve, pbs, pdm]
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
-      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest
+      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest-${{ matrix.proxmox_service }}
+      PROXMOX_SERVICE: ${{ matrix.proxmox_service }}
       PROXBOX_API_IMAGE: emersonfelipesp/proxbox-api
     steps:
       - name: Checkout repository
