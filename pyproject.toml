@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 include = ["proxbox_api*"]
 
 [tool.setuptools.package-data]
-proxbox_api = ["static/*", "static/**/*", "generated/**/*.json", "generated/**/*.py"]
+proxbox_api = ["static/*", "static/**/*", "generated/**/*.json", "generated/**/*.py", "packer_templates/**/*.hcl", "packer_templates/**/*.sh"]
 
 [project]
 name = "proxbox_api"
@@ -128,6 +128,8 @@ select = ["E4", "E7", "E9", "F", "I", "ANN201", "D103", "W", "C90"]
 # C901: inherently complex retry/ reconcile functions
 "proxbox_api/netbox_rest.py" = ["C901"]
 "proxbox_api/routes/cloud/template_images.py" = ["C901"]
+"proxbox_api/routes/cloud/image_factory.py" = ["C901"]
+"proxbox_api/services/image_factory/runner.py" = ["C901"]
 "proxbox_api/routes/virtualization/virtual_machines/sync_vm.py" = ["C901"]
 "proxbox_api/services/sync/vm_coordinator.py" = ["C901"]
 

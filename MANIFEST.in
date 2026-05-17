@@ -1,0 +1,1 @@
+recursive-include proxbox_api/packer_templates *.hcl *.sh

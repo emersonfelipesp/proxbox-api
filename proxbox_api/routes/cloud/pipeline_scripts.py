@@ -172,18 +172,26 @@ def _append_template_import_commands(
     if user_data:
         user_snippet = f"{request.snippets_dir}/{snippet_name}-user-data.yml"
         commands.append(f"cat > {_q(user_snippet)} <<'EOF_USER_DATA'\n{user_data}EOF_USER_DATA")
-        snippet_refs.append(f"user={request.snippets_storage}:snippets/{snippet_name}-user-data.yml")
+        snippet_refs.append(
+            f"user={request.snippets_storage}:snippets/{snippet_name}-user-data.yml"
+        )
     if first_boot_script:
         boot_snippet = f"{request.snippets_dir}/{snippet_name}-first-boot.sh"
-        commands.append(f"cat > {_q(boot_snippet)} <<'EOF_FIRST_BOOT'\n{first_boot_script}EOF_FIRST_BOOT")
+        commands.append(
+            f"cat > {_q(boot_snippet)} <<'EOF_FIRST_BOOT'\n{first_boot_script}EOF_FIRST_BOOT"
+        )
         commands.append(f"chmod 600 {_q(boot_snippet)}")
-        snippet_refs.append(f"vendor={request.snippets_storage}:snippets/{snippet_name}-first-boot.sh")
+        snippet_refs.append(
+            f"vendor={request.snippets_storage}:snippets/{snippet_name}-first-boot.sh"
+        )
     meta_snippet = f"{request.snippets_dir}/{snippet_name}-meta-data.yml"
     meta_data = f"instance-id: {snippet_name}\nlocal-hostname: {request.hostname}\n"
     commands.append(f"cat > {_q(meta_snippet)} <<'EOF_META'\n{meta_data}EOF_META")
     snippet_refs.append(f"meta={request.snippets_storage}:snippets/{snippet_name}-meta-data.yml")
     commands.append(f"qm set {_q(request.vmid)} --cicustom {_q(','.join(snippet_refs))}")
-    commands.append(f"qm set {_q(request.vmid)} --description {_q('Built by Cloud Image Build Pipeline')}")
+    commands.append(
+        f"qm set {_q(request.vmid)} --description {_q('Built by Cloud Image Build Pipeline')}"
+    )
     commands.append(f"qm template {_q(request.vmid)}")
 
 
@@ -195,7 +203,9 @@ def _release_image_script(
 ) -> tuple[str, list[str], str]:
     image_url = request.image_url or entry.image_url
     if not image_url:
-        raise HTTPException(status_code=422, detail="image_url is required for release image builds.")
+        raise HTTPException(
+            status_code=422, detail="image_url is required for release image builds."
+        )
     filename = _artifact_from_url(image_url)
     cache_path = f"/var/lib/vz/template/cache/{filename}"
     raw_path = f"/var/lib/vz/template/cache/{_decompressed_name(filename, entry.compression)}"
@@ -213,7 +223,9 @@ def _release_image_script(
     if decompress:
         commands.append(decompress)
     commands.append(f"qemu-img convert -O qcow2 {_q(raw_path)} {_q(qcow_path)}")
-    _append_template_import_commands(commands, request, entry, qcow_path, first_boot_script, user_data)
+    _append_template_import_commands(
+        commands, request, entry, qcow_path, first_boot_script, user_data
+    )
     return "\n".join(commands) + "\n", commands, image_url
 
 
@@ -242,9 +254,13 @@ def _source_tree_script(
                 f"qemu-img convert -O qcow2 {_q(request.source_artifact_path)} {_q(qcow_path)}",
             ]
         )
-        _append_template_import_commands(commands, request, entry, qcow_path, first_boot_script, None)
+        _append_template_import_commands(
+            commands, request, entry, qcow_path, first_boot_script, None
+        )
     else:
-        commands.append("# Set source_artifact_path to the image emitted by the source build to import it.")
+        commands.append(
+            "# Set source_artifact_path to the image emitted by the source build to import it."
+        )
     return "\n".join(commands) + "\n", commands
 
 
