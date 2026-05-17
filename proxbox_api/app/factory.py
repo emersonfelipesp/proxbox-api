@@ -32,6 +32,7 @@ from proxbox_api.logger import logger
 from proxbox_api.openapi_custom import custom_openapi_builder
 from proxbox_api.routes.admin import router as admin_router
 from proxbox_api.routes.auth import router as auth_router
+from proxbox_api.routes.cloud import router as cloud_router
 from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.routes.extras import router as extras_router
 from proxbox_api.routes.netbox import router as netbox_router
@@ -329,6 +330,7 @@ def create_app() -> FastAPI:
     register_websocket_routes(app)
 
     app.include_router(admin_router, prefix="/admin", tags=["admin"])
+    app.include_router(cloud_router, prefix="/cloud", tags=["cloud"])
     app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
     app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
     app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
