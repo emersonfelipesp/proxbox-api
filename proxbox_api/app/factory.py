@@ -397,10 +397,11 @@ def create_app() -> FastAPI:  # noqa: C901
         for token in os.environ.get("PROXBOX_FEATURES", "").split(",")
         if token.strip()
     }
-    sidecar_features = {"pbs", "ceph"}
+    sidecar_features = {"pbs", "ceph", "pdm"}
     sidecar_only = bool(features) and features.issubset(sidecar_features)
     include_pbs = not features or "pbs" in features
     include_ceph = not features or "ceph" in features
+    include_pdm = not features or "pdm" in features
 
     if not sidecar_only:
         register_cache_routes(app)
@@ -454,5 +455,15 @@ def create_app() -> FastAPI:  # noqa: C901
             logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
         else:
             app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
+
+    if include_pdm:
+        try:
+            from proxbox_api.pdm import admin_router as pdm_admin_router  # noqa: PLC0415
+            from proxbox_api.pdm import router as pdm_router  # noqa: PLC0415
+        except ImportError as exc:
+            logger.info("PDM subpackage unavailable; /pdm/* routes disabled (%s)", exc)
+        else:
+            app.include_router(pdm_admin_router, prefix="/pdm", tags=["pdm"])
+            app.include_router(pdm_router, prefix="/pdm", tags=["pdm"])
 
     return app

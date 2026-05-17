@@ -54,6 +54,9 @@ granian = [
 pbs = [
     "proxmox-sdk[pbs]==0.0.5.post1",
 ]
+pdm = [
+    "proxmox-sdk[pdm]==0.0.5.post1",
+]
 
 [dependency-groups]
 dev = [
