@@ -14,6 +14,7 @@ from proxbox_api.routes.cloud.cloud_init_templates import (
     find_product_version,
     generate_cloud_init_userdata,
 )
+from proxbox_api.routes.cloud.pipeline_scripts import build_pipeline_response
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.schemas.cloud_provision import (
@@ -111,6 +112,19 @@ async def build_cloud_image_template(
     session: SessionDep,
 ) -> CloudImageTemplateBuildResponse | JSONResponse:
     """Create a bootable Proxmox template from a cloud image URL."""
+    if (
+        req.execute is not None
+        or req.provider is not None
+        or req.product_type in {ProxmoxProductType.pfsense, ProxmoxProductType.opnsense}
+    ):
+        return build_pipeline_response(req)
+
+    if req.endpoint_id is None or not req.target_node or not req.image_url:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="endpoint_id, target_node, and image_url are required for direct Proxmox API builds.",
+        )
+
     gated = await _gate(session, req.endpoint_id)
     if isinstance(gated, JSONResponse):
         return gated
@@ -126,7 +140,7 @@ async def build_cloud_image_template(
         )
 
     generated_userdata: str | None = None
-    if req.product_type != ProxmoxProductType.pve:
+    if req.product_type in {ProxmoxProductType.pbs, ProxmoxProductType.pdm}:
         pv = find_product_version(req.product_type, req.product_version)
         if pv is None:
             raise HTTPException(
