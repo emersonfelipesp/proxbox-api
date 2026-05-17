@@ -1,9 +1,9 @@
 # Publicacao de Release
 
 Esta pagina documenta o workflow de publicacao em etapas do pacote
-`proxbox-api`. O workflow valida pacotes no TestPyPI primeiro, promove release
-candidates no PyPI, e so publica a release final no PyPI e as imagens Docker
-depois que o pacote esta instalavel.
+`proxbox-api`. O workflow valida release candidates no TestPyPI primeiro, e
+so promove a release final ao PyPI e publica as imagens Docker depois que a
+instalacao a partir do PyPI funciona.
 
 Para o mapa completo dos jobs de CI e da matriz E2E com NetBox, veja
 [Workflows de CI e E2E](ci-e2e-workflows.md).
@@ -14,36 +14,27 @@ Para o mapa completo dos jobs de CI e da matriz E2E com NetBox, veja
 flowchart TD
     Start([Escolher release alvo\nX.Y.Z])
     Bump[Bump da versao do pacote\npyproject.toml + uv.lock]
-    TagTest[Criar tag vX.Y.Z\nou vX.Y.Z.postN]
-    Prepare[Build do dist\nvalidar tag/versao/uv.lock]
-    TestUpload[Upload para TestPyPI\nsem --skip-existing]
-    TestInstall[Instalar proxbox-api do TestPyPI\nem Python 3.11, 3.12, 3.13]
-    TestChecks[Rodar lint, tipos, compile,\nimport, schema, pytest]
-    TestFailed{Alguma validacao\nTestPyPI falhou?}
-    PostBump[Bump para proximo vX.Y.Z.postN]
-    RCTag[Criar tag candidata PyPI\nvX.Y.ZrcN]
-    RCChecks[Rodar checks da candidata\nantes do upload]
-    RCUpload[Upload vX.Y.ZrcN para PyPI]
-    RCInstall[Instalar rcN do PyPI\nem Python 3.11, 3.12, 3.13]
-    Docker[Publicar imagens Docker\nraw, nginx, granian]
-    E2E[Rodar E2E pos-publicacao\npacote + imagem publicados]
-    RCFailed{RC falhou?}
+    RCTag[Criar tag de release candidate\nvX.Y.ZrcN]
+    RCCI[CI faz build do dist\nvalida tag/versao/uv.lock]
+    RCUpload[Upload vX.Y.ZrcN para TestPyPI\nsem --skip-existing]
+    RCValidate[Instalar rcN do TestPyPI\nem Python 3.11, 3.12, 3.13]
+    RCChecks[Rodar lint, tipos, compile,\nimport, schema, pytest]
+    RCE2E[E2E Docker\nproxbox-api rcN do TestPyPI]
+    RCFailed{Alguma validacao\nTestPyPI falhou?}
     NextRC[Bump para vX.Y.ZrcN+1]
     FinalTag[Criar ou disparar tag final\nvX.Y.Z]
     FinalUpload[Upload vX.Y.Z para PyPI]
-    FinalInstall[Instalar final do PyPI]
-    FinalDocker[Publicar imagens Docker finais]
-    FinalE2E[Rodar E2E final pos-publicacao]
+    FinalValidate[Instalar final do PyPI\nem Python 3.11, 3.12, 3.13]
+    Docker[Publicar imagens Docker\nraw, nginx, granian]
+    FinalE2E[Rodar E2E pos-publicacao\npacote PyPI + imagem Docker]
     FinalFailed{Precisa de fix\npos-release?}
-    PostFix[Bump para vX.Y.Z.postN]
+    Post[Bump para vX.Y.Z.postN\npublicar .postN no PyPI]
     Done([Release verde])
 
-    Start --> Bump --> TagTest --> Prepare --> TestUpload --> TestInstall --> TestChecks --> TestFailed
-    TestFailed -- sim --> PostBump --> TagTest
-    TestFailed -- nao --> RCTag --> RCChecks --> RCUpload --> RCInstall --> Docker --> E2E --> RCFailed
+    Start --> Bump --> RCTag --> RCCI --> RCUpload --> RCValidate --> RCChecks --> RCE2E --> RCFailed
     RCFailed -- sim --> NextRC --> RCTag
-    RCFailed -- nao --> FinalTag --> FinalUpload --> FinalInstall --> FinalDocker --> FinalE2E --> FinalFailed
-    FinalFailed -- sim --> PostFix --> TagTest
+    RCFailed -- nao --> FinalTag --> FinalUpload --> FinalValidate --> Docker --> FinalE2E --> FinalFailed
+    FinalFailed -- sim --> Post --> FinalTag
     FinalFailed -- nao --> Done
 ```
 
@@ -58,13 +49,13 @@ sequenceDiagram
     participant DH as Docker Hub
     participant E2E as Stack E2E
 
-    Tag->>WF: vX.Y.Z ou vX.Y.Z.postN
+    Tag->>WF: vX.Y.ZrcN
     WF->>WF: Validar pyproject + uv.lock + tag
     WF->>TP: Upload do pacote
-    WF->>TP: Reinstalar versao exata do pacote
-    WF->>WF: Rodar checks locais a partir do codigo
+    WF->>TP: Reinstalar versao exata rcN
+    WF->>WF: Rodar checks locais a partir da instalacao TestPyPI
 
-    Tag->>WF: vX.Y.ZrcN, evento de release, ou publish_target=pypi
+    Tag->>WF: vX.Y.Z, vX.Y.Z.postN, evento de release, ou publish_target=pypi
     WF->>WF: Rodar checks da candidata e E2E pre-publicacao
     WF->>E2E: Aguardar migracoes do NetBox e /api/status/
     WF->>PY: Upload do pacote
@@ -76,9 +67,9 @@ sequenceDiagram
 ## Regras do Workflow
 
 - `pyproject.toml`, `uv.lock` e a tag Git precisam descrever a mesma versao.
-- Push de tags normais e `.postN` publica no TestPyPI.
-- Push de tags `rcN`, releases do GitHub, ou dispatch manual com
-  `publish_target=pypi` publica no PyPI.
+- Push de tags `rcN` publica no TestPyPI para validacao de release candidate.
+- Push de tags nao-rc (`vX.Y.Z`, `vX.Y.Z.postN`), releases do GitHub, ou
+  dispatch manual com `publish_target=pypi` publica no PyPI.
 - Uploads de pacote intencionalmente nao usam `twine --skip-existing`; se uma
   versao foi consumida por qualquer indice, corrija para frente com o proximo
   `.postN` ou `rcN`.
@@ -92,11 +83,9 @@ sequenceDiagram
 ## Checklist Operacional
 
 1. Atualize `pyproject.toml` e regenere `uv.lock`.
-2. Crie a tag `vX.Y.Z` e deixe o workflow publicar no TestPyPI.
-3. Se a validacao do TestPyPI falhar depois do upload, atualize para
-   `vX.Y.Z.post1`, depois `post2`, ate ficar verde.
-4. Crie a tag `vX.Y.Zrc1` para validacao de release candidate no PyPI. Se
-   falhar depois do upload, continue com `rc2`, `rc3`, e assim por diante.
-5. Publique a final `vX.Y.Z` no PyPI apenas depois de uma lane RC verde.
-6. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
-   depois da publicacao final.
+2. Crie a tag `vX.Y.Zrc1` para validacao de release candidate no TestPyPI. Se
+   a validacao falhar depois do upload, continue com `rc2`, `rc3`, e assim
+   por diante.
+3. Publique a final `vX.Y.Z` no PyPI apenas depois de uma lane rc verde.
+4. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
+   depois da publicacao final no PyPI.
