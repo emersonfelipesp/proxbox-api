@@ -17,7 +17,7 @@ O `proxmox-sdk` publica tres tags de imagem por servico em
 | Servico | Tag da imagem | Cobertura |
 |---|---|---|
 | `pve` | `emersonfelipesp/proxmox-sdk:latest-pve` | Superficie completa de OpenAPI do Proxmox VE (646 endpoints). Executa o pipeline historico de sync. |
-| `pbs` | `emersonfelipesp/proxmox-sdk:latest-pbs` | Stub do Proxmox Backup Server. Apenas `/health` + identificador de servico; rotas no formato PVE sao propositalmente ausentes. |
+| `pbs` | `emersonfelipesp/proxmox-sdk:latest-pbs` | Stub do Proxmox Backup Server. Apenas `/health` (generico) + `/` (identificador de servico); rotas no formato PVE sao propositalmente ausentes. |
 | `pdm` | `emersonfelipesp/proxmox-sdk:latest-pdm` | Stub do Proxmox Datacenter Manager. Hoje tem o mesmo formato do PBS. |
 
 Rodar o mesmo backend, o mesmo container NetBox e as mesmas fixtures contra as
@@ -146,13 +146,14 @@ quando um stub esta carregado.
 ## Smoke de servico
 
 Um modulo dedicado verifica que a tag correta esta de fato carregada.
-`tests/e2e/test_proxmox_mock_health.py` roda apenas em celulas PBS e PDM e
-confere que `/health` devolve o identificador de servico carregado:
+`tests/e2e/test_proxmox_mock_health.py` roda apenas em celulas PBS e PDM.
+Garante que `/health` responde (probe generico de readiness) e que o payload
+da raiz `/` do mock identifica o stub de servico carregado:
 
 ```python
 @pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.mock_http
-async def test_pbs_pdm_mock_health_reports_loaded_service(proxmox_service: str):
+async def test_pbs_pdm_mock_root_reports_loaded_service(proxmox_service: str):
     if proxmox_service == "pve":
         pytest.skip("PBS/PDM service smoke only")
 
@@ -160,14 +161,17 @@ async def test_pbs_pdm_mock_health_reports_loaded_service(proxmox_service: str):
         "PROXMOX_MOCK_PUBLISHED_URL", "http://localhost:8006"
     ).rstrip("/")
     async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
-        response = await client.get("/health")
+        health = await client.get("/health")
+        root = await client.get("/")
 
-    assert response.status_code == 200
-    assert proxmox_service in response.text.lower()
+    assert health.status_code == 200
+    assert root.status_code == 200
+    assert proxmox_service in root.text.lower()
 ```
 
 Este e o teste que pegaria a tag errada sendo puxada, ou um stub de servico
-regredindo o payload de `/health`.
+regredindo o campo `service` no payload da raiz. (`/health` e propositalmente
+generico em todas as variantes do mock `proxmox-sdk`.)
 
 ## Markers pytest e cabos do CI
 
@@ -203,7 +207,7 @@ sinal.
 | Verificacao | `pve` | `pbs` | `pdm` |
 |---|:---:|:---:|:---:|
 | Prontidao da stack (NetBox API, proxbox-api API, `proxmox-sdk` `/openapi.json`) | sim | sim | sim |
-| Mock `/health` reporta o servico carregado | (smoke pulado) | sim | sim |
+| Raiz `/` do mock reporta o servico carregado | (smoke pulado) | sim | sim |
 | Smoke `auth/register-key` + `netbox/endpoint` + `netbox/status` | sim | sim | sim |
 | Smoke `extras/custom-fields/create` | sim | sim | sim |
 | `test_backups_sync.py` (`requires_pve_schema`) | sim | skip | skip |
