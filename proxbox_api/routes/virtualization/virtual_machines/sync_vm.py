@@ -924,6 +924,7 @@ async def _create_vm_interface_parallel(
         first_ip_id, first_ip = ip_results[0]
         result["ip"] = {"id": first_ip_id, "address": first_ip}
         result["first_ip_id"] = first_ip_id
+        result["all_ips"] = [{"id": iid, "address": addr} for iid, addr in ip_results]
 
     return result
 
@@ -2020,7 +2021,8 @@ async def create_virtual_machines(  # noqa: C901
 
         # Create VM interfaces
         netbox_vm_interfaces = []
-        first_ip_id: int | None = None
+        first_ipv4_id: int | None = None
+        first_ipv6_id: int | None = None
         if virtual_machine and vm_config and sync_vm_network:
             guest_agent_interfaces: list[dict] = []
             guest_agent_diagnostic: str | None = None
@@ -2134,9 +2136,14 @@ async def create_virtual_machines(  # noqa: C901
                         continue
                     if result.get("interface"):
                         netbox_vm_interfaces.append(result["interface"])
-                    ip_id = result.get("first_ip_id")
-                    if ip_id and first_ip_id is None:
-                        first_ip_id = ip_id
+                    for ip_entry in result.get("all_ips") or []:
+                        ip_id = ip_entry.get("id")
+                        addr = ip_entry.get("address") or ""
+                        if ip_id:
+                            if ":" in addr and first_ipv6_id is None:
+                                first_ipv6_id = ip_id
+                            elif ":" not in addr and first_ipv4_id is None:
+                                first_ipv4_id = ip_id
 
             disk_tasks = [
                 _create_vm_disk_parallel(
@@ -2153,19 +2160,19 @@ async def create_virtual_machines(  # noqa: C901
             if disk_tasks:
                 await asyncio.gather(*disk_tasks, return_exceptions=True)
 
-        # Set primary IP only when NetBox has no primary IP yet (user choice is preserved).
-        has_primary_ip = (
-            virtual_machine.get("primary_ip4") is not None
-            or virtual_machine.get("primary_ip6") is not None
-        )
-        if not has_primary_ip:
-            if first_ip_id is not None:
-                from proxbox_api.services.sync.vm_network import set_primary_ip
+        # Set primary IPs per-family. set_primary_ip preserves an already-set
+        # primary for each family independently, so both IPv4 and IPv6 are tried.
+        from proxbox_api.services.sync.vm_network import set_primary_ip
 
+        any_ip_found = first_ipv4_id is not None or first_ipv6_id is not None
+        if any_ip_found:
+            for primary_ip_id in (first_ipv4_id, first_ipv6_id):
+                if primary_ip_id is None:
+                    continue
                 primary_set = await set_primary_ip(
                     nb=nb,
                     virtual_machine=virtual_machine,
-                    primary_ip_id=first_ip_id,
+                    primary_ip_id=primary_ip_id,
                     primary_ip_preference=primary_ip_preference,
                 )
                 if not primary_set and websocket:
@@ -2178,24 +2185,24 @@ async def create_virtual_machines(  # noqa: C901
                             },
                         }
                     )
-            else:
-                logger.info(
-                    "No IP available for VM %s (vmid=%s), skipping primary IP assignment.",
-                    resource.get("name"),
-                    resource.get("vmid"),
+        else:
+            logger.info(
+                "No IP available for VM %s (vmid=%s), skipping primary IP assignment.",
+                resource.get("name"),
+                resource.get("vmid"),
+            )
+            if websocket:
+                await websocket.send_json(
+                    {
+                        "object": "virtual_machine",
+                        "data": {
+                            "completed": True,
+                            "status": "warning",
+                            "warning": "No IP address found; primary IP not set.",
+                            "rowid": virtual_machine.get("name"),
+                        },
+                    }
                 )
-                if websocket:
-                    await websocket.send_json(
-                        {
-                            "object": "virtual_machine",
-                            "data": {
-                                "completed": True,
-                                "status": "warning",
-                                "warning": "No IP address found; primary IP not set.",
-                                "rowid": virtual_machine.get("name"),
-                            },
-                        }
-                    )
 
         try:
             task_history_count = await sync_virtual_machine_task_history(
@@ -3112,8 +3119,15 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 continue
                             ip_payloads.append(payload)
 
-                            # Track first IP for primary assignment
-                            if not first_ips:
+                            # Track first IP per address family for primary assignment.
+                            # Both IPv4 and IPv6 are collected so set_primary_ip can
+                            # designate each family independently.
+                            addr_is_ipv6 = ":" in interface_ip
+                            family_tracked = any(
+                                (":" in e["address"]) == addr_is_ipv6
+                                for e in first_ips
+                            )
+                            if not family_tracked:
                                 first_ips.append(
                                     {
                                         "vm_id": netbox_vm.get("id"),

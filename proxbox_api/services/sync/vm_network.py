@@ -530,13 +530,6 @@ async def set_primary_ip(  # noqa: C901
 
     primary_ip_preference = normalize_primary_ip_preference(primary_ip_preference)
 
-    # Preserve existing explicit primary choice.
-    if (
-        virtual_machine.get("primary_ip4") is not None
-        or virtual_machine.get("primary_ip6") is not None
-    ):
-        return False
-
     # Verify (and fix if needed) that the IP is assigned to this VM before setting primary.
     assigned, reason = await ensure_ip_assigned_to_vm(nb, primary_ip_id, vm_id)
     if not assigned:
@@ -570,6 +563,12 @@ async def set_primary_ip(  # noqa: C901
             primary_ip_id,
             ip_record.get("address"),
         )
+        return False
+
+    # Preserve an existing user-set primary for this specific IP family only.
+    # Checking per-family (not OR across both) lets dual-stack VMs set primary_ip4
+    # and primary_ip6 independently across syncs.
+    if virtual_machine.get(primary_field) is not None:
         return False
 
     patch_payload: dict[str, object] = {primary_field: primary_ip_id}
