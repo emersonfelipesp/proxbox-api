@@ -2005,22 +2005,35 @@ async def ensure_tag_async(
     color: str,
     description: str,
 ) -> RestRecord:
-    return await rest_reconcile_async(
-        nb,
-        "/api/extras/tags/",
-        lookup={"slug": slug},
-        payload={
-            "name": name,
-            "slug": slug,
-            "color": color,
-            "description": description,
-        },
-        schema=TagSchema,
-        current_normalizer=lambda record: {
-            "name": record.get("name"),
-            "slug": record.get("slug"),
-            "color": record.get("color"),
-            "description": record.get("description"),
-        },
-        patchable_fields={"name", "color", "description"},
-    )
+    try:
+        return await rest_reconcile_async(
+            nb,
+            "/api/extras/tags/",
+            lookup={"slug": slug},
+            payload={
+                "name": name,
+                "slug": slug,
+                "color": color,
+                "description": description,
+            },
+            schema=TagSchema,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "slug": record.get("slug"),
+                "color": record.get("color"),
+                "description": record.get("description"),
+            },
+            patchable_fields={"name", "color", "description"},
+        )
+    except ProxboxException as exc:
+        if not _is_duplicate_error(getattr(exc, "detail", str(exc))):
+            raise
+        # The reconciler saw a duplicate error but couldn't locate the record
+        # (race condition: another concurrent worker just created the same tag).
+        # Try two direct lookups that bypass any in-flight cache state.
+        record = await rest_first_async(nb, "/api/extras/tags/", query={"slug": slug})
+        if record is None:
+            record = await rest_first_async(nb, "/api/extras/tags/", query={"name": name})
+        if record is not None:
+            return record
+        raise
