@@ -875,7 +875,11 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
 
     async def _fake_create_vm_interface_parallel(**kwargs):
         interface_calls.append(kwargs)
-        return {"interface": {"id": 66, "name": kwargs["interface_name"]}, "first_ip_id": 77}
+        return {
+            "interface": {"id": 66, "name": kwargs["interface_name"]},
+            "first_ip_id": 77,
+            "all_ips": [{"id": 77, "address": "1.1.1.3/24"}],
+        }
 
     async def _fake_create_vm_disk_parallel(**kwargs):
         disk_calls.append(kwargs)

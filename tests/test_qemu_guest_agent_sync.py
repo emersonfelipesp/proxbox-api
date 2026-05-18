@@ -921,6 +921,10 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
         )
     )
 
-    assert len(primary_ip_calls) == 1
+    # Both IPv4 and IPv6 primaries are set independently (dual-stack fix).
+    assert len(primary_ip_calls) == 2
+    called_ids = {c["primary_ip_id"] for c in primary_ip_calls}
+    assert called_ids == {77, 99}  # 77 = IPv4, 99 = IPv6
+    # IPv4 is listed first because ipv4 is the preferred family.
     assert primary_ip_calls[0]["primary_ip_id"] == 77
     assert primary_ip_calls[0]["primary_ip_preference"] == "ipv4"
