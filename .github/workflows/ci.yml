@@ -59,27 +59,6 @@ jobs:
       - name: Core tests
         run: uv run pytest tests/ -v -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
 
-  test-py311-floor:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: "3.11"
-
-      - name: Sync dependencies
-        run: uv sync --frozen --extra test --group dev
-
-      - name: Compile package
-        run: uv run python -m compileall proxbox_api scripts tests
-
-      - name: Core tests (3.11 floor)
-        run: uv run pytest tests/ -v -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
-
   test-free-threaded:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -89,8 +68,7 @@ jobs:
     # teardown under 3.14t (crash trace points at
     # sqlalchemy/event/registry.py:_stored_in_collection_multi via
     # pool.recreate → engine.dispose), and the crash persists even with
-    # PYTHON_GIL=1. The Python 3.13 and 3.11 lanes already exercise the
-    # full test suite.
+    # PYTHON_GIL=1. The Python 3.12 lane already exercises the full test suite.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -351,7 +329,7 @@ jobs:
         id: proxbox_pkg
         run: |
           if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
-            echo "target=https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.16.tar.gz" >> "$GITHUB_OUTPUT"
+            echo "target=https://github.com/emersonfelipesp/netbox-proxbox/archive/refs/tags/v0.0.16rc5.tar.gz" >> "$GITHUB_OUTPUT"
           else
             echo "target=netbox-proxbox" >> "$GITHUB_OUTPUT"
           fi
