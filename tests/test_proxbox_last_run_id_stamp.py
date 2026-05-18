@@ -66,19 +66,14 @@ async def test_stamp_writes_run_id_on_fresh_vm(patch_recorder: _PatchRecorder) -
     call = patch_recorder.calls[0]
     assert call["path"] == "/api/virtualization/virtual-machines/"
     assert call["record_id"] == 42
-    assert call["payload"] == {
-        "custom_fields": {
-            "team": "platform",
-            LAST_RUN_ID_CUSTOM_FIELD: "run-uuid-1",
-        }
-    }
+    assert call["payload"] == {"custom_fields": {LAST_RUN_ID_CUSTOM_FIELD: "run-uuid-1"}}
 
 
 @pytest.mark.asyncio
-async def test_stamp_preserves_operator_set_custom_field_keys(
+async def test_stamp_sends_only_run_id_key_not_existing_fields(
     patch_recorder: _PatchRecorder,
 ) -> None:
-    """Non-managed CF keys set by the operator survive the merge."""
+    """The PATCH payload contains only the run_id key; NetBox merges existing keys server-side."""
     vm_record = {
         "id": 7,
         "custom_fields": {
@@ -91,10 +86,10 @@ async def test_stamp_preserves_operator_set_custom_field_keys(
     await stamp_vm_last_run_id(nb=object(), vm_record=vm_record, run_id="run-uuid-2")
 
     assert len(patch_recorder.calls) == 1
-    merged_cf = patch_recorder.calls[0]["payload"]["custom_fields"]
-    assert merged_cf["team"] == "platform"
-    assert merged_cf["cost_center"] == "infra-42"
-    assert merged_cf[LAST_RUN_ID_CUSTOM_FIELD] == "run-uuid-2"
+    payload_cf = patch_recorder.calls[0]["payload"]["custom_fields"]
+    assert payload_cf == {LAST_RUN_ID_CUSTOM_FIELD: "run-uuid-2"}
+    assert "team" not in payload_cf
+    assert "cost_center" not in payload_cf
 
 
 @pytest.mark.asyncio
@@ -285,6 +280,37 @@ async def test_stamp_skips_when_dict_call_raises(
     await stamp_vm_last_run_id(nb=object(), vm_record=_BrokenPynetboxVM(), run_id="run-uuid-13")
 
     assert patch_recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_stamp_survives_unserializable_existing_custom_field(
+    patch_recorder: _PatchRecorder,
+) -> None:
+    """Non-JSON-serializable values in existing custom_fields must not block the stamp.
+
+    Reproduces GitHub issue #120: spreading current_cf into the PATCH payload
+    causes aiohttp to fail with TypeError when any existing custom field value is
+    not JSON-serializable (e.g. a Query object that leaked into the record).
+    The fix is to only send the target key, relying on NetBox's server-side merge.
+    """
+
+    class _NonSerializable:
+        """Simulates a Query or similar non-JSON-serializable object."""
+
+    vm_record = {
+        "id": 77,
+        "name": "vm-77",
+        "custom_fields": {
+            "some_object_field": _NonSerializable(),
+        },
+    }
+
+    await stamp_vm_last_run_id(nb=object(), vm_record=vm_record, run_id="run-uuid-bug120")
+
+    assert len(patch_recorder.calls) == 1
+    payload_cf = patch_recorder.calls[0]["payload"]["custom_fields"]
+    assert LAST_RUN_ID_CUSTOM_FIELD in payload_cf
+    assert "some_object_field" not in payload_cf
 
 
 def test_module_exports_helpers() -> None:
