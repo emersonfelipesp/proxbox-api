@@ -103,6 +103,60 @@ docker run -d -p 8443:8000 --name proxbox-api-tls \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
+### Mounting custom certificates
+
+Both the `nginx` and `granian` images detect pre-existing certificates at startup.
+If `cert.pem` **and** `key.pem` are already present inside `$MKCERT_CERT_DIR` (default `/certs`),
+mkcert generation is **skipped entirely** — the container uses those files as-is.
+This lets you mount your own CA-signed, Let's Encrypt, or corporate certificates without
+any special flags.
+
+```bash
+docker run -d -p 8443:8000 --name proxbox-api-nginx \
+  -v ./certs:/certs:ro \
+  emersonfelipesp/proxbox-api:latest-nginx
+```
+
+The `./certs` directory must contain at minimum:
+
+| File | Description |
+|------|-------------|
+| `cert.pem` | PEM-encoded certificate (may be a full chain) |
+| `key.pem` | PEM-encoded private key (PKCS#1 or PKCS#8) |
+
+Docker Compose example:
+
+```yaml
+services:
+  proxbox-api:
+    image: emersonfelipesp/proxbox-api:latest-nginx
+    container_name: proxbox-api
+    restart: unless-stopped
+    ports:
+      - "8443:8000"
+    volumes:
+      - ./certs:/certs:ro
+```
+
+#### Granian image and PKCS#8 keys
+
+Granian's TLS layer requires the private key in **PKCS#8 format**.
+The entrypoint handles this automatically:
+
+1. If `key-pkcs8.pem` is present in the mounted directory → use it directly.
+2. If `key-pkcs8.pem` is absent and the directory is **writable** → convert `key.pem`
+   in place and write `key-pkcs8.pem` there.
+3. If `key-pkcs8.pem` is absent and the directory is **read-only** → convert and write
+   to `/tmp/key-pkcs8.pem` (ephemeral; not persisted across container restarts).
+
+To pre-convert your key and avoid the `/tmp` fallback:
+
+```bash
+openssl pkcs8 -topk8 -nocrypt -in ./certs/key.pem -out ./certs/key-pkcs8.pem
+```
+
+Then mount the directory containing all three files (`cert.pem`, `key.pem`, `key-pkcs8.pem`).
+
 ### Binding to IPv6 / dual-stack
 
 To listen on both IPv4 and IPv6, set `PROXBOX_BIND_HOST=::`:
