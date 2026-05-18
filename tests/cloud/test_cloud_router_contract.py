@@ -15,6 +15,7 @@ from proxbox_api.schemas.cloud_provision import CloudVMProvisionRequest
 
 def test_cloud_package_exposes_both_routers():
     assert cloud.provision_router is not None
+    assert cloud.provision_stream_router is not None
     assert cloud.image_factory_router is not None
     assert cloud.template_images_router is not None
     assert cloud.templates_router is not None
@@ -22,6 +23,7 @@ def test_cloud_package_exposes_both_routers():
     assert cloud.versions_router is not None
     assert cloud.__all__ == (
         "provision_router",
+        "provision_stream_router",
         "image_factory_router",
         "pve_template_router",
         "template_images_router",
