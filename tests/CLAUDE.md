@@ -66,6 +66,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining and retry semantics |
 | `test_auth_lockout.py` | bcrypt API-key check, failed-attempt counting, lockout duration, and async path |
 | `test_schema_cli.py` | `proxbox-schema` CLI subcommands (`list`, `status`, `generate`) via argparse |
+| `test_ensure_tag_duplicate_recovery.py` | `ensure_tag_async` concurrent-creation race recovery: slug/name fallback lookups, re-raise on miss, non-duplicate passthrough |
 | `e2e/conftest.py` | E2E fixtures: `proxmox_mock_http_published`, `proxmox_mock_backend`, `client_with_fake_netbox`, `auth_headers` |
 | `e2e/test_backups_sync.py` | Backup sync end-to-end against mock backend / HTTP mock |
 | `e2e/test_demo_auth.py` | Demo auth happy-path and failure modes |
