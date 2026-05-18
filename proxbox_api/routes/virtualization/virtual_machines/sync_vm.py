@@ -3124,8 +3124,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                             # designate each family independently.
                             addr_is_ipv6 = ":" in interface_ip
                             family_tracked = any(
-                                (":" in e["address"]) == addr_is_ipv6
-                                for e in first_ips
+                                (":" in e["address"]) == addr_is_ipv6 for e in first_ips
                             )
                             if not family_tracked:
                                 first_ips.append(
