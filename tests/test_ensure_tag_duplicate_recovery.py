@@ -17,7 +17,6 @@ import pytest
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import ensure_tag_async
 
-
 _SLUG = "production"
 _NAME = "production"
 _COLOR = "4caf50"
