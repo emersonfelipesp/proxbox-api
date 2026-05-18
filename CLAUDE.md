@@ -306,3 +306,89 @@ After a merge:
 Never leave merged branches lingering. The only branches that should persist
 long-term are `main`, active release branches, and any branch the user has
 explicitly asked to keep.
+
+## Release Procedure
+
+The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on
+**both** `push: tags: v*` and `release: types: [published]`. That means a
+single non-rc tag is enough to trigger PyPI publish — and creating a GitHub
+release **after** the tag spawns a *duplicate* publish run that must be
+cancelled to avoid wasted CI and to keep the run history clean.
+
+### Standard release flow (used for `v0.0.12`)
+
+1. **Land the release on the release branch.** Bump
+   `pyproject.toml`, `proxbox_api/__init__.py`, and any other version
+   references; merge into `main` (or the active release branch) with a
+   normal merge commit. No `--no-ff` is required, but never force-push.
+2. **Annotated tag.** From a clean checkout of the release commit:
+   ```bash
+   git tag -a vX.Y.Z -m "Release vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+   The tag push triggers the publish workflow. Watch it to completion:
+   ```bash
+   gh run watch <run-id> --repo emersonfelipesp/proxbox-api
+   ```
+3. **Verify the dist is live on PyPI** before doing anything else:
+   ```bash
+   curl -s https://pypi.org/pypi/proxbox-api/json | jq '.releases | keys'
+   ```
+4. **Create the GitHub release** so the tag has notes and shows up in the
+   project's release listing:
+   ```bash
+   gh release create vX.Y.Z \
+     --repo emersonfelipesp/proxbox-api \
+     --title vX.Y.Z \
+     --generate-notes
+   ```
+   `--generate-notes` auto-builds release notes from PRs/commits since the
+   previous release.
+5. **Cancel the duplicate publish run that the release just spawned.**
+   `release: published` re-fires the publish workflow against the same tag.
+   The dist already exists on PyPI so the upload step would fail anyway, but
+   the run still spends CI minutes and clutters the actions tab. Right after
+   `gh release create` returns:
+   ```bash
+   gh run list --repo emersonfelipesp/proxbox-api --event release --limit 5 \
+     --json databaseId,name,status
+   # cancel every in_progress run from that listing
+   gh run cancel <run-id> --repo emersonfelipesp/proxbox-api
+   ```
+   On a typical proxbox-api release the duplicate runs are
+   `Release validation and publish`, `Release Docker verification`, and
+   `CI`. Always cancel them — `Release Docker verification` is also wasted
+   because the Docker image is built and pushed from the tag-event run, not
+   the release-event run.
+6. **Branch cleanup** per the Branch Cleanup Policy above. For non-`main`
+   release branches (e.g. `v0.0.12`), once PyPI is green, delete the branch
+   locally and on the remote so only `main` and `gh-pages` persist.
+
+### What was done for v0.0.12
+
+- Merged the v0.0.12 release line into `main` (final commit `828a2f6`).
+- Pushed annotated tag `v0.0.12`. Tag-event publish run completed green:
+  PyPI dist `proxbox-api 0.0.12` verified.
+- Created GitHub release with `gh release create v0.0.12 --repo
+  emersonfelipesp/proxbox-api --title v0.0.12 --generate-notes`.
+- That spawned three release-event runs which were cancelled with
+  `gh run cancel`: `Release validation and publish`,
+  `Release Docker verification`, and `CI`.
+- Deleted the `v0.0.12` release branch locally and on the remote via
+  `git push origin :refs/heads/v0.0.12` (explicit refspec is required when
+  a branch and a tag share the same name, otherwise Git complains that
+  `v0.0.12 matches more than one`).
+- After cleanup, only `main` and `gh-pages` remain on origin.
+
+### Don't
+
+- Don't add `twine --skip-existing` to the upload step. If a version is
+  consumed but later fails validation, **fix forward** with the next
+  `.postN` (PEP 440) — `0.0.12.post1`, `0.0.12.post2`, etc. The same
+  fix-forward rule applies to rc tags (`rcN` → `rcN+1`).
+- Don't force-push a release branch to "rewrite history" of a published
+  tag. Tags on the remote are immutable; treat them as such.
+- Don't skip step 5. Even though the duplicate publish run will fail at
+  upload time (file already exists), leaving it `in_progress` for ~10
+  minutes wastes runners and makes future "did the release publish?"
+  diagnostics harder.
