@@ -66,9 +66,7 @@ async def test_stamp_writes_run_id_on_fresh_vm(patch_recorder: _PatchRecorder) -
     call = patch_recorder.calls[0]
     assert call["path"] == "/api/virtualization/virtual-machines/"
     assert call["record_id"] == 42
-    assert call["payload"] == {
-        "custom_fields": {LAST_RUN_ID_CUSTOM_FIELD: "run-uuid-1"}
-    }
+    assert call["payload"] == {"custom_fields": {LAST_RUN_ID_CUSTOM_FIELD: "run-uuid-1"}}
 
 
 @pytest.mark.asyncio
