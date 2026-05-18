@@ -1695,7 +1695,7 @@
 <h1 id="referencia-de-ha-do-cluster-proxmox">Referencia de HA do Cluster Proxmox<a class="headerlink" href="#referencia-de-ha-do-cluster-proxmox" title="Permanent link">&para;</a></h1>
 <p>Endpoints somente leitura de Alta Disponibilidade do Proxmox, agregados entre todos os clusters configurados. Atendem a aba <strong>HA</strong> na pagina de detalhe da VM e a pagina <strong>HA Status</strong> no nivel de cluster, adicionadas pelo <code>netbox-proxbox</code> v0.0.15+ para a <a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/243">issue #243</a>.</p>
 <ul>
-<li><strong>Disponivel desde:</strong> proxbox-api <code>v0.0.11</code>. O floor correspondente do consumidor e <code>netbox-proxbox &gt;= 0.0.15</code> — versoes anteriores do plugin nao chamam estes paths.</li>
+<li><strong>Disponivel desde:</strong> proxbox-api <code>v0.0.11</code>. O floor correspondente do consumidor e <code>netbox-proxbox &gt;= 0.0.16</code> — versoes anteriores do plugin nao chamam estes paths.</li>
 <li><strong>Mutacoes ficam fora do escopo intencionalmente.</strong> Adicionar/remover recurso, migrar/realocar e CRUD de grupos HA nao sao expostos aqui e podem entrar em uma release seguinte.</li>
 <li><strong>Paths de origem no Proxmox:</strong> <code>/cluster/ha/status/current</code>, <code>/cluster/ha/resources</code>, <code>/cluster/ha/groups</code>. O router agrega resultados de cada <code>ProxmoxSession</code> configurada no backend; uma unica requisicao gera uma chamada por cluster.</li>
 </ul>

@@ -1695,7 +1695,7 @@
 <h1 id="proxmox-cluster-ha-reference">Proxmox Cluster HA Reference<a class="headerlink" href="#proxmox-cluster-ha-reference" title="Permanent link">&para;</a></h1>
 <p>Read-only Proxmox High-Availability endpoints aggregated across every configured cluster. Power the <strong>HA tab</strong> on the NetBox VM detail page and the <strong>cluster-wide HA Status</strong> page added by <code>netbox-proxbox</code> v0.0.15+ for <a href="https://github.com/emersonfelipesp/netbox-proxbox/issues/243">issue #243</a>.</p>
 <ul>
-<li><strong>Available since:</strong> proxbox-api <code>v0.0.11</code>. The matching consumer floor is <code>netbox-proxbox &gt;= 0.0.15</code> — older plugin builds do not call these paths.</li>
+<li><strong>Available since:</strong> proxbox-api <code>v0.0.11</code>. The matching consumer floor is <code>netbox-proxbox &gt;= 0.0.16</code> — older plugin builds do not call these paths.</li>
 <li><strong>Mutations are intentionally out of scope.</strong> Adding/removing a resource, migrating, relocating, or any HA group CRUD is not exposed here and may land in a follow-up release.</li>
 <li><strong>Source paths on Proxmox:</strong> <code>/cluster/ha/status/current</code>, <code>/cluster/ha/resources</code>, <code>/cluster/ha/groups</code>. The router merges results across every <code>ProxmoxSession</code> configured in the backend, so a single request fans out one call per cluster.</li>
 </ul>
