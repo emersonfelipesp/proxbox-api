@@ -43,6 +43,7 @@ from proxbox_api.routes.dcim import router as dcim_router
 from proxbox_api.routes.extras import router as extras_router
 from proxbox_api.routes.intent import router as intent_router
 from proxbox_api.routes.intent.deletion_requests import router as deletion_requests_router
+from proxbox_api.routes.intent.vm_tags import router as vm_tags_router
 from proxbox_api.routes.netbox import router as netbox_router
 from proxbox_api.routes.proxmox import router as proxmox_router
 from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
@@ -428,6 +429,7 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(extras_router, prefix="/extras", tags=["extras"])
         app.include_router(intent_router, prefix="/intent", tags=["intent"])
         app.include_router(deletion_requests_router, prefix="/intent", tags=["intent"])
+        app.include_router(vm_tags_router, prefix="/intent", tags=["intent"])
         app.include_router(cloud_provision_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_provision_stream_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_image_factory_router, prefix="/cloud", tags=["cloud"])
