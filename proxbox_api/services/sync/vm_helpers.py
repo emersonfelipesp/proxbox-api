@@ -369,10 +369,11 @@ async def stamp_vm_last_run_id(
     """Stamp `custom_fields.proxbox_last_run_id` on a NetBox VM after reconcile.
 
     Idempotent: if the record already carries the same run_id, no PATCH is issued.
-    Operator-set custom_fields keys are preserved by merging on top of the
-    current custom_fields dict. This runs as a separate narrow PATCH so the
-    stamp is written regardless of the operator's `overwrite_vm_custom_fields`
-    gate (which controls whether the main reconciler diffs `custom_fields` at all).
+    NetBox merges custom_field keys server-side on PATCH, so we only send the
+    target key. Spreading the existing custom_fields dict into the payload would
+    cause a serialization failure if any value is not JSON-serializable.
+    This runs as a separate narrow PATCH so the stamp is written regardless of
+    the operator's `overwrite_vm_custom_fields` gate.
     """
     if not run_id or not vm_record:
         return
@@ -394,13 +395,12 @@ async def stamp_vm_last_run_id(
 
     from proxbox_api.netbox_rest import rest_patch_async
 
-    merged_cf = {**current_cf, LAST_RUN_ID_CUSTOM_FIELD: run_id}
     try:
         await rest_patch_async(
             nb,
             "/api/virtualization/virtual-machines/",
             record_id,
-            {"custom_fields": merged_cf},
+            {"custom_fields": {LAST_RUN_ID_CUSTOM_FIELD: run_id}},
         )
     except Exception as error:  # noqa: BLE001
         logger.warning(
