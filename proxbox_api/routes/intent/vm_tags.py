@@ -136,7 +136,10 @@ async def _set_tags(proxmox: object, vmid: int, node: str, kind: VMKind, tags: l
 async def tag_pending_deletion(
     body: TagPendingDeletionBody,
     session: SessionDep,
-    endpoint_id: int | None = Query(default=None, description="ProxmoxEndpoint primary key; auto-resolved when omitted and exactly one write-enabled endpoint exists"),
+    endpoint_id: int | None = Query(
+        default=None,
+        description="ProxmoxEndpoint primary key; auto-resolved when omitted and exactly one write-enabled endpoint exists",
+    ),
     actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
 ) -> TagPendingDeletionResponse | JSONResponse:
     endpoint = await _resolve_endpoint(session, endpoint_id)
@@ -191,7 +194,10 @@ async def tag_pending_deletion(
 async def untag_pending_deletion(
     body: TagPendingDeletionBody,
     session: SessionDep,
-    endpoint_id: int | None = Query(default=None, description="ProxmoxEndpoint primary key; auto-resolved when omitted and exactly one write-enabled endpoint exists"),
+    endpoint_id: int | None = Query(
+        default=None,
+        description="ProxmoxEndpoint primary key; auto-resolved when omitted and exactly one write-enabled endpoint exists",
+    ),
     actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
 ) -> TagPendingDeletionResponse | JSONResponse:
     endpoint = await _resolve_endpoint(session, endpoint_id)
