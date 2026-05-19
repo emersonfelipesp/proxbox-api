@@ -36,6 +36,7 @@ from proxbox_api.routes.proxmox import (
     get_vm_config,
     proxmox_version,
 )
+from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.routes.proxmox.nodes import get_node_network
 from proxbox_api.routes.proxmox.replication import cluster_replication
@@ -1728,7 +1729,7 @@ def test_proxmox_routes_use_typed_helpers_for_sync_dependencies():
     cluster_status_payload = asyncio.run(cluster_status(pxs))
     cluster_resources_payload = asyncio.run(cluster_resources(pxs, type=None))
     vm_config_payload = asyncio.run(
-        get_vm_config(pxs, cluster_status_payload, node="pve01", type="qemu", vmid=101)
+        get_vm_config(pxs, node="pve01", type="qemu", vmid=101)
     )
     backup_payload = asyncio.run(
         get_proxmox_node_storage_content(
@@ -1763,6 +1764,22 @@ def test_proxmox_routes_use_typed_helpers_for_sync_dependencies():
     assert vm_config_payload["net0"].startswith("virtio=")
     assert backup_payload[0]["volid"] == "local:backup/vzdump-qemu-101.vma.zst"
     assert backup_payload[0]["content"] == "backup"
+
+
+def test_vm_config_resolves_without_cluster_status_preflight():
+    """Regression test for issue #134.
+
+    resolve_vm_config must return VM config even when the requested node would
+    not appear in any cluster_status node_list (e.g. FQDN vs short-name mismatch,
+    stale cluster data, or multi-cluster topologies).  The function must query the
+    Proxmox API directly instead of relying on a cluster-status preflight.
+    """
+    pxs = [FakeTypedProxmoxSession()]
+    result = asyncio.run(resolve_vm_config(pxs=pxs, node="pve01", vm_type="qemu", vmid=101))
+    assert result["name"] == "vm01"
+    assert result["digest"] == "abc123"
+    assert result["memory"] == "4096"
+    assert result["net0"].startswith("virtio=")
 
 
 def test_cluster_status_accepts_minimal_cluster_payloads():

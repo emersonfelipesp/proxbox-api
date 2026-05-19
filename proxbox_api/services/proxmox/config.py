@@ -4,26 +4,28 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from proxmox_sdk.sdk.exceptions import ResourceException
-
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.schemas.proxmox import ClusterStatusSchemaList
 from proxbox_api.services.proxmox_helpers import get_vm_config as get_typed_vm_config
 
 
 async def resolve_vm_config(
     *,
     pxs: Iterable[object],
-    cluster_status: ClusterStatusSchemaList,
     node: str,
     vm_type: str,
     vmid: int,
 ) -> dict[str, object]:
     """Resolve a VM config across all Proxmox sessions and return the dumped payload.
 
+    Iterates sessions directly without a cluster-status preflight.  The preflight
+    was fragile (FQDN vs short-name mismatches, stale cluster data, multi-cluster
+    topologies) and unnecessary because ProxmoxSessionsDep already scopes sessions
+    to the requested endpoint via the name/endpoint_ids query params.
+
     Raises:
-        ProxboxException: invalid VM type, no matching node, or downstream Proxmox failure.
+        ProxboxException: invalid VM type, no session returned a config, or an
+            unhandled downstream error.
     """
     if vm_type not in ("qemu", "lxc"):
         raise ProxboxException(
@@ -31,33 +33,27 @@ async def resolve_vm_config(
             http_status_code=400,
         )
 
-    config = None
+    errors: list[str] = []
     try:
-        for px, cluster in zip(pxs, cluster_status):
+        for px in pxs:
             try:
-                node_list = cluster.node_list or []
-                for cluster_node in node_list:
-                    if str(node) == str(cluster_node.name):
-                        config = await get_typed_vm_config(
-                            px, node=node, vm_type=vm_type, vmid=vmid
-                        )
-                        if config:
-                            return config.model_dump(
-                                mode="python",
-                                by_alias=True,
-                                exclude_none=True,
-                            )
-            except ResourceException as error:
-                raise ProxboxException(
-                    message="Error getting VM Config",
-                    python_exception=f"Error: {error!s}",
-                )
+                config = await get_typed_vm_config(px, node=node, vm_type=vm_type, vmid=vmid)
+                if config:
+                    return config.model_dump(
+                        mode="python",
+                        by_alias=True,
+                        exclude_none=True,
+                    )
+            except ProxboxException as error:
+                errors.append(str(error.message))
 
-        if config is None:
-            raise ProxboxException(
-                message="VM Config not found.",
-                detail="VM Config not found. Check if the 'node', 'type', and 'vmid' are correct.",
-            )
+        raise ProxboxException(
+            message="VM Config not found.",
+            detail=(
+                "VM Config not found. Check if the 'node', 'type', and 'vmid' are correct."
+                + (f" Session errors: {'; '.join(errors)}" if errors else "")
+            ),
+        )
     except ProxboxException:
         raise
     except Exception as error:
@@ -72,5 +68,3 @@ async def resolve_vm_config(
             detail="Check if the node, type, and vmid are correct.",
             python_exception=str(error),
         )
-
-    return {}
