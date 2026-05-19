@@ -47,6 +47,7 @@ from proxbox_api.routes.intent.vm_tags import router as vm_tags_router
 from proxbox_api.routes.netbox import router as netbox_router
 from proxbox_api.routes.proxmox import router as proxmox_router
 from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
+from proxbox_api.routes.proxmox.firewall import router as px_firewall_router
 from proxbox_api.routes.proxmox.ha import router as px_ha_router
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
@@ -430,6 +431,7 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
         app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
         app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
+        app.include_router(px_firewall_router, prefix="/proxmox", tags=["proxmox / firewall"])
         app.include_router(
             proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
         )
