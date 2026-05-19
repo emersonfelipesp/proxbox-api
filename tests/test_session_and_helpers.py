@@ -36,10 +36,10 @@ from proxbox_api.routes.proxmox import (
     get_vm_config,
     proxmox_version,
 )
-from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.routes.proxmox.nodes import get_node_network
 from proxbox_api.routes.proxmox.replication import cluster_replication
+from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
 )
