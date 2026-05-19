@@ -1,4 +1,5 @@
 """Tests for the nginx config template shipped with the proxbox-api Docker image."""
+
 import re
 from pathlib import Path
 
