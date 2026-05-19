@@ -1288,7 +1288,7 @@ async def create_virtual_machines(  # noqa: C901
             supports_virtual_machine_type_field=supports_vm_type,
         )
     )
-    effective_run_id = run_id or str(uuid.uuid4())
+    effective_run_id = run_id if isinstance(run_id, str) and run_id else str(uuid.uuid4())
 
     filtered_cluster_resources = cluster_resources
     bridge: WebSocketSSEBridge | None = (

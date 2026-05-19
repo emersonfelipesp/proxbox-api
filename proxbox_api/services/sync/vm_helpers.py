@@ -375,7 +375,7 @@ async def stamp_vm_last_run_id(
     This runs as a separate narrow PATCH so the stamp is written regardless of
     the operator's `overwrite_vm_custom_fields` gate.
     """
-    if not run_id or not vm_record:
+    if not isinstance(run_id, str) or not run_id or not vm_record:
         return
 
     record = _coerce_vm_record_to_dict(vm_record)
