@@ -1,6 +1,7 @@
 server {
-    listen __PORT__ ssl http2;
-    listen [::]:__PORT__ ssl http2;
+    listen __PORT__ ssl;
+    listen [::]:__PORT__ ssl;
+    http2 on;
     ssl_certificate __CERT__;
     ssl_certificate_key __KEY__;
 
