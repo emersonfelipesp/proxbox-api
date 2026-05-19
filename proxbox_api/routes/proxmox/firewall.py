@@ -29,6 +29,7 @@ router = APIRouter()
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
+
 class FirewallRuleSchema(BaseModel):
     cluster_name: str | None = None
     zone: str | None = None
@@ -128,6 +129,7 @@ class FirewallSummarySchema(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _bool(value: object) -> bool | None:
     if value is None:
         return None
@@ -162,7 +164,9 @@ async def _safe_get_dict(coro_or_result) -> dict:
         return {}
 
 
-_OPTIONS_KNOWN_KEYS: frozenset[str] = frozenset({"enable", "policy_in", "policy_out", "log_ratelimit"})
+_OPTIONS_KNOWN_KEYS: frozenset[str] = frozenset(
+    {"enable", "policy_in", "policy_out", "log_ratelimit"}
+)
 
 
 def _rule_from_raw(raw: dict, cluster_name: str, zone: str, **extra) -> FirewallRuleSchema:
@@ -202,6 +206,7 @@ def _options_from_raw(raw: dict, cluster_name: str, zone: str, **extra) -> Firew
 
 # ── Datacenter-level endpoints ────────────────────────────────────────────────
 
+
 @router.get("/firewall/datacenter/rules", response_model=list[FirewallRuleSchema])
 async def datacenter_firewall_rules(pxs: ProxmoxSessionsDep):
     """Retrieve datacenter-level firewall rules from all configured endpoints."""
@@ -213,7 +218,11 @@ async def datacenter_firewall_rules(pxs: ProxmoxSessionsDep):
                 results.append(_rule_from_raw(rule, px.name, "datacenter"))
         except Exception as exc:
             logger.exception("Error fetching datacenter firewall rules for %s", px.name)
-            results.append(FirewallRuleSchema(cluster_name=px.name, zone="datacenter", status="error", error=str(exc)))
+            results.append(
+                FirewallRuleSchema(
+                    cluster_name=px.name, zone="datacenter", status="error", error=str(exc)
+                )
+            )
     return results
 
 
@@ -226,23 +235,25 @@ async def datacenter_firewall_groups(pxs: ProxmoxSessionsDep):
             raw_groups = await _safe_get(px.session.cluster.firewall.groups.get())
             for grp in raw_groups:
                 group_name = grp.get("group") or grp.get("name") or ""
-                raw_rules = await _safe_get(
-                    px.session.cluster.firewall.groups(group_name).get()
-                )
+                raw_rules = await _safe_get(px.session.cluster.firewall.groups(group_name).get())
                 rule_schemas = [
                     _rule_from_raw(r, px.name, "security_group", security_group=group_name)
                     for r in raw_rules
                 ]
-                results.append(FirewallSecurityGroupSchema(
-                    cluster_name=px.name,
-                    name=group_name,
-                    comment=grp.get("comment"),
-                    digest=grp.get("digest"),
-                    rules=rule_schemas,
-                ))
+                results.append(
+                    FirewallSecurityGroupSchema(
+                        cluster_name=px.name,
+                        name=group_name,
+                        comment=grp.get("comment"),
+                        digest=grp.get("digest"),
+                        rules=rule_schemas,
+                    )
+                )
         except Exception as exc:
             logger.exception("Error fetching datacenter firewall groups for %s", px.name)
-            results.append(FirewallSecurityGroupSchema(cluster_name=px.name, status="error", error=str(exc)))
+            results.append(
+                FirewallSecurityGroupSchema(cluster_name=px.name, status="error", error=str(exc))
+            )
     return results
 
 
@@ -255,9 +266,7 @@ async def datacenter_firewall_ipsets(pxs: ProxmoxSessionsDep):
             raw_sets = await _safe_get(px.session.cluster.firewall.ipset.get())
             for ipset in raw_sets:
                 set_name = ipset.get("name") or ""
-                raw_entries = await _safe_get(
-                    px.session.cluster.firewall.ipset(set_name).get()
-                )
+                raw_entries = await _safe_get(px.session.cluster.firewall.ipset(set_name).get())
                 entries = [
                     FirewallIPSetEntrySchema(
                         cidr=e.get("cidr"),
@@ -266,17 +275,23 @@ async def datacenter_firewall_ipsets(pxs: ProxmoxSessionsDep):
                     )
                     for e in raw_entries
                 ]
-                results.append(FirewallIPSetSchema(
-                    cluster_name=px.name,
-                    zone="datacenter",
-                    name=set_name,
-                    comment=ipset.get("comment"),
-                    digest=ipset.get("digest"),
-                    entries=entries,
-                ))
+                results.append(
+                    FirewallIPSetSchema(
+                        cluster_name=px.name,
+                        zone="datacenter",
+                        name=set_name,
+                        comment=ipset.get("comment"),
+                        digest=ipset.get("digest"),
+                        entries=entries,
+                    )
+                )
         except Exception as exc:
             logger.exception("Error fetching datacenter firewall IP sets for %s", px.name)
-            results.append(FirewallIPSetSchema(cluster_name=px.name, zone="datacenter", status="error", error=str(exc)))
+            results.append(
+                FirewallIPSetSchema(
+                    cluster_name=px.name, zone="datacenter", status="error", error=str(exc)
+                )
+            )
     return results
 
 
@@ -288,17 +303,23 @@ async def datacenter_firewall_aliases(pxs: ProxmoxSessionsDep):
         try:
             raw_aliases = await _safe_get(px.session.cluster.firewall.aliases.get())
             for alias in raw_aliases:
-                results.append(FirewallAliasSchema(
-                    cluster_name=px.name,
-                    zone="datacenter",
-                    name=alias.get("name"),
-                    cidr=alias.get("cidr"),
-                    comment=alias.get("comment"),
-                    digest=alias.get("digest"),
-                ))
+                results.append(
+                    FirewallAliasSchema(
+                        cluster_name=px.name,
+                        zone="datacenter",
+                        name=alias.get("name"),
+                        cidr=alias.get("cidr"),
+                        comment=alias.get("comment"),
+                        digest=alias.get("digest"),
+                    )
+                )
         except Exception as exc:
             logger.exception("Error fetching datacenter firewall aliases for %s", px.name)
-            results.append(FirewallAliasSchema(cluster_name=px.name, zone="datacenter", status="error", error=str(exc)))
+            results.append(
+                FirewallAliasSchema(
+                    cluster_name=px.name, zone="datacenter", status="error", error=str(exc)
+                )
+            )
     return results
 
 
@@ -317,6 +338,7 @@ async def datacenter_firewall_options(pxs: ProxmoxSessionsDep):
 
 # ── Node-level endpoints ──────────────────────────────────────────────────────
 
+
 @router.get("/firewall/nodes/{node}/rules", response_model=list[FirewallRuleSchema])
 async def node_firewall_rules(node: str, pxs: ProxmoxSessionsDep):
     """Retrieve host-level firewall rules for a Proxmox node."""
@@ -328,7 +350,11 @@ async def node_firewall_rules(node: str, pxs: ProxmoxSessionsDep):
                 results.append(_rule_from_raw(rule, px.name, "node", node=node))
         except Exception as exc:
             logger.exception("Error fetching node %s firewall rules for %s", node, px.name)
-            results.append(FirewallRuleSchema(cluster_name=px.name, zone="node", node=node, status="error", error=str(exc)))
+            results.append(
+                FirewallRuleSchema(
+                    cluster_name=px.name, zone="node", node=node, status="error", error=str(exc)
+                )
+            )
     return results
 
 
@@ -346,6 +372,7 @@ async def node_firewall_options(node: str, pxs: ProxmoxSessionsDep):
 
 
 # ── VM-level endpoints ────────────────────────────────────────────────────────
+
 
 @router.get("/firewall/vms/{vmid}/rules", response_model=list[FirewallRuleSchema])
 async def vm_firewall_rules(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_type: str = "qemu"):
@@ -365,7 +392,16 @@ async def vm_firewall_rules(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_ty
                 results.append(_rule_from_raw(rule, px.name, zone, node=node, vmid=vmid))
         except Exception as exc:
             logger.exception("Error fetching VM %s firewall rules for %s", vmid, px.name)
-            results.append(FirewallRuleSchema(cluster_name=px.name, zone=zone, node=node, vmid=vmid, status="error", error=str(exc)))
+            results.append(
+                FirewallRuleSchema(
+                    cluster_name=px.name,
+                    zone=zone,
+                    node=node,
+                    vmid=vmid,
+                    status="error",
+                    error=str(exc),
+                )
+            )
     return results
 
 
@@ -389,18 +425,29 @@ async def vm_firewall_ipsets(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_t
                     )
                     for e in raw_entries
                 ]
-                results.append(FirewallIPSetSchema(
+                results.append(
+                    FirewallIPSetSchema(
+                        cluster_name=px.name,
+                        zone=zone,
+                        node=node,
+                        vmid=vmid,
+                        name=set_name,
+                        comment=ipset.get("comment"),
+                        entries=entries,
+                    )
+                )
+        except Exception as exc:
+            logger.exception("Error fetching VM %s firewall IP sets for %s", vmid, px.name)
+            results.append(
+                FirewallIPSetSchema(
                     cluster_name=px.name,
                     zone=zone,
                     node=node,
                     vmid=vmid,
-                    name=set_name,
-                    comment=ipset.get("comment"),
-                    entries=entries,
-                ))
-        except Exception as exc:
-            logger.exception("Error fetching VM %s firewall IP sets for %s", vmid, px.name)
-            results.append(FirewallIPSetSchema(cluster_name=px.name, zone=zone, node=node, vmid=vmid, status="error", error=str(exc)))
+                    status="error",
+                    error=str(exc),
+                )
+            )
     return results
 
 
@@ -414,18 +461,29 @@ async def vm_firewall_aliases(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_
             vm_proxy = get_vm_proxy(px, node, vmid, vm_type)
             raw_aliases = await _safe_get(vm_proxy.firewall.aliases.get())
             for alias in raw_aliases:
-                results.append(FirewallAliasSchema(
+                results.append(
+                    FirewallAliasSchema(
+                        cluster_name=px.name,
+                        zone=zone,
+                        node=node,
+                        vmid=vmid,
+                        name=alias.get("name"),
+                        cidr=alias.get("cidr"),
+                        comment=alias.get("comment"),
+                    )
+                )
+        except Exception as exc:
+            logger.exception("Error fetching VM %s firewall aliases for %s", vmid, px.name)
+            results.append(
+                FirewallAliasSchema(
                     cluster_name=px.name,
                     zone=zone,
                     node=node,
                     vmid=vmid,
-                    name=alias.get("name"),
-                    cidr=alias.get("cidr"),
-                    comment=alias.get("comment"),
-                ))
-        except Exception as exc:
-            logger.exception("Error fetching VM %s firewall aliases for %s", vmid, px.name)
-            results.append(FirewallAliasSchema(cluster_name=px.name, zone=zone, node=node, vmid=vmid, status="error", error=str(exc)))
+                    status="error",
+                    error=str(exc),
+                )
+            )
     return results
 
 
@@ -445,6 +503,7 @@ async def vm_firewall_options(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_
 
 
 # ── Aggregated summary endpoint ───────────────────────────────────────────────
+
 
 @router.get("/firewall/summary", response_model=list[FirewallSummarySchema])
 async def firewall_summary(pxs: ProxmoxSessionsDep):
@@ -469,44 +528,52 @@ async def firewall_summary(pxs: ProxmoxSessionsDep):
             dc_rules = [_rule_from_raw(r, px.name, "datacenter") for r in dc_rules_raw]
 
             sg_group_names = [grp.get("group") or grp.get("name") or "" for grp in sg_raw]
-            sg_rules_lists = await asyncio.gather(*[
-                _safe_get(px.session.cluster.firewall.groups(name).get())
-                for name in sg_group_names
-            ])
+            sg_rules_lists = await asyncio.gather(
+                *[
+                    _safe_get(px.session.cluster.firewall.groups(name).get())
+                    for name in sg_group_names
+                ]
+            )
             security_groups: list[FirewallSecurityGroupSchema] = []
             for grp, group_name, sg_rules in zip(sg_raw, sg_group_names, sg_rules_lists):
-                security_groups.append(FirewallSecurityGroupSchema(
-                    cluster_name=px.name,
-                    name=group_name,
-                    comment=grp.get("comment"),
-                    digest=grp.get("digest"),
-                    rules=[
-                        _rule_from_raw(r, px.name, "security_group", security_group=group_name)
-                        for r in sg_rules
-                    ],
-                ))
+                security_groups.append(
+                    FirewallSecurityGroupSchema(
+                        cluster_name=px.name,
+                        name=group_name,
+                        comment=grp.get("comment"),
+                        digest=grp.get("digest"),
+                        rules=[
+                            _rule_from_raw(r, px.name, "security_group", security_group=group_name)
+                            for r in sg_rules
+                        ],
+                    )
+                )
 
-            ipset_entries_lists = await asyncio.gather(*[
-                _safe_get(px.session.cluster.firewall.ipset(ipset.get("name") or "").get())
-                for ipset in ipsets_raw
-            ])
+            ipset_entries_lists = await asyncio.gather(
+                *[
+                    _safe_get(px.session.cluster.firewall.ipset(ipset.get("name") or "").get())
+                    for ipset in ipsets_raw
+                ]
+            )
             dc_ipsets: list[FirewallIPSetSchema] = []
             for ipset, entries_raw in zip(ipsets_raw, ipset_entries_lists):
-                dc_ipsets.append(FirewallIPSetSchema(
-                    cluster_name=px.name,
-                    zone="datacenter",
-                    name=ipset.get("name") or "",
-                    comment=ipset.get("comment"),
-                    digest=ipset.get("digest"),
-                    entries=[
-                        FirewallIPSetEntrySchema(
-                            cidr=e.get("cidr"),
-                            comment=e.get("comment"),
-                            nomatch=_bool(e.get("nomatch")),
-                        )
-                        for e in entries_raw
-                    ],
-                ))
+                dc_ipsets.append(
+                    FirewallIPSetSchema(
+                        cluster_name=px.name,
+                        zone="datacenter",
+                        name=ipset.get("name") or "",
+                        comment=ipset.get("comment"),
+                        digest=ipset.get("digest"),
+                        entries=[
+                            FirewallIPSetEntrySchema(
+                                cidr=e.get("cidr"),
+                                comment=e.get("comment"),
+                                nomatch=_bool(e.get("nomatch")),
+                            )
+                            for e in entries_raw
+                        ],
+                    )
+                )
 
             dc_aliases = [
                 FirewallAliasSchema(
@@ -521,21 +588,23 @@ async def firewall_summary(pxs: ProxmoxSessionsDep):
             ]
 
             dc_options = (
-                _options_from_raw(dc_options_raw, px.name, "datacenter")
-                if dc_options_raw
-                else None
+                _options_from_raw(dc_options_raw, px.name, "datacenter") if dc_options_raw else None
             )
 
-            results.append(FirewallSummarySchema(
-                cluster_name=px.name,
-                datacenter_rules=dc_rules,
-                security_groups=security_groups,
-                datacenter_ipsets=dc_ipsets,
-                datacenter_aliases=dc_aliases,
-                datacenter_options=dc_options,
-            ))
+            results.append(
+                FirewallSummarySchema(
+                    cluster_name=px.name,
+                    datacenter_rules=dc_rules,
+                    security_groups=security_groups,
+                    datacenter_ipsets=dc_ipsets,
+                    datacenter_aliases=dc_aliases,
+                    datacenter_options=dc_options,
+                )
+            )
         except Exception as exc:
             logger.exception("Error fetching firewall summary for %s", px.name)
-            results.append(FirewallSummarySchema(cluster_name=px.name, status="error", error=str(exc)))
+            results.append(
+                FirewallSummarySchema(cluster_name=px.name, status="error", error=str(exc))
+            )
 
     return results
