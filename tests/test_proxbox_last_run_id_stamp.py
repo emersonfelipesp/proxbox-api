@@ -313,6 +313,39 @@ async def test_stamp_survives_unserializable_existing_custom_field(
     assert "some_object_field" not in payload_cf
 
 
+@pytest.mark.asyncio
+async def test_stamp_skips_when_run_id_is_fastapi_query_object(
+    patch_recorder: _PatchRecorder,
+) -> None:
+    """A fastapi.params.Query default must not reach the PATCH payload.
+
+    Reproduces GitHub issue #132: when `create_virtual_machines` is called
+    programmatically without passing `run_id=`, Python uses the FastAPI
+    `Query(default=None)` sentinel as the default value. That object is
+    truthy, so the old guard `effective_run_id = run_id or str(uuid.uuid4())`
+    propagated the Query object instead of generating a fresh UUID, causing:
+
+        TypeError: Object of type Query is not JSON serializable
+
+    The fix is two-pronged:
+      1. `effective_run_id = run_id if isinstance(run_id, str) and run_id else str(uuid.uuid4())`
+         in sync_vm.py prevents the Query from ever reaching stamp_vm_last_run_id.
+      2. The isinstance guard added here makes stamp_vm_last_run_id self-defensive
+         so it silently no-ops rather than raising if a non-str leaks through.
+    """
+    from fastapi.params import Query as FastAPIQuery
+
+    query_default = FastAPIQuery(default=None, title="Run ID")
+
+    vm_record = {"id": 64, "name": "example01.example.com", "custom_fields": {}}
+
+    await stamp_vm_last_run_id(nb=object(), vm_record=vm_record, run_id=query_default)
+
+    assert patch_recorder.calls == [], (
+        "stamp_vm_last_run_id must not issue a PATCH when run_id is a FastAPI Query object"
+    )
+
+
 def test_module_exports_helpers() -> None:
     """The helper is importable from the module's public surface."""
     assert hasattr(vm_helpers, "stamp_vm_last_run_id")
