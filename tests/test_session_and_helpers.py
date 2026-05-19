@@ -1728,9 +1728,7 @@ def test_proxmox_routes_use_typed_helpers_for_sync_dependencies():
 
     cluster_status_payload = asyncio.run(cluster_status(pxs))
     cluster_resources_payload = asyncio.run(cluster_resources(pxs, type=None))
-    vm_config_payload = asyncio.run(
-        get_vm_config(pxs, node="pve01", type="qemu", vmid=101)
-    )
+    vm_config_payload = asyncio.run(get_vm_config(pxs, node="pve01", type="qemu", vmid=101))
     backup_payload = asyncio.run(
         get_proxmox_node_storage_content(
             pxs,
