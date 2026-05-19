@@ -36,10 +36,10 @@ from proxbox_api.routes.proxmox import (
     get_vm_config,
     proxmox_version,
 )
-from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.routes.proxmox.nodes import get_node_network
 from proxbox_api.routes.proxmox.replication import cluster_replication
+from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
 )
@@ -1728,9 +1728,7 @@ def test_proxmox_routes_use_typed_helpers_for_sync_dependencies():
 
     cluster_status_payload = asyncio.run(cluster_status(pxs))
     cluster_resources_payload = asyncio.run(cluster_resources(pxs, type=None))
-    vm_config_payload = asyncio.run(
-        get_vm_config(pxs, node="pve01", type="qemu", vmid=101)
-    )
+    vm_config_payload = asyncio.run(get_vm_config(pxs, node="pve01", type="qemu", vmid=101))
     backup_payload = asyncio.run(
         get_proxmox_node_storage_content(
             pxs,

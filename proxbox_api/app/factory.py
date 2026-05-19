@@ -298,6 +298,21 @@ async def _run_bootstrap_pass(app: FastAPI) -> None:
         )
         return
 
+    if nb is None:
+        app.state.bootstrap_status = BootstrapStatus(
+            ok=False,
+            skipped=True,
+            reason="no_netbox_session",
+        )
+        logger.warning(
+            "NetBox bootstrap skipped: no NetBox endpoint is configured. "
+            "To fix this, add a NetBox endpoint via the Proxbox API admin UI "
+            "(POST /netbox/endpoints/) or the Next.js admin panel. "
+            "See the installation docs: "
+            "https://emersonfelipesp.github.io/proxbox-api/installation/"
+        )
+        return
+
     try:
         status = await run_netbox_bootstrap(nb, enabled=True)
     except Exception as exc:  # noqa: BLE001

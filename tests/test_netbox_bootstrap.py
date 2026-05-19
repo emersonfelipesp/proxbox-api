@@ -461,6 +461,43 @@ async def test_bootstrap_status_as_dict_round_trip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_bootstrap_pass_skips_when_no_netbox_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_run_bootstrap_pass must short-circuit and emit exactly one warning when
+    get_raw_netbox_session returns None (issue #130).
+
+    Before the fix, ``run_netbox_bootstrap`` was called with ``nb=None``
+    causing ~20 per-upsert warning log lines instead of one.
+    """
+    from unittest.mock import MagicMock
+
+    from proxbox_api.app import factory
+    from proxbox_api.app import netbox_session as nb_session_module
+    from proxbox_api.services import netbox_bootstrap as nb_bootstrap_module
+
+    # Fake app with a state object
+    fake_app = MagicMock()
+    fake_app.state = MagicMock()
+
+    # get_raw_netbox_session returns None — simulates no endpoint configured
+    monkeypatch.setattr(nb_session_module, "get_raw_netbox_session", lambda: None)
+
+    # run_netbox_bootstrap must NOT be called; raise if it is
+    async def _must_not_be_called(*_a: object, **_kw: object) -> None:
+        raise AssertionError("run_netbox_bootstrap must not be called when nb is None")
+
+    monkeypatch.setattr(nb_bootstrap_module, "run_netbox_bootstrap", _must_not_be_called)
+
+    await factory._run_bootstrap_pass(fake_app)
+
+    status = fake_app.state.bootstrap_status
+    assert status.skipped is True, "bootstrap_status.skipped must be True when no endpoint"
+    assert status.ok is False, "bootstrap_status.ok must be False when no endpoint"
+    assert "no_netbox_session" in (status.reason or "")
+
+
+@pytest.mark.asyncio
 async def test_run_netbox_bootstrap_skips_vm_types_on_old_netbox(
     patch_rest: dict[str, Any],
     freeze_last_updated: None,
