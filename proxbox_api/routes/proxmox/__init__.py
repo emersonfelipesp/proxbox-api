@@ -401,16 +401,14 @@ async def top_level_endpoint(
 )
 async def get_vm_config(
     pxs: ProxmoxSessionsDep,
-    cluster_status: ClusterStatusDep,
     name: str = Query(title="Cluster", description="Proxmox Cluster Name", default=None),
     node: str = Path(..., title="Node", description="Proxmox Node Name"),
     type: str = Path(..., title="Type", description="Proxmox VM Type"),
     vmid: int = Path(..., title="VM ID", description="Proxmox VM ID"),
 ):
-    """Return the VM config by matching node across all Proxmox clusters."""
+    """Return the VM config by querying Proxmox sessions directly."""
     return await resolve_vm_config(
         pxs=pxs,
-        cluster_status=cluster_status,
         node=node,
         vm_type=type,
         vmid=vmid,
