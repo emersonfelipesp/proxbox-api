@@ -116,6 +116,7 @@ Common to all images (`raw`, `nginx`, `granian`):
 |----------|---------|-------------|
 | `PORT` | `8000` | Port the server listens on |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Bind address for the API server. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
+| `PROXBOX_LOG_LEVEL` | `INFO` | Console log verbosity. Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Set to `DEBUG` for verbose tracing (also enables full `netbox_sdk.client` request tracing). The in-memory log buffer and rotating file handler are unaffected. |
 
 mkcert-specific (only for `nginx` and `granian`):
 
