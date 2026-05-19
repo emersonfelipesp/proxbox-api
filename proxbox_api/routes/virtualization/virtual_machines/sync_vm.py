@@ -2293,7 +2293,7 @@ async def create_virtual_machines(  # noqa: C901
             return_exceptions=True,
         )
 
-        logger.info(
+        logger.debug(
             "VM creation gather complete: %d cluster result(s)",
             len(result_list),
         )

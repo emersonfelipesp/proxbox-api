@@ -2,6 +2,8 @@
 
 import contextvars
 import logging
+import os
+import sys
 import time
 from collections.abc import Callable
 from functools import wraps
@@ -11,6 +13,42 @@ from typing import ParamSpec, TypeVar
 from fastapi import WebSocket
 
 from proxbox_api.constants import DEFAULT_LOG_PATH
+
+# Third-party loggers that are verbose at INFO but rarely operator-meaningful.
+# Suppressed to WARNING by default; restored to DEBUG when PROXBOX_LOG_LEVEL=DEBUG.
+_THIRD_PARTY_NOISY = [
+    "netbox_sdk.client",
+    "netbox_sdk.schema",
+]
+
+_VALID_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+
+def _parse_log_level(raw: str, default: int = logging.INFO) -> int:
+    """Convert a level name string to a logging level integer.
+
+    Falls back to *default* and writes a warning to stderr when *raw* is not
+    a recognised level name.  stderr is used because the proxbox logger has not
+    been constructed yet at the call site.
+    """
+    normalized = raw.strip().upper()
+    if normalized not in _VALID_LEVELS:
+        sys.stderr.write(f"proxbox: unknown PROXBOX_LOG_LEVEL={raw!r}, defaulting to INFO\n")
+        return default
+    return getattr(logging, normalized)
+
+
+def _configure_third_party_levels(console_level: int) -> None:
+    """Set the floor level for known noisy third-party loggers.
+
+    When the operator requests DEBUG output, third-party loggers are left at
+    DEBUG so full SDK tracing is visible.  Otherwise they are raised to WARNING
+    so they do not flood INFO output.
+    """
+    floor = logging.DEBUG if console_level <= logging.DEBUG else logging.WARNING
+    for name in _THIRD_PARTY_NOISY:
+        logging.getLogger(name).setLevel(floor)
+
 
 # Context variable for operation tracking
 _operation_context: contextvars.ContextVar[dict[str, object]] = contextvars.ContextVar(
@@ -123,30 +161,31 @@ def configure_file_logging_path(
 
 
 def setup_logger() -> logging.Logger:
-    # Create a logger
     app_logger = logging.getLogger("proxbox")
 
+    # Logger itself accepts all levels; handlers decide what reaches the output.
     app_logger.setLevel(logging.DEBUG)
 
-    # # Create a console handler
     console_handler = logging.StreamHandler()
 
-    # Log all messages in the console
-    console_handler.setLevel(logging.DEBUG)
+    # Console level is controlled by PROXBOX_LOG_LEVEL (default INFO).
+    # The in-memory buffer and rotating file handler are unaffected: they
+    # always receive DEBUG+ and WARNING+ respectively.
+    console_level = _parse_log_level(os.environ.get("PROXBOX_LOG_LEVEL", "INFO"))
+    console_handler.setLevel(console_level)
 
-    # Create a formatter with colors
     formatter = ColorizedFormatter(
         "%(name)s [%(asctime)s] [%(levelname)-8s] %(module)s: %(message)s"
     )
-    # formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(module)s: %(message)s')
-    # Set the formatter for the console handler and file handler
     console_handler.setFormatter(formatter)
 
-    # Add the handlers to the logger
     app_logger.addHandler(console_handler)
     configure_file_logging_path(DEFAULT_LOG_PATH, target_logger=app_logger)
 
     app_logger.propagate = False
+
+    # Suppress known verbose third-party loggers unless the operator requested DEBUG.
+    _configure_third_party_levels(console_level)
 
     return app_logger
 
@@ -183,7 +222,7 @@ class OperationLogger:
         new_context = {"operation": self.operation, **self.context}
         _operation_context.set(new_context)
 
-        logger.info(f"Starting {self.operation}", extra=new_context)
+        logger.debug(f"Starting {self.operation}", extra=new_context)
         return self
 
     async def __aexit__(
