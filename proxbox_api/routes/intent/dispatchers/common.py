@@ -179,6 +179,12 @@ def status_is_running(status_payload: object) -> bool:
     return status_map.get("status") == "running"
 
 
+def get_vm_proxy(proxmox: object, node: str, vmid: int, kind: str) -> object:
+    if kind == "qemu":
+        return proxmox.session.nodes(node).qemu(vmid)  # type: ignore[union-attr]
+    return proxmox.session.nodes(node).lxc(vmid)  # type: ignore[union-attr]
+
+
 def tags_to_config(tags: list[str]) -> str:
     return ";".join(tags)
 

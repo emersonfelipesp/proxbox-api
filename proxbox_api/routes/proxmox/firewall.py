@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.routes.intent.dispatchers.common import get_vm_proxy
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -162,12 +163,6 @@ async def _safe_get_dict(coro_or_result) -> dict:
 
 
 _OPTIONS_KNOWN_KEYS: frozenset[str] = frozenset({"enable", "policy_in", "policy_out", "log_ratelimit"})
-
-
-def _get_vm_proxy(px, node: str, vmid: int, vm_type: str):
-    if vm_type == "qemu":
-        return px.session.nodes(node).qemu(vmid)
-    return px.session.nodes(node).lxc(vmid)
 
 
 def _rule_from_raw(raw: dict, cluster_name: str, zone: str, **extra) -> FirewallRuleSchema:
@@ -364,7 +359,7 @@ async def vm_firewall_rules(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_ty
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
+            vm_proxy = get_vm_proxy(px, node, vmid, vm_type)
             raw_rules = await _safe_get(vm_proxy.firewall.rules.get())
             for rule in raw_rules:
                 results.append(_rule_from_raw(rule, px.name, zone, node=node, vmid=vmid))
@@ -381,7 +376,7 @@ async def vm_firewall_ipsets(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_t
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
+            vm_proxy = get_vm_proxy(px, node, vmid, vm_type)
             raw_sets = await _safe_get(vm_proxy.firewall.ipset.get())
             for ipset in raw_sets:
                 set_name = ipset.get("name") or ""
@@ -416,7 +411,7 @@ async def vm_firewall_aliases(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
+            vm_proxy = get_vm_proxy(px, node, vmid, vm_type)
             raw_aliases = await _safe_get(vm_proxy.firewall.aliases.get())
             for alias in raw_aliases:
                 results.append(FirewallAliasSchema(
@@ -440,7 +435,7 @@ async def vm_firewall_options(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
+            vm_proxy = get_vm_proxy(px, node, vmid, vm_type)
             raw = await _safe_get_dict(vm_proxy.firewall.options.get())
             if raw:
                 return _options_from_raw(raw, px.name, zone, node=node, vmid=vmid)

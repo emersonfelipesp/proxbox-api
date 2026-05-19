@@ -23,7 +23,7 @@ from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.proxmox_to_netbox import parse_proxmox_tags
-from proxbox_api.routes.intent.dispatchers.common import tags_to_config
+from proxbox_api.routes.intent.dispatchers.common import get_vm_proxy, tags_to_config
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
@@ -94,20 +94,15 @@ async def _resolve_endpoint(
     logger.debug(
         "intent.vm_tags: auto-resolved ProxmoxEndpoint id=%s (%s)",
         endpoint.id,
-        getattr(endpoint, "name", ""),
+        endpoint.name,
     )
     return endpoint
 
 
 async def _get_current_tags(proxmox: object, vmid: int, node: str, kind: VMKind) -> list[str]:
-    if kind == "qemu":
-        config = await resolve_async(
-            proxmox.session.nodes(node).qemu(vmid).config.get()  # type: ignore[union-attr]
-        )
-    else:
-        config = await resolve_async(
-            proxmox.session.nodes(node).lxc(vmid).config.get()  # type: ignore[union-attr]
-        )
+    config = await resolve_async(
+        get_vm_proxy(proxmox, node, vmid, kind).config.get()  # type: ignore[union-attr]
+    )
     raw = None
     if hasattr(config, "tags"):
         raw = config.tags
@@ -118,14 +113,68 @@ async def _get_current_tags(proxmox: object, vmid: int, node: str, kind: VMKind)
 
 async def _set_tags(proxmox: object, vmid: int, node: str, kind: VMKind, tags: list[str]) -> None:
     tags_str = tags_to_config(tags)
-    if kind == "qemu":
-        await resolve_async(
-            proxmox.session.nodes(node).qemu(vmid).config.put(tags=tags_str)  # type: ignore[union-attr]
+    await resolve_async(
+        get_vm_proxy(proxmox, node, vmid, kind).config.put(tags=tags_str)  # type: ignore[union-attr]
+    )
+
+
+async def _apply_tag_operation(
+    body: TagPendingDeletionBody,
+    session: SessionDep,
+    endpoint_id: int | None,
+    actor: str | None,
+    action: Literal["add", "remove"],
+) -> TagPendingDeletionResponse | JSONResponse:
+    verb_past = "added" if action == "add" else "removed"
+    prep = "to" if action == "add" else "from"
+
+    endpoint = await _resolve_endpoint(session, endpoint_id)
+    if isinstance(endpoint, JSONResponse):
+        return endpoint
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+        current_tags = await _get_current_tags(proxmox, body.vmid, body.node, body.kind)
+        if action == "add":
+            updated_tags = current_tags + [body.tag] if body.tag not in current_tags else current_tags
+        else:
+            updated_tags = [t for t in current_tags if t != body.tag] if body.tag in current_tags else current_tags
+        if updated_tags is not current_tags:
+            await _set_tags(proxmox, body.vmid, body.node, body.kind, updated_tags)
+        logger.info(
+            "intent.vm_tags: %s tag %r %s %s vmid=%s node=%s actor=%s",
+            verb_past,
+            body.tag,
+            prep,
+            body.kind,
+            body.vmid,
+            body.node,
+            actor or "unknown",
         )
-    else:
-        await resolve_async(
-            proxmox.session.nodes(node).lxc(vmid).config.put(tags=tags_str)  # type: ignore[union-attr]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "intent.vm_tags: failed to %s tag %r %s %s vmid=%s node=%s: %s",
+            action,
+            body.tag,
+            prep,
+            body.kind,
+            body.vmid,
+            body.node,
+            exc,
         )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Proxmox API call failed: {exc}",
+        ) from exc
+
+    return TagPendingDeletionResponse(
+        ok=True,
+        vmid=body.vmid,
+        node=body.node,
+        kind=body.kind,
+        tag=body.tag,
+        tags_after=updated_tags,
+    )
 
 
 @router.put(
@@ -142,48 +191,7 @@ async def tag_pending_deletion(
     ),
     actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
 ) -> TagPendingDeletionResponse | JSONResponse:
-    endpoint = await _resolve_endpoint(session, endpoint_id)
-    if isinstance(endpoint, JSONResponse):
-        return endpoint
-
-    try:
-        proxmox = await _open_proxmox_session(endpoint)
-        current_tags = await _get_current_tags(proxmox, body.vmid, body.node, body.kind)
-        if body.tag not in current_tags:
-            updated_tags = current_tags + [body.tag]
-            await _set_tags(proxmox, body.vmid, body.node, body.kind, updated_tags)
-        else:
-            updated_tags = current_tags
-        logger.info(
-            "intent.vm_tags: added tag %r to %s vmid=%s node=%s actor=%s",
-            body.tag,
-            body.kind,
-            body.vmid,
-            body.node,
-            actor or "unknown",
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "intent.vm_tags: failed to add tag %r to %s vmid=%s node=%s: %s",
-            body.tag,
-            body.kind,
-            body.vmid,
-            body.node,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Proxmox API call failed: {exc}",
-        ) from exc
-
-    return TagPendingDeletionResponse(
-        ok=True,
-        vmid=body.vmid,
-        node=body.node,
-        kind=body.kind,
-        tag=body.tag,
-        tags_after=updated_tags,
-    )
+    return await _apply_tag_operation(body, session, endpoint_id, actor, "add")
 
 
 @router.put(
@@ -200,45 +208,4 @@ async def untag_pending_deletion(
     ),
     actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
 ) -> TagPendingDeletionResponse | JSONResponse:
-    endpoint = await _resolve_endpoint(session, endpoint_id)
-    if isinstance(endpoint, JSONResponse):
-        return endpoint
-
-    try:
-        proxmox = await _open_proxmox_session(endpoint)
-        current_tags = await _get_current_tags(proxmox, body.vmid, body.node, body.kind)
-        if body.tag in current_tags:
-            updated_tags = [t for t in current_tags if t != body.tag]
-            await _set_tags(proxmox, body.vmid, body.node, body.kind, updated_tags)
-        else:
-            updated_tags = current_tags
-        logger.info(
-            "intent.vm_tags: removed tag %r from %s vmid=%s node=%s actor=%s",
-            body.tag,
-            body.kind,
-            body.vmid,
-            body.node,
-            actor or "unknown",
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "intent.vm_tags: failed to remove tag %r from %s vmid=%s node=%s: %s",
-            body.tag,
-            body.kind,
-            body.vmid,
-            body.node,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Proxmox API call failed: {exc}",
-        ) from exc
-
-    return TagPendingDeletionResponse(
-        ok=True,
-        vmid=body.vmid,
-        node=body.node,
-        kind=body.kind,
-        tag=body.tag,
-        tags_after=updated_tags,
-    )
+    return await _apply_tag_operation(body, session, endpoint_id, actor, "remove")
