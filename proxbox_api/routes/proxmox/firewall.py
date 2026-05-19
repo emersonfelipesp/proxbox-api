@@ -14,6 +14,8 @@ explicitly out of scope for this release.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -145,7 +147,8 @@ async def _safe_get(coro_or_result) -> list:
     try:
         result = await resolve_async(coro_or_result)
         return result if isinstance(result, list) else ([] if result is None else [result])
-    except Exception:
+    except Exception as exc:
+        logger.debug("_safe_get suppressed: %s", exc)
         return []
 
 
@@ -156,6 +159,15 @@ async def _safe_get_dict(coro_or_result) -> dict:
         return result if isinstance(result, dict) else {}
     except Exception:
         return {}
+
+
+_OPTIONS_KNOWN_KEYS: frozenset[str] = frozenset({"enable", "policy_in", "policy_out", "log_ratelimit"})
+
+
+def _get_vm_proxy(px, node: str, vmid: int, vm_type: str):
+    if vm_type == "qemu":
+        return px.session.nodes(node).qemu(vmid)
+    return px.session.nodes(node).lxc(vmid)
 
 
 def _rule_from_raw(raw: dict, cluster_name: str, zone: str, **extra) -> FirewallRuleSchema:
@@ -182,14 +194,13 @@ def _rule_from_raw(raw: dict, cluster_name: str, zone: str, **extra) -> Firewall
 
 
 def _options_from_raw(raw: dict, cluster_name: str, zone: str, **extra) -> FirewallOptionsSchema:
-    known = {"enable", "policy_in", "policy_out", "log_ratelimit"}
     return FirewallOptionsSchema(
         cluster_name=cluster_name,
         zone=zone,
         enable=_bool(raw.get("enable")),
         policy_in=raw.get("policy_in"),
         policy_out=raw.get("policy_out"),
-        options={k: v for k, v in raw.items() if k not in known},
+        options={k: v for k, v in raw.items() if k not in _OPTIONS_KNOWN_KEYS},
         **extra,
     )
 
@@ -220,13 +231,9 @@ async def datacenter_firewall_groups(pxs: ProxmoxSessionsDep):
             raw_groups = await _safe_get(px.session.cluster.firewall.groups.get())
             for grp in raw_groups:
                 group_name = grp.get("group") or grp.get("name") or ""
-                raw_rules: list[dict] = []
-                try:
-                    raw_rules = await _safe_get(
-                        px.session.cluster.firewall.groups(group_name).get()
-                    )
-                except Exception:
-                    pass
+                raw_rules = await _safe_get(
+                    px.session.cluster.firewall.groups(group_name).get()
+                )
                 rule_schemas = [
                     _rule_from_raw(r, px.name, "security_group", security_group=group_name)
                     for r in raw_rules
@@ -253,13 +260,9 @@ async def datacenter_firewall_ipsets(pxs: ProxmoxSessionsDep):
             raw_sets = await _safe_get(px.session.cluster.firewall.ipset.get())
             for ipset in raw_sets:
                 set_name = ipset.get("name") or ""
-                raw_entries: list[dict] = []
-                try:
-                    raw_entries = await _safe_get(
-                        px.session.cluster.firewall.ipset(set_name).get()
-                    )
-                except Exception:
-                    pass
+                raw_entries = await _safe_get(
+                    px.session.cluster.firewall.ipset(set_name).get()
+                )
                 entries = [
                     FirewallIPSetEntrySchema(
                         cidr=e.get("cidr"),
@@ -361,11 +364,7 @@ async def vm_firewall_rules(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_ty
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = (
-                px.session.nodes(node).qemu(vmid)
-                if vm_type == "qemu"
-                else px.session.nodes(node).lxc(vmid)
-            )
+            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
             raw_rules = await _safe_get(vm_proxy.firewall.rules.get())
             for rule in raw_rules:
                 results.append(_rule_from_raw(rule, px.name, zone, node=node, vmid=vmid))
@@ -382,19 +381,11 @@ async def vm_firewall_ipsets(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_t
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = (
-                px.session.nodes(node).qemu(vmid)
-                if vm_type == "qemu"
-                else px.session.nodes(node).lxc(vmid)
-            )
+            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
             raw_sets = await _safe_get(vm_proxy.firewall.ipset.get())
             for ipset in raw_sets:
                 set_name = ipset.get("name") or ""
-                raw_entries: list[dict] = []
-                try:
-                    raw_entries = await _safe_get(vm_proxy.firewall.ipset(set_name).get())
-                except Exception:
-                    pass
+                raw_entries = await _safe_get(vm_proxy.firewall.ipset(set_name).get())
                 entries = [
                     FirewallIPSetEntrySchema(
                         cidr=e.get("cidr"),
@@ -425,11 +416,7 @@ async def vm_firewall_aliases(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = (
-                px.session.nodes(node).qemu(vmid)
-                if vm_type == "qemu"
-                else px.session.nodes(node).lxc(vmid)
-            )
+            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
             raw_aliases = await _safe_get(vm_proxy.firewall.aliases.get())
             for alias in raw_aliases:
                 results.append(FirewallAliasSchema(
@@ -453,11 +440,7 @@ async def vm_firewall_options(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_
     zone = "vm_qemu" if vm_type == "qemu" else "vm_lxc"
     for px in pxs:
         try:
-            vm_proxy = (
-                px.session.nodes(node).qemu(vmid)
-                if vm_type == "qemu"
-                else px.session.nodes(node).lxc(vmid)
-            )
+            vm_proxy = _get_vm_proxy(px, node, vmid, vm_type)
             raw = await _safe_get_dict(vm_proxy.firewall.options.get())
             if raw:
                 return _options_from_raw(raw, px.name, zone, node=node, vmid=vmid)
@@ -480,56 +463,56 @@ async def firewall_summary(pxs: ProxmoxSessionsDep):
     results: list[FirewallSummarySchema] = []
     for px in pxs:
         try:
-            # Datacenter rules
-            dc_rules_raw = await _safe_get(px.session.cluster.firewall.rules.get())
+            dc_rules_raw, sg_raw, ipsets_raw, aliases_raw, dc_options_raw = await asyncio.gather(
+                _safe_get(px.session.cluster.firewall.rules.get()),
+                _safe_get(px.session.cluster.firewall.groups.get()),
+                _safe_get(px.session.cluster.firewall.ipset.get()),
+                _safe_get(px.session.cluster.firewall.aliases.get()),
+                _safe_get_dict(px.session.cluster.firewall.options.get()),
+            )
+
             dc_rules = [_rule_from_raw(r, px.name, "datacenter") for r in dc_rules_raw]
 
-            # Security groups
-            sg_raw = await _safe_get(px.session.cluster.firewall.groups.get())
+            sg_group_names = [grp.get("group") or grp.get("name") or "" for grp in sg_raw]
+            sg_rules_lists = await asyncio.gather(*[
+                _safe_get(px.session.cluster.firewall.groups(name).get())
+                for name in sg_group_names
+            ])
             security_groups: list[FirewallSecurityGroupSchema] = []
-            for grp in sg_raw:
-                group_name = grp.get("group") or grp.get("name") or ""
-                sg_rules_raw = await _safe_get(
-                    px.session.cluster.firewall.groups(group_name).get()
-                )
-                sg_rules = [
-                    _rule_from_raw(r, px.name, "security_group", security_group=group_name)
-                    for r in sg_rules_raw
-                ]
+            for grp, group_name, sg_rules in zip(sg_raw, sg_group_names, sg_rules_lists):
                 security_groups.append(FirewallSecurityGroupSchema(
                     cluster_name=px.name,
                     name=group_name,
                     comment=grp.get("comment"),
                     digest=grp.get("digest"),
-                    rules=sg_rules,
+                    rules=[
+                        _rule_from_raw(r, px.name, "security_group", security_group=group_name)
+                        for r in sg_rules
+                    ],
                 ))
 
-            # IP sets
-            ipsets_raw = await _safe_get(px.session.cluster.firewall.ipset.get())
+            ipset_entries_lists = await asyncio.gather(*[
+                _safe_get(px.session.cluster.firewall.ipset(ipset.get("name") or "").get())
+                for ipset in ipsets_raw
+            ])
             dc_ipsets: list[FirewallIPSetSchema] = []
-            for ipset in ipsets_raw:
-                set_name = ipset.get("name") or ""
-                entries_raw = await _safe_get(
-                    px.session.cluster.firewall.ipset(set_name).get()
-                )
-                entries = [
-                    FirewallIPSetEntrySchema(
-                        cidr=e.get("cidr"),
-                        comment=e.get("comment"),
-                        nomatch=_bool(e.get("nomatch")),
-                    )
-                    for e in entries_raw
-                ]
+            for ipset, entries_raw in zip(ipsets_raw, ipset_entries_lists):
                 dc_ipsets.append(FirewallIPSetSchema(
                     cluster_name=px.name,
                     zone="datacenter",
-                    name=set_name,
+                    name=ipset.get("name") or "",
                     comment=ipset.get("comment"),
-                    entries=entries,
+                    digest=ipset.get("digest"),
+                    entries=[
+                        FirewallIPSetEntrySchema(
+                            cidr=e.get("cidr"),
+                            comment=e.get("comment"),
+                            nomatch=_bool(e.get("nomatch")),
+                        )
+                        for e in entries_raw
+                    ],
                 ))
 
-            # Aliases
-            aliases_raw = await _safe_get(px.session.cluster.firewall.aliases.get())
             dc_aliases = [
                 FirewallAliasSchema(
                     cluster_name=px.name,
@@ -537,12 +520,11 @@ async def firewall_summary(pxs: ProxmoxSessionsDep):
                     name=a.get("name"),
                     cidr=a.get("cidr"),
                     comment=a.get("comment"),
+                    digest=a.get("digest"),
                 )
                 for a in aliases_raw
             ]
 
-            # Options
-            dc_options_raw = await _safe_get_dict(px.session.cluster.firewall.options.get())
             dc_options = (
                 _options_from_raw(dc_options_raw, px.name, "datacenter")
                 if dc_options_raw
