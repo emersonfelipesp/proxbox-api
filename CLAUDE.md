@@ -15,10 +15,11 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ### Companion repos (cross-link map)
 
-- **`netbox-proxbox` v0.0.15+** — the NetBox plugin that consumes this backend.
-  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The HA tab,
-  cluster-wide HA Status page, and the runtime tunables surface all require
-  `proxbox-api >= 0.0.11`.
+- **`netbox-proxbox` v0.0.17** — the NetBox plugin that consumes this backend.
+  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The v0.0.17 release
+  (firewall model scaffolding, intent tag helpers, HA REST shim) requires
+  `proxbox-api >= 0.0.13`; HA tab, cluster-wide HA status page, and runtime
+  tunables alone require `>= 0.0.11`.
 - **Workspace note**:
   `personal-context/claude-reference/proxbox-api.md` (deep-dive index of this
   repo) and `personal-context/claude-reference/netbox-proxbox.md` (deep-dive
@@ -380,6 +381,22 @@ cancelled to avoid wasted CI and to keep the run history clean.
   a branch and a tag share the same name, otherwise Git complains that
   `v0.0.12 matches more than one`).
 - After cleanup, only `main` and `gh-pages` remain on origin.
+
+### What was done for v0.0.13
+
+- Bumped `pyproject.toml` and `proxbox_api/__init__.py` to `0.0.13` (final merge commit `e64cebb`).
+- Bumped `proxmox-sdk` dependency from `0.0.4.post2` → `0.0.5.post1`.
+- New features: read-only Proxmox VE firewall routes (`/proxmox/firewall/*`
+  covering datacenter, node, and per-VM QEMU/LXC zones), intent tag helpers
+  (`PUT /intent/tag-pending-deletion`, `PUT /intent/untag-pending-deletion`),
+  cloud provision SSE stream (`POST /cloud/vm/provision/stream`).
+- Bug fixes: `resolve_vm_config` cluster-status preflight removed (#134),
+  dual-stack primary IP sync to `primary_ip4`/`primary_ip6` (#123),
+  FastAPI `run_id` default leak (#132), bootstrap skip when no NetBox
+  endpoint configured (#130), concurrent tag-creation race recovery (#124),
+  `PROXBOX_LOG_LEVEL` env var for console verbosity (#133).
+- Added NetBox v4.6.1 to `.github/netbox-versions.json` certified versions.
+- Paired consumer: `netbox-proxbox v0.0.17`.
 
 ### Don't
 
