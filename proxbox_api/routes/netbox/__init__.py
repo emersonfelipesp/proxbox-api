@@ -29,6 +29,7 @@ class NetBoxEndpointCreate(BaseModel):
     token_key: str | None = Field(default=None, max_length=1000)
     token: str = Field(max_length=1000)
     verify_ssl: bool = True
+    enabled: bool = True
 
 
 class NetBoxEndpointUpdate(BaseModel):
@@ -40,6 +41,7 @@ class NetBoxEndpointUpdate(BaseModel):
     token_key: str | None = Field(default=None, max_length=1000)
     token: str | None = Field(default=None, max_length=1000)
     verify_ssl: bool | None = None
+    enabled: bool | None = None
 
 
 class NetBoxEndpointResponse(BaseModel):
@@ -52,6 +54,7 @@ class NetBoxEndpointResponse(BaseModel):
     port: int
     token_version: str
     verify_ssl: bool
+    enabled: bool
 
 
 def _normalize_netbox_endpoint_fields(nb: NetBoxEndpoint) -> None:
