@@ -317,9 +317,13 @@ async def load_proxmox_session_schemas(
                 message="NetBox returned invalid JSON while fetching Proxmox endpoints",
                 python_exception=str(error),
             )
-        return [_parse_netbox_endpoint(endpoint, plugin_settings) for endpoint in netbox_endpoints]
+        return [
+            _parse_netbox_endpoint(endpoint, plugin_settings)
+            for endpoint in netbox_endpoints
+            if _netbox_field(endpoint, "enabled", True)
+        ]
 
-    query = select(ProxmoxEndpoint)
+    query = select(ProxmoxEndpoint).where(ProxmoxEndpoint.enabled == True)  # noqa: E712
     if endpoint_ids:
         query = query.where(ProxmoxEndpoint.id.in_(endpoint_ids))
     result = database_session.exec(query)

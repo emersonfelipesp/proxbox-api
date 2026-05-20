@@ -133,7 +133,7 @@ def get_netbox_session(
                 )
             return netbox_api_from_endpoint(netbox_endpoint)
 
-        count = database_session.exec(select(NetBoxEndpoint)).all()
+        count = database_session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)).all()  # noqa: E712
         count = len(count) if count else 0
 
         if count == 0:
@@ -143,10 +143,10 @@ def get_netbox_session(
             )
 
         if count == 1:
-            netbox_endpoint = database_session.exec(select(NetBoxEndpoint)).first()
+            netbox_endpoint = database_session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)).first()  # noqa: E712
         else:
             netbox_endpoint = database_session.exec(
-                select(NetBoxEndpoint).order_by(NetBoxEndpoint.id)
+                select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True).order_by(NetBoxEndpoint.id)  # noqa: E712
             ).first()
 
         if not netbox_endpoint:
@@ -195,8 +195,8 @@ async def get_netbox_async_session(
                 )
             return netbox_api_from_endpoint(netbox_endpoint)
 
-        # Fetch all endpoints to determine how many exist
-        endpoints = await _maybe_await(database_session.exec(select(NetBoxEndpoint)))
+        # Fetch all enabled endpoints to determine how many exist
+        endpoints = await _maybe_await(database_session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)))  # noqa: E712
         endpoints_list = endpoints.all() if endpoints else []
         count = len(endpoints_list) if endpoints_list else 0
 
@@ -206,9 +206,9 @@ async def get_netbox_async_session(
                 detail="Please add a NetBox endpoint in the database",
             )
 
-        # Fetch the endpoint with a single query
+        # Fetch the first enabled endpoint ordered by ID
         result = await _maybe_await(
-            database_session.exec(select(NetBoxEndpoint).order_by(NetBoxEndpoint.id))
+            database_session.exec(select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True).order_by(NetBoxEndpoint.id))  # noqa: E712
         )
         netbox_endpoint = result.first()
 
