@@ -1565,7 +1565,6 @@ async def create_virtual_machines(  # noqa: C901
 
         vm_config_result = get_vm_config(
             pxs=pxs,
-            cluster_status=cluster_status,
             node=resource.get("node"),
             type=vm_type,
             vmid=resource.get("vmid"),
@@ -1818,7 +1817,6 @@ async def create_virtual_machines(  # noqa: C901
             vm_type_key = "undefined"
         vm_config_result = get_vm_config(
             pxs=pxs,
-            cluster_status=cluster_status,
             node=resource.get("node"),
             type=vm_type,
             vmid=resource.get("vmid"),
@@ -2455,7 +2453,6 @@ async def create_only_vm_interfaces(  # noqa: C901
             if proxmox_session and resource_node:
                 vm_config_result = get_vm_config(
                     pxs=pxs,
-                    cluster_status=cluster_status,
                     node=resource_node,
                     type=vm_type,
                     vmid=int(vmid),
@@ -2955,7 +2952,6 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             if proxmox_session and resource_node:
                 vm_config_result = get_vm_config(
                     pxs=pxs,
-                    cluster_status=cluster_status,
                     node=resource_node,
                     type=vm_type,
                     vmid=int(vmid),

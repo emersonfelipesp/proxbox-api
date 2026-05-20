@@ -136,9 +136,15 @@ async def _apply_tag_operation(
         proxmox = await _open_proxmox_session(endpoint)
         current_tags = await _get_current_tags(proxmox, body.vmid, body.node, body.kind)
         if action == "add":
-            updated_tags = current_tags + [body.tag] if body.tag not in current_tags else current_tags
+            updated_tags = (
+                current_tags + [body.tag] if body.tag not in current_tags else current_tags
+            )
         else:
-            updated_tags = [t for t in current_tags if t != body.tag] if body.tag in current_tags else current_tags
+            updated_tags = (
+                [t for t in current_tags if t != body.tag]
+                if body.tag in current_tags
+                else current_tags
+            )
         if updated_tags is not current_tags:
             await _set_tags(proxmox, body.vmid, body.node, body.kind, updated_tags)
         logger.info(
