@@ -149,3 +149,59 @@ def test_size_str_to_mb_units():
     assert size_str_to_mb("1T") == 1024 * 1024
     assert size_str_to_mb("32G") == 32 * 1024
     assert size_str_to_mb("garbage") == 0
+
+
+# --- CD-ROM drive tests (issue #145) ---
+
+
+def test_parse_disk_entry_cdrom_empty_slot_returns_entry(proxbox_caplog):
+    """``ide2: none,media=cdrom`` — empty CD-ROM slot must produce a
+    VirtualDisk entry with null size instead of being dropped with a warning.
+    """
+    proxbox_caplog.set_level(logging.WARNING)
+    entry = parse_disk_entry("ide2", "none,media=cdrom")
+    assert entry is not None
+    assert entry.name == "ide2"
+    assert entry.size is None
+    assert entry.size_mb == 0
+    assert entry.description is not None
+    assert "CD-ROM" in entry.description
+    # Must NOT emit the passthrough/raw-disk warning.
+    assert not any(record.levelno == logging.WARNING for record in proxbox_caplog.records)
+
+
+def test_parse_disk_entry_cdrom_with_iso_returns_entry():
+    """``sata0: local:iso/debian.iso,media=cdrom`` — ISO path must appear in
+    the description so operators know which image is mounted.
+    """
+    entry = parse_disk_entry("sata0", "local:iso/debian.iso,media=cdrom")
+    assert entry is not None
+    assert entry.name == "sata0"
+    assert entry.size is None
+    assert entry.description is not None
+    assert "local:iso/debian.iso" in entry.description
+    assert "CD-ROM" in entry.description
+
+
+def test_parse_disk_entry_cdrom_ide_key_accepted():
+    """CD-ROM entries on ``ide0`` (common default slot) are also parsed."""
+    entry = parse_disk_entry("ide0", "none,media=cdrom")
+    assert entry is not None
+    assert entry.size is None
+
+
+def test_parse_vm_config_disks_includes_cdrom_entries():
+    """CD-ROM disks must appear alongside normal disks in the parsed list
+    and must not inflate the VM-level disk aggregate.
+    """
+    config = {
+        "scsi0": "local-lvm:vm-100-disk-0,size=32G",
+        "ide2": "none,media=cdrom",
+    }
+    entries = parse_vm_config_disks(config)
+    names = {e.name for e in entries}
+    assert "ide2" in names
+    assert "scsi0" in names
+    # CD-ROM contributes 0 to the aggregate via size_mb.
+    aggregate = sum(e.size_mb for e in entries)
+    assert aggregate == 32 * 1024

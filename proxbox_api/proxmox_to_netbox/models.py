@@ -741,7 +741,7 @@ class NetBoxVirtualDiskSyncState(BaseModel):
 
     virtual_machine: int
     name: str
-    size: int
+    size: int | None = None
     storage: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
