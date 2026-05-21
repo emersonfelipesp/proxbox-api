@@ -192,8 +192,12 @@ def _status_item_to_schema(cluster_name: str, item: object) -> HaStatusItemSchem
         request_state=data.get("request_state") or data.get("request-state"),
         quorate=_coerce_bool(data.get("quorate")),
         failback=_coerce_bool(data.get("failback")),
-        max_relocate=_coerce_int(data.get("max_relocate") or data.get("max-relocate")),
-        max_restart=_coerce_int(data.get("max_restart") or data.get("max-restart")),
+        max_relocate=_coerce_int(
+            data.get("max_relocate") if "max_relocate" in data else data.get("max-relocate")
+        ),
+        max_restart=_coerce_int(
+            data.get("max_restart") if "max_restart" in data else data.get("max-restart")
+        ),
         timestamp=_coerce_int(data.get("timestamp")),
     )
 
@@ -550,7 +554,9 @@ async def ha_manager_status(pxs: ProxmoxSessionsDep) -> list[HaManagerStatusSche
                     timestamp=data.get("timestamp")
                     if isinstance(data.get("timestamp"), int)
                     else None,
-                    quorum_ok=_coerce_bool(data.get("quorum_ok") or data.get("quorum-ok")),
+                    quorum_ok=_coerce_bool(
+                        data.get("quorum_ok") if "quorum_ok" in data else data.get("quorum-ok")
+                    ),
                     mode=str(data.get("mode")) if data.get("mode") is not None else None,
                 )
             )

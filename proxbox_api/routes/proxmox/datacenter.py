@@ -284,10 +284,9 @@ async def datacenter_options(pxs: ProxmoxSessionsDep) -> list[DatacenterOptionsS
                     if isinstance(data.get("max_workers"), (int, str))
                     else None,
                     migration_unsecure=bool(
-                        data.get("migration_unsecure") or data.get("migration-unsecure")
+                        data.get("migration_unsecure", data.get("migration-unsecure"))
                     )
-                    if (data.get("migration_unsecure") or data.get("migration-unsecure"))
-                    is not None
+                    if "migration_unsecure" in data or "migration-unsecure" in data
                     else None,
                     next_id=dict(data["next_id"])
                     if isinstance(data.get("next_id"), dict)
