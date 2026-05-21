@@ -70,7 +70,6 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     assert calls["resolve_vm_config"] == [
         {
             "pxs": [],
-            "cluster_status": [],
             "node": "pve01",
             "vm_type": "qemu",
             "vmid": "101",
