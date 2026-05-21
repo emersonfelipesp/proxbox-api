@@ -56,7 +56,7 @@ jobs:
           uv run python -c "import proxmox_sdk.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
-      - name: Core tests
+      - name: Core tests  # includes TestClient HTTP integration tests (test_endpoint_crud, test_stub_routes, test_sse_stream_output, test_proxmox_actions_gate)
         run: uv run pytest tests/ -v -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
 
   test-free-threaded:
