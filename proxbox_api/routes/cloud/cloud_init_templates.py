@@ -47,6 +47,14 @@ class ProxmoxProductVersion:
 PRODUCT_CATALOG: dict[ProxmoxProductType, list[ProxmoxProductVersion]] = {
     ProxmoxProductType.pve: [
         ProxmoxProductVersion(
+            version="9.2",
+            debian_codename="bookworm",
+            package_name="proxmox-ve",
+            repo_component="pve-no-subscription",
+            repo_suite="pve",
+            extra_services=["pve-cluster", "pvedaemon", "pvestatd"],
+        ),
+        ProxmoxProductVersion(
             version="8.4",
             debian_codename="bookworm",
             package_name="proxmox-ve",
