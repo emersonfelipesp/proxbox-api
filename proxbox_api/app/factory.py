@@ -46,12 +46,15 @@ from proxbox_api.routes.intent.deletion_requests import router as deletion_reque
 from proxbox_api.routes.intent.vm_tags import router as vm_tags_router
 from proxbox_api.routes.netbox import router as netbox_router
 from proxbox_api.routes.proxmox import router as proxmox_router
+from proxbox_api.routes.proxmox.access import router as px_access_router
 from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
+from proxbox_api.routes.proxmox.datacenter import router as px_datacenter_router
 from proxbox_api.routes.proxmox.firewall import router as px_firewall_router
 from proxbox_api.routes.proxmox.ha import router as px_ha_router
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
+from proxbox_api.routes.proxmox.sdn import router as px_sdn_router
 from proxbox_api.routes.proxmox_actions import router as proxmox_actions_router
 from proxbox_api.routes.sync.active import router as sync_active_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
@@ -432,6 +435,9 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
         app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
         app.include_router(px_firewall_router, prefix="/proxmox", tags=["proxmox / firewall"])
+        app.include_router(px_sdn_router, prefix="/proxmox", tags=["proxmox / sdn"])
+        app.include_router(px_datacenter_router, prefix="/proxmox", tags=["proxmox / datacenter"])
+        app.include_router(px_access_router, prefix="/proxmox", tags=["proxmox / access"])
         app.include_router(
             proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
         )
