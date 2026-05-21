@@ -229,7 +229,6 @@ async def create_virtual_disks(  # noqa: C901
             try:
                 vm_config = await resolve_vm_config(
                     pxs=pxs,
-                    cluster_status=cluster_status,
                     node=node_name,
                     vm_type=vm_type,
                     vmid=vmid,
