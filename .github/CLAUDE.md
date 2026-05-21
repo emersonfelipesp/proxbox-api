@@ -63,7 +63,7 @@ publish-testpypi.yml (staged package release)
 
 | Mode | netbox-proxbox (in NetBox container) | proxbox-api container | netbox-sdk / proxmox-sdk (in proxbox-api) |
 |------|--------------------------------------|-----------------------|-------------------------------------------|
-| **dev** | GitHub `develop` branch tarball | Built from local checkout with `--build-arg DEV_OVERRIDES=...` | `git+https://github.com/emersonfelipesp/netbox-sdk.git@main` and `git+https://github.com/emersonfelipesp/proxmox-sdk.git@main` |
+| **dev** | GitHub release tag tarball (pinned; see `ci.yml` → "Resolve netbox-proxbox install target") | Built from local checkout with `--build-arg DEV_OVERRIDES=...` | `git+https://github.com/emersonfelipesp/netbox-sdk.git@main` and `git+https://github.com/emersonfelipesp/proxmox-sdk.git@main` |
 | **published** | PyPI `netbox-proxbox` | Docker Hub `emersonfelipesp/proxbox-api:<version>` | PyPI versions from `uv.lock` (no override) |
 
 `DEV_OVERRIDES` is injected via `ARG DEV_OVERRIDES` in the Dockerfile builder stage. Normal production builds leave `DEV_OVERRIDES` empty (default `""`), so there is no impact on published images.
