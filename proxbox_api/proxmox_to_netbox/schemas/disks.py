@@ -19,6 +19,21 @@ DISK_KEY_PATTERN = re.compile(r"^(scsi|ide|sata|virtio|mp)\d+$|^rootfs$|^efidisk
 UNUSED_DISK_PATTERN = re.compile(r"^unused\d+$")
 
 
+def _is_cdrom(disk_info: dict[str, object]) -> bool:
+    """Return True when disk_info carries ``media=cdrom``."""
+    return str(disk_info.get("media", "")).lower() == "cdrom"
+
+
+def _cdrom_description(storage_info: str) -> str:
+    """Build a human-readable description for a CD-ROM drive.
+
+    ``none`` (empty slot) → ``"CD-ROM drive"``
+    ``local:iso/debian.iso`` (mounted ISO) → ``"CD-ROM drive | ISO: local:iso/debian.iso"``
+    """
+    iso_path = storage_info if storage_info and storage_info.lower() != "none" else ""
+    return f"CD-ROM drive | ISO: {iso_path}" if iso_path else "CD-ROM drive"
+
+
 def size_str_to_mb(size_str: str) -> int:
     """Convert Proxmox size string (e.g., '32G', '512M', '1T') to MB."""
     if not size_str:
@@ -71,6 +86,19 @@ def parse_disk_entry(key: str, raw_value: str) -> ProxmoxDiskEntry | None:
         if "=" in part:
             k, v = part.split("=", 1)
             disk_info[k.strip()] = v.strip()
+
+    # CD-ROM drives carry ``media=cdrom`` and have no ``size=`` field by design.
+    # Represent them as virtual-disk entries with null size so operators can
+    # see which optical drives are attached.  They contribute 0 to the VM-level
+    # disk aggregate so NetBox reconciliation is not affected.
+    if _is_cdrom(disk_info):
+        return ProxmoxDiskEntry(
+            name=key,
+            raw_value=raw_value,
+            size=None,
+            storage=storage_info,
+            description=_cdrom_description(storage_info),
+        )
 
     size_mb = size_str_to_mb(disk_info.get("size", "0"))
     if size_mb <= 0:
@@ -138,7 +166,7 @@ class ProxmoxDiskEntry(ProxboxBaseModel):
 
     name: str
     raw_value: str
-    size: int = 0
+    size: int | None = None
     storage: str | None = None
     storage_name: str | None = None
     format: str | None = None
@@ -151,7 +179,9 @@ class ProxmoxDiskEntry(ProxboxBaseModel):
 
     @field_validator("size", mode="before")
     @classmethod
-    def parse_size(cls, v: object) -> int:
+    def parse_size(cls, v: object) -> int | None:
+        if v is None:
+            return None
         if isinstance(v, int):
             return v
         return size_str_to_mb(str(v))
@@ -159,5 +189,5 @@ class ProxmoxDiskEntry(ProxboxBaseModel):
     @computed_field(return_type=int)
     @property
     def size_mb(self) -> int:
-        """Alias for size to provide consistent naming."""
-        return self.size
+        """Alias for size in MB; returns 0 for CD-ROM/null-size entries."""
+        return self.size if self.size is not None else 0
