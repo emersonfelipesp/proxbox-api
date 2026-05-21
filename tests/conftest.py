@@ -18,6 +18,7 @@ os.environ.setdefault("PROXBOX_RATE_LIMIT", "999999")
 os.environ.setdefault("PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS", "1")
 
 import pytest
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session, SQLModel, create_engine
@@ -167,6 +168,45 @@ async def authenticated_client(test_api_key, client_with_fake_netbox):
         transport=ASGITransport(app=app),
         base_url="http://test",
         headers={"X-Proxbox-API-Key": test_api_key},
+    ) as client:
+        yield client
+
+
+@pytest.fixture
+def test_client(client_with_fake_netbox) -> TestClient:
+    """Unauthenticated synchronous TestClient.
+
+    Uses FastAPI TestClient (httpx + ASGITransport) without pre-set auth headers.
+    Suitable for testing public routes or verifying that protected routes reject
+    unauthenticated requests.
+
+    Usage:
+        def test_root(test_client):
+            resp = test_client.get("/")
+            assert resp.status_code == 200
+    """
+    with TestClient(app, raise_server_exceptions=True) as client:
+        yield client
+
+
+@pytest.fixture
+def auth_test_client(test_api_key, client_with_fake_netbox) -> TestClient:
+    """Authenticated synchronous TestClient with test API key pre-set in headers.
+
+    Preferred fixture for synchronous HTTP integration tests against protected
+    routes. The lifecycle events (startup/shutdown) are driven by the TestClient
+    context manager, so lifespan-dependent state (generated Proxmox routes, etc.)
+    is available inside each test.
+
+    Usage:
+        def test_version(auth_test_client):
+            resp = auth_test_client.get("/version")
+            assert resp.status_code == 200
+    """
+    with TestClient(
+        app,
+        headers={"X-Proxbox-API-Key": test_api_key},
+        raise_server_exceptions=True,
     ) as client:
         yield client
 

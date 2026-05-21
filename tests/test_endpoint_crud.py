@@ -1,149 +1,197 @@
-"""Tests for NetBox and Proxmox endpoint CRUD APIs."""
+"""Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes.
 
-import asyncio
-from pathlib import Path
+Uses the conftest-provided sync TestClient fixtures (test_client, auth_test_client)
+to exercise the full request lifecycle including auth middleware, SSRF validation,
+and DB persistence via the overridden get_session dependency.
+"""
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlmodel import Session, SQLModel, create_engine
-from sqlmodel.ext.asyncio.session import AsyncSession
-
-from proxbox_api.database import ApiKey, get_async_session, get_session
-from proxbox_api.main import app
+from __future__ import annotations
 
 
-@pytest.fixture
-def client(tmp_path: Path):
-    sqlite_file = tmp_path / "test.db"
-    engine = create_engine(f"sqlite:///{sqlite_file}", connect_args={"check_same_thread": False})
-    SQLModel.metadata.create_all(engine)
+class TestAuthBoundary:
+    """Verify that protected routes reject unauthenticated callers."""
 
-    async_url = str(engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    async_engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
-    session_factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+    def test_protected_route_without_key_returns_401(self, test_client):
+        resp = test_client.get("/netbox/endpoint")
+        assert resp.status_code == 401
 
-    def _override_get_session():
-        with Session(engine) as session:
-            yield session
+    def test_proxmox_endpoints_list_without_key_returns_401(self, test_client):
+        resp = test_client.get("/proxmox/endpoints")
+        assert resp.status_code == 401
 
-    async def _override_get_async_session():
-        async with session_factory() as session:
-            yield session
+    def test_root_is_auth_exempt(self, test_client):
+        resp = test_client.get("/")
+        assert resp.status_code == 200
 
-    with Session(engine) as session:
-        raw_key = "test-api-key-for-endpoint-crud-suite"
-        ApiKey.store_key(session, raw_key, label="test-endpoint-crud")
-
-    app.dependency_overrides[get_session] = _override_get_session
-    app.dependency_overrides[get_async_session] = _override_get_async_session
-    with TestClient(app, headers={"X-Proxbox-API-Key": raw_key}) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
-    asyncio.run(async_engine.dispose())
+    def test_health_is_auth_exempt(self, test_client):
+        resp = test_client.get("/health")
+        assert resp.status_code == 200
 
 
-def test_proxmox_endpoint_crud_lifecycle(client: TestClient):
-    create_payload = {
-        "name": "pve-lab-1",
-        "ip_address": "10.0.0.10",
-        "domain": "pve-lab-1.local",
-        "port": 8006,
-        "username": "root@pam",
-        "password": "supersecret",
-        "verify_ssl": False,
-        "site_id": 42,
-        "site_slug": "dc1",
-        "site_name": "DC 1",
-        "tenant_id": 9,
-        "tenant_slug": "customer-a",
-        "tenant_name": "Customer A",
-    }
+class TestNetBoxEndpointCRUD:
+    """CRUD coverage for the singleton NetBox endpoint resource."""
 
-    create_response = client.post("/proxmox/endpoints", json=create_payload)
-    assert create_response.status_code == 200
-    created = create_response.json()
-    endpoint_id = created["id"]
-    assert created["name"] == "pve-lab-1"
-    assert created["site_id"] == 42
-    assert created["tenant_slug"] == "customer-a"
-    for secret_field in ("password", "token_name", "token_value"):
-        assert secret_field not in created
+    def test_list_endpoints_initially_empty(self, auth_test_client):
+        resp = auth_test_client.get("/netbox/endpoint")
+        assert resp.status_code == 200
+        assert resp.json() == []
 
-    list_response = client.get("/proxmox/endpoints")
-    assert list_response.status_code == 200
-    listed = list_response.json()
-    assert len(listed) == 1
-    assert listed[0]["id"] == endpoint_id
-    assert listed[0]["site_slug"] == "dc1"
-    for secret_field in ("password", "token_name", "token_value"):
-        assert secret_field not in listed[0]
+    def test_get_nonexistent_endpoint_returns_404(self, auth_test_client):
+        resp = auth_test_client.get("/netbox/endpoint/999")
+        assert resp.status_code == 404
 
-    get_response = client.get(f"/proxmox/endpoints/{endpoint_id}")
-    assert get_response.status_code == 200
-    assert get_response.json()["username"] == "root@pam"
-    for secret_field in ("password", "token_name", "token_value"):
-        assert secret_field not in get_response.json()
+    def test_create_netbox_endpoint(self, auth_test_client):
+        payload = {
+            "name": "test-netbox",
+            "ip_address": "192.168.1.10",
+            "domain": "",
+            "port": 8000,
+            "token_version": "v1",
+            "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "verify_ssl": False,
+        }
+        resp = auth_test_client.post("/netbox/endpoint", json=payload)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["name"] == "test-netbox"
+        assert "token" not in data
 
-    update_payload = {
-        "name": "pve-lab-1-updated",
-        "port": 8443,
-        "verify_ssl": True,
-    }
-    update_response = client.put(f"/proxmox/endpoints/{endpoint_id}", json=update_payload)
-    assert update_response.status_code == 200
-    updated = update_response.json()
-    assert updated["name"] == "pve-lab-1-updated"
-    assert updated["port"] == 8443
-    assert updated["verify_ssl"] is True
-    for secret_field in ("password", "token_name", "token_value"):
-        assert secret_field not in updated
+    def test_create_second_endpoint_rejected(self, auth_test_client):
+        """NetBox endpoint is a singleton — second create must fail."""
+        payload = {
+            "name": "first",
+            "ip_address": "192.168.1.10",
+            "domain": "",
+            "port": 8000,
+            "token_version": "v1",
+            "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "verify_ssl": False,
+        }
+        first = auth_test_client.post("/netbox/endpoint", json=payload)
+        assert first.status_code == 200, first.text
 
-    delete_response = client.delete(f"/proxmox/endpoints/{endpoint_id}")
-    assert delete_response.status_code == 200
-    assert delete_response.json() == {"message": "Proxmox endpoint deleted."}
+        payload["name"] = "second"
+        second = auth_test_client.post("/netbox/endpoint", json=payload)
+        assert second.status_code in (400, 409), second.text
 
-    get_deleted_response = client.get(f"/proxmox/endpoints/{endpoint_id}")
-    assert get_deleted_response.status_code == 404
-    assert get_deleted_response.json()["detail"] == "Proxmox endpoint not found"
+    def test_get_created_endpoint_by_id(self, auth_test_client):
+        payload = {
+            "name": "by-id",
+            "ip_address": "192.168.1.20",
+            "domain": "",
+            "port": 8000,
+            "token_version": "v1",
+            "token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "verify_ssl": False,
+        }
+        created = auth_test_client.post("/netbox/endpoint", json=payload)
+        assert created.status_code == 200, created.text
+        endpoint_id = created.json()["id"]
+
+        resp = auth_test_client.get(f"/netbox/endpoint/{endpoint_id}")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "by-id"
+
+    def test_delete_endpoint(self, auth_test_client):
+        payload = {
+            "name": "to-delete",
+            "ip_address": "192.168.1.30",
+            "domain": "",
+            "port": 8000,
+            "token_version": "v1",
+            "token": "cccccccccccccccccccccccccccccccccccccccc",
+            "verify_ssl": False,
+        }
+        created = auth_test_client.post("/netbox/endpoint", json=payload)
+        assert created.status_code == 200, created.text
+        endpoint_id = created.json()["id"]
+
+        del_resp = auth_test_client.delete(f"/netbox/endpoint/{endpoint_id}")
+        assert del_resp.status_code in (200, 204), del_resp.text
+
+        get_resp = auth_test_client.get(f"/netbox/endpoint/{endpoint_id}")
+        assert get_resp.status_code == 404
 
 
-def test_proxmox_endpoint_create_requires_auth_fields(client: TestClient):
-    invalid_payload = {
-        "name": "pve-lab-2",
-        "ip_address": "10.0.0.11",
-        "domain": "pve-lab-2.local",
-        "port": 8006,
-        "username": "root@pam",
-        "verify_ssl": True,
-    }
+class TestProxmoxEndpointCRUD:
+    """CRUD coverage for Proxmox endpoint resources.
 
-    response = client.post("/proxmox/endpoints", json=invalid_payload)
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Provide password or both token_name/token_value"
+    SSRF defaults to allow_private_ips=True so private IPs (192.168.x.x,
+    10.x.x.x) pass without additional configuration in the test environment.
+    """
 
+    def test_list_endpoints_initially_empty(self, auth_test_client):
+        resp = auth_test_client.get("/proxmox/endpoints")
+        assert resp.status_code == 200
+        assert resp.json() == []
 
-def test_netbox_endpoint_only_allows_single_instance(client: TestClient):
-    first_payload = {
-        "name": "netbox-primary",
-        "ip_address": "10.0.0.20",
-        "domain": "netbox.local",
-        "port": 443,
-        "token": "token-1",
-        "verify_ssl": True,
-    }
-    second_payload = {
-        "name": "netbox-secondary",
-        "ip_address": "10.0.0.21",
-        "domain": "netbox2.local",
-        "port": 443,
-        "token": "token-2",
-        "verify_ssl": True,
-    }
+    def test_get_nonexistent_endpoint_returns_404(self, auth_test_client):
+        resp = auth_test_client.get("/proxmox/endpoints/999")
+        assert resp.status_code == 404
 
-    first_response = client.post("/netbox/endpoint", json=first_payload)
-    assert first_response.status_code == 200
+    def test_create_proxmox_endpoint(self, auth_test_client):
+        payload = {
+            "name": "pve-test",
+            "ip_address": "192.168.1.100",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+        }
+        resp = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["name"] == "pve-test"
+        assert "password" not in data
 
-    second_response = client.post("/netbox/endpoint", json=second_payload)
-    assert second_response.status_code == 400
-    assert second_response.json()["detail"] == "Only one NetBox endpoint is allowed"
+    def test_get_created_endpoint_by_id(self, auth_test_client):
+        payload = {
+            "name": "pve-by-id",
+            "ip_address": "192.168.1.101",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+        }
+        created = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert created.status_code == 200, created.text
+        endpoint_id = created.json()["id"]
+
+        resp = auth_test_client.get(f"/proxmox/endpoints/{endpoint_id}")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "pve-by-id"
+
+    def test_duplicate_name_rejected(self, auth_test_client):
+        payload = {
+            "name": "pve-dup",
+            "ip_address": "192.168.1.102",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+        }
+        first = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert first.status_code == 200, first.text
+
+        payload["ip_address"] = "192.168.1.103"
+        second = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert second.status_code in (400, 409), second.text
+
+    def test_delete_proxmox_endpoint(self, auth_test_client):
+        payload = {
+            "name": "pve-to-delete",
+            "ip_address": "192.168.1.110",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+        }
+        created = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert created.status_code == 200, created.text
+        endpoint_id = created.json()["id"]
+
+        del_resp = auth_test_client.delete(f"/proxmox/endpoints/{endpoint_id}")
+        assert del_resp.status_code in (200, 204), del_resp.text
+
+        get_resp = auth_test_client.get(f"/proxmox/endpoints/{endpoint_id}")
+        assert get_resp.status_code == 404

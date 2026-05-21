@@ -17,7 +17,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 
 | File | What it tests |
 |------|---------------|
-| `conftest.py` | Global fixtures: test DB engine, FastAPI test app, dependency overrides, fake NetBox session, auth headers |
+| `conftest.py` | Global fixtures: test DB engine, sync TestClient (`test_client`, `auth_test_client`), async client (`authenticated_client`), dependency overrides, fake NetBox session, auth headers |
 | `fixtures.py` | Shared reusable fixtures imported by multiple test modules |
 | `test_admin_logs.py` | In-memory log buffer routes (`/admin/logs`) |
 | `test_api_routes.py` | API route integration tests (request/response contracts) |
@@ -108,3 +108,15 @@ uv run pytest tests/e2e -m mock_http
 - `proxmox_sdk` is the canonical mock source for Proxmox API responses.
 - Keep each test file scoped to one module or workflow; cross-cutting concerns go in `fixtures.py`.
 - The global `tests/conftest.py` sets `PROXBOX_RATE_LIMIT=999999` at module-import time so SlowAPI does not trip during the suite.
+
+## TestClient Fixtures (conftest.py)
+
+Use these fixtures for synchronous HTTP integration tests. They drive the full FastAPI lifespan (startup/shutdown) through the context manager, so generated Proxmox routes and other lifespan-dependent state are available inside each test.
+
+| Fixture | Type | Auth | Use when |
+|---------|------|------|----------|
+| `test_client` | `fastapi.testclient.TestClient` (sync) | None | Testing auth-exempt routes (`/`, `/health`) or verifying that protected routes reject unauthenticated requests |
+| `auth_test_client` | `fastapi.testclient.TestClient` (sync) | `X-Proxbox-API-Key` pre-set | Testing protected routes in synchronous test functions |
+| `authenticated_client` | `httpx.AsyncClient` (async) | `X-Proxbox-API-Key` pre-set | Testing protected routes in `async def` test functions, including SSE streaming via `.stream()` |
+
+Both sync fixtures depend on `client_with_fake_netbox` (which sets up the DB override and fake NetBox session). `auth_test_client` additionally depends on `test_api_key`.
