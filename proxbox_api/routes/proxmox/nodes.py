@@ -229,3 +229,139 @@ async def node_qemu(
         )
 
     return [{px.name: json_result}]
+
+
+# ---------------------------------------------------------------------------
+# PVE 9.2: PBS storage identity + node physical location
+# ---------------------------------------------------------------------------
+
+
+class PbsStorageIdentitySchema(BaseModel):
+    """Instance ID of a Proxmox Backup Server storage (PVE 9.2+)."""
+
+    cluster_name: str | None = None
+    node: str | None = None
+    storage: str | None = None
+    instance_id: str | None = None
+    status: str = "ok"
+    error: str | None = None
+
+
+@router.get("/{node}/storage/{storage}/identity", response_model=PbsStorageIdentitySchema)
+async def get_pbs_storage_identity(
+    pxs: ProxmoxSessionsDep,
+    node: Annotated[
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
+    ],
+    storage: Annotated[str, Path(title="Storage ID", description="Proxmox storage identifier.")],
+    cluster_name: Annotated[
+        str | None,
+        Query(
+            title="Cluster Name",
+            description="Optional cluster name to disambiguate multi-session deployments.",
+        ),
+    ] = None,
+) -> PbsStorageIdentitySchema:
+    """Return the instance ID of a Proxmox Backup Server storage (PVE 9.2+).
+
+    Proxies ``GET /nodes/{node}/storage/{storage}/identity``.  Used by
+    Proxmox Datacenter Manager to map PBS storages onto their
+    corresponding PBS remotes.
+    """
+    px = resolve_proxmox_session_for_request(
+        pxs, cluster_name, resource_name="PBS storage identity"
+    )
+    try:
+        raw = await resolve_async(px.session(f"nodes/{node}/storage/{storage}/identity").get())
+        data: dict[str, object] = {}
+        if hasattr(raw, "model_dump"):
+            data = raw.model_dump(mode="python", by_alias=True, exclude_none=True)
+        elif isinstance(raw, dict):
+            data = dict(raw)
+        return PbsStorageIdentitySchema(
+            cluster_name=px.name,
+            node=node,
+            storage=storage,
+            instance_id=str(data.get("instance-id") or data.get("instance_id"))
+            if (data.get("instance-id") or data.get("instance_id")) is not None
+            else None,
+        )
+    except ResourceException as error:
+        raise ProxboxException(
+            message="Error fetching PBS storage identity from Proxmox",
+            python_exception=str(error),
+        )
+
+
+class NodeConfigSchema(BaseModel):
+    """Selected fields from ``GET /nodes/{node}/config`` (PVE 9.2+).
+
+    Surfaces the new ``location`` property added in PVE 9.2 alongside
+    existing node-level configuration fields.
+    """
+
+    cluster_name: str | None = None
+    node: str | None = None
+    description: str | None = None
+    wakeonlan: str | None = None
+    startall_onboot_delay: int | None = None
+    location: str | None = None
+    status: str = "ok"
+    error: str | None = None
+
+
+@router.get("/{node}/config", response_model=NodeConfigSchema)
+async def get_node_config(
+    pxs: ProxmoxSessionsDep,
+    node: Annotated[
+        str,
+        Path(
+            title="Proxmox Node",
+            description="Proxmox Node name (ex. 'pve01').",
+            pattern=NODE_PATTERN,
+        ),
+    ],
+    cluster_name: Annotated[
+        str | None,
+        Query(
+            title="Cluster Name",
+            description="Optional cluster name to disambiguate multi-session deployments.",
+        ),
+    ] = None,
+) -> NodeConfigSchema:
+    """Retrieve node configuration including the PVE 9.2 ``location`` field.
+
+    Proxies ``GET /nodes/{node}/config``.  The ``location`` field maps
+    the node to a physical site and renders as an OpenStreetMap link in
+    the Proxmox web interface.
+    """
+    px = resolve_proxmox_session_for_request(pxs, cluster_name, resource_name="node config")
+    try:
+        raw = await resolve_async(px.session(f"nodes/{node}/config").get())
+        data: dict[str, object] = {}
+        if hasattr(raw, "model_dump"):
+            data = raw.model_dump(mode="python", by_alias=True, exclude_none=True)
+        elif isinstance(raw, dict):
+            data = dict(raw)
+        return NodeConfigSchema(
+            cluster_name=px.name,
+            node=node,
+            description=str(data.get("description"))
+            if data.get("description") is not None
+            else None,
+            wakeonlan=str(data.get("wakeonlan")) if data.get("wakeonlan") is not None else None,
+            startall_onboot_delay=int(data["startall_onboot_delay"])
+            if isinstance(data.get("startall_onboot_delay"), (int, str))
+            else None,
+            location=str(data.get("location")) if data.get("location") is not None else None,
+        )
+    except ResourceException as error:
+        raise ProxboxException(
+            message="Error fetching node config from Proxmox",
+            python_exception=str(error),
+        )

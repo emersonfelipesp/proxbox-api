@@ -398,6 +398,35 @@ cancelled to avoid wasted CI and to keep the run history clean.
 - Added NetBox v4.6.1 to `.github/netbox-versions.json` certified versions.
 - Paired consumer: `netbox-proxbox v0.0.17`.
 
+### What was done for v0.0.14
+
+- Bumped `pyproject.toml` to `0.0.14`.
+- Bumped `proxmox-sdk` dependency from `0.0.5.post1` → `0.0.6` (PVE 9.2 schema, 675 operations / 449 endpoints, up from 646/389 in 9.1.11). Also bumped `proxmox-sdk[pbs]` and `proxmox-sdk[pdm]` optional extras.
+- New routes — **HA (PVE 9.2)**:
+  - `POST /proxmox/cluster/ha/disarm` — disarm HA stack cluster-wide (maintenance mode).
+  - `POST /proxmox/cluster/ha/arm` — re-arm HA stack.
+  - `GET /proxmox/cluster/ha/manager-status` — live HA CRM manager status.
+  - `GET /proxmox/cluster/ha/crs` — Cluster Resource Scheduler configuration extracted from datacenter options.
+- New routes — **SDN fabrics (PVE 9.2)**:
+  - `GET /proxmox/sdn/fabrics` — list SDN fabrics (WireGuard, BGP, VXLAN, OSPF types).
+  - `GET /proxmox/sdn/fabrics/all` — list all SDN fabrics including inherited ones.
+  - `GET /proxmox/sdn/route-maps` — SDN route-map objects.
+  - `GET /proxmox/sdn/prefix-lists` — SDN prefix-list objects.
+- New routes — **Datacenter (PVE 9.2)**:
+  - `GET /proxmox/datacenter/cpu-models` — list custom CPU models.
+  - `GET /proxmox/datacenter/cpu-models/{cputype}` — get a single custom CPU model.
+  - `POST /proxmox/datacenter/cpu-models` — create a custom CPU model.
+  - `PUT /proxmox/datacenter/cpu-models/{cputype}` — update a custom CPU model.
+  - `DELETE /proxmox/datacenter/cpu-models/{cputype}` — delete a custom CPU model.
+  - `GET /proxmox/datacenter/options` — datacenter options including CRS sub-object and `location` field.
+- New routes — **Access tokens (PVE 9.2)**:
+  - `GET /proxmox/access/tokens/{userid}/{tokenid}` — read API token info.
+  - `PUT /proxmox/access/tokens/{userid}/{tokenid}/regenerate` — regenerate token secret in-place.
+- Extended routes — **Nodes (PVE 9.2)**:
+  - `GET /proxmox/nodes/{node}/storage/{storage}/identity` — PBS storage instance ID.
+  - `GET /proxmox/nodes/{node}/config` — node configuration including new `location` field.
+- Tracked in issue: <https://github.com/emersonfelipesp/proxbox-api/issues/152>.
+
 ### Don't
 
 - Don't add `twine --skip-existing` to the upload step. If a version is

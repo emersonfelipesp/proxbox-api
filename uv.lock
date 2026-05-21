@@ -1505,7 +1505,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.13"
+version = "0.0.14"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1573,9 +1573,9 @@ requires-dist = [
     { name = "netbox-sdk", specifier = "==0.0.8.post1" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.58.0" },
     { name = "playwright", marker = "extra == 'test'", specifier = ">=1.58.0" },
-    { name = "proxmox-sdk", specifier = "==0.0.5.post1" },
-    { name = "proxmox-sdk", extras = ["pbs"], marker = "extra == 'pbs'", specifier = "==0.0.5.post1" },
-    { name = "proxmox-sdk", extras = ["pdm"], marker = "extra == 'pdm'", specifier = "==0.0.5.post1" },
+    { name = "proxmox-sdk", specifier = "==0.0.6" },
+    { name = "proxmox-sdk", extras = ["pbs"], marker = "extra == 'pbs'", specifier = "==0.0.6" },
+    { name = "proxmox-sdk", extras = ["pdm"], marker = "extra == 'pdm'", specifier = "==0.0.6" },
     { name = "pydantic", specifier = "==2.13.3" },
     { name = "pytest", marker = "extra == 'e2e'", specifier = ">=9.0.3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
@@ -1617,7 +1617,7 @@ dev = [{ name = "ruff", specifier = ">=0.15.8" }]
 
 [[package]]
 name = "proxmox-sdk"
-version = "0.0.5.post1"
+version = "0.0.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1626,9 +1626,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "slowapi" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/b0/7e4c1f56c42e5eeca7223759b44e4d4967d0ad9195bb88b51cc9c464f2de/proxmox_sdk-0.0.5.post1.tar.gz", hash = "sha256:51f946a94e7ba5e9c3d90ec3a1eeef2e9b6a2310cd5ca650005ccf3883d3b3f6", size = 826849, upload-time = "2026-05-16T21:59:34.635Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/e0/0a6eb16809bd1d26cf99f208c4fa8b50b96c7ada05d0e5ecee41a10f97db/proxmox_sdk-0.0.6.tar.gz", hash = "sha256:89bb44697883910d97bea615178ab2a48397d16a1c11485b29537b9057cd8c2b", size = 2063601, upload-time = "2026-05-21T17:50:53.341Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/d7/241e26495214d90c04c6504ff311722a376b0bb76c444bb374ed10f916ce/proxmox_sdk-0.0.5.post1-py3-none-any.whl", hash = "sha256:bfc7bf04be487e6b1de76ab7c9faddf4721b92410157a04a79da068ca169b7f4", size = 897924, upload-time = "2026-05-16T21:59:32.621Z" },
+    { url = "https://files.pythonhosted.org/packages/86/ef/3377c76592ccb5e5e87d15f5f34ce68dadfbf42ca6309c9a5191a3a189fa/proxmox_sdk-0.0.6-py3-none-any.whl", hash = "sha256:0383a714d43fcf2d40f1193d256fcfd37ba98aa2f5d8e79ed776c30a0cc67664", size = 2208696, upload-time = "2026-05-21T17:50:52.053Z" },
 ]
 
 [[package]]

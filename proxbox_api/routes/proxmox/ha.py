@@ -12,8 +12,16 @@ silently).  Use the new `/ha/rules` endpoint for PVE 9.x HA rule data.
 `/ha/summary` now includes both `groups` and `rules` so consumers can
 handle mixed-version clusters.
 
-All endpoints are read-only by design. HA mutations (add/remove/migrate)
-are intentionally out of scope and will land in a follow-up release.
+PVE 9.2 additions (disarm/arm HA stack, manager status, CRS config):
+- ``POST /ha/disarm`` / ``POST /ha/arm`` — disarm/arm the HA stack
+  cluster-wide via the new ``cluster/ha/status/disarm-ha`` and
+  ``cluster/ha/status/arm-ha`` CRM commands.  Safe for planned
+  maintenance windows without triggering node fencing.
+- ``GET /ha/manager-status`` — CRM manager status (queue depths, CRS
+  scheduling state).
+- ``GET /ha/crs`` — CRS (Cluster Resource Scheduler) configuration
+  extracted from datacenter options; drives the PVE 9.2 dynamic load
+  balancer that migrates HA-managed guests to lower node imbalance.
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.proxmox_helpers import (
     get_ha_groups,
     get_ha_resources,
@@ -434,3 +443,150 @@ def _runtime_index(cluster_name: str, status_rows: list[object]) -> dict[str, Ha
         if item.sid:
             index[item.sid] = item
     return index
+
+
+# ---------------------------------------------------------------------------
+# PVE 9.2 additions: disarm/arm, manager-status, CRS config
+# ---------------------------------------------------------------------------
+
+
+class HaManagerStatusSchema(BaseModel):
+    """CRM manager status from ``/cluster/ha/status/manager_status``."""
+
+    cluster_name: str | None = None
+    manager_status: str | None = None
+    timestamp: int | None = None
+    quorum_ok: bool | None = None
+    mode: str | None = None
+
+
+class HaDisarmResultSchema(BaseModel):
+    """Result of a disarm-ha or arm-ha CRM command."""
+
+    cluster_name: str | None = None
+    status: str = "ok"
+    error: str | None = None
+
+
+class HaCrsConfigSchema(BaseModel):
+    """CRS (Cluster Resource Scheduler) configuration (PVE 9.2+).
+
+    Extracted from the ``crs`` sub-object of ``GET /cluster/options``.
+    CRS drives the dynamic load balancer that migrates HA-managed guests
+    to lower the overall node imbalance across the cluster.
+    """
+
+    cluster_name: str | None = None
+    ha: str | None = None
+    status: str = "ok"
+    error: str | None = None
+
+
+@router.post("/ha/disarm", response_model=list[HaDisarmResultSchema])
+async def ha_disarm(pxs: ProxmoxSessionsDep) -> list[HaDisarmResultSchema]:
+    """Disarm the HA stack cluster-wide (PVE 9.2+).
+
+    Calls ``POST /cluster/ha/status/disarm-ha`` on each configured
+    Proxmox cluster.  While disarmed, HA-managed guests are **not**
+    automatically restarted or migrated, and no fencing events are
+    triggered.  Use ``POST /ha/arm`` to re-enable HA after maintenance.
+    """
+    results: list[HaDisarmResultSchema] = []
+    for px in pxs:
+        try:
+            await resolve_async(px.session("cluster/ha/status/disarm-ha").post())
+            results.append(HaDisarmResultSchema(cluster_name=px.name))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error disarming HA for Proxmox cluster %s", px.name)
+            results.append(
+                HaDisarmResultSchema(cluster_name=px.name, status="error", error=str(exc))
+            )
+    return results
+
+
+@router.post("/ha/arm", response_model=list[HaDisarmResultSchema])
+async def ha_arm(pxs: ProxmoxSessionsDep) -> list[HaDisarmResultSchema]:
+    """Re-arm the HA stack cluster-wide (PVE 9.2+).
+
+    Calls ``POST /cluster/ha/status/arm-ha`` on each configured
+    Proxmox cluster.  HA resources return to their previous state after
+    the maintenance window is completed.
+    """
+    results: list[HaDisarmResultSchema] = []
+    for px in pxs:
+        try:
+            await resolve_async(px.session("cluster/ha/status/arm-ha").post())
+            results.append(HaDisarmResultSchema(cluster_name=px.name))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error arming HA for Proxmox cluster %s", px.name)
+            results.append(
+                HaDisarmResultSchema(cluster_name=px.name, status="error", error=str(exc))
+            )
+    return results
+
+
+@router.get("/ha/manager-status", response_model=list[HaManagerStatusSchema])
+async def ha_manager_status(pxs: ProxmoxSessionsDep) -> list[HaManagerStatusSchema]:
+    """Retrieve CRM manager status across all clusters (PVE 9.2+).
+
+    Proxies ``GET /cluster/ha/status/manager_status``.  Returns queue
+    depths, CRS scheduling state, and quorum health per cluster.
+    """
+    results: list[HaManagerStatusSchema] = []
+    for px in pxs:
+        try:
+            raw = await resolve_async(px.session("cluster/ha/status/manager_status").get())
+            data: dict[str, object] = {}
+            if hasattr(raw, "model_dump"):
+                data = raw.model_dump(mode="python", by_alias=True, exclude_none=True)
+            elif isinstance(raw, dict):
+                data = raw
+            results.append(
+                HaManagerStatusSchema(
+                    cluster_name=px.name,
+                    manager_status=str(data.get("manager_status"))
+                    if data.get("manager_status") is not None
+                    else None,
+                    timestamp=data.get("timestamp")
+                    if isinstance(data.get("timestamp"), int)
+                    else None,
+                    quorum_ok=_coerce_bool(data.get("quorum_ok") or data.get("quorum-ok")),
+                    mode=str(data.get("mode")) if data.get("mode") is not None else None,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error fetching HA manager status for Proxmox cluster %s", px.name)
+            results.append(
+                HaManagerStatusSchema(cluster_name=px.name, manager_status=f"error: {exc}")
+            )
+    return results
+
+
+@router.get("/ha/crs", response_model=list[HaCrsConfigSchema])
+async def ha_crs(pxs: ProxmoxSessionsDep) -> list[HaCrsConfigSchema]:
+    """Retrieve CRS (Cluster Resource Scheduler) config across all clusters (PVE 9.2+).
+
+    Extracts the ``crs`` sub-object from ``GET /cluster/options``.
+    The CRS ``ha`` field controls the scheduling mode:
+    ``static`` (pre-9.2 default), ``basic``, or ``dynamic`` (PVE 9.2).
+    """
+    results: list[HaCrsConfigSchema] = []
+    for px in pxs:
+        try:
+            raw = await resolve_async(px.session("cluster/options").get())
+            data: dict[str, object] = {}
+            if hasattr(raw, "model_dump"):
+                data = raw.model_dump(mode="python", by_alias=True, exclude_none=True)
+            elif isinstance(raw, dict):
+                data = raw
+            crs = data.get("crs")
+            crs_ha: str | None = None
+            if isinstance(crs, dict):
+                crs_ha = str(crs.get("ha")) if crs.get("ha") is not None else None
+            elif isinstance(crs, str):
+                crs_ha = crs
+            results.append(HaCrsConfigSchema(cluster_name=px.name, ha=crs_ha))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error fetching CRS config for Proxmox cluster %s", px.name)
+            results.append(HaCrsConfigSchema(cluster_name=px.name, status="error", error=str(exc)))
+    return results
