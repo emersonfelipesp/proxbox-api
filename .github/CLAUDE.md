@@ -35,7 +35,7 @@ ci.yml (push/PR — dev mode E2E only)
 ├── setup             (generates E2E matrix)
 ├── build-netbox-image (only uploads an artifact when the public NetBox image cannot be pulled)
 └── e2e-docker        (needs: test + setup + build-netbox-image; transport × NetBox version matrix)
-    - dev mode:  netbox-proxbox from pinned GitHub release tag tarball (currently v0.0.15)
+    - dev mode:  netbox-proxbox from pinned GitHub release tag tarball (currently v0.0.17)
                  proxbox-api built from local checkout with DEV_OVERRIDES (netbox-sdk + proxmox-sdk from GitHub)
     - pypi mode: netbox-proxbox from PyPI; proxbox-api built from local checkout without overrides
     - NetBox image handling: each E2E job pulls the public image first and only downloads the source-built artifact when the registry pull fails.
@@ -63,7 +63,7 @@ publish-testpypi.yml (staged package release)
 
 | Mode | netbox-proxbox (in NetBox container) | proxbox-api container | netbox-sdk / proxmox-sdk (in proxbox-api) |
 |------|--------------------------------------|-----------------------|-------------------------------------------|
-| **dev** | GitHub `develop` branch tarball | Built from local checkout with `--build-arg DEV_OVERRIDES=...` | `git+https://github.com/emersonfelipesp/netbox-sdk.git@main` and `git+https://github.com/emersonfelipesp/proxmox-sdk.git@main` |
+| **dev** | GitHub release tag tarball (pinned; see `ci.yml` → "Resolve netbox-proxbox install target") | Built from local checkout with `--build-arg DEV_OVERRIDES=...` | `git+https://github.com/emersonfelipesp/netbox-sdk.git@main` and `git+https://github.com/emersonfelipesp/proxmox-sdk.git@main` |
 | **published** | PyPI `netbox-proxbox` | Docker Hub `emersonfelipesp/proxbox-api:<version>` | PyPI versions from `uv.lock` (no override) |
 
 `DEV_OVERRIDES` is injected via `ARG DEV_OVERRIDES` in the Dockerfile builder stage. Normal production builds leave `DEV_OVERRIDES` empty (default `""`), so there is no impact on published images.
