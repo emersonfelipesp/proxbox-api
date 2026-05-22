@@ -49,7 +49,7 @@ show_missing = true
 
 [tool.uv]
 default-groups = ["dev"]
-constraint-dependencies = ["python-multipart>=0.0.27", "urllib3>=2.7.0"]
+constraint-dependencies = ["python-multipart>=0.0.27", "urllib3>=2.7.0", "idna>=3.15"]
 
 [tool.ruff]
 target-version = "py311"
