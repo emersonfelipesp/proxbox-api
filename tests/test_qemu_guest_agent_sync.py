@@ -928,3 +928,124 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
     # IPv4 is listed first because ipv4 is the preferred family.
     assert primary_ip_calls[0]["primary_ip_id"] == 77
     assert primary_ip_calls[0]["primary_ip_preference"] == "ipv4"
+
+
+def _install_ip_only_patches(monkeypatch, *, vm_config: dict, primary_ip_calls: list):
+    """Install the minimal set of monkeypatches needed by create_only_vm_ip_addresses."""
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return vm_config
+
+    async def _fake_bulk_reconcile_ips(nb, payloads, **_kwargs):
+        return [{"id": 77, "address": p.get("address", "")} for p in payloads]
+
+    async def _fake_rest_list(*args, **kwargs):
+        return [{"id": 66, "name": "net0", "virtual_machine": 55}]
+
+    async def _fake_rest_first(*args, **kwargs):
+        return {"id": 77, "address": "10.0.0.20/24"}
+
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    for attr, val in [
+        ("get_vm_config", _fake_get_vm_config),
+        ("resolve_vm_sync_concurrency", lambda: 1),
+        ("_resolve_netbox_virtual_machine_by_proxmox_id", _fake_resolve_netbox_vm),
+        ("_load_netbox_virtual_machine_snapshot", _fake_load_snapshot),
+    ]:
+        monkeypatch.setattr(
+            f"proxbox_api.routes.virtualization.virtual_machines.sync_vm.{attr}",
+            val,
+        )
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _fake_rest_list)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_rest_first)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile_ips,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_network.set_primary_ip",
+        _fake_set_primary_ip,
+    )
+
+
+def test_agent_kv_flag_disabled_skips_guest_agent_fetch(monkeypatch):
+    """agent='0,fstrim_cloned_disks=1' must NOT trigger guest-agent fetch (closes #491)."""
+    data = _vm_sync_inputs(
+        {
+            "agent": "0,fstrim_cloned_disks=1",
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+        }
+    )
+    guest_agent_calls: list = []
+    primary_ip_calls: list = []
+    _install_ip_only_patches(
+        monkeypatch, vm_config=data["vm_config"], primary_ip_calls=primary_ip_calls
+    )
+
+    async def _spy_guest_ifaces(*args, **kwargs):
+        guest_agent_calls.append(args)
+        return []
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _spy_guest_ifaces,
+    )
+
+    asyncio.run(
+        create_only_vm_ip_addresses(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert guest_agent_calls == [], "Guest agent must not be fetched when agent KV flag head is '0'"
+
+
+def test_agent_kv_flag_enabled_calls_guest_agent_fetch(monkeypatch):
+    """agent='1,fstrim_cloned_disks=1' MUST trigger guest-agent fetch (closes #491)."""
+    data = _vm_sync_inputs(
+        {
+            "agent": "1,fstrim_cloned_disks=1",
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    guest_agent_calls: list = []
+    primary_ip_calls: list = []
+    _install_ip_only_patches(
+        monkeypatch, vm_config=data["vm_config"], primary_ip_calls=primary_ip_calls
+    )
+
+    async def _spy_guest_ifaces(*args, **kwargs):
+        guest_agent_calls.append(args)
+        return []
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        _spy_guest_ifaces,
+    )
+
+    asyncio.run(
+        create_only_vm_ip_addresses(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+        )
+    )
+
+    assert len(guest_agent_calls) == 1, "Guest agent must be fetched when agent KV flag head is '1'"

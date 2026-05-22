@@ -37,6 +37,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
     ProxmoxVmConfigInput,
+    _parse_proxmox_kv_flag,
 )
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox import get_vm_config
@@ -157,7 +158,7 @@ async def _resolve_vm_dns_name(
     if vm_type != "qemu" or proxmox_session is None or not node or vmid is None:
         return None
 
-    if isinstance(vm_config, dict) and not vm_config.get("agent"):
+    if isinstance(vm_config, dict) and not _parse_proxmox_kv_flag(vm_config.get("agent")):
         return None
 
     try:
@@ -2464,7 +2465,7 @@ async def create_only_vm_interfaces(  # noqa: C901
             logger.warning("Could not fetch VM config for %s (vmid=%s): %s", vm_name, vmid, exc)
 
         guest_agent_interfaces: list[dict[str, object]] = []
-        if vm_type == "qemu" and vm_config.get("agent"):
+        if vm_type == "qemu" and _parse_proxmox_kv_flag(vm_config.get("agent")):
             if proxmox_session and resource_node:
                 guest_agent_interfaces = (
                     await get_qemu_guest_agent_network_interfaces(
@@ -2965,7 +2966,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             )
 
         guest_agent_interfaces: list[dict[str, object]] = []
-        if vm_type == "qemu" and vm_config.get("agent"):
+        if vm_type == "qemu" and _parse_proxmox_kv_flag(vm_config.get("agent")):
             if proxmox_session and resource_node:
                 guest_agent_interfaces = (
                     await get_qemu_guest_agent_network_interfaces(
