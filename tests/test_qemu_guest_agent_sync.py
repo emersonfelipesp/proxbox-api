@@ -987,7 +987,9 @@ def test_agent_kv_flag_disabled_skips_guest_agent_fetch(monkeypatch):
     )
     guest_agent_calls: list = []
     primary_ip_calls: list = []
-    _install_ip_only_patches(monkeypatch, vm_config=data["vm_config"], primary_ip_calls=primary_ip_calls)
+    _install_ip_only_patches(
+        monkeypatch, vm_config=data["vm_config"], primary_ip_calls=primary_ip_calls
+    )
 
     async def _spy_guest_ifaces(*args, **kwargs):
         guest_agent_calls.append(args)
@@ -1009,9 +1011,7 @@ def test_agent_kv_flag_disabled_skips_guest_agent_fetch(monkeypatch):
         )
     )
 
-    assert guest_agent_calls == [], (
-        "Guest agent must not be fetched when agent KV flag head is '0'"
-    )
+    assert guest_agent_calls == [], "Guest agent must not be fetched when agent KV flag head is '0'"
 
 
 def test_agent_kv_flag_enabled_calls_guest_agent_fetch(monkeypatch):
@@ -1024,7 +1024,9 @@ def test_agent_kv_flag_enabled_calls_guest_agent_fetch(monkeypatch):
     )
     guest_agent_calls: list = []
     primary_ip_calls: list = []
-    _install_ip_only_patches(monkeypatch, vm_config=data["vm_config"], primary_ip_calls=primary_ip_calls)
+    _install_ip_only_patches(
+        monkeypatch, vm_config=data["vm_config"], primary_ip_calls=primary_ip_calls
+    )
 
     async def _spy_guest_ifaces(*args, **kwargs):
         guest_agent_calls.append(args)
@@ -1046,6 +1048,4 @@ def test_agent_kv_flag_enabled_calls_guest_agent_fetch(monkeypatch):
         )
     )
 
-    assert len(guest_agent_calls) == 1, (
-        "Guest agent must be fetched when agent KV flag head is '1'"
-    )
+    assert len(guest_agent_calls) == 1, "Guest agent must be fetched when agent KV flag head is '1'"
