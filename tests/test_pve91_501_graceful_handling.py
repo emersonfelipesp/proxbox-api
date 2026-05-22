@@ -165,7 +165,9 @@ def test_sdn_501_multi_cluster_only_skips_affected():
 def test_sdn_prefix_list_501_does_not_pollute_other_results():
     """501 cluster does not appear in prefix-list results at all."""
     pxs = [
-        _FakePx("pve92", rows=[{"name": "allow-rfc1918", "cidr": "10.0.0.0/8", "action": "permit"}]),
+        _FakePx(
+            "pve92", rows=[{"name": "allow-rfc1918", "cidr": "10.0.0.0/8", "action": "permit"}]
+        ),
         _FakePx("pve91", exc=_make_501()),
     ]
 
