@@ -1101,6 +1101,7 @@ async def _rest_reconcile_async_impl(  # noqa: C901
     patchable_fields: set[str] | frozenset[str] | None = None,
     nullable_fields: set[str] | frozenset[str] | None = None,
     strict_lookup: bool = False,
+    lookup_query_field_map: dict[str, str] | None = None,
 ) -> tuple[RestRecord, ReconcileStatus]:
     """Internal: reconcile and return ``(record, status)``.
 
@@ -1122,7 +1123,15 @@ async def _rest_reconcile_async_impl(  # noqa: C901
             [lookup] if strict_lookup else _candidate_reuse_lookups(lookup, desired_payload)
         )
         for candidate in candidates:
-            existing_record = await rest_first_async(nb, path, query={**candidate, "limit": 2})
+            if lookup_query_field_map:
+                query_candidate = {
+                    lookup_query_field_map.get(k, k): v for k, v in candidate.items()
+                }
+            else:
+                query_candidate = candidate
+            existing_record = await rest_first_async(
+                nb, path, query={**query_candidate, "limit": 2}
+            )
             if existing_record:
                 return existing_record
         return None
@@ -1234,6 +1243,7 @@ async def rest_reconcile_async(
     patchable_fields: set[str] | frozenset[str] | None = None,
     nullable_fields: set[str] | frozenset[str] | None = None,
     strict_lookup: bool = False,
+    lookup_query_field_map: dict[str, str] | None = None,
 ) -> RestRecord:
     """Reconcile a NetBox record with the desired payload.
 
@@ -1252,6 +1262,13 @@ async def rest_reconcile_async(
             Use this to clear stale FK or choice values that are no longer managed
             by this sync path (e.g. the VMInterface ``bridge`` FK after switching
             to the ``proxbox_bridge`` custom field).
+        lookup_query_field_map: Optional mapping of payload field names to the
+            corresponding NetBox filter query parameter names used in GET requests.
+            For example ``{"virtual_machine": "virtual_machine_id"}`` maps the
+            integer FK field ``virtual_machine`` in the payload to the
+            ``virtual_machine_id`` query parameter that NetBox uses for integer-ID
+            filtering.  Only applies to the ``_find_existing`` GET query; the
+            payload keys used for CREATE/PATCH are not affected.
     """
     record, _ = await _rest_reconcile_async_impl(
         nb,
@@ -1263,6 +1280,7 @@ async def rest_reconcile_async(
         patchable_fields=patchable_fields,
         nullable_fields=nullable_fields,
         strict_lookup=strict_lookup,
+        lookup_query_field_map=lookup_query_field_map,
     )
     return record
 
@@ -1278,6 +1296,7 @@ async def rest_reconcile_async_with_status(
     patchable_fields: set[str] | frozenset[str] | None = None,
     nullable_fields: set[str] | frozenset[str] | None = None,
     strict_lookup: bool = False,
+    lookup_query_field_map: dict[str, str] | None = None,
 ) -> ReconcileResult:
     """Reconcile a NetBox record and report ``created`` / ``updated`` / ``unchanged``.
 
@@ -1295,6 +1314,7 @@ async def rest_reconcile_async_with_status(
         patchable_fields=patchable_fields,
         nullable_fields=nullable_fields,
         strict_lookup=strict_lookup,
+        lookup_query_field_map=lookup_query_field_map,
     )
     return ReconcileResult(record=record, status=status)
 
@@ -1747,6 +1767,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
     batch_delay_ms: int | None = None,
     selector: Callable[[list[RestRecord]], RestRecord | None] | None = None,
     base_query: dict[str, object] | None = None,
+    lookup_query_field_map: dict[str, str] | None = None,
 ) -> BulkReconcileResult:
     if not payloads:
         return BulkReconcileResult(records=[], created=0, updated=0, unchanged=0, failed=0)
@@ -1879,6 +1900,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
                         schema=schema,
                         current_normalizer=current_normalizer,
                         patchable_fields=patchable_fields,
+                        lookup_query_field_map=lookup_query_field_map,
                     )
                     records.append(record)
                     created += 1

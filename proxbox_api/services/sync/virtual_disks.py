@@ -278,7 +278,7 @@ async def create_virtual_disks(  # noqa: C901
                 disk_payload: dict[str, object] = {
                     "virtual_machine": vm_id,
                     "name": disk_entry.name,
-                    "size": disk_entry.size,
+                    "size": disk_entry.size_mb,
                     "description": disk_entry.description,
                     "tags": tag_refs,
                 }
@@ -302,6 +302,7 @@ async def create_virtual_disks(  # noqa: C901
                         "custom_fields": record.get("custom_fields"),
                     },
                     base_query={"virtual_machine_id": vm_id},
+                    lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
                 )
                 disks_created = bulk_result.created
                 disks_updated = bulk_result.updated
