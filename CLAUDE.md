@@ -15,11 +15,11 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ### Companion repos (cross-link map)
 
-- **`netbox-proxbox` v0.0.17** — the NetBox plugin that consumes this backend.
-  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The v0.0.17 release
-  (firewall model scaffolding, intent tag helpers, HA REST shim) requires
-  `proxbox-api >= 0.0.13`; HA tab, cluster-wide HA status page, and runtime
-  tunables alone require `>= 0.0.11`.
+- **`netbox-proxbox` v0.0.18** — the NetBox plugin that consumes this backend.
+  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The v0.0.18 release
+  (PVE 9.2 SDN models, CPU model, HA arm/disarm views, node-level firewall sync)
+  requires `proxbox-api >= 0.0.14`; firewall model scaffolding and intent tag
+  helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
 - **Workspace note**:
   `personal-context/claude-reference/proxbox-api.md` (deep-dive index of this
   repo) and `personal-context/claude-reference/netbox-proxbox.md` (deep-dive
@@ -426,6 +426,7 @@ cancelled to avoid wasted CI and to keep the run history clean.
   - `GET /proxmox/nodes/{node}/storage/{storage}/identity` — PBS storage instance ID.
   - `GET /proxmox/nodes/{node}/config` — node configuration including new `location` field.
 - Tracked in issue: <https://github.com/emersonfelipesp/proxbox-api/issues/152>.
+- Paired consumer: `netbox-proxbox v0.0.18`.
 
 ### Don't
 
