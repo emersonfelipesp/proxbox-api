@@ -14,6 +14,7 @@ to a single cluster via the ``cluster_name`` query parameter.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel
 
 from proxbox_api.logger import logger
@@ -82,6 +83,12 @@ async def list_custom_cpu_models(pxs: ProxmoxSessionsDep) -> list[CustomCpuModel
             for row in rows:
                 results.append(_to_cpu_model(px.name, row))
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ResourceException) and exc.status_code == 501:
+                logger.warning(
+                    "Cluster %s does not support /cluster/qemu/custom-cpu-models (PVE < 9.2) — skipping",
+                    px.name,
+                )
+                continue
             logger.exception("Error fetching custom CPU models for Proxmox cluster %s", px.name)
             results.append(
                 CustomCpuModelSchema(cluster_name=px.name, status="error", error=str(exc))
