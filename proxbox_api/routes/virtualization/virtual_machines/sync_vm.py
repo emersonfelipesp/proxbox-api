@@ -960,7 +960,7 @@ async def _create_vm_disk_parallel(
             payload={
                 "virtual_machine": virtual_machine.get("id"),
                 "name": disk_entry.name,
-                "size": disk_entry.size,
+                "size": disk_entry.size_mb,
                 "storage": storage_record.get("id") if storage_record else None,
                 "description": disk_entry.description,
                 "tags": tag_refs,
