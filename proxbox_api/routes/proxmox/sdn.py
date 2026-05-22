@@ -11,6 +11,7 @@ access and remain intentionally out of scope for this proxy layer.
 from __future__ import annotations
 
 from fastapi import APIRouter
+from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel
 
 from proxbox_api.logger import logger
@@ -138,6 +139,12 @@ async def sdn_fabrics(pxs: ProxmoxSessionsDep) -> list[SdnFabricSchema]:
             for row in rows:
                 results.append(_to_fabric(px.name, row))
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ResourceException) and exc.status_code == 501:
+                logger.warning(
+                    "Cluster %s does not support /cluster/sdn/fabrics (PVE < 9.2) — skipping",
+                    px.name,
+                )
+                continue
             logger.exception("Error fetching SDN fabrics for Proxmox cluster %s", px.name)
             results.append(SdnFabricSchema(cluster_name=px.name, status="error", error=str(exc)))
     return results
@@ -157,6 +164,12 @@ async def sdn_fabrics_all(pxs: ProxmoxSessionsDep) -> list[SdnFabricSchema]:
             for row in rows:
                 results.append(_to_fabric(px.name, row))
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ResourceException) and exc.status_code == 501:
+                logger.warning(
+                    "Cluster %s does not support /cluster/sdn/fabrics/all (PVE < 9.2) — skipping",
+                    px.name,
+                )
+                continue
             logger.exception("Error fetching all SDN fabrics for Proxmox cluster %s", px.name)
             results.append(SdnFabricSchema(cluster_name=px.name, status="error", error=str(exc)))
     return results
@@ -177,6 +190,12 @@ async def sdn_route_maps(pxs: ProxmoxSessionsDep) -> list[SdnRouteMapSchema]:
             for row in rows:
                 results.append(_to_route_map(px.name, row))
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ResourceException) and exc.status_code == 501:
+                logger.warning(
+                    "Cluster %s does not support /cluster/sdn/route-maps (PVE < 9.2) — skipping",
+                    px.name,
+                )
+                continue
             logger.exception("Error fetching SDN route-maps for Proxmox cluster %s", px.name)
             results.append(SdnRouteMapSchema(cluster_name=px.name, status="error", error=str(exc)))
     return results
@@ -197,6 +216,12 @@ async def sdn_prefix_lists(pxs: ProxmoxSessionsDep) -> list[SdnPrefixListSchema]
             for row in rows:
                 results.append(_to_prefix_list(px.name, row))
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ResourceException) and exc.status_code == 501:
+                logger.warning(
+                    "Cluster %s does not support /cluster/sdn/prefix-lists (PVE < 9.2) — skipping",
+                    px.name,
+                )
+                continue
             logger.exception("Error fetching SDN prefix-lists for Proxmox cluster %s", px.name)
             results.append(
                 SdnPrefixListSchema(cluster_name=px.name, status="error", error=str(exc))
