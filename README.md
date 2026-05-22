@@ -1,5 +1,32 @@
 # Installing proxbox-api (Plugin backend made using FastAPI)
 
+## Integrations Architecture
+
+<p align="center">
+  <img
+    src="https://emersonfelipesp.com/proxbox-api/integrations-netbox-dark.svg"
+    alt="proxbox-api integrations architecture: consumer NetBox plugins funnel into proxbox-api on :8000, which forks into netbox-sdk (write target) and proxmox-sdk (read source)"
+    width="900"
+  />
+</p>
+
+`proxbox-api` sits between **consumer NetBox plugins** (top tier) and the
+**downstream REST surfaces** it talks to (bottom tier):
+
+- **Top — consumer plugins**: `netbox-ceph`, `netbox-pbs`, **`netbox-proxbox`** (base plugin),
+  `netbox-pdm`, `netbox-packer`. They reach `proxbox-api` over **HTTP REST / SSE / WebSocket**,
+  authenticated with the `X-Proxbox-API-Key` header.
+- **Middle — `proxbox-api`**: FastAPI app on `:8000`. Owns the SSE and WebSocket
+  sync streams, runtime tunables, and the API-key auth surface.
+- **Bottom — downstream SDKs**:
+  - **Write target** — `netbox-sdk` → `netbox · REST API` (4.5.x / 4.6.x). Async with a
+    cached GET layer (60s TTL); concurrency capped by `PROXBOX_NETBOX_MAX_CONCURRENT`.
+  - **Read source** — `proxmox-sdk` → `proxmox · REST API` (7.x / 8.x). Async, read-only,
+    `mock | real` modes; concurrency capped by `PROXBOX_VM_SYNC_MAX_CONCURRENCY`.
+
+The interactive version of this diagram lives at
+[emersonfelipesp.com/proxbox-api](https://emersonfelipesp.com/proxbox-api).
+
 ## Tooling: uv + Ruff + ty
 
 This repo uses [uv](https://docs.astral.sh/uv/) to install Python and dependencies, [Ruff](https://docs.astral.sh/ruff/) for linting and formatting, and [ty](https://github.com/astral-sh/ty) for type checking.
