@@ -2,8 +2,46 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 from proxbox_api.services.sync.virtual_disks import create_virtual_disks
+
+
+def _virtual_disk_normalizer(record):
+    return {
+        "virtual_machine": record.get("virtual_machine"),
+        "name": record.get("name"),
+        "size": record.get("size") if record.get("size") is not None else 0,
+        "storage": record.get("storage"),
+        "description": record.get("description"),
+        "tags": record.get("tags"),
+        "custom_fields": record.get("custom_fields"),
+    }
+
+
+def _make_virtual_disk_record(
+    *,
+    record_id=10,
+    vm_id=7,
+    name="scsi0",
+    size=1024,
+    storage_id=None,
+    with_save=False,
+):
+    record = MagicMock()
+    record.id = record_id
+    if with_save:
+        record.save = AsyncMock()
+    record.serialize.return_value = {
+        "virtual_machine": {"id": vm_id},
+        "name": name,
+        "size": size,
+        "storage": {"id": storage_id} if storage_id is not None else None,
+        "description": "",
+        "tags": [],
+        "custom_fields": {},
+    }
+    return record
 
 
 def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
@@ -236,22 +274,10 @@ def test_cdrom_no_patch_storm_when_existing_has_null_size(monkeypatch):
     triggers a PATCH on every sync run. The normalizer must return 0 for None
     so the comparison sees no diff.
     """
-    from unittest.mock import MagicMock
-
     from proxbox_api.netbox_rest import rest_bulk_reconcile_async
     from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState
 
-    existing_record = MagicMock()
-    existing_record.id = 10
-    existing_record.serialize.return_value = {
-        "virtual_machine": {"id": 7},
-        "name": "ide0",
-        "size": None,
-        "storage": None,
-        "description": "",
-        "tags": [],
-        "custom_fields": {},
-    }
+    existing_record = _make_virtual_disk_record(name="ide0", size=None)
 
     patched: list = []
 
@@ -288,15 +314,7 @@ def test_cdrom_no_patch_storm_when_existing_has_null_size(monkeypatch):
             ],
             lookup_fields=["virtual_machine", "name"],
             schema=NetBoxVirtualDiskSyncState,
-            current_normalizer=lambda record: {
-                "virtual_machine": record.get("virtual_machine"),
-                "name": record.get("name"),
-                "size": record.get("size") if record.get("size") is not None else 0,
-                "storage": record.get("storage"),
-                "description": record.get("description"),
-                "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
-            },
+            current_normalizer=_virtual_disk_normalizer,
             base_query={"virtual_machine_id": 7},
             lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
             strict_lookup=True,
@@ -304,6 +322,153 @@ def test_cdrom_no_patch_storm_when_existing_has_null_size(monkeypatch):
     )
 
     assert patched == [], "no PATCH should be issued when existing size=NULL matches desired size=0"
+    assert result.unchanged == 1
+    assert result.created == 0
+    assert result.updated == 0
+
+
+def test_single_reconcile_nullable_field_keeps_matching_storage(monkeypatch):
+    """A nullable FK must not be cleared when desired and current values match."""
+    from proxbox_api.netbox_rest import rest_reconcile_async_with_status
+    from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState
+
+    existing_record = _make_virtual_disk_record(storage_id=11, with_save=True)
+
+    async def _fake_first(_nb, _path, *, query):
+        return existing_record
+
+    async def _fake_create(*_args, **_kwargs):
+        raise AssertionError("create should not be called for an existing disk")
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_create_async", _fake_create)
+
+    result = asyncio.run(
+        rest_reconcile_async_with_status(
+            object(),
+            "/api/virtualization/virtual-disks/",
+            lookup={"virtual_machine": 7, "name": "scsi0"},
+            payload={
+                "virtual_machine": 7,
+                "name": "scsi0",
+                "size": 1024,
+                "storage": 11,
+                "description": "",
+                "tags": [],
+                "custom_fields": {},
+            },
+            schema=NetBoxVirtualDiskSyncState,
+            current_normalizer=_virtual_disk_normalizer,
+            strict_lookup=True,
+            nullable_fields={"storage"},
+        )
+    )
+
+    assert result.status == "unchanged"
+    existing_record.save.assert_not_awaited()
+
+
+def test_bulk_reconcile_nullable_field_keeps_matching_storage(monkeypatch):
+    from proxbox_api.netbox_rest import rest_bulk_reconcile_async
+    from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState
+
+    existing_record = _make_virtual_disk_record(storage_id=11)
+    patched: list = []
+
+    async def _fake_list_paginated(_nb, _path, *, base_query=None, **kwargs):
+        return [existing_record]
+
+    async def _fake_bulk_create(_nb, _path, entries):
+        return []
+
+    async def _fake_bulk_patch(_nb, _path, entries):
+        patched.extend(entries)
+        return []
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_paginated_async", _fake_list_paginated)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_bulk_create_async", _fake_bulk_create)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_bulk_patch_async", _fake_bulk_patch)
+
+    result = asyncio.run(
+        rest_bulk_reconcile_async(
+            object(),
+            "/api/virtualization/virtual-disks/",
+            payloads=[
+                {
+                    "virtual_machine": 7,
+                    "name": "scsi0",
+                    "size": 1024,
+                    "storage": 11,
+                    "description": "",
+                    "tags": [],
+                    "custom_fields": {},
+                }
+            ],
+            lookup_fields=["virtual_machine", "name"],
+            schema=NetBoxVirtualDiskSyncState,
+            current_normalizer=_virtual_disk_normalizer,
+            base_query={"virtual_machine_id": 7},
+            lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
+            strict_lookup=True,
+            nullable_fields={"storage"},
+        )
+    )
+
+    assert patched == []
+    assert result.unchanged == 1
+    assert result.created == 0
+    assert result.updated == 0
+
+
+def test_bulk_create_fallback_forwards_nullable_fields(monkeypatch):
+    from proxbox_api.netbox_rest import rest_bulk_reconcile_async
+    from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState
+
+    captured_kwargs: list[dict] = []
+
+    async def _fake_list_paginated(_nb, _path, *, base_query=None, **kwargs):
+        return []
+
+    async def _fake_bulk_create(_nb, _path, entries):
+        raise RuntimeError("duplicate")
+
+    async def _fake_reconcile_with_status(*_args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return SimpleNamespace(record=SimpleNamespace(id=10), status="unchanged")
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_paginated_async", _fake_list_paginated)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_bulk_create_async", _fake_bulk_create)
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_reconcile_async_with_status",
+        _fake_reconcile_with_status,
+    )
+
+    result = asyncio.run(
+        rest_bulk_reconcile_async(
+            object(),
+            "/api/virtualization/virtual-disks/",
+            payloads=[
+                {
+                    "virtual_machine": 7,
+                    "name": "scsi0",
+                    "size": 1024,
+                    "storage": None,
+                    "description": "",
+                    "tags": [],
+                    "custom_fields": {},
+                }
+            ],
+            lookup_fields=["virtual_machine", "name"],
+            schema=NetBoxVirtualDiskSyncState,
+            current_normalizer=_virtual_disk_normalizer,
+            base_query={"virtual_machine_id": 7},
+            lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
+            strict_lookup=True,
+            nullable_fields={"storage"},
+        )
+    )
+
+    assert captured_kwargs[0]["nullable_fields"] == {"storage"}
     assert result.unchanged == 1
     assert result.created == 0
     assert result.updated == 0

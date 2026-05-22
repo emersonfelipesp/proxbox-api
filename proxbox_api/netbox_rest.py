@@ -1195,10 +1195,10 @@ async def _rest_reconcile_async_impl(  # noqa: C901
             for key, value in desired_payload.items()
             if current_payload.get(key) != value
         }
-        # Explicitly null out stale non-null fields that are no longer managed by this path.
+        # Explicitly null out stale non-null fields that the desired payload no longer carries.
         if nullable_fields:
             for field in nullable_fields:
-                if current_payload.get(field) is not None and field not in patch_payload:
+                if current_payload.get(field) is not None and field not in desired_payload:
                     patch_payload[field] = None
         if patchable_fields is not None:
             allowed = {str(field) for field in patchable_fields}
@@ -1258,10 +1258,11 @@ async def rest_reconcile_async(
             for object types whose natural key is only unique within a parent
             scope (e.g. VMInterface names are unique per VM, not globally).
         nullable_fields: Field names that should be explicitly set to ``None``
-            during a PATCH if the current record has a non-null value for them.
-            Use this to clear stale FK or choice values that are no longer managed
-            by this sync path (e.g. the VMInterface ``bridge`` FK after switching
-            to the ``proxbox_bridge`` custom field).
+            during a PATCH if the current record has a non-null value and the
+            normalized desired payload no longer carries the field. Use this to
+            clear stale FK or choice values that are no longer managed by this
+            sync path (e.g. the VMInterface ``bridge`` FK after switching to the
+            ``proxbox_bridge`` custom field).
         lookup_query_field_map: Optional mapping of payload field names to the
             corresponding NetBox filter query parameter names used in GET requests.
             For example ``{"virtual_machine": "virtual_machine_id"}`` maps the
@@ -1869,7 +1870,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
         }
         if nullable_fields:
             for field in nullable_fields:
-                if current_payload.get(field) is not None and field not in patch_payload:
+                if current_payload.get(field) is not None and field not in desired_payload:
                     patch_payload[field] = None
         if patchable_fields is not None:
             allowed = {str(field) for field in patchable_fields}
@@ -1910,6 +1911,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
                         schema=schema,
                         current_normalizer=current_normalizer,
                         patchable_fields=patchable_fields,
+                        nullable_fields=nullable_fields,
                         lookup_query_field_map=lookup_query_field_map,
                         strict_lookup=strict_lookup,
                     )
