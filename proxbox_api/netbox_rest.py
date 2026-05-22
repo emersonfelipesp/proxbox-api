@@ -1671,6 +1671,9 @@ class BulkReconcilePhase:
     batch_size: int | None = None
     batch_delay_ms: int | None = None
     selector: Callable[[list[RestRecord]], RestRecord | None] | None = None
+    lookup_query_field_map: dict[str, str] | None = None
+    strict_lookup: bool = False
+    nullable_fields: set[str] | frozenset[str] | None = None
 
 
 def _normalize_bulk_batch_size(batch_size: int | None) -> int:
@@ -1768,6 +1771,8 @@ async def rest_bulk_reconcile_async(  # noqa: C901
     selector: Callable[[list[RestRecord]], RestRecord | None] | None = None,
     base_query: dict[str, object] | None = None,
     lookup_query_field_map: dict[str, str] | None = None,
+    strict_lookup: bool = False,
+    nullable_fields: set[str] | frozenset[str] | None = None,
 ) -> BulkReconcileResult:
     if not payloads:
         return BulkReconcileResult(records=[], created=0, updated=0, unchanged=0, failed=0)
@@ -1862,6 +1867,10 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             for key, value in desired_payload.items()
             if current_payload.get(key) != value
         }
+        if nullable_fields:
+            for field in nullable_fields:
+                if current_payload.get(field) is not None and field not in patch_payload:
+                    patch_payload[field] = None
         if patchable_fields is not None:
             allowed = {str(field) for field in patchable_fields}
             patch_payload = {key: value for key, value in patch_payload.items() if key in allowed}
@@ -1872,6 +1881,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             unchanged += 1
 
     created = 0
+    updated = 0
     failed = 0
     for offset in range(0, len(to_create), resolved_batch_size):
         batch = to_create[offset : offset + resolved_batch_size]
@@ -1892,7 +1902,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             )
             for payload, lookup in batch:
                 try:
-                    record = await rest_reconcile_async(
+                    reconcile_result = await rest_reconcile_async_with_status(
                         nb,
                         path,
                         lookup=lookup,
@@ -1901,9 +1911,15 @@ async def rest_bulk_reconcile_async(  # noqa: C901
                         current_normalizer=current_normalizer,
                         patchable_fields=patchable_fields,
                         lookup_query_field_map=lookup_query_field_map,
+                        strict_lookup=strict_lookup,
                     )
-                    records.append(record)
-                    created += 1
+                    records.append(reconcile_result.record)
+                    if reconcile_result.status == "created":
+                        created += 1
+                    elif reconcile_result.status == "updated":
+                        updated += 1
+                    else:
+                        unchanged += 1
                 except Exception as reconcile_exc:
                     logger.error(
                         "Per-item reconcile failed for %s with lookup %s: %s",
@@ -1916,7 +1932,6 @@ async def rest_bulk_reconcile_async(  # noqa: C901
         if offset + resolved_batch_size < len(to_create) and resolved_batch_delay_ms > 0:
             await asyncio.sleep(resolved_batch_delay_ms / 1000.0)
 
-    updated = 0
     for offset in range(0, len(to_patch), resolved_batch_size):
         batch = to_patch[offset : offset + resolved_batch_size]
         none_id_count = sum(1 for record, _, _ in batch if record.id is None)
@@ -1999,6 +2014,9 @@ async def rest_bulk_reconcile_phases_async(
             batch_size=phase.batch_size,
             batch_delay_ms=phase.batch_delay_ms,
             selector=phase.selector,
+            lookup_query_field_map=phase.lookup_query_field_map,
+            strict_lookup=phase.strict_lookup,
+            nullable_fields=phase.nullable_fields,
         )
     return results
 

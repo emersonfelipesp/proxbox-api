@@ -279,6 +279,7 @@ async def create_virtual_disks(  # noqa: C901
                     "virtual_machine": vm_id,
                     "name": disk_entry.name,
                     "size": disk_entry.size_mb,
+                    "storage": storage_id,
                     "description": disk_entry.description,
                     "tags": tag_refs,
                 }
@@ -296,13 +297,16 @@ async def create_virtual_disks(  # noqa: C901
                     current_normalizer=lambda record: {
                         "virtual_machine": record.get("virtual_machine"),
                         "name": record.get("name"),
-                        "size": record.get("size"),
+                        "size": record.get("size") if record.get("size") is not None else 0,
+                        "storage": record.get("storage"),
                         "description": record.get("description"),
                         "tags": record.get("tags"),
                         "custom_fields": record.get("custom_fields"),
                     },
                     base_query={"virtual_machine_id": vm_id},
                     lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
+                    strict_lookup=True,
+                    nullable_fields={"storage"},
                 )
                 disks_created = bulk_result.created
                 disks_updated = bulk_result.updated
