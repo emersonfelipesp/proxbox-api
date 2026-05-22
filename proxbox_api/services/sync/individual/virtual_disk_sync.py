@@ -212,12 +212,14 @@ async def sync_virtual_disk_individual(
             current_normalizer=lambda record: {
                 "virtual_machine": record.get("virtual_machine"),
                 "name": record.get("name"),
-                "size": record.get("size"),
+                "size": record.get("size") if record.get("size") is not None else 0,
                 "storage": record.get("storage"),
                 "description": record.get("description"),
                 "tags": record.get("tags"),
                 "custom_fields": record.get("custom_fields"),
             },
+            strict_lookup=True,
+            nullable_fields={"storage"},
         )
 
         netbox_object = disk_record.serialize() if hasattr(disk_record, "serialize") else None

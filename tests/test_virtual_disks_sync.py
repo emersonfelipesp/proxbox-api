@@ -226,3 +226,84 @@ def test_all_cdrom_vm_synced_as_zero_size(monkeypatch):
     assert all(p["size"] == 0 for p in reconciled_payloads)
     assert result["count"] == 1
     assert result["created"] == 1
+
+
+def test_cdrom_no_patch_storm_when_existing_has_null_size(monkeypatch):
+    """Re-syncing a CD-ROM disk must not generate a spurious PATCH when the
+    existing NetBox record has size=NULL.
+
+    Without the normalizer fix, comparing desired size=0 against current size=None
+    triggers a PATCH on every sync run. The normalizer must return 0 for None
+    so the comparison sees no diff.
+    """
+    from unittest.mock import MagicMock
+
+    from proxbox_api.netbox_rest import rest_bulk_reconcile_async
+    from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState
+
+    existing_record = MagicMock()
+    existing_record.id = 10
+    existing_record.serialize.return_value = {
+        "virtual_machine": {"id": 7},
+        "name": "ide0",
+        "size": None,
+        "storage": None,
+        "description": "",
+        "tags": [],
+        "custom_fields": {},
+    }
+
+    patched: list = []
+
+    async def _fake_list_paginated(_nb, _path, *, base_query=None, **kwargs):
+        return [existing_record]
+
+    async def _fake_bulk_create(_nb, _path, entries):
+        return []
+
+    async def _fake_bulk_patch(_nb, _path, entries):
+        patched.extend(entries)
+        return []
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_paginated_async", _fake_list_paginated)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_bulk_create_async", _fake_bulk_create)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_bulk_patch_async", _fake_bulk_patch)
+
+    import asyncio
+
+    result = asyncio.run(
+        rest_bulk_reconcile_async(
+            object(),
+            "/api/virtualization/virtual-disks/",
+            payloads=[
+                {
+                    "virtual_machine": 7,
+                    "name": "ide0",
+                    "size": 0,
+                    "storage": None,
+                    "description": "",
+                    "tags": [],
+                    "custom_fields": {},
+                }
+            ],
+            lookup_fields=["virtual_machine", "name"],
+            schema=NetBoxVirtualDiskSyncState,
+            current_normalizer=lambda record: {
+                "virtual_machine": record.get("virtual_machine"),
+                "name": record.get("name"),
+                "size": record.get("size") if record.get("size") is not None else 0,
+                "storage": record.get("storage"),
+                "description": record.get("description"),
+                "tags": record.get("tags"),
+                "custom_fields": record.get("custom_fields"),
+            },
+            base_query={"virtual_machine_id": 7},
+            lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
+            strict_lookup=True,
+        )
+    )
+
+    assert patched == [], "no PATCH should be issued when existing size=NULL matches desired size=0"
+    assert result.unchanged == 1
+    assert result.created == 0
+    assert result.updated == 0

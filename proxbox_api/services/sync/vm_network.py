@@ -334,12 +334,14 @@ async def sync_vm_disks(
                 current_normalizer=lambda record: {
                     "virtual_machine": record.get("virtual_machine"),
                     "name": record.get("name"),
-                    "size": record.get("size"),
+                    "size": record.get("size") if record.get("size") is not None else 0,
                     "storage": record.get("storage"),
                     "description": record.get("description"),
                     "tags": record.get("tags"),
                     "custom_fields": record.get("custom_fields"),
                 },
+                strict_lookup=True,
+                nullable_fields={"storage"},
             )
             disk_count += 1
         except Exception as e:
