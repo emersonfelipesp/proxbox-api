@@ -16,7 +16,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]==0.136.1",
-    "proxmox-sdk==0.0.6",
+    "proxmox-sdk==0.0.7",
     "netbox-sdk==0.0.8.post1",
     "sqlmodel==0.0.38",
     "pydantic==2.13.3",
@@ -52,10 +52,10 @@ granian = [
     "granian>=2.7.4",
 ]
 pbs = [
-    "proxmox-sdk[pbs]==0.0.6",
+    "proxmox-sdk[pbs]==0.0.7",
 ]
 pdm = [
-    "proxmox-sdk[pdm]==0.0.6",
+    "proxmox-sdk[pdm]==0.0.7",
 ]
 
 [dependency-groups]
