@@ -278,6 +278,26 @@ def build_vm_payload(...) -> VMPayloadDict:
 
 See `proxbox_api/types/CLAUDE.md` for complete typing guidelines.
 
+## Rust-Python FFI Reference
+
+The `proxbox-api` backend is pure Python today. When performance-critical paths
+(sync transforms in `proxmox_to_netbox/`, codegen pipeline in
+`proxmox_codegen/`, bulk data serialization in `services/sync/`, or generated
+Proxmox proxy routes) justify native Rust extensions, use PyO3 as the binding
+framework:
+
+- Architecture reference: `/root/personal-context/PYO3.md`
+- Per-directory guidance: `/root/personal-context/pyo3/CLAUDE.md`
+- Dashboard overview: `/pyo3` route on the personal-context app
+- Build backend: maturin (preferred) or setuptools-rust
+- Version: PyO3 v0.28.3, minimum Rust 1.83
+
+Candidate hotpaths for future Rust acceleration:
+- `proxbox_api/proxmox_to_netbox/` — object mapping and field transformation
+- `proxbox_api/proxmox_codegen/` — OpenAPI schema crawling and code generation
+- `proxbox_api/services/sync/` — bulk reconciliation and diffing
+- `proxbox_api/generated/` — generated Pydantic model validation
+
 ## Extension Rules
 
 1. Update schemas and enums before route handlers.
