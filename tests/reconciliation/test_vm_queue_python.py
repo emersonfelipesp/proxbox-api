@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
-from proxbox_api.routes.virtualization.virtual_machines import sync_vm
+from proxbox_api.services.sync.reconciliation.types import NetBoxVMOperation, PreparedVMState
+from proxbox_api.services.sync.reconciliation.vm_queue import build_vm_operation_queue_python
 
 
 def _prepared_vm(
@@ -20,7 +21,7 @@ def _prepared_vm(
     custom_fields: dict[str, object] | None = None,
     role: object = 20,
     description: str | None = "Synced from Proxmox node pve01",
-) -> sync_vm._PreparedVMState:
+) -> PreparedVMState:
     desired_payload = {
         "name": name or f"{vm_type}-{vmid}",
         "status": "active",
@@ -38,7 +39,7 @@ def _prepared_vm(
         ),
         "description": description,
     }
-    return sync_vm._PreparedVMState(
+    return PreparedVMState(
         cluster_name=cluster_name,
         resource={"name": desired_payload["name"], "vmid": vmid, "type": vm_type},
         vm_config={},
@@ -96,11 +97,11 @@ def _snapshot_vm(
 
 
 def _queue(
-    prepared: list[sync_vm._PreparedVMState],
+    prepared: list[PreparedVMState],
     snapshot: list[dict[str, object]],
     **flags: bool,
-) -> list[sync_vm._NetBoxVMOperation]:
-    return sync_vm._build_vm_operation_queue(prepared, snapshot, **flags)
+) -> list[NetBoxVMOperation]:
+    return build_vm_operation_queue_python(prepared, snapshot, **flags)
 
 
 def test_missing_cluster_in_desired_payload_creates() -> None:
