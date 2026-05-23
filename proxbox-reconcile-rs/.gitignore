@@ -1,0 +1,5 @@
+/target/
+/.venv/
+/uv.lock
+/python/proxbox_reconcile_rs/*.so
+/tests/__pycache__/
