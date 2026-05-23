@@ -3,6 +3,7 @@
 # FastAPI Imports
 import asyncio
 import inspect
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -478,6 +479,59 @@ def _build_vm_operation_queue(
             )
 
     return operation_queue
+
+
+def _count_vm_operation_methods(
+    operation_queue: list[_NetBoxVMOperation],
+) -> dict[str, int]:
+    """Count queued VM operations by method for reconciliation telemetry."""
+
+    operation_counts: dict[str, int] = {"GET": 0, "CREATE": 0, "UPDATE": 0}
+    for operation in operation_queue:
+        operation_counts[operation.method] = operation_counts.get(operation.method, 0) + 1
+    return operation_counts
+
+
+def _count_prepared_vm_types(prepared_vms: list[_PreparedVMState]) -> dict[str, int]:
+    """Count prepared VM types for reconciliation telemetry."""
+
+    type_counts: dict[str, int] = {"qemu": 0, "lxc": 0, "unknown": 0}
+    for prepared in prepared_vms:
+        vm_type = str(prepared.vm_type or "unknown").lower()
+        if vm_type not in {"qemu", "lxc"}:
+            vm_type = "unknown"
+        type_counts[vm_type] = type_counts.get(vm_type, 0) + 1
+    return type_counts
+
+
+def _log_vm_reconciliation_measurement(
+    *,
+    operation_queue: list[_NetBoxVMOperation],
+    prepared_vms: list[_PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+    duration_ms: float,
+    supports_virtual_machine_type_field: bool,
+) -> dict[str, int]:
+    """Log the queue-build measurement used by the Rust migration gate."""
+
+    operation_counts = _count_vm_operation_methods(operation_queue)
+    type_counts = _count_prepared_vm_types(prepared_vms)
+    logger.info(
+        "VM reconciliation queue prepared: reconciliation_ms=%.2f vm_count=%d "
+        "snapshot_count=%d qemu_count=%d lxc_count=%d unknown_type_count=%d "
+        "supports_virtual_machine_type_field=%s GET=%d CREATE=%d UPDATE=%d",
+        duration_ms,
+        len(prepared_vms),
+        len(netbox_snapshot),
+        type_counts["qemu"],
+        type_counts["lxc"],
+        type_counts["unknown"],
+        supports_virtual_machine_type_field,
+        operation_counts["GET"],
+        operation_counts["CREATE"],
+        operation_counts["UPDATE"],
+    )
+    return operation_counts
 
 
 async def _dispatch_vm_operation_queue(
@@ -1668,6 +1722,7 @@ async def create_virtual_machines(  # noqa: C901
         )
 
     async def _run_full_update_vm_batch() -> list[dict[str, object]]:  # noqa: C901
+        batch_t0 = time.perf_counter()
         operation_inputs: list[tuple[str, dict]] = []
         for cluster in filtered_cluster_resources:
             if not isinstance(cluster, dict):
@@ -1708,6 +1763,7 @@ async def create_virtual_machines(  # noqa: C901
 
         netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
         await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
+        reconciliation_t0 = time.perf_counter()
         operation_queue = _build_vm_operation_queue(
             prepared_vms,
             netbox_snapshot,
@@ -1718,15 +1774,13 @@ async def create_virtual_machines(  # noqa: C901
             overwrite_vm_custom_fields=overwrite_vm_custom_fields,
             supports_virtual_machine_type_field=supports_vm_type,
         )
-
-        operation_counts: dict[str, int] = {"GET": 0, "CREATE": 0, "UPDATE": 0}
-        for operation in operation_queue:
-            operation_counts[operation.method] = operation_counts.get(operation.method, 0) + 1
-        logger.info(
-            "VM reconciliation queue prepared: GET=%s CREATE=%s UPDATE=%s",
-            operation_counts["GET"],
-            operation_counts["CREATE"],
-            operation_counts["UPDATE"],
+        reconciliation_ms = (time.perf_counter() - reconciliation_t0) * 1000
+        _log_vm_reconciliation_measurement(
+            operation_queue=operation_queue,
+            prepared_vms=prepared_vms,
+            netbox_snapshot=netbox_snapshot,
+            duration_ms=reconciliation_ms,
+            supports_virtual_machine_type_field=supports_vm_type,
         )
 
         resolved_records = await _dispatch_vm_operation_queue(nb, operation_queue)
@@ -1771,6 +1825,18 @@ async def create_virtual_machines(  # noqa: C901
                     operation.prepared.resource.get("vmid"),
                     error,
                 )
+
+        batch_ms = (time.perf_counter() - batch_t0) * 1000
+        reconciliation_share_pct = (reconciliation_ms / batch_ms) * 100 if batch_ms > 0 else 0.0
+        logger.info(
+            "VM full-update batch timing: total_ms=%.2f reconciliation_ms=%.2f "
+            "reconciliation_share_pct=%.2f vm_count=%d snapshot_count=%d",
+            batch_ms,
+            reconciliation_ms,
+            reconciliation_share_pct,
+            len(prepared_vms),
+            len(netbox_snapshot),
+        )
 
         return results
 
