@@ -199,6 +199,92 @@ def _extract_cluster_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, i
     return (cluster_id, proxmox_vmid)
 
 
+def _normalize_proxmox_vm_type(value: object) -> str | None:
+    """Normalize Proxmox VM type values used in snapshot identity keys."""
+
+    if isinstance(value, dict):
+        for key in ("value", "slug", "name", "label"):
+            candidate = value.get(key)
+            if candidate:
+                value = candidate
+                break
+        else:
+            value = None
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def _extract_proxmox_vm_type(record: dict[str, object]) -> str | None:
+    """Return the stored Proxmox VM type custom field for a NetBox VM record."""
+
+    custom_fields = record.get("custom_fields")
+    if not isinstance(custom_fields, dict):
+        return None
+    return _normalize_proxmox_vm_type(custom_fields.get("proxmox_vm_type"))
+
+
+def _build_vm_snapshot_identity_indexes(
+    snapshot: list[dict[str, object]],
+) -> tuple[
+    dict[tuple[int, int, str], dict[str, object]],
+    dict[tuple[int, int], list[dict[str, object]]],
+]:
+    """Index NetBox VM records by typed identity plus legacy untyped candidates."""
+
+    typed_index: dict[tuple[int, int, str], dict[str, object]] = {}
+    untyped_candidates: dict[tuple[int, int], list[dict[str, object]]] = {}
+    for current in snapshot:
+        key = _extract_cluster_and_proxmox_vmid(current)
+        if key is None:
+            continue
+        untyped_candidates.setdefault(key, []).append(current)
+        vm_type = _extract_proxmox_vm_type(current)
+        if vm_type is not None:
+            typed_index.setdefault((key[0], key[1], vm_type), current)
+    return typed_index, untyped_candidates
+
+
+def _select_existing_vm_record(
+    *,
+    prepared: _PreparedVMState,
+    cluster_id: int | None,
+    proxmox_vmid: int | None,
+    typed_index: dict[tuple[int, int, str], dict[str, object]],
+    untyped_candidates: dict[tuple[int, int], list[dict[str, object]]],
+) -> dict[str, object] | None:
+    """Find the NetBox VM record for prepared state without guessing on type collisions."""
+
+    if cluster_id is None or proxmox_vmid is None:
+        return None
+
+    prepared_vm_type = _normalize_proxmox_vm_type(prepared.vm_type)
+    untyped_key = (cluster_id, proxmox_vmid)
+    if prepared_vm_type is not None:
+        exact_record = typed_index.get((cluster_id, proxmox_vmid, prepared_vm_type))
+        if exact_record is not None:
+            return exact_record
+
+        candidates = untyped_candidates.get(untyped_key, [])
+        if len(candidates) == 1 and _extract_proxmox_vm_type(candidates[0]) is None:
+            return candidates[0]
+        return None
+
+    candidates = untyped_candidates.get(untyped_key, [])
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _prepared_vm_result_key(prepared: _PreparedVMState) -> tuple[str, int, str]:
+    """Build the deterministic in-memory result key for a prepared VM."""
+
+    vmid = int(prepared.resource.get("vmid", 0) or 0)
+    vm_type = _normalize_proxmox_vm_type(prepared.vm_type) or ""
+    return (prepared.cluster_name, vmid, vm_type)
+
+
 async def _load_netbox_virtual_machine_snapshot(nb: object) -> list[dict[str, object]]:
     """Fetch all NetBox virtual machines once and keep them in-memory for comparison."""
 
@@ -286,7 +372,7 @@ async def _resolve_vm_names_pre_pass(
     the bare name; subsequent VMs receive ``" (2)"``, ``" (3)"``, ...
     """
 
-    by_vmid = _build_vm_index_by_proxmox_id(netbox_snapshot)
+    typed_vm_index, untyped_vm_candidates = _build_vm_snapshot_identity_indexes(netbox_snapshot)
     cluster_used_names: dict[int, set[str]] = {}
     cluster_no_id_used_names: set[str] = set()
     for record in netbox_snapshot:
@@ -325,7 +411,13 @@ async def _resolve_vm_names_pre_pass(
                 vmid = int(prepared.resource.get("vmid", 0) or 0)
             except (TypeError, ValueError):
                 vmid = 0
-            existing = by_vmid.get(vmid) if vmid else None
+            existing = _select_existing_vm_record(
+                prepared=prepared,
+                cluster_id=cluster_id,
+                proxmox_vmid=vmid or None,
+                typed_index=typed_vm_index,
+                untyped_candidates=untyped_vm_candidates,
+            )
             if existing is not None:
                 existing_name = existing.get("name")
                 if isinstance(existing_name, str) and existing_name in used:
@@ -340,6 +432,13 @@ async def _resolve_vm_names_pre_pass(
             if not candidate or vmid == 0:
                 continue
 
+            existing = _select_existing_vm_record(
+                prepared=prepared,
+                cluster_id=cluster_id,
+                proxmox_vmid=vmid,
+                typed_index=typed_vm_index,
+                untyped_candidates=untyped_vm_candidates,
+            )
             resolution = await resolve_unique_vm_name(
                 None,
                 netbox_cluster_id=cluster_id,
@@ -347,7 +446,7 @@ async def _resolve_vm_names_pre_pass(
                 candidate=candidate,
                 proxmox_vmid=vmid,
                 used_names_in_cluster=used,
-                existing_vm_by_vmid=by_vmid,
+                existing_vm_by_vmid={vmid: existing} if existing is not None else {},
             )
 
             if resolution.operator_renamed:
@@ -391,11 +490,7 @@ def _build_vm_operation_queue(
 ) -> list[_NetBoxVMOperation]:
     """Classify desired VM state into GET/CREATE/UPDATE operations using Pydantic."""
 
-    snapshot_index: dict[tuple[int, int], dict[str, object]] = {}
-    for current in netbox_snapshot:
-        key = _extract_cluster_and_proxmox_vmid(current)
-        if key is not None and key not in snapshot_index:
-            snapshot_index[key] = current
+    typed_vm_index, untyped_vm_candidates = _build_vm_snapshot_identity_indexes(netbox_snapshot)
 
     operation_queue: list[_NetBoxVMOperation] = []
 
@@ -406,7 +501,13 @@ def _build_vm_operation_queue(
             operation_queue.append(_NetBoxVMOperation(method="CREATE", prepared=prepared))
             continue
 
-        existing_record = snapshot_index.get((cluster_id, proxmox_vmid))
+        existing_record = _select_existing_vm_record(
+            prepared=prepared,
+            cluster_id=cluster_id,
+            proxmox_vmid=proxmox_vmid,
+            typed_index=typed_vm_index,
+            untyped_candidates=untyped_vm_candidates,
+        )
         if existing_record is None:
             operation_queue.append(_NetBoxVMOperation(method="CREATE", prepared=prepared))
             continue
@@ -537,20 +638,20 @@ def _log_vm_reconciliation_measurement(
 async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
-) -> dict[tuple[str, int], dict[str, object]]:
+) -> dict[tuple[str, int, str], dict[str, object]]:
     """Dispatch queued VM operations sequentially in deterministic batches."""
 
     if not operation_queue:
         return {}
 
     batch_size = max(1, resolve_netbox_write_concurrency())
-    resolved_records: dict[tuple[str, int], dict[str, object]] = {}
+    resolved_records: dict[tuple[str, int, str], dict[str, object]] = {}
 
     for start_index in range(0, len(operation_queue), batch_size):
         batch = operation_queue[start_index : start_index + batch_size]
         for operation in batch:
             vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
-            key = (operation.prepared.cluster_name, vmid)
+            key = _prepared_vm_result_key(operation.prepared)
 
             if operation.method == "GET":
                 if operation.existing_record is not None:
@@ -1788,7 +1889,7 @@ async def create_virtual_machines(  # noqa: C901
         results: list[dict[str, object]] = []
         for operation in operation_queue:
             vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
-            key = (operation.prepared.cluster_name, vmid)
+            key = _prepared_vm_result_key(operation.prepared)
             vm_record = resolved_records.get(key)
             if vm_record is None and operation.existing_record is not None:
                 vm_record = operation.existing_record
