@@ -90,15 +90,9 @@ class TerminalSessionManager:
     """In-memory one-time ticket store for SSH terminal handoff."""
 
     def __init__(self) -> None:
-        self.ticket_ttl_seconds = _env_int(
-            "PROXBOX_SSH_TERMINAL_TICKET_TTL_SECONDS", 60
-        )
-        self.idle_timeout_seconds = _env_int(
-            "PROXBOX_SSH_TERMINAL_IDLE_TIMEOUT_SECONDS", 900
-        )
-        self.max_lifetime_seconds = _env_int(
-            "PROXBOX_SSH_TERMINAL_MAX_LIFETIME_SECONDS", 7200
-        )
+        self.ticket_ttl_seconds = _env_int("PROXBOX_SSH_TERMINAL_TICKET_TTL_SECONDS", 60)
+        self.idle_timeout_seconds = _env_int("PROXBOX_SSH_TERMINAL_IDLE_TIMEOUT_SECONDS", 900)
+        self.max_lifetime_seconds = _env_int("PROXBOX_SSH_TERMINAL_MAX_LIFETIME_SECONDS", 7200)
         self.max_sessions = _env_int("PROXBOX_SSH_TERMINAL_MAX_SESSIONS", 10)
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = asyncio.Lock()
@@ -184,9 +178,7 @@ class TerminalSessionManager:
     def _cleanup_locked(self, now: datetime) -> None:
         expired: list[str] = []
         for session_id, session in self._sessions.items():
-            lifetime_deadline = session.created_at + timedelta(
-                seconds=self.max_lifetime_seconds
-            )
+            lifetime_deadline = session.created_at + timedelta(seconds=self.max_lifetime_seconds)
             if now > session.expires_at and not session.consumed:
                 expired.append(session_id)
             elif now > lifetime_deadline:
@@ -224,14 +216,10 @@ def _coerce_endpoint_credential(
     host = str(payload.get("host") or requested_host or "").strip()
     username = str(payload.get("username") or payload.get("ssh_username") or "").strip()
     fingerprint = str(
-        payload.get("known_host_fingerprint")
-        or payload.get("ssh_known_host_fingerprint")
-        or ""
+        payload.get("known_host_fingerprint") or payload.get("ssh_known_host_fingerprint") or ""
     ).strip()
     if not host:
-        raise TerminalCredentialError(
-            f"SSH credential for endpoint {endpoint_id} is missing host"
-        )
+        raise TerminalCredentialError(f"SSH credential for endpoint {endpoint_id} is missing host")
     if not username:
         raise TerminalCredentialError(
             f"SSH credential for endpoint {endpoint_id} is missing username"

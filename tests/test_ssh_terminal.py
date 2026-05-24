@@ -78,7 +78,7 @@ def test_create_ssh_terminal_session_returns_browser_ticket(auth_test_client) ->
 
 def test_asyncssh_relay_pins_host_key_instead_of_disabling_validation() -> None:
     source = Path("proxbox_api/services/ssh_terminal.py").read_text()
-    assert "known_hosts=b\"\"" in source
+    assert 'known_hosts=b""' in source
     assert 'server_host_key_algs="default"' in source
     assert "known_hosts=None" not in source
     assert "validate_host_public_key" in source
