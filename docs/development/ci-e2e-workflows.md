@@ -10,8 +10,8 @@ matrix, and staged package publication.
 |---|---|---|
 | `.github/workflows/ci.yml` | Push, pull request, release, manual dispatch | Runs core checks and the NetBox + Proxmox Docker E2E matrix. |
 | `.github/workflows/publish-testpypi.yml` | Version tag, GitHub release, manual dispatch | Publishes immutable package versions through TestPyPI, PyPI release candidates, final PyPI releases, Docker images, and post-publish E2E. |
-| `.github/workflows/docker-hub-publish.yml` | Reusable workflow / manual dispatch | Builds and publishes raw, nginx, and granian Docker image variants. |
-| `.github/workflows/release-docker-verify.yml` | Release / manual dispatch | Pulls the published Docker image tags and verifies container startup. |
+| `.github/workflows/docker-hub-publish.yml` | Reusable workflow / manual dispatch | Builds and publishes raw, nginx, granian, and experimental PyO3/Rust Docker image variants. |
+| `.github/workflows/release-docker-verify.yml` | Release / manual dispatch | Pulls the published Docker image tags, including experimental PyO3/Rust tags, and verifies container startup. |
 | `.github/workflows/docs.yml` | Docs changes on main / PR | Builds and publishes the MkDocs site. |
 | `.github/workflows/nightly-schema-refresh.yml` | Schedule / manual dispatch | Refreshes generated Proxmox schemas and opens a PR when they change. |
 
@@ -101,7 +101,7 @@ sequenceDiagram
     WF->>E2E: Run pre-publish E2E with dev dependencies
     WF->>PY: Upload proxbox-api
     WF->>PY: Reinstall exact package
-    WF->>DH: Publish raw, nginx, granian images
+    WF->>DH: Publish raw, nginx, granian images + experimental PyO3/Rust variants
     WF->>E2E: Run post-publish E2E with published package + image
 ```
 

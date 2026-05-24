@@ -10,13 +10,16 @@ This page documents supported ways to run `proxbox-api`.
 
 ## Option 1: Docker (recommended for quick start)
 
-All Docker images are **Alpine-based** (smaller footprint). Three variants are available:
+All Docker images are **Alpine-based** (smaller footprint). The default tags use the Python reconciliation engine. Experimental PyO3/Rust tags are available for opt-in native-engine testing:
 
 | Variant | Tags | Description |
 |---------|------|-------------|
 | **Raw** (default) | `latest`, `<version>` | Pure uvicorn, HTTP only. Smallest image. |
 | **Nginx** | `latest-nginx`, `<version>-nginx` | nginx terminates HTTPS via mkcert; proxies to uvicorn. |
 | **Granian** | `latest-granian`, `<version>-granian` | Granian (Rust ASGI server) with native TLS via mkcert. |
+| **Raw PyO3/Rust** (experimental) | `experimental`, `pyo3-rust`, `<version>-pyo3-rust` | Raw image with the optional PyO3 reconciliation engine installed and enabled. |
+| **Nginx PyO3/Rust** (experimental) | `experimental-nginx`, `pyo3-rust-nginx`, `<version>-pyo3-rust-nginx` | nginx image with the optional PyO3 reconciliation engine installed and enabled. |
+| **Granian PyO3/Rust** (experimental) | `experimental-granian`, `pyo3-rust-granian`, `<version>-pyo3-rust-granian` | granian image with the optional PyO3 reconciliation engine installed and enabled. |
 
 ### Raw image — HTTP only (default)
 
@@ -78,9 +81,25 @@ Service URL:
 
 - <https://127.0.0.1:8443>
 
+### Experimental PyO3/Rust images
+
+Use the experimental images when you want the optional native reconciliation
+engine to run by default. The raw alias is the simplest Docker command:
+
+```bash
+docker pull emersonfelipesp/proxbox-api:pyo3-rust
+docker run -d -p 8000:8000 --name proxbox-api-rust \
+  emersonfelipesp/proxbox-api:pyo3-rust
+```
+
+HTTPS variants are published as `pyo3-rust-nginx` and `pyo3-rust-granian`.
+These images set `PROXBOX_RECONCILIATION_ENGINE=rust` and include the
+`proxbox-reconcile-rs` PyO3 extension. Switch back to `latest`, `latest-nginx`,
+or `latest-granian` to return to the Python-only implementation.
+
 ### Docker runtime environment variables
 
-Common to all images (`raw`, `nginx`, `granian`):
+Common to all images, including the experimental PyO3/Rust variants:
 
 | Variable | Default | Description |
 |----------|---------|-------------|

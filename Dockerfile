@@ -22,7 +22,18 @@ ARG DEV_OVERRIDES=""
 RUN uv sync --frozen --no-dev --no-editable && \
     if [ -n "${DEV_OVERRIDES}" ]; then uv pip install --python /app/.venv/bin/python ${DEV_OVERRIDES}; fi
 
-# Application tree + venv only (shared by all runtime images).
+# Optional native reconciliation engine build. This intentionally stays out of
+# the default builder so the published latest/version images remain Python-only.
+FROM builder AS builder-pyo3-rust
+
+RUN apk add --no-cache cargo rust
+
+COPY proxbox-reconcile-rs ./proxbox-reconcile-rs
+
+RUN uv pip install --python /app/.venv/bin/python ./proxbox-reconcile-rs && \
+    /app/.venv/bin/python -c "from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert rust_available()"
+
+# Application tree + venv only (shared by Python-only runtime images).
 FROM python:3.13-alpine AS runtime-base
 
 WORKDIR /app
@@ -37,8 +48,36 @@ RUN mkdir -p /app/scripts
 
 EXPOSE 8000
 
+# Application tree + venv only (shared by PyO3/Rust runtime images).
+FROM python:3.13-alpine AS runtime-base-pyo3-rust
+
+WORKDIR /app
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PORT=8000 \
+    PYTHONUNBUFFERED=1 \
+    PROXBOX_RECONCILIATION_ENGINE=rust
+
+COPY --from=builder-pyo3-rust /app/.venv /app/.venv
+
+RUN apk add --no-cache libgcc && \
+    mkdir -p /app/scripts && \
+    /app/.venv/bin/python -c "from proxbox_reconcile_rs._native import build_vm_operation_queue_json"
+
+EXPOSE 8000
+
 # Default image: raw uvicorn, no proxy, HTTP only. Smallest possible image.
 FROM runtime-base AS raw
+
+COPY docker/entrypoint-raw.sh /usr/local/bin/docker-entrypoint-raw.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint-raw.sh
+
+ENV PROXBOX_BIND_HOST=0.0.0.0
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-raw.sh"]
+CMD []
+
+# Experimental raw image: raw uvicorn plus the PyO3/Rust reconciliation engine.
+FROM runtime-base-pyo3-rust AS raw-pyo3-rust
 
 COPY docker/entrypoint-raw.sh /usr/local/bin/docker-entrypoint-raw.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint-raw.sh
@@ -63,7 +102,35 @@ RUN apk add --no-cache \
     curl \
     nss-tools \
   && rm -f /etc/nginx/conf.d/default.conf \
-  && curl -fsSL -o /usr/local/bin/mkcert \
+  && curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o /usr/local/bin/mkcert \
+     "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
+  && chmod +x /usr/local/bin/mkcert
+
+COPY docker/nginx/proxbox-https.conf.template /etc/proxbox/nginx-https.conf.template
+COPY docker/supervisor/supervisord.conf /etc/supervisor/supervisord.conf
+COPY docker/supervisor/proxbox.conf /etc/supervisor/conf.d/proxbox.conf
+COPY docker/entrypoint-nginx.sh /usr/local/bin/docker-entrypoint-nginx.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint-nginx.sh
+
+ENV MKCERT_CERT_DIR=/certs
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-nginx.sh"]
+CMD []
+
+# Experimental nginx image: nginx plus the PyO3/Rust reconciliation engine.
+FROM raw-pyo3-rust AS nginx-pyo3-rust
+
+ARG MKCERT_VERSION=1.4.4
+ARG TARGETARCH
+
+RUN apk add --no-cache \
+    nginx \
+    supervisor \
+    ca-certificates \
+    curl \
+    nss-tools \
+  && rm -f /etc/nginx/conf.d/default.conf \
+  && curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
   && chmod +x /usr/local/bin/mkcert
 
@@ -93,7 +160,33 @@ RUN apk add --no-cache \
     nss-tools \
     openssl \
   && uv pip install --python /app/.venv/bin/python 'granian>=2.7.0' \
-  && curl -fsSL -o /usr/local/bin/mkcert \
+  && curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o /usr/local/bin/mkcert \
+     "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
+  && chmod +x /usr/local/bin/mkcert
+
+COPY docker/entrypoint-granian.sh /usr/local/bin/docker-entrypoint-granian.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint-granian.sh
+
+ENV MKCERT_CERT_DIR=/certs
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-granian.sh"]
+CMD []
+
+# Experimental granian image: granian plus the PyO3/Rust reconciliation engine.
+FROM runtime-base-pyo3-rust AS granian-pyo3-rust
+
+ARG MKCERT_VERSION=1.4.4
+ARG TARGETARCH
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    nss-tools \
+    openssl \
+  && uv pip install --python /app/.venv/bin/python 'granian>=2.7.0' \
+  && curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
   && chmod +x /usr/local/bin/mkcert
 
