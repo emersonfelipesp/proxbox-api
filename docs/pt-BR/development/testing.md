@@ -34,6 +34,55 @@ Para a superficie atual de rotas e contratos de docs:
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
 ```
 
+## Testes da reconciliacao Rust
+
+O pacote Rust opcional fica em `proxbox-reconcile-rs/`. Python continua sendo o engine padrao,
+entao a suite normal deve passar sem o pacote nativo.
+
+Rode os contratos Python das fixtures; a paridade Rust sera pulada se o pacote nativo nao estiver instalado:
+
+```bash
+uv run pytest tests/reconciliation
+```
+
+Rode testes unitarios Rust sem o modo de link `extension-module` do PyO3:
+
+```bash
+cd proxbox-reconcile-rs
+cargo test --no-default-features
+```
+
+Instale o pacote nativo local no ambiente `uv` raiz:
+
+```bash
+uv pip install -e proxbox-reconcile-rs
+```
+
+Rode paridade estrita em compare mode:
+
+```bash
+PROXBOX_RECONCILIATION_ENGINE=compare \
+PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+uv run pytest tests/reconciliation
+```
+
+Rode testes usando explicitamente o engine Rust:
+
+```bash
+PROXBOX_RECONCILIATION_ENGINE=rust uv run pytest tests/reconciliation
+```
+
+Rode o benchmark sintetico:
+
+```bash
+uv run python benchmarks/reconciliation/bench_vm_queue.py --sizes 100 1000 10000
+uv run python benchmarks/reconciliation/bench_vm_queue.py --sizes 10000 --pathological
+```
+
+Se o compare mode reportar divergencias, mantenha `PROXBOX_RECONCILIATION_ENGINE=python` em
+producao e inspecione `proxbox_reconcile_mismatch_total` em `/cache/metrics` ou
+`/cache/metrics/prometheus`.
+
 Para os modulos novos da v0.0.11 (HA, verbos operacionais, sync-active, parsing de metadata e resolucao de colisao de nomes):
 
 ```bash
@@ -215,6 +264,7 @@ python -m compileall proxbox_api
 - `pytest`
 - `python -m compileall proxbox_api`
 - `mkdocs build --strict` (quando docs mudarem)
+- `cargo test --no-default-features` em `proxbox-reconcile-rs` (quando Rust mudar)
 
 ## Checks de contrato Proxmox gerado
 

@@ -1,0 +1,19 @@
+[package]
+name = "proxbox-reconcile-rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "proxbox_reconcile_rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+indexmap = "2"
+
+[features]
+extension-module = ["pyo3/extension-module"]
+default = ["extension-module"]
