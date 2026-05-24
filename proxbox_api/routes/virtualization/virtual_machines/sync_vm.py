@@ -110,6 +110,7 @@ from proxbox_api.services.sync.virtual_machines import (
 from proxbox_api.services.sync.vm_create import ensure_vm_type
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
+    extract_vm_disk_aggregate_size,
     normalized_mac,
     parse_comma_separated_ints,
     parse_key_value_string,
@@ -423,6 +424,46 @@ def _log_vm_reconciliation_measurement(
     return operation_counts
 
 
+async def _patch_vm_with_disk_aggregate_retry(
+    nb: object,
+    *,
+    record_id: int,
+    payload: dict[str, object],
+    cluster_name: str,
+    vmid: int,
+) -> dict[str, object] | object:
+    """Patch a VM, retrying once when NetBox requires the current child-disk sum."""
+
+    try:
+        return await rest_patch_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            record_id,
+            payload,
+        )
+    except ProxboxException as exc:
+        aggregate_disk = extract_vm_disk_aggregate_size(exc)
+        if aggregate_disk is None:
+            raise
+
+        retry_payload = {**payload, "disk": aggregate_disk}
+        logger.warning(
+            "Retrying VM patch with NetBox virtual-disk aggregate: cluster=%s vmid=%s "
+            "record_id=%s requested_disk=%s aggregate_disk=%s",
+            cluster_name,
+            vmid,
+            record_id,
+            payload.get("disk"),
+            aggregate_disk,
+        )
+        return await rest_patch_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            record_id,
+            retry_payload,
+        )
+
+
 async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
@@ -478,11 +519,12 @@ async def _dispatch_vm_operation_queue(
                     python_exception=f"cluster={operation.prepared.cluster_name} vmid={vmid}",
                 )
 
-            patched = await rest_patch_async(
+            patched = await _patch_vm_with_disk_aggregate_retry(
                 nb,
-                "/api/virtualization/virtual-machines/",
-                record_id,
-                operation.patch_payload,
+                record_id=record_id,
+                payload=operation.patch_payload,
+                cluster_name=operation.prepared.cluster_name,
+                vmid=vmid,
             )
             if isinstance(patched, dict) and patched:
                 resolved_records[key] = patched

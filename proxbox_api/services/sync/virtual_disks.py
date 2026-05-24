@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
+from proxbox_api.netbox_rest import (
+    RestRecord,
+    rest_bulk_delete_async,
+    rest_bulk_reconcile_async,
+    rest_list_async,
+    rest_patch_async,
+)
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
 from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.sync.storage_links import (
@@ -11,6 +17,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_helpers import relation_id, to_mapping
 from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
@@ -43,6 +50,93 @@ async def _list_all_vms_with_proxmox_id(
         offset += batch_size
 
     return all_vms
+
+
+async def _delete_stale_virtual_disks(
+    nb: object,
+    *,
+    vm_id: int,
+    desired_disks: dict[str, int],
+) -> int:
+    """Delete VM disk records missing from Proxmox, including duplicate names."""
+
+    existing_disks = await rest_list_async(
+        nb,
+        "/api/virtualization/virtual-disks/",
+        query={"virtual_machine_id": vm_id, "limit": 500},
+    )
+    stale_ids: list[int] = []
+    desired_names = set(desired_disks)
+    desired_records: dict[str, list[tuple[int, int]]] = {}
+    for record in existing_disks:
+        data = to_mapping(record)
+        name = str(data.get("name") or "").strip()
+        record_id = relation_id(data.get("id"))
+        if not name or record_id is None:
+            continue
+        if name not in desired_names:
+            stale_ids.append(record_id)
+            continue
+        try:
+            size = int(data.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        desired_records.setdefault(name, []).append((record_id, size))
+
+    for name, records in desired_records.items():
+        if len(records) <= 1:
+            continue
+        desired_size = desired_disks[name]
+        keep_id = next(
+            (record_id for record_id, size in records if size == desired_size),
+            records[0][0],
+        )
+        stale_ids.extend(record_id for record_id, _size in records if record_id != keep_id)
+
+    if not stale_ids:
+        return 0
+
+    stale_ids = sorted(set(stale_ids))
+    deleted = await rest_bulk_delete_async(nb, "/api/virtualization/virtual-disks/", stale_ids)
+    logger.info(
+        "Deleted %s stale virtual disk(s) for VM id=%s: %s",
+        deleted,
+        vm_id,
+        sorted(stale_ids),
+    )
+    return deleted
+
+
+async def _sync_parent_vm_disk_total(
+    nb: object,
+    *,
+    vm: dict[str, object],
+    desired_disk_total: int,
+) -> bool:
+    """Patch the VM disk total after child virtual disks have converged."""
+
+    if "disk" not in vm:
+        return False
+
+    vm_id = relation_id(vm.get("id"))
+    if vm_id is None:
+        return False
+
+    try:
+        current_disk = int(vm.get("disk") or 0)
+    except (TypeError, ValueError):
+        current_disk = 0
+    if current_disk == desired_disk_total:
+        return False
+
+    await rest_patch_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        vm_id,
+        {"disk": desired_disk_total},
+    )
+    vm["disk"] = desired_disk_total
+    return True
 
 
 async def create_virtual_disks(  # noqa: C901
@@ -260,6 +354,8 @@ async def create_virtual_disks(  # noqa: C901
 
             disks_created = 0
             disks_updated = 0
+            disks_deleted = 0
+            parent_vm_disk_updated = False
 
             disk_payloads: list[dict[str, object]] = []
             for disk_entry in disk_entries:
@@ -287,6 +383,11 @@ async def create_virtual_disks(  # noqa: C901
                     disk_payload["custom_fields"] = custom_fields
                 disk_payloads.append(disk_payload)
 
+            desired_disk_sizes = {
+                str(payload.get("name")): int(payload.get("size") or 0) for payload in disk_payloads
+            }
+            desired_disk_total = sum(int(payload.get("size") or 0) for payload in disk_payloads)
+
             if disk_payloads:
                 bulk_result = await rest_bulk_reconcile_async(
                     nb,
@@ -311,15 +412,29 @@ async def create_virtual_disks(  # noqa: C901
                 disks_created = bulk_result.created
                 disks_updated = bulk_result.updated
 
+            vm_id_int = relation_id(vm_id)
+            if vm_id_int is not None:
+                disks_deleted = await _delete_stale_virtual_disks(
+                    nb,
+                    vm_id=vm_id_int,
+                    desired_disks=desired_disk_sizes,
+                )
+                parent_vm_disk_updated = await _sync_parent_vm_disk_total(
+                    nb,
+                    vm=vm,
+                    desired_disk_total=desired_disk_total,
+                )
+
             if disks_created > 0:
                 created += 1
-            elif disks_updated > 0:
+            elif disks_updated > 0 or disks_deleted > 0 or parent_vm_disk_updated:
                 updated += 1
             else:
                 skipped += 1
 
             disk_summary = (
-                f"{len(disk_entries)} disks ({disks_created} created, {disks_updated} updated)"
+                f"{len(disk_entries)} disks ({disks_created} created, "
+                f"{disks_updated} updated, {disks_deleted} deleted)"
             )
 
             if use_websocket and websocket:

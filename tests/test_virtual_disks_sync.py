@@ -119,6 +119,96 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     assert reconciled_payloads[0].get("custom_fields", {}).get("proxbox_storage_id") == 42
 
 
+def test_create_virtual_disks_deletes_stale_disks_and_updates_vm_total(monkeypatch):
+    deleted_ids: list[int] = []
+    parent_vm_patches: list[dict[str, object]] = []
+
+    async def _fake_rest_list(_nb, _path, query=None):
+        if _path == "/api/virtualization/virtual-machines/":
+            return [
+                {
+                    "id": 7,
+                    "name": "vm-101",
+                    "disk": 2256,
+                    "cluster": {"name": "cluster-a"},
+                    "custom_fields": {"proxmox_vm_id": 101},
+                }
+            ]
+        if _path == "/api/plugins/proxbox/storage/":
+            return []
+        if _path == "/api/virtualization/virtual-disks/":
+            assert query == {"virtual_machine_id": 7, "limit": 500}
+            return [
+                {"id": 10, "virtual_machine": {"id": 7}, "name": "scsi0", "size": 2252},
+                {"id": 12, "virtual_machine": {"id": 7}, "name": "scsi0", "size": 2252},
+                {"id": 11, "virtual_machine": {"id": 7}, "name": "efidisk0", "size": 4},
+            ]
+        return []
+
+    async def _fake_resolve_vm_config(**kwargs):
+        return {"scsi0": "local-lvm:vm-101-disk-0,size=2252M"}
+
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        assert payloads == [
+            {
+                "virtual_machine": 7,
+                "name": "scsi0",
+                "size": 2252,
+                "storage": None,
+                "description": "Storage: local-lvm",
+                "tags": [],
+            }
+        ]
+        return SimpleNamespace(records=[], created=0, updated=0, unchanged=1, failed=0)
+
+    async def _fake_bulk_delete(_nb, _path, ids):
+        deleted_ids.extend(ids)
+        return len(ids)
+
+    async def _fake_patch(_nb, _path, record_id, payload):
+        parent_vm_patches.append({"record_id": record_id, **payload})
+        return {"id": record_id, **payload}
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.resolve_vm_config",
+        _fake_resolve_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_bulk_delete_async",
+        _fake_bulk_delete,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_patch_async",
+        _fake_patch,
+    )
+
+    result = asyncio.run(
+        create_virtual_disks(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[
+                {"cluster-a": [{"type": "qemu", "name": "vm-101", "vmid": "101", "node": "pve01"}]}
+            ],
+            tag=None,
+            use_websocket=False,
+            use_css=False,
+        )
+    )
+
+    assert deleted_ids == [11, 12]
+    assert parent_vm_patches == [{"record_id": 7, "disk": 2252}]
+    assert result == {"count": 1, "created": 0, "updated": 1, "skipped": 0}
+
+
 def test_cdrom_disk_is_included_with_size_zero(monkeypatch):
     """CD-ROM drives (size=None) must appear in the reconcile payloads with size=0.
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from datetime import datetime, timezone
 from ipaddress import ip_address, ip_interface
 
@@ -24,31 +23,14 @@ from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
 from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
 from proxbox_api.services.sync.vm_helpers import (
+    extract_vm_disk_aggregate_size,
     normalize_primary_ip_preference,
     normalized_mac,
-)
-
-_VM_DISK_AGGREGATE_ERROR_RE = re.compile(
-    r"aggregate size of assigned virtual disks \((\d+)\)",
-    flags=re.IGNORECASE,
 )
 
 _PRIMARY_IP_REASSIGN_ERROR = (
     "Cannot reassign IP address while it is designated as the primary IP for the parent object"
 )
-
-
-def _extract_vm_disk_aggregate_size(error: Exception) -> int | None:
-    """Extract the expected VM disk size from NetBox disk aggregate validation errors."""
-    detail = getattr(error, "detail", None)
-    text = str(detail) if detail else str(error)
-    match = _VM_DISK_AGGREGATE_ERROR_RE.search(text)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except (TypeError, ValueError):
-        return None
 
 
 def _primary_field_from_ip_address(address: object) -> str | None:
@@ -594,7 +576,7 @@ async def set_primary_ip(  # noqa: C901
         )
         return True
     except Exception as exc:
-        aggregate_disk = _extract_vm_disk_aggregate_size(exc)
+        aggregate_disk = extract_vm_disk_aggregate_size(exc)
         if aggregate_disk and aggregate_disk > 0:
             try:
                 await rest_patch_async(
