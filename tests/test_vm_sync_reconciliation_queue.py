@@ -225,6 +225,34 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     resolved = await sync_vm._dispatch_vm_operation_queue(object(), queue)
 
     assert calls == ["create:201", "patch:4203"]
-    assert resolved[("cluster-a", 202)]["id"] == 4202
-    assert resolved[("cluster-a", 201)]["id"] == 3201
-    assert resolved[("cluster-a", 203)]["id"] == 4203
+    assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
+    assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
+    assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203
+
+
+@pytest.mark.asyncio
+async def test_dispatch_vm_operation_queue_keeps_same_vmid_types_separate(monkeypatch):
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 2)
+
+    prepared_qemu = _prepared_vm(cluster_name="cluster-a", vmid=300, memory=2048)
+    prepared_lxc = _prepared_vm(cluster_name="cluster-a", vmid=300, memory=2048)
+    prepared_lxc.resource["type"] = "lxc"
+    prepared_lxc.vm_type = "lxc"
+
+    queue = [
+        sync_vm._NetBoxVMOperation(
+            method="GET",
+            prepared=prepared_qemu,
+            existing_record={"id": 5300, "custom_fields": {"proxmox_vm_id": 300}},
+        ),
+        sync_vm._NetBoxVMOperation(
+            method="GET",
+            prepared=prepared_lxc,
+            existing_record={"id": 6300, "custom_fields": {"proxmox_vm_id": 300}},
+        ),
+    ]
+
+    resolved = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert resolved[("cluster-a", 300, "qemu")]["id"] == 5300
+    assert resolved[("cluster-a", 300, "lxc")]["id"] == 6300

@@ -1,0 +1,49 @@
+{
+  "prepared_vms": [
+    {
+      "cluster_name": "cluster-a",
+      "resource": {"name": "qemu-106", "vmid": 106, "type": "qemu"},
+      "vm_config": {},
+      "desired_payload": {
+        "name": "qemu-106",
+        "status": "active",
+        "cluster": null,
+        "device": 10,
+        "role": 20,
+        "vcpus": 2,
+        "memory": 2048,
+        "disk": 30,
+        "tags": [99],
+        "custom_fields": {"proxmox_vm_id": 106, "proxmox_vm_type": "qemu"},
+        "description": "Synced from Proxmox node pve01"
+      },
+      "lookup": {"cf_proxmox_vm_id": 106, "cluster_id": 1},
+      "vm_type": "qemu"
+    }
+  ],
+  "netbox_snapshot": [
+    {
+      "id": 2106,
+      "name": "qemu-106",
+      "status": "active",
+      "cluster": {"id": 1},
+      "device": {"id": 10},
+      "role": {"id": 20},
+      "vcpus": 2,
+      "memory": 2048,
+      "disk": 30,
+      "tags": [{"id": 99}],
+      "custom_fields": {"proxmox_vm_id": 106, "proxmox_vm_type": "qemu"},
+      "description": "Synced from Proxmox node pve01"
+    }
+  ],
+  "flags": {
+    "overwrite_vm_role": true,
+    "overwrite_vm_type": true,
+    "overwrite_vm_tags": true,
+    "overwrite_vm_description": true,
+    "overwrite_vm_custom_fields": true,
+    "supports_virtual_machine_type_field": true
+  },
+  "expected": {"methods": ["CREATE"], "patch_payloads": [{}]}
+}

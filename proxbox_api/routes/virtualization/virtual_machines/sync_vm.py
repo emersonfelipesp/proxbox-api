@@ -5,7 +5,6 @@ import asyncio
 import inspect
 import time
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -75,6 +74,27 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
 )
+from proxbox_api.services.sync.reconciliation.types import (
+    NetBoxVMOperation as _NetBoxVMOperation,
+)
+from proxbox_api.services.sync.reconciliation.types import (
+    PreparedVMState as _PreparedVMState,
+)
+from proxbox_api.services.sync.reconciliation.vm_queue import (
+    build_vm_operation_queue as _build_vm_operation_queue,
+)
+from proxbox_api.services.sync.reconciliation.vm_queue import (
+    build_vm_snapshot_identity_indexes as _build_vm_snapshot_identity_indexes,
+)
+from proxbox_api.services.sync.reconciliation.vm_queue import (
+    normalize_current_vm_payload as _normalize_current_virtual_machine_payload,
+)
+from proxbox_api.services.sync.reconciliation.vm_queue import (
+    prepared_vm_result_key as _prepared_vm_result_key,
+)
+from proxbox_api.services.sync.reconciliation.vm_queue import (
+    select_existing_vm_record as _select_existing_vm_record,
+)
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -90,7 +110,6 @@ from proxbox_api.services.sync.virtual_machines import (
 from proxbox_api.services.sync.vm_create import ensure_vm_type
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
-    normalize_current_virtual_machine_payload,
     normalized_mac,
     parse_comma_separated_ints,
     parse_key_value_string,
@@ -111,30 +130,6 @@ from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
-
-
-@dataclass(slots=True)
-class _PreparedVMState:
-    """In-memory VM snapshot prepared from Proxmox + dependency cache."""
-
-    cluster_name: str
-    resource: dict[str, object]
-    vm_config: dict[str, object]
-    vm_config_obj: ProxmoxVmConfigInput
-    desired_payload: dict[str, object]
-    lookup: dict[str, object]
-    now: datetime
-    vm_type: str
-
-
-@dataclass(slots=True)
-class _NetBoxVMOperation:
-    """Queued NetBox VM operation determined by in-memory reconciliation."""
-
-    method: Literal["GET", "CREATE", "UPDATE"]
-    prepared: _PreparedVMState
-    existing_record: dict[str, object] | None = None
-    patch_payload: dict[str, object] = field(default_factory=dict)
 
 
 async def _resolve_vm_dns_name(
@@ -167,36 +162,6 @@ async def _resolve_vm_dns_name(
     except Exception as exc:
         logger.debug("VM dns_name resolution failed for node=%s vmid=%s: %s", node, vmid, exc)
         return None
-
-
-def _normalize_current_virtual_machine_payload(
-    record: dict[str, object],
-    *,
-    supports_virtual_machine_type_field: bool = True,
-) -> dict[str, object]:
-    """Normalize NetBox VM record for Pydantic diff comparison."""
-
-    return normalize_current_virtual_machine_payload(
-        record,
-        supports_virtual_machine_type_field=supports_virtual_machine_type_field,
-    )
-
-
-def _extract_cluster_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, int] | None:
-    """Build the in-memory index key used to correlate NetBox VM records."""
-
-    cluster_id = _relation_id(record.get("cluster"))
-    if cluster_id is None:
-        return None
-    custom_fields = record.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return None
-    raw_vmid = custom_fields.get("proxmox_vm_id")
-    try:
-        proxmox_vmid = int(str(raw_vmid).strip())
-    except (TypeError, ValueError):
-        return None
-    return (cluster_id, proxmox_vmid)
 
 
 async def _load_netbox_virtual_machine_snapshot(nb: object) -> list[dict[str, object]]:
@@ -286,7 +251,7 @@ async def _resolve_vm_names_pre_pass(
     the bare name; subsequent VMs receive ``" (2)"``, ``" (3)"``, ...
     """
 
-    by_vmid = _build_vm_index_by_proxmox_id(netbox_snapshot)
+    typed_vm_index, untyped_vm_candidates = _build_vm_snapshot_identity_indexes(netbox_snapshot)
     cluster_used_names: dict[int, set[str]] = {}
     cluster_no_id_used_names: set[str] = set()
     for record in netbox_snapshot:
@@ -325,7 +290,13 @@ async def _resolve_vm_names_pre_pass(
                 vmid = int(prepared.resource.get("vmid", 0) or 0)
             except (TypeError, ValueError):
                 vmid = 0
-            existing = by_vmid.get(vmid) if vmid else None
+            existing = _select_existing_vm_record(
+                prepared=prepared,
+                cluster_id=cluster_id,
+                proxmox_vmid=vmid or None,
+                typed_index=typed_vm_index,
+                untyped_candidates=untyped_vm_candidates,
+            )
             if existing is not None:
                 existing_name = existing.get("name")
                 if isinstance(existing_name, str) and existing_name in used:
@@ -340,6 +311,13 @@ async def _resolve_vm_names_pre_pass(
             if not candidate or vmid == 0:
                 continue
 
+            existing = _select_existing_vm_record(
+                prepared=prepared,
+                cluster_id=cluster_id,
+                proxmox_vmid=vmid,
+                typed_index=typed_vm_index,
+                untyped_candidates=untyped_vm_candidates,
+            )
             resolution = await resolve_unique_vm_name(
                 None,
                 netbox_cluster_id=cluster_id,
@@ -347,7 +325,7 @@ async def _resolve_vm_names_pre_pass(
                 candidate=candidate,
                 proxmox_vmid=vmid,
                 used_names_in_cluster=used,
-                existing_vm_by_vmid=by_vmid,
+                existing_vm_by_vmid={vmid: existing} if existing is not None else {},
             )
 
             if resolution.operator_renamed:
@@ -377,108 +355,6 @@ async def _resolve_vm_names_pre_pass(
                     )
 
     return resolutions
-
-
-def _build_vm_operation_queue(
-    prepared_vms: list[_PreparedVMState],
-    netbox_snapshot: list[dict[str, object]],
-    overwrite_vm_role: bool = True,
-    overwrite_vm_type: bool = True,
-    overwrite_vm_tags: bool = True,
-    overwrite_vm_description: bool = True,
-    overwrite_vm_custom_fields: bool = True,
-    supports_virtual_machine_type_field: bool = True,
-) -> list[_NetBoxVMOperation]:
-    """Classify desired VM state into GET/CREATE/UPDATE operations using Pydantic."""
-
-    snapshot_index: dict[tuple[int, int], dict[str, object]] = {}
-    for current in netbox_snapshot:
-        key = _extract_cluster_and_proxmox_vmid(current)
-        if key is not None and key not in snapshot_index:
-            snapshot_index[key] = current
-
-    operation_queue: list[_NetBoxVMOperation] = []
-
-    for prepared in prepared_vms:
-        cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
-        proxmox_vmid = _relation_id(prepared.resource.get("vmid"))
-        if cluster_id is None or proxmox_vmid is None:
-            operation_queue.append(_NetBoxVMOperation(method="CREATE", prepared=prepared))
-            continue
-
-        existing_record = snapshot_index.get((cluster_id, proxmox_vmid))
-        if existing_record is None:
-            operation_queue.append(_NetBoxVMOperation(method="CREATE", prepared=prepared))
-            continue
-
-        desired_state = NetBoxVirtualMachineCreateBody.model_validate(prepared.desired_payload)
-        desired_payload = desired_state.model_dump(exclude_none=True, by_alias=True)
-        if not supports_virtual_machine_type_field:
-            desired_payload.pop("virtual_machine_type", None)
-        current_state = NetBoxVirtualMachineCreateBody.model_validate(
-            _normalize_current_virtual_machine_payload(
-                existing_record,
-                supports_virtual_machine_type_field=supports_virtual_machine_type_field,
-            )
-        )
-        current_payload = current_state.model_dump(exclude_none=True, by_alias=True)
-
-        patch_payload = {
-            field_name: desired_value
-            for field_name, desired_value in desired_payload.items()
-            if current_payload.get(field_name) != desired_value
-        }
-
-        if not overwrite_vm_role and _relation_id(existing_record.get("role")) is not None:
-            patch_payload.pop("role", None)
-        if (
-            not overwrite_vm_type
-            and _relation_id(existing_record.get("virtual_machine_type")) is not None
-        ):
-            patch_payload.pop("virtual_machine_type", None)
-        if not overwrite_vm_description:
-            existing_description = existing_record.get("description")
-            if isinstance(existing_description, str) and existing_description:
-                patch_payload.pop("description", None)
-        if not overwrite_vm_custom_fields:
-            existing_custom_fields = existing_record.get("custom_fields")
-            if isinstance(existing_custom_fields, dict) and existing_custom_fields:
-                patch_payload.pop("custom_fields", None)
-        if not overwrite_vm_tags:
-            existing_tags = existing_record.get("tags")
-            if isinstance(existing_tags, list) and existing_tags:
-                patch_payload.pop("tags", None)
-        elif "tags" in patch_payload:
-            # Merge: preserve existing user tags while ensuring the Proxbox tag is present.
-            # current_payload["tags"] is already a sorted list[int] — normalized by
-            # NetBoxVirtualMachineCreateBody.normalize_tags which handles dict-with-id format.
-            existing_normalized: list[int] = current_payload.get("tags") or []
-            desired_normalized: list[int] = desired_payload.get("tags") or []
-            merged = sorted(set(existing_normalized) | set(desired_normalized))
-            if merged == existing_normalized:
-                patch_payload.pop("tags", None)
-            else:
-                patch_payload["tags"] = merged
-
-        if patch_payload:
-            operation_queue.append(
-                _NetBoxVMOperation(
-                    method="UPDATE",
-                    prepared=prepared,
-                    existing_record=existing_record,
-                    patch_payload=patch_payload,
-                )
-            )
-        else:
-            operation_queue.append(
-                _NetBoxVMOperation(
-                    method="GET",
-                    prepared=prepared,
-                    existing_record=existing_record,
-                )
-            )
-
-    return operation_queue
 
 
 def _count_vm_operation_methods(
@@ -537,20 +413,20 @@ def _log_vm_reconciliation_measurement(
 async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
-) -> dict[tuple[str, int], dict[str, object]]:
+) -> dict[tuple[str, int, str], dict[str, object]]:
     """Dispatch queued VM operations sequentially in deterministic batches."""
 
     if not operation_queue:
         return {}
 
     batch_size = max(1, resolve_netbox_write_concurrency())
-    resolved_records: dict[tuple[str, int], dict[str, object]] = {}
+    resolved_records: dict[tuple[str, int, str], dict[str, object]] = {}
 
     for start_index in range(0, len(operation_queue), batch_size):
         batch = operation_queue[start_index : start_index + batch_size]
         for operation in batch:
             vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
-            key = (operation.prepared.cluster_name, vmid)
+            key = _prepared_vm_result_key(operation.prepared)
 
             if operation.method == "GET":
                 if operation.existing_record is not None:
@@ -1788,7 +1664,7 @@ async def create_virtual_machines(  # noqa: C901
         results: list[dict[str, object]] = []
         for operation in operation_queue:
             vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
-            key = (operation.prepared.cluster_name, vmid)
+            key = _prepared_vm_result_key(operation.prepared)
             vm_record = resolved_records.get(key)
             if vm_record is None and operation.existing_record is not None:
                 vm_record = operation.existing_record
