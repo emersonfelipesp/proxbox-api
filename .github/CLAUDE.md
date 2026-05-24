@@ -19,7 +19,7 @@ GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.git
 |------|---------|--------------|
 | `ci.yml` | Push / PR to any branch; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run `tests/` with coverage, then E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
-| `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes three Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert) |
+| `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
 | `publish-testpypi.yml` | Version tag push, GitHub Release published, or manual dispatch | Validates release metadata, builds dist, then runs either the TestPyPI lane or the PyPI lane. `rcN` tag pushes publish to TestPyPI for release-candidate validation; non-rc tag pushes (`vX.Y.Z`, `vX.Y.Z.postN`), GitHub releases, and `publish_target=pypi` dispatches publish to PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
 | `rust-reconcile.yml` | Push / PR to `main`, `testing`, or `v*`; manual dispatch | Runs Rust unit tests for `proxbox-reconcile-rs`, installs the local native extension, runs strict Rust/Python reconciliation parity tests, and builds wheel artifacts across Linux/macOS/Windows for Python 3.12 and 3.13. |
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
@@ -80,8 +80,11 @@ publish-testpypi.yml (staged package release)
 | Raw (uvicorn, HTTP) | `latest` | `<version>` |
 | Nginx (nginx+mkcert, HTTPS) | `latest-nginx` | `<version>-nginx` |
 | Granian (granian+mkcert, HTTPS) | `latest-granian` | `<version>-granian` |
+| Raw PyO3/Rust experimental | `experimental`, `pyo3-rust` | `<version>-pyo3-rust` |
+| Nginx PyO3/Rust experimental | `experimental-nginx`, `pyo3-rust-nginx` | `<version>-pyo3-rust-nginx` |
+| Granian PyO3/Rust experimental | `experimental-granian`, `pyo3-rust-granian` | `<version>-pyo3-rust-granian` |
 
-All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-nginx`, `sha-abc1234-granian`).
+All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-nginx`, `sha-abc1234-granian`, `sha-abc1234-pyo3-rust`).
 
 ## Key Rules
 

@@ -25,7 +25,7 @@ flowchart TD
     FinalTag[Create or dispatch final tag\nvX.Y.Z]
     FinalUpload[Upload vX.Y.Z to PyPI]
     FinalValidate[Install final from PyPI\non Python 3.11, 3.12, 3.13]
-    Docker[Publish Docker images\nraw, nginx, granian]
+    Docker[Publish Docker images\nraw, nginx, granian\n+ experimental PyO3/Rust]
     FinalE2E[Run post-publish E2E\npublished package + Docker image]
     FinalFailed{Post-release fix needed?}
     Post[Bump to vX.Y.Z.postN\npublish .postN to PyPI]
@@ -60,7 +60,7 @@ sequenceDiagram
     WF->>E2E: Wait for NetBox migrations and /api/status/ readiness
     WF->>PY: Upload package
     WF->>PY: Reinstall exact package version
-    WF->>DH: Publish raw, nginx, and granian images
+    WF->>DH: Publish raw, nginx, granian, and experimental PyO3/Rust images
     WF->>E2E: Verify published PyPI package and Docker image
 ```
 
@@ -75,7 +75,8 @@ sequenceDiagram
 - PyPI publication must pass package reinstall validation before Docker images
   are published.
 - Docker image tags use the same version as the PyPI package that passed
-  validation.
+  validation. Experimental PyO3/Rust images add `-pyo3-rust` tag suffixes and
+  opt-in aliases (`experimental`, `pyo3-rust`, and HTTPS variant suffixes).
 - Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
   migrations/search indexing and require `/api/status/` readiness before
   configuring tokens or backend endpoints.

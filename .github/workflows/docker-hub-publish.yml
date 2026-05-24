@@ -1,4 +1,5 @@
-# Three Alpine-based images: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert).
+# Alpine-based images: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian
+# (granian+mkcert), plus experimental PyO3/Rust engine variants.
 # Triggers:
 # - workflow_call: CI (main/testing) and release → always build, test, push (parallel jobs).
 # - workflow_dispatch: manual — test-only (no Hub) or full publish (parallel jobs, same as call).
@@ -15,7 +16,8 @@ on:
       mode:
         description: >-
           build-and-test-only — amd64 build + in-container tests, no Docker Hub.
-          publish — build, smoke-test, and push raw + nginx + granian images.
+          publish — build, smoke-test, and push raw + nginx + granian images,
+          plus experimental PyO3/Rust engine variants.
         type: string
         required: false
         default: publish
@@ -29,7 +31,8 @@ on:
       mode:
         description: >-
           build-and-test-only — amd64 build + in-container tests, no Docker Hub.
-          publish — same as CI/release (push raw + nginx + granian, multi-arch).
+          publish — same as CI/release (push raw + nginx + granian and
+          experimental PyO3/Rust variants, multi-arch).
         type: choice
         required: true
         options:
@@ -392,6 +395,201 @@ jobs:
             ok=0
             for i in $(seq 1 40); do
               if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+              sleep 2
+            done
+            if [ "$ok" -ne 1 ]; then
+              docker logs "$NAME"
+              docker rm -f "$NAME"
+              exit 1
+            fi
+            docker rm -f "$NAME"
+          done
+
+  docker-pyo3-rust:
+    if: inputs.mode == 'publish'
+    name: Docker Hub — ${{ matrix.variant }} PyO3/Rust experimental
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: raw
+            target: raw-pyo3-rust
+            version_suffix: -pyo3-rust
+            experimental_tag: experimental
+            pyo3_tag: pyo3-rust
+            cache_scope: raw-pyo3-rust
+            smoke_name: raw-pyo3-rust
+            smoke_port: "18081"
+            smoke_url: http://127.0.0.1:18081/
+            curl_flags: -fsS
+          - variant: nginx
+            target: nginx-pyo3-rust
+            version_suffix: -pyo3-rust-nginx
+            experimental_tag: experimental-nginx
+            pyo3_tag: pyo3-rust-nginx
+            cache_scope: nginx-pyo3-rust
+            smoke_name: nginx-pyo3-rust
+            smoke_port: "18445"
+            smoke_url: https://127.0.0.1:18445/
+            curl_flags: -kfsS
+          - variant: granian
+            target: granian-pyo3-rust
+            version_suffix: -pyo3-rust-granian
+            experimental_tag: experimental-granian
+            pyo3_tag: pyo3-rust-granian
+            cache_scope: granian-pyo3-rust
+            smoke_name: granian-pyo3-rust
+            smoke_port: "18446"
+            smoke_url: https://127.0.0.1:18446/
+            curl_flags: -kfsS
+    steps:
+      - name: Resolve checkout ref
+        id: checkout_source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          encoded_ref="$(python3 - <<'PY'
+          import os
+          from urllib.parse import quote
+
+          print(quote(os.environ["SOURCE_REF"], safe=""))
+          PY
+          )"
+          sha="$(gh api "repos/${{ github.repository }}/commits/$encoded_ref" --jq .sha)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.checkout_source.outputs.sha }}
+
+      - name: Resolve source revision
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve image version from pyproject
+        id: version
+        env:
+          GIT_REF: ${{ inputs.source_ref != '' && inputs.source_ref || github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = data["project"]["version"]
+          expected_tag = f"v{version}"
+          git_ref = os.environ["GIT_REF"].strip()
+          if git_ref.startswith("v") and git_ref != expected_tag:
+              raise SystemExit(
+                  f"git ref / pyproject mismatch: ref={git_ref!r}, expected {expected_tag!r}"
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"tag={version}\n")
+          PY
+
+      - name: Keep image tag in env
+        run: echo "IMAGE_TAG=${{ steps.version.outputs.tag }}" >> $GITHUB_ENV
+
+      - name: Build amd64 ${{ matrix.variant }} PyO3/Rust image for pre-release tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}${{ matrix.version_suffix }}-pre
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+
+      - name: Verify native Rust engine before push
+        run: |
+          set -eux
+          docker run --rm \
+            -e PROXBOX_ENCRYPTION_KEY \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}${{ matrix.version_suffix }}-pre \
+            python -c "import os; from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert os.environ.get('PROXBOX_RECONCILIATION_ENGINE') == 'rust'; assert rust_available()"
+
+      - name: Smoke-test ${{ matrix.variant }} PyO3/Rust image before push
+        run: |
+          set -eux
+          NAME=proxbox-smoke-${{ matrix.smoke_name }}
+          docker rm -f "$NAME" 2>/dev/null || true
+          docker run -d --name "$NAME" \
+            -p 127.0.0.1:${{ matrix.smoke_port }}:8000 \
+            -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+            -e PROXBOX_ENCRYPTION_KEY \
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}${{ matrix.version_suffix }}-pre
+          for i in $(seq 1 40); do
+            if curl ${{ matrix.curl_flags }} --max-time 5 ${{ matrix.smoke_url }} >/dev/null 2>&1; then
+              docker rm -f "$NAME"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$NAME"
+          docker rm -f "$NAME"
+          exit 1
+
+      - name: Build and push ${{ matrix.variant }} PyO3/Rust Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}${{ matrix.version_suffix }}
+            emersonfelipesp/proxbox-api:${{ matrix.experimental_tag }}
+            emersonfelipesp/proxbox-api:${{ matrix.pyo3_tag }}
+            emersonfelipesp/proxbox-api:sha-${{ steps.source.outputs.sha }}${{ matrix.version_suffix }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+
+      - name: Smoke-test pushed ${{ matrix.variant }} PyO3/Rust images
+        run: |
+          set -eux
+          for TAG in \
+            "${{ env.IMAGE_TAG }}${{ matrix.version_suffix }}" \
+            "${{ matrix.experimental_tag }}" \
+            "${{ matrix.pyo3_tag }}" \
+            "sha-${{ steps.source.outputs.sha }}${{ matrix.version_suffix }}"; do
+            NAME=$(printf 'proxbox-smoke-%s' "$TAG" | tr '.:' '-')
+            docker rm -f "$NAME" 2>/dev/null || true
+            docker run --rm \
+              -e PROXBOX_ENCRYPTION_KEY \
+              emersonfelipesp/proxbox-api:"$TAG" \
+              python -c "import os; from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert os.environ.get('PROXBOX_RECONCILIATION_ENGINE') == 'rust'; assert rust_available()"
+            docker run -d --name "$NAME" \
+              -p 127.0.0.1:${{ matrix.smoke_port }}:8000 \
+              -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+              -e PROXBOX_ENCRYPTION_KEY \
+              emersonfelipesp/proxbox-api:"$TAG"
+            ok=0
+            for i in $(seq 1 40); do
+              if curl ${{ matrix.curl_flags }} --max-time 5 ${{ matrix.smoke_url }} >/dev/null 2>&1; then
                 ok=1
                 break
               fi

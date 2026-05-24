@@ -10,13 +10,16 @@ Esta pagina documenta formas suportadas para executar o `proxbox-api`.
 
 ## Opcao 1: Docker (recomendado para inicio rapido)
 
-Todas as imagens Docker sao baseadas em **Alpine** (menor footprint). Tres variantes estao disponiveis:
+Todas as imagens Docker sao baseadas em **Alpine** (menor footprint). As tags padrao usam o engine de reconciliacao em Python. Tags experimentais com PyO3/Rust estao disponiveis para testes opt-in do engine nativo:
 
 | Variante | Tags | Descricao |
 |---------|------|-----------|
 | **Raw** (padrao) | `latest`, `<versao>` | Uvicorn puro, somente HTTP. Imagem menor. |
 | **Nginx** | `latest-nginx`, `<versao>-nginx` | nginx encerra HTTPS via mkcert; proxy para uvicorn. |
 | **Granian** | `latest-granian`, `<versao>-granian` | Granian (servidor ASGI em Rust) com TLS nativo via mkcert. |
+| **Raw PyO3/Rust** (experimental) | `experimental`, `pyo3-rust`, `<versao>-pyo3-rust` | Imagem raw com o engine opcional PyO3 instalado e habilitado. |
+| **Nginx PyO3/Rust** (experimental) | `experimental-nginx`, `pyo3-rust-nginx`, `<versao>-pyo3-rust-nginx` | Imagem nginx com o engine opcional PyO3 instalado e habilitado. |
+| **Granian PyO3/Rust** (experimental) | `experimental-granian`, `pyo3-rust-granian`, `<versao>-pyo3-rust-granian` | Imagem granian com o engine opcional PyO3 instalado e habilitado. |
 
 ### Imagem Raw — somente HTTP (padrao)
 
@@ -75,9 +78,26 @@ URL do servico:
 
 - <https://127.0.0.1:8443>
 
+### Imagens experimentais PyO3/Rust
+
+Use as imagens experimentais quando quiser que o engine nativo de reconciliacao
+rode por padrao. O alias raw e o caminho Docker mais simples:
+
+```bash
+docker pull emersonfelipesp/proxbox-api:pyo3-rust
+docker run -d -p 8000:8000 --name proxbox-api-rust \
+  emersonfelipesp/proxbox-api:pyo3-rust
+```
+
+As variantes HTTPS sao publicadas como `pyo3-rust-nginx` e
+`pyo3-rust-granian`. Essas imagens definem
+`PROXBOX_RECONCILIATION_ENGINE=rust` e incluem a extensao PyO3
+`proxbox-reconcile-rs`. Volte para `latest`, `latest-nginx` ou
+`latest-granian` para retornar a implementacao Python-only.
+
 ### Variaveis de ambiente Docker em tempo de execucao
 
-Comuns a todas as imagens (`raw`, `nginx`, `granian`):
+Comuns a todas as imagens, incluindo as variantes experimentais PyO3/Rust:
 
 | Variavel | Padrao | Descricao |
 |----------|--------|-----------|

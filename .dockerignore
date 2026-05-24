@@ -19,3 +19,5 @@ tasks
 coverage.xml
 .coverage
 htmlcov
+proxbox-reconcile-rs/target
+proxbox-reconcile-rs/python/proxbox_reconcile_rs/_native*.so

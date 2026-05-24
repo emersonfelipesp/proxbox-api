@@ -73,13 +73,16 @@ uv run mkdocs serve
 
 ## Using docker (recommended)
 
-All images are **Alpine-based** (smaller footprint), built from this repository with **uv** and **`uv.lock`** in a multi-stage Dockerfile. Three variants are published to Docker Hub:
+All images are **Alpine-based** (smaller footprint), built from this repository with **uv** and **`uv.lock`** in a multi-stage Dockerfile. Three Python-only variants are published to Docker Hub by default, plus opt-in experimental PyO3/Rust variants:
 
 | Variant | Tags | Description |
 |---------|------|-------------|
 | **Raw** (default) | `latest`, `<version>` | Pure uvicorn, HTTP only. Smallest image. |
 | **Nginx** | `latest-nginx`, `<version>-nginx` | nginx terminates HTTPS via mkcert; proxies to uvicorn. |
 | **Granian** | `latest-granian`, `<version>-granian` | [Granian](https://github.com/emmett-framework/granian) (Rust ASGI server) with native TLS via mkcert. No nginx. |
+| **Raw PyO3/Rust** (experimental) | `experimental`, `pyo3-rust`, `<version>-pyo3-rust` | Raw image with the optional PyO3 reconciliation engine installed and enabled. |
+| **Nginx PyO3/Rust** (experimental) | `experimental-nginx`, `pyo3-rust-nginx`, `<version>-pyo3-rust-nginx` | nginx image with the optional PyO3 reconciliation engine installed and enabled. |
+| **Granian PyO3/Rust** (experimental) | `experimental-granian`, `pyo3-rust-granian`, `<version>-pyo3-rust-granian` | granian image with the optional PyO3 reconciliation engine installed and enabled. |
 
 > **Upgrade note:** before v0.0.7, `latest` was the nginx+HTTP image. It is now the raw uvicorn image. Pull `latest-nginx` for the previous behavior.
 
@@ -140,9 +143,25 @@ docker build --target granian -t proxbox-api:granian .
 docker run -d -p 8443:8000 proxbox-api:granian
 ```
 
+### Experimental PyO3/Rust images
+
+The default images above continue to use the Python reconciliation engine. To opt in to the native PyO3/Rust implementation, run one of the experimental tags. The raw alias is the easiest path:
+
+```bash
+docker pull emersonfelipesp/proxbox-api:pyo3-rust
+docker run -d -p 8000:8000 --name proxbox-api-rust \
+  emersonfelipesp/proxbox-api:pyo3-rust
+```
+
+Equivalent HTTPS variants are available as `pyo3-rust-nginx` and
+`pyo3-rust-granian`. These images set
+`PROXBOX_RECONCILIATION_ENGINE=rust` and include the local
+`proxbox-reconcile-rs` native extension. Use the standard Python-only tags to
+roll back immediately.
+
 ### Docker runtime environment variables
 
-Common to all images (`raw`, `nginx`, `granian`):
+Common to all images, including the experimental PyO3/Rust variants:
 
 | Variable | Default | Description |
 |----------|---------|-------------|

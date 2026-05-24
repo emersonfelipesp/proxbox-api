@@ -54,6 +54,15 @@ jobs:
           pull_with_retry emersonfelipesp/proxbox-api:latest-nginx
           pull_with_retry emersonfelipesp/proxbox-api:"${TAG}-granian"
           pull_with_retry emersonfelipesp/proxbox-api:latest-granian
+          pull_with_retry emersonfelipesp/proxbox-api:"${TAG}-pyo3-rust"
+          pull_with_retry emersonfelipesp/proxbox-api:experimental
+          pull_with_retry emersonfelipesp/proxbox-api:pyo3-rust
+          pull_with_retry emersonfelipesp/proxbox-api:"${TAG}-pyo3-rust-nginx"
+          pull_with_retry emersonfelipesp/proxbox-api:experimental-nginx
+          pull_with_retry emersonfelipesp/proxbox-api:pyo3-rust-nginx
+          pull_with_retry emersonfelipesp/proxbox-api:"${TAG}-pyo3-rust-granian"
+          pull_with_retry emersonfelipesp/proxbox-api:experimental-granian
+          pull_with_retry emersonfelipesp/proxbox-api:pyo3-rust-granian
 
       - name: Smoke-test published startup
         run: |
@@ -120,3 +129,47 @@ jobs:
               exit 1
             fi
           done
+
+          verify_rust_image() {
+            local tag="$1"
+            local name="$2"
+            local port="$3"
+            local url="$4"
+            local curl_flags="$5"
+
+            docker run --rm \
+              -e PROXBOX_ENCRYPTION_KEY \
+              "emersonfelipesp/proxbox-api:$tag" \
+              python -c "import os; from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert os.environ.get('PROXBOX_RECONCILIATION_ENGINE') == 'rust'; assert rust_available()"
+
+            docker rm -f "$name" 2>/dev/null || true
+            docker run -d --name "$name" \
+              -p "127.0.0.1:${port}:8000" \
+              -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
+              -e PROXBOX_ENCRYPTION_KEY \
+              "emersonfelipesp/proxbox-api:$tag"
+            for i in $(seq 1 40); do
+              if curl $curl_flags --max-time 5 "$url" >/dev/null 2>&1; then
+                docker rm -f "$name"
+                return 0
+              fi
+              sleep 2
+              if [ "$i" -eq 40 ]; then
+                docker logs "$name"
+                docker rm -f "$name"
+                return 1
+              fi
+            done
+          }
+
+          verify_rust_image "${TAG}-pyo3-rust" proxbox-release-pyo3-rust 18081 http://127.0.0.1:18081/ "-fsS"
+          verify_rust_image experimental proxbox-release-experimental 18082 http://127.0.0.1:18082/ "-fsS"
+          verify_rust_image pyo3-rust proxbox-release-pyo3-rust-alias 18083 http://127.0.0.1:18083/ "-fsS"
+
+          verify_rust_image "${TAG}-pyo3-rust-nginx" proxbox-release-pyo3-rust-nginx 18445 https://127.0.0.1:18445/ "-kfsS"
+          verify_rust_image experimental-nginx proxbox-release-experimental-nginx 18447 https://127.0.0.1:18447/ "-kfsS"
+          verify_rust_image pyo3-rust-nginx proxbox-release-pyo3-rust-nginx-alias 18448 https://127.0.0.1:18448/ "-kfsS"
+
+          verify_rust_image "${TAG}-pyo3-rust-granian" proxbox-release-pyo3-rust-granian 18446 https://127.0.0.1:18446/ "-kfsS"
+          verify_rust_image experimental-granian proxbox-release-experimental-granian 18449 https://127.0.0.1:18449/ "-kfsS"
+          verify_rust_image pyo3-rust-granian proxbox-release-pyo3-rust-granian-alias 18450 https://127.0.0.1:18450/ "-kfsS"
