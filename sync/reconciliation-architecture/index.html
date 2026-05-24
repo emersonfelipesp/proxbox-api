@@ -914,10 +914,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-4-pydantic-reconciliation" class="md-nav__link">
+  <a href="#phase-4-queue-reconciliation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 4: Pydantic Reconciliation
+        Phase 4: Queue Reconciliation
       
     </span>
   </a>
@@ -995,6 +995,17 @@
     <span class="md-ellipsis">
       
         Configuration and Tuning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rust-rollout-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust Rollout Policy
       
     </span>
   </a>
@@ -1625,10 +1636,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-4-pydantic-reconciliation" class="md-nav__link">
+  <a href="#phase-4-queue-reconciliation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 4: Pydantic Reconciliation
+        Phase 4: Queue Reconciliation
       
     </span>
   </a>
@@ -1713,6 +1724,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rust-rollout-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust Rollout Policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#benefits" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1789,11 +1811,14 @@
 <h3 id="phase-3-netbox-read-snapshot-in-memory">Phase 3: NetBox Read Snapshot (In-Memory)<a class="headerlink" href="#phase-3-netbox-read-snapshot-in-memory" title="Permanent link">&para;</a></h3>
 <p>The sync reads all NetBox VMs in paginated batches (<code>limit/offset</code>) and builds an in-memory index keyed by:</p>
 <ul>
-<li><code>(cluster_id, proxmox_vm_id)</code></li>
+<li><code>(cluster_id, proxmox_vm_id, proxmox_vm_type)</code></li>
 </ul>
-<p>This avoids repeated NetBox list/filter calls during per-VM comparison.</p>
-<h3 id="phase-4-pydantic-reconciliation">Phase 4: Pydantic Reconciliation<a class="headerlink" href="#phase-4-pydantic-reconciliation" title="Permanent link">&para;</a></h3>
-<p>For each prepared VM:</p>
+<p>This avoids repeated NetBox list/filter calls during per-VM comparison.
+The VM type segment prevents QEMU VM 100 and LXC CT 100 in the same cluster from colliding.
+Legacy records that do not yet have <code>custom_fields.proxmox_vm_type</code> are matched only when the
+<code>(cluster_id, proxmox_vm_id)</code> identity is unambiguous.</p>
+<h3 id="phase-4-queue-reconciliation">Phase 4: Queue Reconciliation<a class="headerlink" href="#phase-4-queue-reconciliation" title="Permanent link">&para;</a></h3>
+<p>The default reconciliation engine is Python. For each prepared VM:</p>
 <ol>
 <li>Validate desired payload with <code>NetBoxVirtualMachineCreateBody</code>.</li>
 <li>Normalize current NetBox record with the same schema.</li>
@@ -1804,6 +1829,53 @@
 <li><code>GET</code>: Object exists and no delta.</li>
 <li><code>CREATE</code>: Object missing in snapshot index.</li>
 <li><code>UPDATE</code>: Object exists and delta is non-empty.</li>
+</ul>
+<p>An optional Rust implementation exists behind a pure JSON boundary:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Input  : prepared_vms + netbox_snapshot + flags  (JSON bytes)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>Output : operation queue (CREATE | GET | UPDATE + patch_payload)  (JSON bytes)
+</code></pre></div>
+<p>The Rust function performs no HTTP, async work, database access, retry logic, or dispatch.
+Those concerns remain in Python. When the native package is installed, the Python bridge can
+serialize inputs with Pydantic v2, call the PyO3 extension with the GIL released, decode the
+result, and adapt operations back to the Python dataclasses used by dispatch.</p>
+<p>Engine selection is controlled by environment variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Value</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>python</code></td>
+<td>Default. Use Python output only.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>compare</code></td>
+<td>Run Python and Rust when Rust is installed, log mismatches, return Python output.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>rust</code></td>
+<td>Return adapted Rust output.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_COMPARE_STRICT</code></td>
+<td><code>true</code></td>
+<td>Raise on compare-mode mismatch. Intended for CI.</td>
+</tr>
+</tbody>
+</table>
+<p>If the Rust package is not installed, <code>python</code> mode works normally and <code>compare</code> mode returns
+Python output. <code>rust</code> mode requires the native package and fails clearly if it is unavailable.</p>
+<p>Compare-mode mismatches increment <code>proxbox_reconcile_mismatch_total</code>, which is exposed in:</p>
+<ul>
+<li><code>/cache/metrics</code></li>
+<li><code>/cache/metrics/prometheus</code></li>
 </ul>
 <h3 id="phase-5-sequential-netbox-dispatch-in-batch-windows">Phase 5: Sequential NetBox Dispatch in Batch Windows<a class="headerlink" href="#phase-5-sequential-netbox-dispatch-in-batch-windows" title="Permanent link">&para;</a></h3>
 <p>Operations are executed in deterministic queue order.</p>
@@ -1845,7 +1917,7 @@
     S-&gt;&gt;N: Fetch NetBox VM pages
     N--&gt;&gt;S: NetBox in-memory snapshot
 
-    S-&gt;&gt;S: Reconcile with Pydantic
+    S-&gt;&gt;S: Reconcile with Python or optional Rust engine
     S-&gt;&gt;S: Build ordered operations queue
 
     loop Sequential batch dispatch
@@ -1860,7 +1932,7 @@
 </ul>
 <p><code>CREATE</code></p>
 <ul>
-<li>Means no matching <code>(cluster_id, proxmox_vm_id)</code> was found.</li>
+<li>Means no matching <code>(cluster_id, proxmox_vm_id, proxmox_vm_type)</code> was found.</li>
 <li>NetBox POST is executed once during dispatch.</li>
 </ul>
 <p><code>UPDATE</code></p>
@@ -1872,8 +1944,25 @@
 <ul>
 <li><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code>: controls concurrent VM preparation/fetch from Proxmox.</li>
 <li><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code>: defines dispatch batch window size.</li>
+<li><code>PROXBOX_RECONCILIATION_ENGINE</code>: selects <code>python</code>, <code>compare</code>, or <code>rust</code>.</li>
+<li><code>PROXBOX_RECONCILIATION_COMPARE_STRICT</code>: raises on compare-mode drift when set to <code>true</code>.</li>
 </ul>
 <p>Note: batch window size does not imply parallel writes; writes remain sequential to protect NetBox under single-instance operation.</p>
+<h2 id="rust-rollout-policy">Rust Rollout Policy<a class="headerlink" href="#rust-rollout-policy" title="Permanent link">&para;</a></h2>
+<p>Rust is not the default engine. Rollout is intentionally conservative:</p>
+<ol>
+<li>Build and test <code>proxbox-reconcile-rs</code> wheels in CI.</li>
+<li>Publish <code>proxbox-reconcile-rs</code> only through the repository release workflow.</li>
+<li>Keep <code>PROXBOX_RECONCILIATION_ENGINE=python</code> as the default in <code>proxbox-api</code>.</li>
+<li>Run <code>PROXBOX_RECONCILIATION_ENGINE=compare</code> in staging for at least two weeks.</li>
+<li>Watch <code>proxbox_reconcile_mismatch_total</code> and reconciliation mismatch logs.</li>
+<li>Recommend <code>PROXBOX_RECONCILIATION_ENGINE=rust</code> only after zero mismatches across diverse real syncs.</li>
+<li>Consider a default-engine change only in a later minor release and only after full sync wall-time benchmarks show a real win.</li>
+</ol>
+<p>Rollback is immediate: unset <code>PROXBOX_RECONCILIATION_ENGINE</code> or set it back to <code>python</code>.</p>
+<p>Current benchmark evidence does not justify making Rust the default. The full Rust path is slower
+than Python in the synthetic benchmark harness, and live measurement showed reconciliation was not
+the dominant sync cost.</p>
 <h2 id="benefits">Benefits<a class="headerlink" href="#benefits" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Predictable NetBox write load.</li>

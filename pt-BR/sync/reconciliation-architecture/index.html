@@ -914,10 +914,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fase-4-reconciliacao-com-pydantic" class="md-nav__link">
+  <a href="#fase-4-reconciliacao-da-fila" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fase 4: Reconciliacao com Pydantic
+        Fase 4: Reconciliacao da Fila
       
     </span>
   </a>
@@ -995,6 +995,17 @@
     <span class="md-ellipsis">
       
         Configuracao
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#politica-de-rollout-do-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Politica de Rollout do Rust
       
     </span>
   </a>
@@ -1614,10 +1625,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fase-4-reconciliacao-com-pydantic" class="md-nav__link">
+  <a href="#fase-4-reconciliacao-da-fila" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fase 4: Reconciliacao com Pydantic
+        Fase 4: Reconciliacao da Fila
       
     </span>
   </a>
@@ -1701,6 +1712,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#politica-de-rollout-do-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Politica de Rollout do Rust
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1765,10 +1787,13 @@
 <h3 id="fase-3-snapshot-de-leitura-netbox-memoria">Fase 3: Snapshot de Leitura NetBox (Memoria)<a class="headerlink" href="#fase-3-snapshot-de-leitura-netbox-memoria" title="Permanent link">&para;</a></h3>
 <p>O sync le todas as VMs do NetBox em paginas (<code>limit/offset</code>) e monta um indice em memoria com chave:</p>
 <ul>
-<li><code>(cluster_id, proxmox_vm_id)</code></li>
+<li><code>(cluster_id, proxmox_vm_id, proxmox_vm_type)</code></li>
 </ul>
-<h3 id="fase-4-reconciliacao-com-pydantic">Fase 4: Reconciliacao com Pydantic<a class="headerlink" href="#fase-4-reconciliacao-com-pydantic" title="Permanent link">&para;</a></h3>
-<p>Para cada VM preparada:</p>
+<p>O segmento de tipo evita colisao entre uma VM QEMU 100 e um CT LXC 100 no mesmo cluster.
+Registros legados sem <code>custom_fields.proxmox_vm_type</code> so sao reaproveitados quando a identidade
+<code>(cluster_id, proxmox_vm_id)</code> e inequivoca.</p>
+<h3 id="fase-4-reconciliacao-da-fila">Fase 4: Reconciliacao da Fila<a class="headerlink" href="#fase-4-reconciliacao-da-fila" title="Permanent link">&para;</a></h3>
+<p>O engine padrao de reconciliacao e Python. Para cada VM preparada:</p>
 <ol>
 <li>Validar payload desired com <code>NetBoxVirtualMachineCreateBody</code>.</li>
 <li>Normalizar registro current do NetBox com o mesmo schema.</li>
@@ -1779,6 +1804,54 @@
 <li><code>GET</code>: objeto existe e nao ha delta.</li>
 <li><code>CREATE</code>: objeto nao encontrado no indice.</li>
 <li><code>UPDATE</code>: objeto existe e ha delta.</li>
+</ul>
+<p>Existe uma implementacao Rust opcional atras de uma fronteira JSON pura:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Input  : prepared_vms + netbox_snapshot + flags  (JSON bytes)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>Output : operation queue (CREATE | GET | UPDATE + patch_payload)  (JSON bytes)
+</code></pre></div>
+<p>A funcao Rust nao executa HTTP, async, banco de dados, retry ou dispatch. Essas responsabilidades
+continuam no Python. Quando o pacote nativo esta instalado, a ponte Python serializa a entrada com
+Pydantic v2, chama a extensao PyO3 com o GIL liberado, decodifica o resultado e adapta as operacoes
+de volta para as dataclasses usadas pelo dispatch.</p>
+<p>Selecao de engine:</p>
+<table>
+<thead>
+<tr>
+<th>Variavel</th>
+<th>Valor</th>
+<th>Comportamento</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>python</code></td>
+<td>Padrao. Usa apenas a saida Python.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>compare</code></td>
+<td>Roda Python e Rust quando Rust esta instalado, loga divergencias e retorna Python.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>rust</code></td>
+<td>Retorna a saida Rust adaptada.</td>
+</tr>
+<tr>
+<td><code>PROXBOX_RECONCILIATION_COMPARE_STRICT</code></td>
+<td><code>true</code></td>
+<td>Falha em divergencia no compare mode. Uso previsto para CI.</td>
+</tr>
+</tbody>
+</table>
+<p>Se o pacote Rust nao estiver instalado, o modo <code>python</code> funciona normalmente e o modo <code>compare</code>
+retorna a saida Python. O modo <code>rust</code> requer o pacote nativo e falha claramente quando ele nao esta
+disponivel.</p>
+<p>Divergencias em compare mode incrementam <code>proxbox_reconcile_mismatch_total</code>, exposto em:</p>
+<ul>
+<li><code>/cache/metrics</code></li>
+<li><code>/cache/metrics/prometheus</code></li>
 </ul>
 <h3 id="fase-5-dispatch-sequencial-para-netbox-em-janelas-de-batch">Fase 5: Dispatch Sequencial para NetBox em Janelas de Batch<a class="headerlink" href="#fase-5-dispatch-sequencial-para-netbox-em-janelas-de-batch" title="Permanent link">&para;</a></h3>
 <p>As operacoes sao executadas em ordem deterministica.</p>
@@ -1819,7 +1892,7 @@
     S-&gt;&gt;N: Buscar paginas de VM no NetBox
     N--&gt;&gt;S: Snapshot NetBox em memoria
 
-    S-&gt;&gt;S: Reconciliar com Pydantic
+    S-&gt;&gt;S: Reconciliar com Python ou engine Rust opcional
     S-&gt;&gt;S: Montar fila ordenada de operacoes
 
     loop Dispatch sequencial por batch
@@ -1834,7 +1907,7 @@
 </ul>
 <p><code>CREATE</code></p>
 <ul>
-<li>Nao existe correspondencia por <code>(cluster_id, proxmox_vm_id)</code>.</li>
+<li>Nao existe correspondencia por <code>(cluster_id, proxmox_vm_id, proxmox_vm_type)</code>.</li>
 <li>Executa POST no NetBox durante o dispatch.</li>
 </ul>
 <p><code>UPDATE</code></p>
@@ -1846,8 +1919,25 @@
 <ul>
 <li><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code>: controla concorrencia de preparacao/fetch de VMs no Proxmox.</li>
 <li><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code>: define tamanho da janela de batch no dispatch.</li>
+<li><code>PROXBOX_RECONCILIATION_ENGINE</code>: seleciona <code>python</code>, <code>compare</code> ou <code>rust</code>.</li>
+<li><code>PROXBOX_RECONCILIATION_COMPARE_STRICT</code>: falha em drift no compare mode quando <code>true</code>.</li>
 </ul>
 <p>Observacao: tamanho de batch nao implica escrita paralela; as escritas continuam sequenciais para proteger o NetBox em ambiente de instancia unica.</p>
+<h2 id="politica-de-rollout-do-rust">Politica de Rollout do Rust<a class="headerlink" href="#politica-de-rollout-do-rust" title="Permanent link">&para;</a></h2>
+<p>Rust nao e o engine padrao. O rollout e conservador:</p>
+<ol>
+<li>Construir e testar wheels de <code>proxbox-reconcile-rs</code> no CI.</li>
+<li>Publicar <code>proxbox-reconcile-rs</code> apenas pelo workflow de release do repositorio.</li>
+<li>Manter <code>PROXBOX_RECONCILIATION_ENGINE=python</code> como padrao no <code>proxbox-api</code>.</li>
+<li>Rodar <code>PROXBOX_RECONCILIATION_ENGINE=compare</code> em staging por pelo menos duas semanas.</li>
+<li>Monitorar <code>proxbox_reconcile_mismatch_total</code> e logs de mismatch.</li>
+<li>Recomendar <code>PROXBOX_RECONCILIATION_ENGINE=rust</code> apenas depois de zero divergencias em syncs reais diversos.</li>
+<li>Considerar trocar o padrao apenas em uma release minor futura e somente se benchmarks de wall time do sync completo provarem ganho real.</li>
+</ol>
+<p>Rollback e imediato: remova <code>PROXBOX_RECONCILIATION_ENGINE</code> ou volte para <code>python</code>.</p>
+<p>A evidencia atual de benchmark nao justifica tornar Rust o padrao. O caminho Rust completo ficou
+mais lento que Python no benchmark sintetico, e a medicao real mostrou que reconciliacao nao era o
+custo dominante do sync.</p>
 
 
 

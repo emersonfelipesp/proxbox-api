@@ -559,6 +559,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option 2: PyPI">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-rust-reconciliation-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional Rust reconciliation engine
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1806,6 +1823,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option 2: PyPI">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-rust-reconciliation-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional Rust reconciliation engine
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2128,46 +2162,65 @@ The entrypoint handles this automatically:</p>
 <p>Or with <code>uv</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>uv<span class="w"> </span>add<span class="w"> </span>proxbox-api
 </code></pre></div>
+<h3 id="optional-rust-reconciliation-engine">Optional Rust reconciliation engine<a class="headerlink" href="#optional-rust-reconciliation-engine" title="Permanent link">&para;</a></h3>
+<p>VM reconciliation uses the Python engine by default. An optional native package,
+<code>proxbox-reconcile-rs</code>, can be installed for compare-mode validation or explicit Rust-engine
+testing after wheels are published.</p>
+<p>Once the optional package is published, install with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox-api<span class="o">[</span>rust<span class="o">]</span>
+</code></pre></div>
+<p>Until the native package is published, install it from a local checkout:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--group<span class="w"> </span>dev
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
+</code></pre></div>
+<p>Enable compare mode first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nv">PROXBOX_RECONCILIATION_ENGINE</span><span class="o">=</span>compare<span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app
+</code></pre></div>
+<p>The production default remains Python. To roll back immediately, unset
+<code>PROXBOX_RECONCILIATION_ENGINE</code> or set it to <code>python</code>.</p>
 <p>Start the server:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>
 <h2 id="option-3-local-development-from-source">Option 3: Local development from source<a class="headerlink" href="#option-3-local-development-from-source" title="Permanent link">&para;</a></h2>
 <p>Clone repository:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
 </code></pre></div>
 <p>Install runtime dependencies:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
 </code></pre></div>
 <p>Or use <code>uv</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>uv<span class="w"> </span>sync
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>uv<span class="w"> </span>sync
+</code></pre></div>
+<p>Install the optional Rust reconciliation package for local parity testing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
 </code></pre></div>
 <p>Run API:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>
 <p>Alternative with uvicorn:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
 </code></pre></div>
 <p><code>fastapi run</code> does not expose TLS flags; for HTTPS from the app process, use <strong>uvicorn</strong> with <code>--ssl-certfile</code> / <code>--ssl-keyfile</code> below, or put <strong>nginx/Caddy</strong> in front (recommended for real certificates).</p>
 <h2 id="tls-without-docker">TLS without Docker<a class="headerlink" href="#tls-without-docker" title="Permanent link">&para;</a></h2>
 <h3 id="local-certificates-mkcert">Local certificates (mkcert)<a class="headerlink" href="#local-certificates-mkcert" title="Permanent link">&para;</a></h3>
 <p>For trusted HTTPS on your own machine only:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>mkcert<span class="w"> </span>-install
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>mkcert<span class="w"> </span>proxbox.backend.local<span class="w"> </span>localhost<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>::1
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>./proxbox.backend.local+3-key.pem<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>./proxbox.backend.local+3.pem
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>mkcert<span class="w"> </span>-install
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>mkcert<span class="w"> </span>proxbox.backend.local<span class="w"> </span>localhost<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>::1
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>./proxbox.backend.local+3-key.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>./proxbox.backend.local+3.pem
 </code></pre></div>
 <p>Adjust file names to match what <code>mkcert</code> created.</p>
 <h3 id="publicly-trusted-or-corporate-certificates">Publicly trusted or corporate certificates<a class="headerlink" href="#publicly-trusted-or-corporate-certificates" title="Permanent link">&para;</a></h3>
 <p><strong>Recommended:</strong> terminate TLS in <strong>nginx</strong> or <strong>Caddy</strong>, run the API on <strong>HTTP</strong> on <code>127.0.0.1:8000</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>
 <p>Point the proxy at <code>http://127.0.0.1:8000</code> and set <code>ssl_certificate</code> / <code>ssl_certificate_key</code> to your PEM paths (for Let's Encrypt: <code>fullchain.pem</code> and <code>privkey.pem</code> under <code>/etc/letsencrypt/live/&lt;domain&gt;/</code>). Set <code>X-Forwarded-Proto</code> and related headers so the app sees the original scheme. See the repository <strong>README</strong> for a complete nginx <code>server</code> example.</p>
 <p><strong>Direct uvicorn TLS</strong> (small deployments): use the <strong>full certificate chain</strong> as <code>--ssl-certfile</code> and the private key as <code>--ssl-keyfile</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8443</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/fullchain.pem<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/privkey.pem
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8443</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/fullchain.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/privkey.pem
 </code></pre></div>
 <p>Ensure the process user can read those files, and renew/reload after certificate updates.</p>
 <h2 id="verify-installation">Verify installation<a class="headerlink" href="#verify-installation" title="Permanent link">&para;</a></h2>

@@ -1170,6 +1170,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#testes-da-reconciliacao-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testes da reconciliacao Rust
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#testes-com-mock-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1668,6 +1679,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#testes-da-reconciliacao-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testes da reconciliacao Rust
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#testes-com-mock-proxmox" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1924,19 +1946,47 @@
 <p>Para a superficie atual de rotas e contratos de docs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pytest<span class="w"> </span>tests/test_generated_proxmox_routes.py<span class="w"> </span>tests/test_proxmox_codegen_docs.py<span class="w"> </span>tests/test_api_routes.py<span class="w"> </span>tests/test_stub_routes.py<span class="w"> </span>tests/test_admin_logs.py
 </code></pre></div>
+<h2 id="testes-da-reconciliacao-rust">Testes da reconciliacao Rust<a class="headerlink" href="#testes-da-reconciliacao-rust" title="Permanent link">&para;</a></h2>
+<p>O pacote Rust opcional fica em <code>proxbox-reconcile-rs/</code>. Python continua sendo o engine padrao,
+entao a suite normal deve passar sem o pacote nativo.</p>
+<p>Rode os contratos Python das fixtures; a paridade Rust sera pulada se o pacote nativo nao estiver instalado:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/reconciliation
+</code></pre></div>
+<p>Rode testes unitarios Rust sem o modo de link <code>extension-module</code> do PyO3:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">cd</span><span class="w"> </span>proxbox-reconcile-rs
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--no-default-features
+</code></pre></div>
+<p>Instale o pacote nativo local no ambiente <code>uv</code> raiz:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
+</code></pre></div>
+<p>Rode paridade estrita em compare mode:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">PROXBOX_RECONCILIATION_ENGINE</span><span class="o">=</span>compare<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">PROXBOX_RECONCILIATION_COMPARE_STRICT</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/reconciliation
+</code></pre></div>
+<p>Rode testes usando explicitamente o engine Rust:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">PROXBOX_RECONCILIATION_ENGINE</span><span class="o">=</span>rust<span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/reconciliation
+</code></pre></div>
+<p>Rode o benchmark sintetico:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>benchmarks/reconciliation/bench_vm_queue.py<span class="w"> </span>--sizes<span class="w"> </span><span class="m">100</span><span class="w"> </span><span class="m">1000</span><span class="w"> </span><span class="m">10000</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>benchmarks/reconciliation/bench_vm_queue.py<span class="w"> </span>--sizes<span class="w"> </span><span class="m">10000</span><span class="w"> </span>--pathological
+</code></pre></div>
+<p>Se o compare mode reportar divergencias, mantenha <code>PROXBOX_RECONCILIATION_ENGINE=python</code> em
+producao e inspecione <code>proxbox_reconcile_mismatch_total</code> em <code>/cache/metrics</code> ou
+<code>/cache/metrics/prometheus</code>.</p>
 <p>Para os modulos novos da v0.0.11 (HA, verbos operacionais, sync-active, parsing de metadata e resolucao de colisao de nomes):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pytest<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>tests/test_proxmox_ha_routes.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>tests/test_proxmox_actions_gate.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>tests/test_proxmox_actions_start.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>tests/test_proxmox_actions_stop.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>tests/test_proxmox_actions_snapshot.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>tests/test_proxmox_actions_migrate_verb.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>tests/test_verb_dispatch_helpers.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>tests/test_sync_active.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>tests/test_name_collision.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span>tests/test_vm_cloudinit_mapping.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">  </span>tests/test_description_metadata.py
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pytest<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>tests/test_proxmox_ha_routes.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>tests/test_proxmox_actions_gate.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>tests/test_proxmox_actions_start.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>tests/test_proxmox_actions_stop.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>tests/test_proxmox_actions_snapshot.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span>tests/test_proxmox_actions_migrate_verb.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span>tests/test_verb_dispatch_helpers.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span>tests/test_sync_active.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>tests/test_name_collision.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span>tests/test_vm_cloudinit_mapping.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">  </span>tests/test_description_metadata.py
 </code></pre></div>
 <h2 id="testes-com-mock-proxmox">Testes com Mock Proxmox<a class="headerlink" href="#testes-com-mock-proxmox" title="Permanent link">&para;</a></h2>
 <p>Todos os testes usam recursos mock do <code>proxmox-sdk</code> para validar a integracao com a API Proxmox. A suite de testes suporta tres modos mock:</p>
@@ -1977,78 +2027,78 @@
 </table>
 <h3 id="1-mockbackend-in-process-pytestmarkmock_backend">1. MockBackend In-process (<code>@pytest.mark.mock_backend</code>)<a class="headerlink" href="#1-mockbackend-in-process-pytestmarkmock_backend" title="Permanent link">&para;</a></h3>
 <p>O modo mais rapido usando <code>proxmox_sdk.sdk.backends.mock.MockBackend</code>. Nao requer servidor HTTP.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_backend</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync</span><span class="p">(</span><span class="n">proxmox_mock_backend</span><span class="p">):</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste rapido usando MockBackend in-process.&quot;&quot;&quot;</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">vms</span> <span class="o">=</span> <span class="k">await</span> <span class="n">proxmox_mock_backend</span><span class="o">.</span><span class="n">request</span><span class="p">(</span><span class="s2">&quot;GET&quot;</span><span class="p">,</span> <span class="s2">&quot;/api2/json/nodes/pve01/qemu&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_backend</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync</span><span class="p">(</span><span class="n">proxmox_mock_backend</span><span class="p">):</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste rapido usando MockBackend in-process.&quot;&quot;&quot;</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">vms</span> <span class="o">=</span> <span class="k">await</span> <span class="n">proxmox_mock_backend</span><span class="o">.</span><span class="n">request</span><span class="p">(</span><span class="s2">&quot;GET&quot;</span><span class="p">,</span> <span class="s2">&quot;/api2/json/nodes/pve01/qemu&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="2-container-http-published-pytestmarkmock_http">2. Container HTTP Published (<code>@pytest.mark.mock_http</code>)<a class="headerlink" href="#2-container-http-published-pytestmarkmock_http" title="Permanent link">&para;</a></h3>
 <p>Usa a imagem Docker publicada <code>emersonfelipesp/proxmox-sdk:latest</code> na porta 8006.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync_http</span><span class="p">(</span><span class="n">proxmox_mock_http_published</span><span class="p">):</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste realista usando container HTTP (imagem publicada).&quot;&quot;&quot;</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">vms</span> <span class="o">=</span> <span class="k">await</span> <span class="n">proxmox_mock_http_published</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync_http</span><span class="p">(</span><span class="n">proxmox_mock_http_published</span><span class="p">):</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste realista usando container HTTP (imagem publicada).&quot;&quot;&quot;</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="n">vms</span> <span class="o">=</span> <span class="k">await</span> <span class="n">proxmox_mock_http_published</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="3-container-http-local-pytestmarkmock_http">3. Container HTTP Local (<code>@pytest.mark.mock_http</code>)<a class="headerlink" href="#3-container-http-local-pytestmarkmock_http" title="Permanent link">&para;</a></h3>
 <p>Usa uma imagem Docker construida localmente de <code>./proxmox-sdk</code> na porta 8007.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync_http_local</span><span class="p">(</span><span class="n">proxmox_mock_http_local</span><span class="p">):</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste realista usando container HTTP (build local).&quot;&quot;&quot;</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">vms</span> <span class="o">=</span> <span class="k">await</span> <span class="n">proxmox_mock_http_local</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync_http_local</span><span class="p">(</span><span class="n">proxmox_mock_http_local</span><span class="p">):</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste realista usando container HTTP (build local).&quot;&quot;&quot;</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="n">vms</span> <span class="o">=</span> <span class="k">await</span> <span class="n">proxmox_mock_http_local</span><span class="o">.</span><span class="n">nodes</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="executando-testes-com-containers-docker">Executando Testes com Containers Docker<a class="headerlink" href="#executando-testes-com-containers-docker" title="Permanent link">&para;</a></h3>
 <p>Inicie ambos os containers mock:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Usando docker compose (v2)</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Ou usando docker-compose (v1)</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Usando docker compose (v2)</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Ou usando docker-compose (v1)</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 <p>Execute a suite completa de testes com o script de orquestracao:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>./scripts/test-with-mock.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>./scripts/test-with-mock.sh
 </code></pre></div>
 <p>Execute modos de teste especificos:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Apenas MockBackend (rapido, sem HTTP)</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nv">PROXMOX_API_MODE</span><span class="o">=</span>mock<span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests<span class="w"> </span>--ignore<span class="o">=</span>tests/e2e<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;mock_backend&quot;</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Apenas HTTP published</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nv">PROXMOX_API_MODE</span><span class="o">=</span>mock<span class="w"> </span><span class="nv">PROXMOX_MOCK_PUBLISHED_URL</span><span class="o">=</span>http://localhost:8006<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests<span class="w"> </span>--ignore<span class="o">=</span>tests/e2e<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;mock_http&quot;</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># Apenas HTTP local</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="nv">PROXMOX_API_MODE</span><span class="o">=</span>mock<span class="w"> </span><span class="nv">PROXMOX_MOCK_LOCAL_URL</span><span class="o">=</span>http://localhost:8007<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests<span class="w"> </span>--ignore<span class="o">=</span>tests/e2e<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;mock_http&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Apenas MockBackend (rapido, sem HTTP)</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nv">PROXMOX_API_MODE</span><span class="o">=</span>mock<span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests<span class="w"> </span>--ignore<span class="o">=</span>tests/e2e<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;mock_backend&quot;</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># Apenas HTTP published</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="nv">PROXMOX_API_MODE</span><span class="o">=</span>mock<span class="w"> </span><span class="nv">PROXMOX_MOCK_PUBLISHED_URL</span><span class="o">=</span>http://localhost:8006<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">  </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests<span class="w"> </span>--ignore<span class="o">=</span>tests/e2e<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;mock_http&quot;</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="c1"># Apenas HTTP local</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="nv">PROXMOX_API_MODE</span><span class="o">=</span>mock<span class="w"> </span><span class="nv">PROXMOX_MOCK_LOCAL_URL</span><span class="o">=</span>http://localhost:8007<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="w">  </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests<span class="w"> </span>--ignore<span class="o">=</span>tests/e2e<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;mock_http&quot;</span>
 </code></pre></div>
 <h3 id="teste-em-modo-dual">Teste em Modo Dual<a class="headerlink" href="#teste-em-modo-dual" title="Permanent link">&para;</a></h3>
 <p>Testes podem executar contra MockBackend E containers HTTP:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_backend</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync_all_modes</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">proxmox_mock_backend</span><span class="p">,</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>                                   <span class="n">proxmox_mock_http_published</span><span class="p">,</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>                                   <span class="n">proxmox_mock_http_local</span><span class="p">):</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste executa 3 vezes: backend, HTTP published, e HTTP local.&quot;&quot;&quot;</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="o">...</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_backend</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mock_http</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_vm_sync_all_modes</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">proxmox_mock_backend</span><span class="p">,</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>                                   <span class="n">proxmox_mock_http_published</span><span class="p">,</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>                                   <span class="n">proxmox_mock_http_local</span><span class="p">):</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Teste executa 3 vezes: backend, HTTP published, e HTTP local.&quot;&quot;&quot;</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>    <span class="o">...</span>
 </code></pre></div>
 <h3 id="servicos-docker-compose">Servicos Docker Compose<a class="headerlink" href="#servicos-docker-compose" title="Permanent link">&para;</a></h3>
 <p>O <code>docker-compose.yml</code> define dois servicos:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">services</span><span class="p">:</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">proxmox-mock-published</span><span class="p">:</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">emersonfelipesp/proxmox-sdk:latest</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8006:8000&quot;</span>
-<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_API_MODE=mock</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_MOCK_SCHEMA_VERSION=latest</span>
-<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>
-<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">  </span><span class="nt">proxmox-mock-local</span><span class="p">:</span>
-<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">    </span><span class="nt">build</span><span class="p">:</span>
-<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./proxmox-sdk</span>
-<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">      </span><span class="nt">dockerfile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Dockerfile</span>
-<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8007:8000&quot;</span>
-<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
-<a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_API_MODE=mock</span>
-<a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_MOCK_SCHEMA_VERSION=latest</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nt">services</span><span class="p">:</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span><span class="nt">proxmox-mock-published</span><span class="p">:</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">emersonfelipesp/proxmox-sdk:latest</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8006:8000&quot;</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_API_MODE=mock</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_MOCK_SCHEMA_VERSION=latest</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="w">  </span><span class="nt">proxmox-mock-local</span><span class="p">:</span>
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="w">    </span><span class="nt">build</span><span class="p">:</span>
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a><span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./proxmox-sdk</span>
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a><span class="w">      </span><span class="nt">dockerfile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Dockerfile</span>
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8007:8000&quot;</span>
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_API_MODE=mock</span>
+<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PROXMOX_MOCK_SCHEMA_VERSION=latest</span>
 </code></pre></div>
 <p>Ambos os servicos:
 - Usam <code>PROXMOX_API_MODE=mock</code>
@@ -2114,16 +2164,17 @@
 <li>Regra singleton para endpoint NetBox.</li>
 </ul>
 <p>Executar apenas este arquivo:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>pytest<span class="w"> </span>tests/test_endpoint_crud.py
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>pytest<span class="w"> </span>tests/test_endpoint_crud.py
 </code></pre></div>
 <h2 id="verificacao-de-compilacao">Verificacao de compilacao<a class="headerlink" href="#verificacao-de-compilacao" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>python<span class="w"> </span>-m<span class="w"> </span>compileall<span class="w"> </span>proxbox_api
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>python<span class="w"> </span>-m<span class="w"> </span>compileall<span class="w"> </span>proxbox_api
 </code></pre></div>
 <h2 id="checks-recomendados-antes-de-pr">Checks recomendados antes de PR<a class="headerlink" href="#checks-recomendados-antes-de-pr" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>pytest</code></li>
 <li><code>python -m compileall proxbox_api</code></li>
 <li><code>mkdocs build --strict</code> (quando docs mudarem)</li>
+<li><code>cargo test --no-default-features</code> em <code>proxbox-reconcile-rs</code> (quando Rust mudar)</li>
 </ul>
 <h2 id="checks-de-contrato-proxmox-gerado">Checks de contrato Proxmox gerado<a class="headerlink" href="#checks-de-contrato-proxmox-gerado" title="Permanent link">&para;</a></h2>
 <p>Ao alterar <code>proxbox_api/proxmox_codegen/</code> ou a camada de servico Proxmox voltada para sync:</p>
@@ -2134,27 +2185,27 @@
 </ul>
 <h2 id="solucao-de-problemas">Solucao de Problemas<a class="headerlink" href="#solucao-de-problemas" title="Permanent link">&para;</a></h2>
 <h3 id="container-nao-inicia">Container Nao Inicia<a class="headerlink" href="#container-nao-inicia" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Ver logs do container</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>proxmox-mock-published
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>proxmox-mock-local
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="c1"># Verificar status de health</span>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="c1"># Reiniciar containers</span>
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>docker<span class="w"> </span>compose<span class="w"> </span>restart
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Ver logs do container</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>proxmox-mock-published
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>proxmox-mock-local
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="c1"># Verificar status de health</span>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="c1"># Reiniciar containers</span>
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>docker<span class="w"> </span>compose<span class="w"> </span>restart
 </code></pre></div>
 <h3 id="testes-timeout">Testes Timeout<a class="headerlink" href="#testes-timeout" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Aumente o timeout de health check em docker-compose.yml</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="c1"># Ou aguarde mais antes de executar testes:</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>sleep<span class="w"> </span><span class="m">30</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Aumente o timeout de health check em docker-compose.yml</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="c1"># Ou aguarde mais antes de executar testes:</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>sleep<span class="w"> </span><span class="m">30</span>
 </code></pre></div>
 <h3 id="erros-de-import">Erros de Import<a class="headerlink" href="#erros-de-import" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Garanta que dependencias estao instaladas</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>uv<span class="w"> </span>sync<span class="w"> </span>--frozen<span class="w"> </span>--extra<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--group<span class="w"> </span>dev
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># Verificar imports</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from proxbox_api.testing import MockProxmoxContext&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Garanta que dependencias estao instaladas</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>uv<span class="w"> </span>sync<span class="w"> </span>--frozen<span class="w"> </span>--extra<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--group<span class="w"> </span>dev
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1"># Verificar imports</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from proxbox_api.testing import MockProxmoxContext&quot;</span>
 </code></pre></div>
 
 
