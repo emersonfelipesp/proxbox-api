@@ -173,6 +173,24 @@ class DeletionRequestRecord(SQLModel, table=True):
     updated_at: float = Field(default_factory=time.time)
 
 
+class FirewallIntentRequestRecord(SQLModel, table=True):
+    __tablename__: ClassVar[str] = "firewall_intent_request"
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    endpoint_id: int = Field(index=True)
+    actor: str | None = Field(default=None, index=True)
+    action: str = Field(index=True)
+    state: str = Field(default="planned", index=True)
+    payload: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    plan_snapshot: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
 class PBSEndpoint(SQLModel, table=True):
     """Proxmox Backup Server (PBS) endpoint record.
 

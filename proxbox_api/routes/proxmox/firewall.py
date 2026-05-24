@@ -1,4 +1,4 @@
-"""Proxmox VE firewall endpoints (read-only).
+"""Proxmox VE firewall endpoints.
 
 Surfaces firewall rules, security groups, IP sets, aliases, and options for all
 firewall zones: datacenter, node, VM (QEMU + LXC), and VNet SDN (tech-preview).
@@ -8,21 +8,37 @@ The nftables vs iptables backend difference is a runtime flag, not an API
 difference. SDK calls that are not implemented on older/newer clusters degrade
 gracefully — HTTP 500 responses are caught and return empty lists silently.
 
-All endpoints are read-only by design. Firewall write operations are
-explicitly out of scope for this release.
+Write endpoints are intentionally explicit operator actions. They are gated by
+``ProxmoxEndpoint.allow_writes`` and require ``X-Proxbox-Actor`` attribution.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi.responses import JSONResponse
+from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel
 
+from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
+from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.routes.intent.dispatchers.common import get_vm_proxy
-from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.schemas.firewall import (
+    FirewallAliasWrite,
+    FirewallIPSetEntryWrite,
+    FirewallIPSetWrite,
+    FirewallOptionsWrite,
+    FirewallRuleWrite,
+    FirewallSecurityGroupWrite,
+    FirewallVmType,
+    FirewallWriteResponse,
+)
+from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
+from proxbox_api.session.proxmox_providers import _parse_db_endpoint
+from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
 
@@ -162,6 +178,186 @@ async def _safe_get_dict(coro_or_result) -> dict:
         return result if isinstance(result, dict) else {}
     except Exception:
         return {}
+
+
+async def _firewall_gate(
+    session: SessionDep,
+    endpoint_id: int | None,
+) -> JSONResponse | ProxmoxEndpoint:
+    """Resolve the target endpoint and enforce the firewall write gate."""
+    if endpoint_id is None:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "reason": "endpoint_id_required",
+                "detail": "Firewall writes require an explicit endpoint_id query parameter.",
+            },
+        )
+
+    endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
+    if endpoint is None:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "reason": "endpoint_not_found",
+                "detail": f"No ProxmoxEndpoint with id={endpoint_id}.",
+            },
+        )
+
+    if not endpoint.allow_writes:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "reason": "writes_disabled_for_endpoint",
+                "detail": (
+                    "Firewall writes are disabled on this endpoint. Enable "
+                    "ProxmoxEndpoint.allow_writes before pushing firewall changes."
+                ),
+                "endpoint_id": endpoint.id,
+            },
+        )
+
+    return endpoint
+
+
+async def _open_proxmox_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
+    """Open a Proxmox API session for a DB endpoint."""
+    schema = _parse_db_endpoint(endpoint)
+    return await ProxmoxSession.create(schema)
+
+
+async def _close_proxmox_session(proxmox: ProxmoxSession) -> None:
+    close_method = getattr(proxmox, "aclose", None)
+    if callable(close_method):
+        try:
+            await close_method()
+        except Exception as exc:  # pragma: no cover - best-effort cleanup
+            logger.debug("Failed to close firewall write Proxmox session: %s", exc)
+
+
+def _require_actor(actor: str | None) -> str:
+    actor_value = (actor or "").strip()
+    if not actor_value:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "actor_required",
+                "detail": "Firewall writes require X-Proxbox-Actor.",
+            },
+        )
+    return actor_value
+
+
+def _task_id(raw: object) -> str | None:
+    if isinstance(raw, str) and raw.startswith("UPID:"):
+        return raw
+    if isinstance(raw, dict):
+        value = raw.get("upid") or raw.get("task") or raw.get("data")
+        if isinstance(value, str) and value.startswith("UPID:"):
+            return value
+    return None
+
+
+def _unsupported_response(
+    *,
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    path: str,
+    reason: str,
+    detail: str,
+) -> FirewallWriteResponse:
+    return FirewallWriteResponse(
+        status="skipped",
+        endpoint_id=endpoint.id,
+        cluster_name=endpoint.name,
+        actor=actor,
+        path=path,
+        reason=reason,
+        detail=detail,
+    )
+
+
+async def _firewall_write(
+    *,
+    db: SessionDep,
+    endpoint_id: int | None,
+    actor: str | None,
+    method: str,
+    path: str,
+    payload: dict[str, object] | None = None,
+    unsupported_reason: str = "firewall_write_not_supported",
+    probe_supported: bool = False,
+) -> FirewallWriteResponse | JSONResponse:
+    """Dispatch one write through proxmox-sdk with gate and unsupported-surface handling."""
+    actor_value = _require_actor(actor)
+    endpoint_or_response = await _firewall_gate(db, endpoint_id)
+    if isinstance(endpoint_or_response, JSONResponse):
+        return endpoint_or_response
+    endpoint = endpoint_or_response
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except Exception as exc:
+        logger.warning("Failed to open Proxmox session for firewall write: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason": "proxmox_session_unreachable",
+                "detail": str(exc),
+                "endpoint_id": endpoint.id,
+            },
+        ) from exc
+
+    try:
+        resource = proxmox.session(path)
+        try:
+            if probe_supported:
+                await resolve_async(resource.get())
+            write_call = getattr(resource, method)
+            raw = await resolve_async(write_call(**(payload or {})))
+        except ResourceException as exc:
+            if probe_supported and exc.status_code in {404, 501}:
+                return _unsupported_response(
+                    endpoint=endpoint,
+                    actor=actor_value,
+                    path=path,
+                    reason=unsupported_reason,
+                    detail=f"Upstream Proxmox returned HTTP {exc.status_code}.",
+                )
+            raise
+
+        return FirewallWriteResponse(
+            status="deleted" if method == "delete" else "pushed",
+            endpoint_id=endpoint.id,
+            cluster_name=endpoint.name,
+            actor=actor_value,
+            path=path,
+            proxmox_task_id=_task_id(raw),
+            response=raw,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Firewall write failed for endpoint=%s path=%s", endpoint.id, path)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason": "proxmox_firewall_write_failed",
+                "detail": str(exc),
+                "endpoint_id": endpoint.id,
+                "path": path,
+            },
+        ) from exc
+    finally:
+        await _close_proxmox_session(proxmox)
+
+
+def _rule_payload(payload: FirewallRuleWrite) -> dict[str, object]:
+    return payload.pve_payload()
+
+
+def _entry_payload(payload: FirewallIPSetEntryWrite) -> dict[str, object]:
+    return payload.pve_payload()
 
 
 _OPTIONS_KNOWN_KEYS: frozenset[str] = frozenset(
@@ -336,6 +532,326 @@ async def datacenter_firewall_options(pxs: ProxmoxSessionsDep):
     return None
 
 
+# ── Datacenter-level write endpoints ─────────────────────────────────────────
+
+
+@router.post("/firewall/datacenter/rules", response_model=FirewallWriteResponse)
+async def create_datacenter_firewall_rule(
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path="cluster/firewall/rules",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.put("/firewall/datacenter/rules/{pos}", response_model=FirewallWriteResponse)
+async def update_datacenter_firewall_rule(
+    pos: int,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"cluster/firewall/rules/{pos}",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.delete("/firewall/datacenter/rules/{pos}", response_model=FirewallWriteResponse)
+async def delete_datacenter_firewall_rule(
+    pos: int,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"cluster/firewall/rules/{pos}",
+    )
+
+
+@router.post("/firewall/datacenter/groups", response_model=FirewallWriteResponse)
+async def create_datacenter_firewall_group(
+    payload: FirewallSecurityGroupWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    body = payload.pve_payload()
+    if not body.get("group"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "firewall_group_name_required",
+                "detail": "group or name is required",
+            },
+        )
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path="cluster/firewall/groups",
+        payload=body,
+    )
+
+
+@router.delete("/firewall/datacenter/groups/{group}", response_model=FirewallWriteResponse)
+async def delete_datacenter_firewall_group(
+    group: str,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"cluster/firewall/groups/{group}",
+    )
+
+
+@router.post("/firewall/datacenter/groups/{group}/rules", response_model=FirewallWriteResponse)
+async def create_datacenter_firewall_group_rule(
+    group: str,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=f"cluster/firewall/groups/{group}",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.put(
+    "/firewall/datacenter/groups/{group}/rules/{pos}",
+    response_model=FirewallWriteResponse,
+)
+async def update_datacenter_firewall_group_rule(
+    group: str,
+    pos: int,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"cluster/firewall/groups/{group}/{pos}",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.delete(
+    "/firewall/datacenter/groups/{group}/rules/{pos}",
+    response_model=FirewallWriteResponse,
+)
+async def delete_datacenter_firewall_group_rule(
+    group: str,
+    pos: int,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"cluster/firewall/groups/{group}/{pos}",
+    )
+
+
+@router.post("/firewall/datacenter/ipsets", response_model=FirewallWriteResponse)
+async def create_datacenter_firewall_ipset(
+    payload: FirewallIPSetWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path="cluster/firewall/ipset",
+        payload=payload.pve_payload(),
+    )
+
+
+@router.delete("/firewall/datacenter/ipsets/{name}", response_model=FirewallWriteResponse)
+async def delete_datacenter_firewall_ipset(
+    name: str,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"cluster/firewall/ipset/{name}",
+    )
+
+
+@router.post(
+    "/firewall/datacenter/ipsets/{name}/entries",
+    response_model=FirewallWriteResponse,
+)
+async def create_datacenter_firewall_ipset_entry(
+    name: str,
+    payload: FirewallIPSetEntryWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=f"cluster/firewall/ipset/{name}",
+        payload=_entry_payload(payload),
+    )
+
+
+@router.put(
+    "/firewall/datacenter/ipsets/{name}/entries/{cidr:path}",
+    response_model=FirewallWriteResponse,
+)
+async def update_datacenter_firewall_ipset_entry(
+    name: str,
+    cidr: str,
+    payload: FirewallIPSetEntryWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"cluster/firewall/ipset/{name}/{cidr}",
+        payload=_entry_payload(payload),
+    )
+
+
+@router.delete(
+    "/firewall/datacenter/ipsets/{name}/entries/{cidr:path}",
+    response_model=FirewallWriteResponse,
+)
+async def delete_datacenter_firewall_ipset_entry(
+    name: str,
+    cidr: str,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"cluster/firewall/ipset/{name}/{cidr}",
+    )
+
+
+@router.post("/firewall/datacenter/aliases", response_model=FirewallWriteResponse)
+async def create_datacenter_firewall_alias(
+    payload: FirewallAliasWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path="cluster/firewall/aliases",
+        payload=payload.pve_payload(),
+    )
+
+
+@router.put("/firewall/datacenter/aliases/{name}", response_model=FirewallWriteResponse)
+async def update_datacenter_firewall_alias(
+    name: str,
+    payload: FirewallAliasWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"cluster/firewall/aliases/{name}",
+        payload=payload.pve_payload(exclude={"name"}),
+    )
+
+
+@router.delete("/firewall/datacenter/aliases/{name}", response_model=FirewallWriteResponse)
+async def delete_datacenter_firewall_alias(
+    name: str,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"cluster/firewall/aliases/{name}",
+    )
+
+
+@router.put("/firewall/datacenter/options", response_model=FirewallWriteResponse)
+async def update_datacenter_firewall_options(
+    payload: FirewallOptionsWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path="cluster/firewall/options",
+        payload=payload.pve_payload(),
+    )
+
+
 # ── Node-level endpoints ──────────────────────────────────────────────────────
 
 
@@ -369,6 +885,81 @@ async def node_firewall_options(node: str, pxs: ProxmoxSessionsDep):
         except Exception:
             logger.exception("Error fetching node %s firewall options for %s", node, px.name)
     return None
+
+
+# ── Node-level write endpoints ───────────────────────────────────────────────
+
+
+@router.post("/firewall/nodes/{node}/rules", response_model=FirewallWriteResponse)
+async def create_node_firewall_rule(
+    node: str,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=f"nodes/{node}/firewall/rules",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.put("/firewall/nodes/{node}/rules/{pos}", response_model=FirewallWriteResponse)
+async def update_node_firewall_rule(
+    node: str,
+    pos: int,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"nodes/{node}/firewall/rules/{pos}",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.delete("/firewall/nodes/{node}/rules/{pos}", response_model=FirewallWriteResponse)
+async def delete_node_firewall_rule(
+    node: str,
+    pos: int,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"nodes/{node}/firewall/rules/{pos}",
+    )
+
+
+@router.put("/firewall/nodes/{node}/options", response_model=FirewallWriteResponse)
+async def update_node_firewall_options(
+    node: str,
+    payload: FirewallOptionsWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"nodes/{node}/firewall/options",
+        payload=payload.pve_payload(),
+    )
 
 
 # ── VM-level endpoints ────────────────────────────────────────────────────────
@@ -500,6 +1091,325 @@ async def vm_firewall_options(vmid: int, node: str, pxs: ProxmoxSessionsDep, vm_
         except Exception:
             logger.exception("Error fetching VM %s firewall options for %s", vmid, px.name)
     return None
+
+
+def _vm_firewall_base(node: str, vmid: int, vm_type: FirewallVmType) -> str:
+    return f"nodes/{node}/{vm_type}/{vmid}/firewall"
+
+
+# ── VM-level write endpoints ─────────────────────────────────────────────────
+
+
+@router.post("/firewall/vms/{vmid}/rules", response_model=FirewallWriteResponse)
+async def create_vm_firewall_rule(
+    vmid: int,
+    node: str,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/rules",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.put("/firewall/vms/{vmid}/rules/{pos}", response_model=FirewallWriteResponse)
+async def update_vm_firewall_rule(
+    vmid: int,
+    pos: int,
+    node: str,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/rules/{pos}",
+        payload=_rule_payload(payload),
+    )
+
+
+@router.delete("/firewall/vms/{vmid}/rules/{pos}", response_model=FirewallWriteResponse)
+async def delete_vm_firewall_rule(
+    vmid: int,
+    pos: int,
+    node: str,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/rules/{pos}",
+    )
+
+
+@router.post("/firewall/vms/{vmid}/ipsets", response_model=FirewallWriteResponse)
+async def create_vm_firewall_ipset(
+    vmid: int,
+    node: str,
+    payload: FirewallIPSetWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/ipset",
+        payload=payload.pve_payload(),
+    )
+
+
+@router.delete("/firewall/vms/{vmid}/ipsets/{name}", response_model=FirewallWriteResponse)
+async def delete_vm_firewall_ipset(
+    vmid: int,
+    name: str,
+    node: str,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/ipset/{name}",
+    )
+
+
+@router.post("/firewall/vms/{vmid}/ipsets/{name}/entries", response_model=FirewallWriteResponse)
+async def create_vm_firewall_ipset_entry(
+    vmid: int,
+    name: str,
+    node: str,
+    payload: FirewallIPSetEntryWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/ipset/{name}",
+        payload=_entry_payload(payload),
+    )
+
+
+@router.put(
+    "/firewall/vms/{vmid}/ipsets/{name}/entries/{cidr:path}",
+    response_model=FirewallWriteResponse,
+)
+async def update_vm_firewall_ipset_entry(
+    vmid: int,
+    name: str,
+    cidr: str,
+    node: str,
+    payload: FirewallIPSetEntryWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/ipset/{name}/{cidr}",
+        payload=_entry_payload(payload),
+    )
+
+
+@router.delete(
+    "/firewall/vms/{vmid}/ipsets/{name}/entries/{cidr:path}",
+    response_model=FirewallWriteResponse,
+)
+async def delete_vm_firewall_ipset_entry(
+    vmid: int,
+    name: str,
+    cidr: str,
+    node: str,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/ipset/{name}/{cidr}",
+    )
+
+
+@router.post("/firewall/vms/{vmid}/aliases", response_model=FirewallWriteResponse)
+async def create_vm_firewall_alias(
+    vmid: int,
+    node: str,
+    payload: FirewallAliasWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/aliases",
+        payload=payload.pve_payload(),
+    )
+
+
+@router.put("/firewall/vms/{vmid}/aliases/{name}", response_model=FirewallWriteResponse)
+async def update_vm_firewall_alias(
+    vmid: int,
+    name: str,
+    node: str,
+    payload: FirewallAliasWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/aliases/{name}",
+        payload=payload.pve_payload(exclude={"name"}),
+    )
+
+
+@router.delete("/firewall/vms/{vmid}/aliases/{name}", response_model=FirewallWriteResponse)
+async def delete_vm_firewall_alias(
+    vmid: int,
+    name: str,
+    node: str,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/aliases/{name}",
+    )
+
+
+@router.put("/firewall/vms/{vmid}/options", response_model=FirewallWriteResponse)
+async def update_vm_firewall_options(
+    vmid: int,
+    node: str,
+    payload: FirewallOptionsWrite,
+    db: SessionDep,
+    vm_type: FirewallVmType = Query(default="qemu"),
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"{_vm_firewall_base(node, vmid, vm_type)}/options",
+        payload=payload.pve_payload(),
+    )
+
+
+# ── VNet/SDN firewall write endpoints ────────────────────────────────────────
+
+
+@router.post("/firewall/vnets/{vnet}/rules", response_model=FirewallWriteResponse)
+async def create_vnet_firewall_rule(
+    vnet: str,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    path = f"cluster/sdn/vnets/{vnet}/firewall/rules"
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="post",
+        path=path,
+        payload=_rule_payload(payload),
+        unsupported_reason="vnet_firewall_not_supported",
+        probe_supported=True,
+    )
+
+
+@router.put("/firewall/vnets/{vnet}/rules/{pos}", response_model=FirewallWriteResponse)
+async def update_vnet_firewall_rule(
+    vnet: str,
+    pos: int,
+    payload: FirewallRuleWrite,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="put",
+        path=f"cluster/sdn/vnets/{vnet}/firewall/rules/{pos}",
+        payload=_rule_payload(payload),
+        unsupported_reason="vnet_firewall_not_supported",
+        probe_supported=True,
+    )
+
+
+@router.delete("/firewall/vnets/{vnet}/rules/{pos}", response_model=FirewallWriteResponse)
+async def delete_vnet_firewall_rule(
+    vnet: str,
+    pos: int,
+    db: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+):
+    return await _firewall_write(
+        db=db,
+        endpoint_id=endpoint_id,
+        actor=actor,
+        method="delete",
+        path=f"cluster/sdn/vnets/{vnet}/firewall/rules/{pos}",
+        unsupported_reason="vnet_firewall_not_supported",
+        probe_supported=True,
+    )
 
 
 # ── Aggregated summary endpoint ───────────────────────────────────────────────

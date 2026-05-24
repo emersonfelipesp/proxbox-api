@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from proxbox_api.routes.intent.cloud_init import CloudInitPayload
 
 DiffOp = Literal["create", "update", "delete"]
-VMKind = Literal["virtualmachine", "lxc"]
+VMKind = Literal["virtualmachine", "lxc", "firewall"]
 Verdict = Literal["permitted", "blocked", "warning"]
 DeletionRequestKind = Literal["qemu", "lxc"]
 DeletionRequestState = Literal[
@@ -149,11 +149,26 @@ class LXCIntentPayload(BaseModel):
     password: str | None = None
 
 
+class FirewallIntentPayload(BaseModel):
+    action: str
+    zone: str | None = None
+    node: str | None = None
+    vmid: int | None = None
+    vm_type: Literal["qemu", "lxc"] | None = None
+    vnet: str | None = None
+    group: str | None = None
+    pos: int | None = None
+    name: str | None = None
+    cidr: str | None = None
+    body: dict[str, object] = Field(default_factory=dict)
+    rollback: dict[str, object] = Field(default_factory=dict)
+
+
 class ApplyDiff(BaseModel):
     op: Literal["create", "update", "delete"]
-    kind: Literal["qemu", "lxc"]
+    kind: Literal["qemu", "lxc", "firewall"]
     netbox_id: int | None = None
-    payload: VMIntentPayload | LXCIntentPayload
+    payload: VMIntentPayload | LXCIntentPayload | FirewallIntentPayload
 
     @model_validator(mode="before")
     @classmethod
@@ -169,6 +184,8 @@ class ApplyDiff(BaseModel):
             coerced["payload"] = VMIntentPayload.model_validate(payload)
         elif kind == "lxc":
             coerced["payload"] = LXCIntentPayload.model_validate(payload)
+        elif kind == "firewall":
+            coerced["payload"] = FirewallIntentPayload.model_validate(payload)
         return coerced
 
 
