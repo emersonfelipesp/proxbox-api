@@ -51,13 +51,16 @@ Preparation runs with bounded concurrency using `asyncio.gather` + semaphore.
 
 The sync reads all NetBox VMs in paginated batches (`limit/offset`) and builds an in-memory index keyed by:
 
-- `(cluster_id, proxmox_vm_id)`
+- `(cluster_id, proxmox_vm_id, proxmox_vm_type)`
 
 This avoids repeated NetBox list/filter calls during per-VM comparison.
+The VM type segment prevents QEMU VM 100 and LXC CT 100 in the same cluster from colliding.
+Legacy records that do not yet have `custom_fields.proxmox_vm_type` are matched only when the
+`(cluster_id, proxmox_vm_id)` identity is unambiguous.
 
-### Phase 4: Pydantic Reconciliation
+### Phase 4: Queue Reconciliation
 
-For each prepared VM:
+The default reconciliation engine is Python. For each prepared VM:
 
 1. Validate desired payload with `NetBoxVirtualMachineCreateBody`.
 2. Normalize current NetBox record with the same schema.
@@ -68,6 +71,35 @@ Classification result:
 - `GET`: Object exists and no delta.
 - `CREATE`: Object missing in snapshot index.
 - `UPDATE`: Object exists and delta is non-empty.
+
+An optional Rust implementation exists behind a pure JSON boundary:
+
+```text
+Input  : prepared_vms + netbox_snapshot + flags  (JSON bytes)
+Output : operation queue (CREATE | GET | UPDATE + patch_payload)  (JSON bytes)
+```
+
+The Rust function performs no HTTP, async work, database access, retry logic, or dispatch.
+Those concerns remain in Python. When the native package is installed, the Python bridge can
+serialize inputs with Pydantic v2, call the PyO3 extension with the GIL released, decode the
+result, and adapt operations back to the Python dataclasses used by dispatch.
+
+Engine selection is controlled by environment variables:
+
+| Variable | Value | Behavior |
+|----------|-------|----------|
+| `PROXBOX_RECONCILIATION_ENGINE` | `python` | Default. Use Python output only. |
+| `PROXBOX_RECONCILIATION_ENGINE` | `compare` | Run Python and Rust when Rust is installed, log mismatches, return Python output. |
+| `PROXBOX_RECONCILIATION_ENGINE` | `rust` | Return adapted Rust output. |
+| `PROXBOX_RECONCILIATION_COMPARE_STRICT` | `true` | Raise on compare-mode mismatch. Intended for CI. |
+
+If the Rust package is not installed, `python` mode works normally and `compare` mode returns
+Python output. `rust` mode requires the native package and fails clearly if it is unavailable.
+
+Compare-mode mismatches increment `proxbox_reconcile_mismatch_total`, which is exposed in:
+
+- `/cache/metrics`
+- `/cache/metrics/prometheus`
 
 ### Phase 5: Sequential NetBox Dispatch in Batch Windows
 
@@ -118,7 +150,7 @@ sequenceDiagram
     S->>N: Fetch NetBox VM pages
     N-->>S: NetBox in-memory snapshot
 
-    S->>S: Reconcile with Pydantic
+    S->>S: Reconcile with Python or optional Rust engine
     S->>S: Build ordered operations queue
 
     loop Sequential batch dispatch
@@ -136,7 +168,7 @@ sequenceDiagram
 
 `CREATE`
 
-- Means no matching `(cluster_id, proxmox_vm_id)` was found.
+- Means no matching `(cluster_id, proxmox_vm_id, proxmox_vm_type)` was found.
 - NetBox POST is executed once during dispatch.
 
 `UPDATE`
@@ -148,8 +180,28 @@ sequenceDiagram
 
 - `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: controls concurrent VM preparation/fetch from Proxmox.
 - `PROXBOX_NETBOX_WRITE_CONCURRENCY`: defines dispatch batch window size.
+- `PROXBOX_RECONCILIATION_ENGINE`: selects `python`, `compare`, or `rust`.
+- `PROXBOX_RECONCILIATION_COMPARE_STRICT`: raises on compare-mode drift when set to `true`.
 
 Note: batch window size does not imply parallel writes; writes remain sequential to protect NetBox under single-instance operation.
+
+## Rust Rollout Policy
+
+Rust is not the default engine. Rollout is intentionally conservative:
+
+1. Build and test `proxbox-reconcile-rs` wheels in CI.
+2. Publish `proxbox-reconcile-rs` only through the repository release workflow.
+3. Keep `PROXBOX_RECONCILIATION_ENGINE=python` as the default in `proxbox-api`.
+4. Run `PROXBOX_RECONCILIATION_ENGINE=compare` in staging for at least two weeks.
+5. Watch `proxbox_reconcile_mismatch_total` and reconciliation mismatch logs.
+6. Recommend `PROXBOX_RECONCILIATION_ENGINE=rust` only after zero mismatches across diverse real syncs.
+7. Consider a default-engine change only in a later minor release and only after full sync wall-time benchmarks show a real win.
+
+Rollback is immediate: unset `PROXBOX_RECONCILIATION_ENGINE` or set it back to `python`.
+
+Current benchmark evidence does not justify making Rust the default. The full Rust path is slower
+than Python in the synthetic benchmark harness, and live measurement showed reconciliation was not
+the dominant sync cost.
 
 ## Benefits
 

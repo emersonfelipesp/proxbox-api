@@ -202,6 +202,34 @@ Ou com `uv`:
 uv add proxbox-api
 ```
 
+### Engine Rust opcional de reconciliacao
+
+A reconciliacao de VMs usa Python por padrao. Um pacote nativo opcional,
+`proxbox-reconcile-rs`, pode ser instalado para validacao em compare mode ou testes explicitos do
+engine Rust depois que os wheels forem publicados.
+
+Quando o pacote opcional estiver publicado, instale com:
+
+```bash
+pip install proxbox-api[rust]
+```
+
+Ate a publicacao do pacote nativo, instale a partir do checkout local:
+
+```bash
+uv sync --extra test --group dev
+uv pip install -e proxbox-reconcile-rs
+```
+
+Habilite primeiro o compare mode:
+
+```bash
+PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app
+```
+
+O padrao de producao continua sendo Python. Para rollback imediato, remova
+`PROXBOX_RECONCILIATION_ENGINE` ou defina `python`.
+
 Inicie o servidor apos instalar:
 
 ```bash
@@ -227,6 +255,12 @@ Ou use `uv`:
 
 ```bash
 uv sync
+```
+
+Instale o pacote Rust opcional para testes locais de paridade:
+
+```bash
+uv pip install -e proxbox-reconcile-rs
 ```
 
 Execute a API:
