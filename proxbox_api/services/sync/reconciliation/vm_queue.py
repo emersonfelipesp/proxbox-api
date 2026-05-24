@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+import difflib
+import json
+import logging
+import os
+from typing import Any, Literal
+
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
+from proxbox_api.services.sync.reconciliation.metrics import (
+    increment_reconciliation_mismatch_total,
+)
+from proxbox_api.services.sync.reconciliation.rust_bridge import (
+    build_vm_operation_queue_rust,
+    rust_available,
+)
 from proxbox_api.services.sync.reconciliation.types import NetBoxVMOperation, PreparedVMState
 from proxbox_api.services.sync.vm_helpers import (
     normalize_current_virtual_machine_payload,
@@ -10,6 +23,17 @@ from proxbox_api.services.sync.vm_helpers import (
 from proxbox_api.services.sync.vm_helpers import (
     relation_id as _relation_id,
 )
+
+logger = logging.getLogger(__name__)
+
+_ENGINE_ENV = "PROXBOX_RECONCILIATION_ENGINE"
+_COMPARE_STRICT_ENV = "PROXBOX_RECONCILIATION_COMPARE_STRICT"
+_VALID_ENGINES = {"python", "compare", "rust"}
+_MAX_DIFF_CHARS = 12000
+
+
+class RustOperationAdaptationError(RuntimeError):
+    """Raised when a raw Rust operation cannot be mapped back to prepared state."""
 
 
 def normalize_current_vm_payload(
@@ -242,13 +266,192 @@ def build_vm_operation_queue(
 ) -> list[NetBoxVMOperation]:
     """Engine-neutral VM operation-queue entry point."""
 
-    return build_vm_operation_queue_python(
+    flags = {
+        "overwrite_vm_role": overwrite_vm_role,
+        "overwrite_vm_type": overwrite_vm_type,
+        "overwrite_vm_tags": overwrite_vm_tags,
+        "overwrite_vm_description": overwrite_vm_description,
+        "overwrite_vm_custom_fields": overwrite_vm_custom_fields,
+        "supports_virtual_machine_type_field": supports_virtual_machine_type_field,
+    }
+    engine = _reconciliation_engine()
+
+    if engine == "rust":
+        return _build_vm_operation_queue_with_rust(prepared_vms, netbox_snapshot, flags)
+
+    py_ops = build_vm_operation_queue_python(
         prepared_vms,
         netbox_snapshot,
-        overwrite_vm_role=overwrite_vm_role,
-        overwrite_vm_type=overwrite_vm_type,
-        overwrite_vm_tags=overwrite_vm_tags,
-        overwrite_vm_description=overwrite_vm_description,
-        overwrite_vm_custom_fields=overwrite_vm_custom_fields,
-        supports_virtual_machine_type_field=supports_virtual_machine_type_field,
+        **flags,
     )
+
+    if engine == "python" or not rust_available():
+        return py_ops
+
+    try:
+        rust_ops = _build_vm_operation_queue_with_rust(prepared_vms, netbox_snapshot, flags)
+    except Exception as exc:
+        increment_reconciliation_mismatch_total()
+        logger.exception("Rust reconciliation failed in compare mode; returning Python output")
+        if _reconciliation_compare_strict():
+            raise AssertionError("Rust reconciliation failed in compare mode") from exc
+        return py_ops
+
+    normalized_py_ops = _normalize_ops(py_ops)
+    normalized_rust_ops = _normalize_ops(rust_ops)
+    if normalized_py_ops != normalized_rust_ops:
+        increment_reconciliation_mismatch_total()
+        diff = _format_diff(normalized_py_ops, normalized_rust_ops)
+        logger.error("Rust reconciliation mismatch:\n%s", diff)
+        if _reconciliation_compare_strict():
+            raise AssertionError(f"Rust/Python reconciliation mismatch:\n{diff}")
+
+    return py_ops
+
+
+def _build_vm_operation_queue_with_rust(
+    prepared_vms: list[PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+    flags: dict[str, bool],
+) -> list[NetBoxVMOperation]:
+    raw_ops = build_vm_operation_queue_rust(
+        prepared_vms=prepared_vms,
+        netbox_snapshot=netbox_snapshot,
+        flags=flags,
+    )
+    return _adapt_to_dataclasses(raw_ops, prepared_vms)
+
+
+def _reconciliation_engine() -> Literal["python", "compare", "rust"]:
+    engine = os.getenv(_ENGINE_ENV, "python").strip().lower()
+    if engine not in _VALID_ENGINES:
+        valid = ", ".join(sorted(_VALID_ENGINES))
+        raise ValueError(f"Invalid {_ENGINE_ENV}={engine!r}; expected one of: {valid}")
+    return engine  # type: ignore[return-value]
+
+
+def _reconciliation_compare_strict() -> bool:
+    return os.getenv(_COMPARE_STRICT_ENV, "false").strip().lower() == "true"
+
+
+def _adapt_to_dataclasses(
+    raw_ops: list[dict[str, Any]],
+    prepared_vms: list[PreparedVMState],
+) -> list[NetBoxVMOperation]:
+    by_key = _prepared_by_result_key(prepared_vms)
+    adapted: list[NetBoxVMOperation] = []
+
+    for index, raw_op in enumerate(raw_ops):
+        key = _raw_operation_result_key(raw_op, index)
+        prepared = by_key.get(key)
+        if prepared is None:
+            raise RustOperationAdaptationError(
+                f"Rust operation {index} references unknown prepared VM identity {key!r}"
+            )
+
+        method = raw_op.get("method")
+        if method not in {"GET", "CREATE", "UPDATE"}:
+            raise RustOperationAdaptationError(
+                f"Rust operation {index} has invalid method {method!r}"
+            )
+
+        existing_record = raw_op.get("existing_record")
+        if existing_record is not None and not isinstance(existing_record, dict):
+            raise RustOperationAdaptationError(
+                f"Rust operation {index} has non-object existing_record"
+            )
+
+        patch_payload = raw_op.get("patch_payload") or {}
+        if not isinstance(patch_payload, dict):
+            raise RustOperationAdaptationError(
+                f"Rust operation {index} has non-object patch_payload"
+            )
+
+        adapted.append(
+            NetBoxVMOperation(
+                method=method,
+                prepared=prepared,
+                existing_record=existing_record,
+                patch_payload=patch_payload,
+            )
+        )
+
+    return adapted
+
+
+def _prepared_by_result_key(
+    prepared_vms: list[PreparedVMState],
+) -> dict[tuple[str, int, str], PreparedVMState]:
+    by_key: dict[tuple[str, int, str], PreparedVMState] = {}
+    for prepared in prepared_vms:
+        key = prepared_vm_result_key(prepared)
+        if key in by_key:
+            raise RustOperationAdaptationError(f"Duplicate prepared VM identity {key!r}")
+        by_key[key] = prepared
+    return by_key
+
+
+def _raw_operation_result_key(raw_op: dict[str, Any], index: int) -> tuple[str, int, str]:
+    cluster_name = raw_op.get("cluster_name")
+    if not isinstance(cluster_name, str) or not cluster_name:
+        raise RustOperationAdaptationError(
+            f"Rust operation {index} has invalid cluster_name {cluster_name!r}"
+        )
+
+    try:
+        vmid = int(raw_op.get("vmid"))
+    except (TypeError, ValueError) as exc:
+        raise RustOperationAdaptationError(
+            f"Rust operation {index} has invalid vmid {raw_op.get('vmid')!r}"
+        ) from exc
+
+    vm_type = normalize_proxmox_vm_type(raw_op.get("vm_type")) or ""
+    return (cluster_name, vmid, vm_type)
+
+
+def _normalize_ops(ops: list[NetBoxVMOperation]) -> list[dict[str, object]]:
+    return [
+        {
+            "method": op.method,
+            "prepared": {
+                "cluster_name": prepared_vm_result_key(op.prepared)[0],
+                "vmid": prepared_vm_result_key(op.prepared)[1],
+                "vm_type": prepared_vm_result_key(op.prepared)[2],
+            },
+            "existing_record": _normalize_value(op.existing_record),
+            "patch_payload": _normalize_value(op.patch_payload),
+            "desired_payload": _normalize_value(op.prepared.desired_payload),
+        }
+        for op in ops
+    ]
+
+
+def _normalize_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_value(child)
+            for key, child in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, list | tuple):
+        return [_normalize_value(child) for child in value]
+    return value
+
+
+def _format_diff(
+    python_ops: list[dict[str, object]],
+    rust_ops: list[dict[str, object]],
+) -> str:
+    python_text = json.dumps(python_ops, indent=2, sort_keys=True, default=str).splitlines()
+    rust_text = json.dumps(rust_ops, indent=2, sort_keys=True, default=str).splitlines()
+    diff = "\n".join(
+        difflib.unified_diff(
+            python_text,
+            rust_text,
+            fromfile="python",
+            tofile="rust",
+            lineterm="",
+        )
+    )
+    if len(diff) > _MAX_DIFF_CHARS:
+        return f"{diff[:_MAX_DIFF_CHARS]}\n... diff truncated ..."
+    return diff
