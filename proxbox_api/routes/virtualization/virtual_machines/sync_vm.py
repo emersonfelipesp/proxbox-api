@@ -112,6 +112,19 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 router = APIRouter()
 
 
+def _vm_dependency_error_detail(error: Exception) -> str:
+    details: list[str] = []
+    for attr_name in ("detail", "python_exception"):
+        value = getattr(error, attr_name, None)
+        if value is not None:
+            text = str(value)
+            if text and text not in details:
+                details.append(text)
+    if not details:
+        details.append(str(error))
+    return " | ".join(details)
+
+
 @dataclass(slots=True)
 class _PreparedVMState:
     """In-memory VM snapshot prepared from Proxmox + dependency cache."""
@@ -1546,9 +1559,11 @@ async def create_virtual_machines(  # noqa: C901
     try:
         await _precompute_vm_dependencies()
     except Exception as error:
+        error_detail = _vm_dependency_error_detail(error)
         raise ProxboxException(
             message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
-            python_exception=f"Error: {str(error)}",
+            detail=error_detail,
+            python_exception=f"Error: {error_detail}",
         )
 
     async def _get_vm_type(vm_type_key: str) -> object | None:
@@ -1944,18 +1959,20 @@ async def create_virtual_machines(  # noqa: C901
                 )
 
         except Exception as error:
+            error_detail = _vm_dependency_error_detail(error)
             if bridge:
                 await bridge.emit_error_detail(
                     message="Failed to resolve VM dependencies",
                     category=ErrorCategory.VALIDATION,
                     phase="virtual-machines",
                     item={"name": vm_name},
-                    detail=str(error),
+                    detail=error_detail,
                     suggestion="Check cluster, node device, and VM role mappings in NetBox",
                 )
             raise ProxboxException(
                 message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
-                python_exception=f"Error: {str(error)}",
+                detail=error_detail,
+                python_exception=f"Error: {error_detail}",
             )
 
         now = datetime.now(timezone.utc)

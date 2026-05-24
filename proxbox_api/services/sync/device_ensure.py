@@ -149,6 +149,41 @@ def _prefer_existing_device(records: list[object]) -> NetBoxRecord | None:
     return records[0] if records else None
 
 
+def _ordered_device_candidates(records: list[object]) -> list[NetBoxRecord]:
+    """Return candidates with ProxBox-managed records ahead of manual records."""
+    proxbox_records = [record for record in records if _record_has_tag(record, "proxbox")]
+    if not proxbox_records:
+        return list(records)
+    proxbox_ids = {id(record) for record in proxbox_records}
+    return [*proxbox_records, *[record for record in records if id(record) not in proxbox_ids]]
+
+
+def _select_existing_device_for_target(
+    records: list[object],
+    *,
+    desired_site_id: int | None,
+    cluster_id: int | None,
+) -> NetBoxRecord | None:
+    """Select an existing device only when it is compatible with the target placement."""
+    candidates = _ordered_device_candidates(records)
+    if not candidates:
+        return None
+
+    if desired_site_id is not None:
+        for record in candidates:
+            if _relation_id_or_none(record.get("site")) == desired_site_id:
+                return record
+
+    if cluster_id is not None:
+        for record in candidates:
+            if _relation_id_or_none(record.get("cluster")) == cluster_id:
+                return record
+
+    if desired_site_id is None and cluster_id is None:
+        return candidates[0]
+    return None
+
+
 def _existing_device_site_pin(
     existing_device: NetBoxRecord | None,
     desired_site_id: int | None,
@@ -170,25 +205,31 @@ def _existing_device_site_pin(
 
 async def _resolve_existing_device_sites(
     nb: object,
-    device_names: list[str],
-) -> dict[str, int]:
-    """Return a {device_name: existing_site_id} map for any matching ProxBox-managed devices."""
-    pins: dict[str, int] = {}
-    for device_name in device_names:
-        try:
-            existing = await rest_list_async(
-                nb,
-                "/api/dcim/devices/",
-                query={"name": device_name, "limit": 2},
-            )
-        except Exception:
-            continue
-        record = _prefer_existing_device(existing)
+    device_targets: list[tuple[str, int | None, int | None]],
+) -> dict[tuple[str, int | None, int | None], int]:
+    """Return existing site pins for devices already compatible with a target."""
+    pins: dict[tuple[str, int | None, int | None], int] = {}
+    existing_by_name: dict[str, list[object]] = {}
+    for device_name, desired_site_id, cluster_id in device_targets:
+        if device_name not in existing_by_name:
+            try:
+                existing_by_name[device_name] = await rest_list_async(
+                    nb,
+                    "/api/dcim/devices/",
+                    query={"name": device_name, "limit": 10},
+                )
+            except Exception:
+                existing_by_name[device_name] = []
+        record = _select_existing_device_for_target(
+            existing_by_name[device_name],
+            desired_site_id=desired_site_id,
+            cluster_id=cluster_id,
+        )
         if record is None:
             continue
         site_id = _relation_id_or_none(record.get("site"))
         if site_id is not None:
-            pins[device_name] = site_id
+            pins[(device_name, desired_site_id, cluster_id)] = site_id
     return pins
 
 
@@ -543,23 +584,39 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         else None
     )
 
-    existing_site_pins = await _resolve_existing_device_sites(nb, sorted(set(node_names)))
-
+    device_targets: list[tuple[str, int | None, int | None]] = []
     device_payloads: list[dict[str, object]] = []
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
         cluster_record = cluster_by_name.get(cluster_name)
         site_record = site_by_cluster_name.get(cluster_name)
         desired_site_id = _relation_id_or_none(getattr(site_record, "id", None))
+        cluster_id = _relation_id_or_none(getattr(cluster_record, "id", None))
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()
             if not node_name:
                 continue
-            site_id = existing_site_pins.get(node_name, desired_site_id)
+            device_targets.append((node_name, desired_site_id, cluster_id))
+
+    existing_site_pins = await _resolve_existing_device_sites(nb, device_targets)
+
+    for cluster_status in clusters_status:
+        cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
+        cluster_record = cluster_by_name.get(cluster_name)
+        site_record = site_by_cluster_name.get(cluster_name)
+        desired_site_id = _relation_id_or_none(getattr(site_record, "id", None))
+        cluster_id = _relation_id_or_none(getattr(cluster_record, "id", None))
+        for node in getattr(cluster_status, "node_list", None) or []:
+            node_name = str(getattr(node, "name", "") or "").strip()
+            if not node_name:
+                continue
+            site_id = existing_site_pins.get(
+                (node_name, desired_site_id, cluster_id), desired_site_id
+            )
             device_payloads.append(
                 _device_payload(
                     node_name,
-                    cluster_id=_relation_id_or_none(getattr(cluster_record, "id", None)),
+                    cluster_id=cluster_id,
                     device_type_id=_relation_id_or_none(getattr(device_type, "id", None)),
                     role_id=_relation_id_or_none(getattr(role, "id", None)),
                     site_id=site_id,
@@ -581,7 +638,8 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                 name="devices",
                 path="/api/dcim/devices/",
                 payloads=device_payloads,
-                lookup_fields=["name"],
+                lookup_fields=["name", "site"],
+                lookup_query_field_map={"site": "site_id"},
                 schema=NetBoxDeviceSyncState,
                 patchable_fields=frozenset(_device_patchable),
                 current_normalizer=lambda record: {
@@ -834,9 +892,13 @@ async def _ensure_device(
     existing_devices = await rest_list_async(
         nb,
         "/api/dcim/devices/",
-        query={"name": device_name, "limit": 2},
+        query={"name": device_name, "limit": 10},
     )
-    existing_device = _prefer_existing_device(existing_devices)
+    existing_device = _select_existing_device_for_target(
+        existing_devices,
+        desired_site_id=site_id,
+        cluster_id=cluster_id,
+    )
     site_id = _existing_device_site_pin(existing_device, site_id)
 
     # First-discovery audit tag (issue #362). Stamp the node-discovery slug

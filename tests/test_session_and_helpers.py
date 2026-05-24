@@ -1859,7 +1859,7 @@ def test_ensure_device_preserves_existing_site_different_from_sync_default():
             )
 
     def make_get_response(query, payload):
-        if query.get("name") == "pve01" and query.get("limit") == 2:
+        if query.get("name") == "pve01" and query.get("limit") == 10:
             return (
                 200,
                 {
@@ -1974,7 +1974,7 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device():
     }
 
     def make_get_response(query, payload):
-        if query.get("name") == "pve01" and query.get("limit") == 2:
+        if query.get("name") == "pve01" and query.get("limit") == 10:
             return (
                 200,
                 {

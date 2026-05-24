@@ -15,6 +15,7 @@ branch propagating ``patchable_fields`` to ``rest_reconcile_async``.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -50,6 +51,12 @@ class _FakeExistingDevice:
             object.__setattr__(self, key, value)
             return
         self.applied[key] = value
+
+
+class _FakePhaseRecord(_FakeExistingDevice):
+    def __init__(self, current: dict[str, Any]) -> None:
+        super().__init__(current)
+        object.__setattr__(self, "id", current.get("id"))
 
 
 def _existing_payload(*, device_type_id: int, role_id: int) -> dict[str, Any]:
@@ -130,6 +137,138 @@ async def test_existing_device_preserves_device_type_when_flag_disabled(
     )
 
     assert "device_type" not in existing.applied
+
+
+@pytest.mark.asyncio
+async def test_existing_device_different_site_and_cluster_is_not_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not patch a same-name node from another cluster/site into the target cluster."""
+    existing = _FakeExistingDevice(_existing_payload(device_type_id=42, role_id=10))
+    existing._current.update({"cluster": 77, "site": 99})
+
+    async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [existing]
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_rest_reconcile(*_args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        payload = dict(kwargs["payload"])
+        payload["id"] = 101
+        return _FakeExistingDevice(payload)
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(device_ensure, "rest_reconcile_async", _fake_rest_reconcile)
+
+    await device_ensure._ensure_device(
+        nb=object(),
+        device_name="pve01",
+        cluster_id=11,
+        device_type_id=42,
+        role_id=10,
+        site_id=41,
+        tag_refs=[{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+        overwrite_flags=SyncOverwriteFlags(),
+    )
+
+    assert existing.saved is False
+    assert existing.applied == {}
+    assert captured["lookup"] == {"name": "pve01", "site_id": 41}
+    assert captured["payload"]["cluster"] == 11
+    assert captured["payload"]["site"] == 41
+
+
+@pytest.mark.asyncio
+async def test_bulk_device_reconcile_uses_name_and_site_for_same_name_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-name nodes in different cluster sites must not reuse the old-site record."""
+    captured_device_phase: dict[str, Any] = {}
+
+    async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [
+            _FakePhaseRecord(
+                {
+                    "id": 200,
+                    "name": "pve01",
+                    "site": 99,
+                    "cluster": 77,
+                    "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                }
+            )
+        ]
+
+    async def _fake_bulk_phases(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        phases = kwargs["phases"] if "phases" in kwargs else args[1]
+        phase_names = {phase.name for phase in phases}
+
+        if "cluster_types" in phase_names:
+            return {
+                "cluster_types": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 1, "name": "Cluster", "slug": "cluster"})]
+                ),
+                "manufacturers": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 2, "name": "Proxmox", "slug": "proxmox"})]
+                ),
+                "device_roles": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 3, "name": "Proxmox Node"})]
+                ),
+                "sites": SimpleNamespace(
+                    records=[
+                        _FakePhaseRecord(
+                            {
+                                "id": 41,
+                                "name": "Proxmox Default Site - PVE-CLUSTER-01",
+                                "slug": "proxmox-default-site-pve-cluster-01",
+                            }
+                        )
+                    ]
+                ),
+            }
+
+        if "clusters" in phase_names:
+            return {
+                "clusters": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 11, "name": "PVE-CLUSTER-01"})]
+                ),
+                "device_types": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 4, "model": "Proxmox Generic Device"})]
+                ),
+            }
+
+        device_phase = phases[0]
+        captured_device_phase["lookup_fields"] = list(device_phase.lookup_fields)
+        captured_device_phase["lookup_query_field_map"] = dict(
+            device_phase.lookup_query_field_map or {}
+        )
+        captured_device_phase["payload"] = dict(device_phase.payloads[0])
+        return {
+            "devices": SimpleNamespace(
+                records=[_FakePhaseRecord({"id": 101, **device_phase.payloads[0]})]
+            )
+        }
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(device_ensure, "rest_bulk_reconcile_phases_async", _fake_bulk_phases)
+
+    await device_ensure.ensure_proxmox_devices_bulk(
+        object(),
+        clusters_status=[
+            SimpleNamespace(
+                name="PVE-CLUSTER-01",
+                mode="cluster",
+                node_list=[SimpleNamespace(name="pve01")],
+            )
+        ],
+        tag_refs=[{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+        overwrite_flags=SyncOverwriteFlags(),
+    )
+
+    assert captured_device_phase["lookup_fields"] == ["name", "site"]
+    assert captured_device_phase["lookup_query_field_map"] == {"site": "site_id"}
+    assert captured_device_phase["payload"]["cluster"] == 11
+    assert captured_device_phase["payload"]["site"] == 41
 
 
 @pytest.mark.asyncio
