@@ -3,6 +3,39 @@
 from pydantic import field_validator
 
 from proxbox_api.schemas._base import ProxboxBaseModel
+from proxbox_api.schemas.firecracker import (
+    FirecrackerAssetPrepareRequest as FirecrackerAssetPrepareRequest,
+)
+from proxbox_api.schemas.firecracker import (
+    FirecrackerAssetPrepareResponse as FirecrackerAssetPrepareResponse,
+)
+from proxbox_api.schemas.firecracker import (
+    FirecrackerHostAgentHealth as FirecrackerHostAgentHealth,
+)
+from proxbox_api.schemas.firecracker import (
+    FirecrackerHostCapabilities as FirecrackerHostCapabilities,
+)
+from proxbox_api.schemas.firecracker import FirecrackerImageBundle as FirecrackerImageBundle
+from proxbox_api.schemas.firecracker import (
+    FirecrackerMicroVMAction as FirecrackerMicroVMAction,
+)
+from proxbox_api.schemas.firecracker import (
+    FirecrackerMicroVMCreateRequest as FirecrackerMicroVMCreateRequest,
+)
+from proxbox_api.schemas.firecracker import (
+    FirecrackerMicroVMMetrics as FirecrackerMicroVMMetrics,
+)
+from proxbox_api.schemas.firecracker import FirecrackerMicroVMState as FirecrackerMicroVMState
+from proxbox_api.schemas.firecracker import FirecrackerNetworkMode as FirecrackerNetworkMode
+from proxbox_api.schemas.firecracker import (
+    FirecrackerNetworkRequest as FirecrackerNetworkRequest,
+)
+from proxbox_api.schemas.firecracker import (
+    FirecrackerProvisionRequest as FirecrackerProvisionRequest,
+)
+from proxbox_api.schemas.firecracker import (
+    FirecrackerProvisionResponse as FirecrackerProvisionResponse,
+)
 
 from .image_factory import ImageFactoryBuildMode as ImageFactoryBuildMode
 from .image_factory import PackerImageBuildRequest as PackerImageBuildRequest

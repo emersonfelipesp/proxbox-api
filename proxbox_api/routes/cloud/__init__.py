@@ -1,6 +1,7 @@
 """Cloud Portal provisioning routes."""
 
 from proxbox_api.routes.cloud.catalog import versions_router
+from proxbox_api.routes.cloud.firecracker import router as firecracker_router
 from proxbox_api.routes.cloud.image_factory import router as image_factory_router
 from proxbox_api.routes.cloud.provision import router as provision_router
 from proxbox_api.routes.cloud.provision_stream import stream_router as provision_stream_router
@@ -11,6 +12,7 @@ from proxbox_api.routes.cloud.templates import router as templates_router
 __all__ = (
     "provision_router",
     "provision_stream_router",
+    "firecracker_router",
     "image_factory_router",
     "pve_template_router",
     "template_images_router",
