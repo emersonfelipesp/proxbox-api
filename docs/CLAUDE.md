@@ -23,12 +23,14 @@ docs/
 ├── architecture/               # System overview and design patterns
 ├── api/                        # HTTP and WebSocket API reference
 ├── sync/                       # Sync workflow documentation
+│   └── reconciliation-architecture.md
 └── pt-BR/                      # Brazilian Portuguese translations
     ├── api/
     ├── architecture/
     ├── development/
     ├── getting-started/
     └── sync/
+        └── reconciliation-architecture.md
 ```
 
 ## Building and Serving Docs
@@ -49,4 +51,7 @@ uv run mkdocs build
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
 - API reference in `docs/api/` should match the actual route signatures in `proxbox_api/routes/`.
 - Architecture diagrams belong in `docs/architecture/`.
+- Reconciliation engine docs live under `docs/sync/reconciliation-architecture.md`
+  and `docs/pt-BR/sync/reconciliation-architecture.md`; keep them aligned
+  with `proxbox_api/services/sync/reconciliation/` and `proxbox-reconcile-rs/`.
 - Do not store generated artifacts or runtime data in `docs/`.

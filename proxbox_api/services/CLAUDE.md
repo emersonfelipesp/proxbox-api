@@ -18,6 +18,8 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `__init__.py`: service package namespace.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
+- `sync/reconciliation/`: pure operation-queue builders, including the VM queue
+  Python fallback and optional Rust bridge.
 - `sync/individual/`: targeted single-object sync workflows with dependency auto-creation and dry-run support.
 
 ## How Services Are Used
@@ -25,6 +27,8 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - Route handlers import these modules to keep HTTP, SSE, and WebSocket code thin.
 - `session/` provides the authenticated clients that service functions consume.
 - `schemas/` and `proxmox_to_netbox/` provide the normalization layer that services rely on.
+- VM full sync uses `sync/reconciliation/build_vm_operation_queue()` as the
+  synchronous boundary between prepared desired state and NetBox write dispatch.
 
 ## Extension Guidance
 
@@ -32,3 +36,5 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - Prefer idempotent operations so repeated sync runs are safe.
 - Surface predictable errors through `ProxboxException`.
 - Keep response payloads compatible with both JSON and stream transports when a service is reused in SSE or WebSocket paths.
+- Keep reconciliation seams pure: no HTTP clients, async I/O, database writes,
+  retry loops, or stream emission inside queue builders.

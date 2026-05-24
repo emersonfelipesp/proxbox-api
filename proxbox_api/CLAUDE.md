@@ -17,7 +17,7 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 
 - `app/` — application factory, bootstrap, CORS, exception handlers, cache routes, root metadata, full-update orchestration, and WebSocket handlers. See `app/CLAUDE.md`.
 - `routes/` — FastAPI route packages for admin, NetBox, Proxmox, DCIM, virtualization, Proxbox plugin access, and sync helpers. See `routes/CLAUDE.md`.
-- `services/` — synchronization workflows and reusable helper logic, including the typed Proxmox helper layer. See `services/CLAUDE.md`.
+- `services/` — synchronization workflows and reusable helper logic, including the typed Proxmox helper layer and VM reconciliation seam. See `services/CLAUDE.md`.
 - `session/` — NetBox and Proxmox session factories, providers, and dependency aliases. See `session/CLAUDE.md`.
 - `schemas/` — Pydantic request and response models for external and internal contracts. See `schemas/CLAUDE.md`.
 - `enum/` — Proxmox and NetBox choice values used by schemas and routes. See `enum/CLAUDE.md`.
@@ -40,7 +40,10 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - `auth.py` implements bcrypt-hashed API key validation, IP-based brute-force lockout, and the `check_auth_header_with_session` helper used by `APIKeyAuthMiddleware`.
 - `database.py` persists NetBox and Proxmox endpoint records, API keys, and auth lockout state in SQLite.
 - `session/netbox.py` and `session/proxmox.py` own client construction and dependency wiring. Route handlers should use these dependencies instead of creating clients inline.
-- `services/sync/` and `routes/virtualization/virtual_machines/` handle the main Proxmox-to-NetBox sync flow, including per-object journal tracking and stream progress.
+- `services/sync/`, `services/sync/reconciliation/`, and
+  `routes/virtualization/virtual_machines/` handle the main Proxmox-to-NetBox
+  sync flow, including VM operation-queue classification, per-object journal
+  tracking, and stream progress.
 - `proxmox_to_netbox/` is the normalization boundary. Parsing and conversion must happen in schemas and mappers, not in route handlers.
 
 ## Key Data Flow
@@ -48,8 +51,11 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 1. Startup bootstraps the local database and default NetBox session unless bootstrap is skipped.
 2. Routes resolve NetBox or Proxmox clients through dependency aliases.
 3. Service modules fetch source data, normalize it through schemas, and create or update NetBox objects.
-4. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
-5. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
+4. Full VM sync prepares Proxmox VM state plus a NetBox snapshot, then calls
+   `proxbox_api.services.sync.reconciliation.build_vm_operation_queue()` to
+   classify `CREATE`, `GET`, and `UPDATE` operations before dispatch.
+5. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
+6. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
 
 ## Extension Guidance
 
@@ -59,6 +65,8 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - Preserve ASCII-only documentation and source text unless a file already requires otherwise.
 - Prefer `ProxboxException` for expected API failures and `logger` for operational messages.
 - When adding new sync behavior, keep WebSocket and SSE payload shapes aligned.
+- Keep deterministic reconciliation logic in `services/sync/reconciliation/`.
+  Do not re-grow operation-queue diffing inside VM route modules.
 - For new runtime tunables, prefer a `ProxboxPluginSettings` field on the
   `netbox-proxbox` side over a fresh `PROXBOX_*` env var. Read it through
   `proxbox_api.runtime_settings.get_int / get_float / get_bool / get_str`, which

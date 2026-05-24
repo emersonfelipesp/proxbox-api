@@ -45,6 +45,10 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_pydantic_generator_models.py` | Pydantic model generation from OpenAPI specs |
 | `test_qemu_guest_agent_helpers.py` | QEMU guest agent utility functions |
 | `test_qemu_guest_agent_sync.py` | QEMU guest agent sync workflows |
+| `reconciliation/test_rust_bridge_python.py` | Pydantic bridge serialization and optional Rust import behavior |
+| `reconciliation/test_vm_queue_engine_modes.py` | `python`, `compare`, and `rust` reconciliation engine-mode behavior |
+| `reconciliation/test_vm_queue_parity.py` | Rust/Python fixture parity for VM operation queues |
+| `reconciliation/test_vm_queue_python.py` | Python VM operation-queue contract and edge-case semantics |
 | `test_replications_backup_routines_sync.py` | Replication and backup-routine sync workflows |
 | `test_schema_contracts.py` | Pydantic schema validation and contract checks |
 | `test_session_and_helpers.py` | Session factory creation and dependency wiring |
@@ -99,6 +103,12 @@ uv run pytest tests/e2e -m mock_backend
 
 # E2E tests against HTTP mock container (requires the proxmox-mock service running)
 uv run pytest tests/e2e -m mock_http
+
+# VM reconciliation contract and optional Rust parity tests
+uv run pytest tests/reconciliation -q
+PROXBOX_RECONCILIATION_ENGINE=compare \
+  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+  uv run pytest tests/reconciliation -q
 ```
 
 ## Conventions
@@ -108,6 +118,9 @@ uv run pytest tests/e2e -m mock_http
 - `proxmox_sdk` is the canonical mock source for Proxmox API responses.
 - Keep each test file scoped to one module or workflow; cross-cutting concerns go in `fixtures.py`.
 - The global `tests/conftest.py` sets `PROXBOX_RATE_LIMIT=999999` at module-import time so SlowAPI does not trip during the suite.
+- Reconciliation fixtures must stay deterministic. Include `vm_type` in VM
+  identity expectations so QEMU and LXC resources with the same VMID do not
+  collide.
 
 ## TestClient Fixtures (conftest.py)
 

@@ -33,6 +33,7 @@ Open the nearest scoped guide for the code you are changing.
 ### Top-level packages
 
 - `proxbox_api/CLAUDE.md` — Core FastAPI package overview
+- `proxbox-reconcile-rs/CLAUDE.md` — Optional Rust VM reconciliation engine
 - `proxmox-sdk/CLAUDE.md` — Proxmox OpenAPI package (mock + real API modes)
 - `nextjs-ui/CLAUDE.md` — Next.js frontend for endpoint management
 - `nextjs-ui/AGENTS.md` — Frontend agent quick-reference
@@ -64,6 +65,7 @@ Open the nearest scoped guide for the code you are changing.
 - `proxbox_api/routes/virtualization/virtual_machines/CLAUDE.md` — VM sync routes
 - `proxbox_api/services/CLAUDE.md` — Service layer index
 - `proxbox_api/services/sync/CLAUDE.md` — Sync workflow services
+- `proxbox_api/services/sync/reconciliation/CLAUDE.md` — VM reconciliation seam and engine modes
 - `proxbox_api/services/sync/individual/CLAUDE.md` — Individual object sync services
 - `proxbox_api/session/CLAUDE.md` — Session and client factories
 - `proxbox_api/schemas/CLAUDE.md` — Pydantic schema index
@@ -92,9 +94,11 @@ Open the nearest scoped guide for the code you are changing.
 ## Repo Structure
 
 - `proxbox_api/`: FastAPI package, session factories, schemas, routes, sync services, code generation, and shared utilities.
+- `proxbox-reconcile-rs/`: optional PyO3/maturin Rust package for VM operation-queue reconciliation parity testing and opt-in execution.
 - `proxmox-sdk/`: Schema-driven Proxmox API package used for both mock endpoints and real API access.
 - `nextjs-ui/`: Next.js frontend used to manage one NetBox endpoint and multiple Proxmox endpoints.
 - `tests/`: Unit, integration, and end-to-end tests for the backend package.
+- `benchmarks/`: local benchmark helpers, including VM reconciliation queue datasets and timers.
 - `docs/`: MkDocs documentation, including English and Brazilian Portuguese content.
 - `scripts/`: Utility scripts, including schema refresh helpers.
 - `automation/`: Placeholder for future automation workflows.
@@ -120,8 +124,10 @@ Open the nearest scoped guide for the code you are changing.
 1. `proxbox_api.app.factory.create_app()` initializes database state, builds the default NetBox session, and records bootstrap status.
 2. The app registers generated Proxmox proxy routes during lifespan startup and wires shared middleware, routers, and exception handlers.
 3. Requests resolve NetBox and Proxmox sessions through dependency providers.
-4. Route handlers delegate heavy work to service modules and schemas.
-5. Sync runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
+4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
+   operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.
+5. Route handlers delegate remaining heavy work to service modules and schemas.
+6. Sync runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
 
 ### Error and data rules
 
@@ -186,6 +192,13 @@ the `netbox-proxbox` side, do all five — the existing fields in
 - `PROXBOX_ENCRYPTION_KEY_FILE`: optional override for the local key file path used when neither the env var nor the plugin settings provide a key. Defaults to `<repo_root>/data/encryption.key`.
 - `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: legacy opt-in flag for plaintext credential storage. No longer required for startup; kept for compatibility with operators who scripted it.
 - `PROXBOX_LOG_LEVEL`: console log verbosity (default `INFO`). Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Controls only the console handler; the in-memory buffer always receives DEBUG+ and the rotating file handler always writes WARNING+. Setting `DEBUG` also enables full `netbox_sdk.client` per-request tracing which is suppressed at all other levels to prevent INFO-level flooding.
+- `PROXBOX_RECONCILIATION_ENGINE`: VM operation-queue engine. Valid values:
+  `python` (default), `compare`, and `rust`. `compare` runs Python and Rust,
+  logs/increments mismatch metrics, and returns Python output. `rust` requires
+  the optional `proxbox-reconcile-rs` native package to be installed.
+- `PROXBOX_RECONCILIATION_COMPARE_STRICT`: when `true`, compare mode raises on
+  Rust/Python mismatch. Use this in CI/parity tests, not normal production
+  syncs.
 
 ### Plugin-managed (env override optional, defaults shown)
 
@@ -224,6 +237,18 @@ uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
 uv run pytest tests
+```
+
+If you touch `proxbox_api/services/sync/reconciliation/`, `tests/reconciliation/`,
+`benchmarks/reconciliation/`, `proxbox-reconcile-rs/`, or `.github/workflows/rust-reconcile.yml`,
+also run the focused Rust/parity checks:
+
+```bash
+cargo test --no-default-features --manifest-path proxbox-reconcile-rs/Cargo.toml
+uv pip install -e proxbox-reconcile-rs
+PROXBOX_RECONCILIATION_ENGINE=compare \
+  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+  uv run pytest tests/reconciliation -q
 ```
 
 If you touch `nextjs-ui/`, also run:
@@ -280,11 +305,36 @@ See `proxbox_api/types/CLAUDE.md` for complete typing guidelines.
 
 ## Rust-Python FFI Reference
 
-The `proxbox-api` backend is pure Python today. When performance-critical paths
-(sync transforms in `proxmox_to_netbox/`, codegen pipeline in
-`proxmox_codegen/`, bulk data serialization in `services/sync/`, or generated
-Proxmox proxy routes) justify native Rust extensions, use PyO3 as the binding
-framework:
+The backend now has one optional native extension:
+`proxbox-reconcile-rs`, a PyO3/maturin Rust package for the deterministic VM
+operation-queue builder used by full VM sync. Python remains the default engine
+because live `netbox.nmulti.cloud` timing and synthetic benchmarks showed the
+full Rust path was not faster after JSON/adaptation overhead.
+
+The runtime seam is:
+
+```
+prepared_vms + netbox_snapshot + flags
+  -> proxbox_api.services.sync.reconciliation.build_vm_operation_queue()
+  -> Python engine, compare mode, or optional Rust engine
+  -> CREATE | GET | UPDATE operations with patch_payload
+```
+
+Keep FastAPI routes, NetBox/Proxmox clients, SQLite, auth, retries, streaming,
+and dispatch execution in Python. Only pure, synchronous, CPU-bound queue
+construction belongs behind the Rust bridge.
+
+Engine modes:
+
+- `PROXBOX_RECONCILIATION_ENGINE=python`: default and production-safe path.
+- `PROXBOX_RECONCILIATION_ENGINE=compare`: run both engines, return Python,
+  and report mismatches through logs and `proxbox_reconcile_mismatch_total`.
+- `PROXBOX_RECONCILIATION_ENGINE=rust`: return Rust output; requires the
+  native package and should only be used after compare mode is clean.
+- `PROXBOX_RECONCILIATION_COMPARE_STRICT=true`: raise on mismatch in compare
+  mode, intended for CI and local parity debugging.
+
+When adding future native Rust extensions, use PyO3 as the binding framework:
 
 - Architecture reference: `/root/personal-context/PYO3.md`
 - Per-directory guidance: `/root/personal-context/pyo3/CLAUDE.md`
@@ -292,10 +342,23 @@ framework:
 - Build backend: maturin (preferred) or setuptools-rust
 - Version: PyO3 v0.28.3, minimum Rust 1.83
 
+Current Rust package:
+
+- `proxbox-reconcile-rs/`: Rust VM reconciliation crate.
+- `proxbox_api/services/sync/reconciliation/rust_bridge.py`: Pydantic v2
+  JSON-byte adapter and optional native import.
+- `proxbox_api/services/sync/reconciliation/vm_queue.py`: engine-neutral
+  wrapper, Python fallback, compare mode, strict mode, mismatch diffing, and
+  dataclass adaptation.
+- `tests/reconciliation/`: Python contract, bridge, engine-mode, and
+  Rust/Python parity fixtures.
+- `.github/workflows/rust-reconcile.yml`: Rust unit tests, strict parity matrix,
+  and wheel build matrix.
+
 Candidate hotpaths for future Rust acceleration:
 - `proxbox_api/proxmox_to_netbox/` — object mapping and field transformation
 - `proxbox_api/proxmox_codegen/` — OpenAPI schema crawling and code generation
-- `proxbox_api/services/sync/` — bulk reconciliation and diffing
+- `proxbox_api/services/sync/` — additional bulk reconciliation and diffing
 - `proxbox_api/generated/` — generated Pydantic model validation
 
 ## Extension Rules

@@ -22,7 +22,9 @@ Main synchronization endpoints for virtual machines and related resources.
 - `helpers.py`: shared VM route helpers and concurrency helpers.
 - `snapshots_vm.py`: snapshot reconciliation helpers and routes.
 - `storages_vm.py`: storage reconciliation helpers and routes.
-- `sync_vm.py`: VM sync orchestration routes, including the create and stream entrypoints.
+- `sync_vm.py`: VM sync orchestration routes, including the create and stream
+  entrypoints. Deterministic operation-queue reconciliation is delegated to
+  `proxbox_api.services.sync.reconciliation`.
 
 ## How These Routes Work
 
@@ -31,6 +33,9 @@ Main synchronization endpoints for virtual machines and related resources.
 - They write journal entries to NetBox for auditability of each synchronization run.
 - Some paths stream progress over WebSocket or SSE, so those payloads must stay aligned.
 - `sync_vm.py` also exposes the test route and the summary example route used by stub/coverage checks.
+- Full VM sync prepares desired VM state and the NetBox snapshot here, but queue
+  classification (`CREATE`, `GET`, `UPDATE`) belongs to the reconciliation
+  service seam.
 
 ## Extension Guidance
 
@@ -38,3 +43,6 @@ Main synchronization endpoints for virtual machines and related resources.
 - Keep WebSocket and non-WebSocket code paths behaviorally equivalent.
 - Use `WebSocketSSEBridge` and `StreamingResponse` with `text/event-stream` for new stream endpoints.
 - Keep read routes explicit about not-found and upstream-error behavior.
+- Do not reintroduce VM operation diffing in the route. Update
+  `proxbox_api/services/sync/reconciliation/` and `tests/reconciliation/`
+  instead.
