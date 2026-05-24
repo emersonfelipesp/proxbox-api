@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pydantic import BaseModel, TypeAdapter
+
+try:
+    from proxbox_reconcile_rs._native import build_vm_operation_queue_json as _rust_build
+except ImportError:
+    _rust_build = None
 
 
 class _BridgeVm(BaseModel):
@@ -31,7 +37,7 @@ _input_adapter = TypeAdapter(_BridgeInput)
 def rust_available() -> bool:
     """Return whether the optional Rust reconciliation extension is importable."""
 
-    return False
+    return _rust_build is not None
 
 
 def build_bridge_input(
@@ -72,3 +78,23 @@ def dump_bridge_input_json(
         flags=flags,
     )
     return _input_adapter.dump_json(payload)
+
+
+def build_vm_operation_queue_rust(
+    *,
+    prepared_vms: list[Any],
+    netbox_snapshot: list[dict[str, Any]],
+    flags: dict[str, bool],
+) -> list[dict[str, Any]]:
+    """Run the optional Rust VM queue builder and decode its JSON response."""
+
+    if _rust_build is None:
+        raise RuntimeError("proxbox-reconcile-rs is not installed")
+
+    input_bytes = dump_bridge_input_json(
+        prepared_vms=prepared_vms,
+        netbox_snapshot=netbox_snapshot,
+        flags=flags,
+    )
+    output_bytes = _rust_build(input_bytes)
+    return json.loads(output_bytes)
