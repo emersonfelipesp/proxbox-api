@@ -20,6 +20,8 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `device_ensure.py`: device creation and reconciliation helpers.
 - `devices.py`: device synchronization from Proxmox nodes to NetBox.
 - `network.py`: network and interface sync helpers.
+- `reconciliation/`: pure operation-queue reconciliation, Python fallback,
+  optional Rust bridge, mismatch metric, and shared VM operation types.
 - `snapshots.py`: snapshot sync helpers.
 - `storage_links.py`: storage-to-NetBox relationship helpers.
 - `storages.py`: storage sync helpers.
@@ -40,6 +42,8 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - Route handlers call these helpers to keep HTTP orchestration thin.
 - These modules implement idempotent Proxmox-to-NetBox sync flows and journal tracking.
 - The VM helpers split orchestration, filtering, network processing, and object creation so the route layer does not need to duplicate state handling.
+- `reconciliation/` is the deterministic sync seam: it receives prepared state
+  and NetBox snapshots, returns queue operations, and performs no I/O.
 
 ## Extension Guidance
 
@@ -47,3 +51,5 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - Emit structured errors with `ProxboxException` for route-level handling.
 - Keep progress reporting compatible with both WebSocket and SSE transport.
 - Prefer small helper functions for object-specific concerns instead of growing a single coordinator module.
+- For VM queue changes, update `tests/reconciliation/` and preserve
+  Rust/Python parity before touching dispatch behavior.

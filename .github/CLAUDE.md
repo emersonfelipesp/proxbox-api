@@ -21,6 +21,7 @@ GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.git
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes three Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert) |
 | `publish-testpypi.yml` | Version tag push, GitHub Release published, or manual dispatch | Validates release metadata, builds dist, then runs either the TestPyPI lane or the PyPI lane. `rcN` tag pushes publish to TestPyPI for release-candidate validation; non-rc tag pushes (`vX.Y.Z`, `vX.Y.Z.postN`), GitHub releases, and `publish_target=pypi` dispatches publish to PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
+| `rust-reconcile.yml` | Push / PR to `main`, `testing`, or `v*`; manual dispatch | Runs Rust unit tests for `proxbox-reconcile-rs`, installs the local native extension, runs strict Rust/Python reconciliation parity tests, and builds wheel artifacts across Linux/macOS/Windows for Python 3.12 and 3.13. |
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
 | `release-docker-verify.yml` | Release published | Post-release smoke test of all three published Docker images |
 
@@ -41,6 +42,10 @@ ci.yml (push/PR — dev mode E2E only)
     - NetBox image handling: each E2E job pulls the public image first and only downloads the source-built artifact when the registry pull fails.
     - NetBox readiness waits up to 20 minutes for migrations/search indexing, then checks `/api/status/` before creating tokens.
     - Docker-backed Proxmox E2E uses pytest marker `mock_http`; the separate in-process MockBackend pass uses `mock_backend`.
+
+rust-reconcile.yml
+├── test         (cargo test --no-default-features, local native install, strict parity)
+└── build-wheels (needs: test; maturin wheel artifacts for Linux/macOS/Windows)
 
 ci.yml (release event — both dev + pypi modes)
 └── e2e-docker matrix runs both netbox_proxbox_mode=dev and netbox_proxbox_mode=pypi
@@ -85,3 +90,5 @@ All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-ng
 - Package uploads intentionally do not use `twine --skip-existing`; if an artifact version was consumed, bump to the next `.postN` or `rcN` and publish that immutable version.
 - Do not add secrets to workflow files — use repository secrets (`PYPI_TOKEN`, `DOCKERHUB_TOKEN`, etc.).
 - Keep `docs/development/ci-e2e-workflows.md`, `docs/pt-BR/development/ci-e2e-workflows.md`, and `docs/development/release-publishing.md` aligned with CI workflow changes.
+- Keep `rust-reconcile.yml` aligned with `proxbox-reconcile-rs/Cargo.toml`,
+  `proxbox-reconcile-rs/pyproject.toml`, and `tests/reconciliation/`.

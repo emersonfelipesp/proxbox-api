@@ -25,6 +25,18 @@ uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas
 rtk pytest tests
 ```
 
+If you edit VM reconciliation or the Rust bridge (`proxbox_api/services/sync/reconciliation/`,
+`tests/reconciliation/`, `benchmarks/reconciliation/`, `proxbox-reconcile-rs/`,
+or `.github/workflows/rust-reconcile.yml`), also run:
+
+```bash
+cargo test --no-default-features --manifest-path proxbox-reconcile-rs/Cargo.toml
+uv pip install -e proxbox-reconcile-rs
+PROXBOX_RECONCILIATION_ENGINE=compare \
+  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+  uv run pytest tests/reconciliation -q
+```
+
 If you edit `proxmox-sdk/`, also run:
 
 ```bash
@@ -81,6 +93,8 @@ and resolution-order details.
 
 ### Top-level packages
 - `proxbox_api/CLAUDE.md`
+- `proxbox-reconcile-rs/CLAUDE.md`
+- `proxbox-reconcile-rs/AGENTS.md`
 - `proxmox-sdk/CLAUDE.md`
 - `nextjs-ui/CLAUDE.md`
 - `nextjs-ui/AGENTS.md`
@@ -110,6 +124,7 @@ and resolution-order details.
 - `proxbox_api/routes/virtualization/virtual_machines/CLAUDE.md`
 - `proxbox_api/services/CLAUDE.md`
 - `proxbox_api/services/sync/CLAUDE.md`
+- `proxbox_api/services/sync/reconciliation/CLAUDE.md`
 - `proxbox_api/services/sync/individual/CLAUDE.md`
 - `proxbox_api/session/CLAUDE.md`
 - `proxbox_api/schemas/CLAUDE.md`
@@ -180,10 +195,12 @@ Read the nearest scoped guide for the code you are changing.
 - [proxbox_api/schemas/virtualization/CLAUDE.md](proxbox_api/schemas/virtualization/CLAUDE.md)
 - [proxbox_api/services/CLAUDE.md](proxbox_api/services/CLAUDE.md)
 - [proxbox_api/services/sync/CLAUDE.md](proxbox_api/services/sync/CLAUDE.md)
+- [proxbox_api/services/sync/reconciliation/CLAUDE.md](proxbox_api/services/sync/reconciliation/CLAUDE.md)
 - [proxbox_api/services/sync/individual/CLAUDE.md](proxbox_api/services/sync/individual/CLAUDE.md)
 - [proxbox_api/session/CLAUDE.md](proxbox_api/session/CLAUDE.md)
 - [proxbox_api/types/CLAUDE.md](proxbox_api/types/CLAUDE.md)
 - [proxbox_api/utils/CLAUDE.md](proxbox_api/utils/CLAUDE.md)
+- [proxbox-reconcile-rs/CLAUDE.md](proxbox-reconcile-rs/CLAUDE.md)
 - [proxmox-mock/CLAUDE.md](proxmox-mock/CLAUDE.md)
 - [scripts/CLAUDE.md](scripts/CLAUDE.md)
 - [tasks/CLAUDE.md](tasks/CLAUDE.md)
