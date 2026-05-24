@@ -54,6 +54,11 @@ uv run mkdocs serve   # after syncing with --extra docs
 
 Project documentation is available under `docs/` and built with MkDocs Material.
 
+The VM reconciliation engine is documented in
+[`docs/sync/reconciliation-architecture.md`](docs/sync/reconciliation-architecture.md).
+Python is the default engine; the optional Rust engine is for compare-mode validation and explicit
+opt-in testing.
+
 ### Local docs build
 
 ```bash
