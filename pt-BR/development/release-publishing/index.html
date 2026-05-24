@@ -1548,7 +1548,7 @@ instalacao a partir do PyPI funciona.</p>
     FinalTag[Criar ou disparar tag final\nvX.Y.Z]
     FinalUpload[Upload vX.Y.Z para PyPI]
     FinalValidate[Instalar final do PyPI\nem Python 3.11, 3.12, 3.13]
-    Docker[Publicar imagens Docker\nraw, nginx, granian]
+    Docker[Publicar imagens Docker\nraw, nginx, granian\n+ experimentais PyO3/Rust]
     FinalE2E[Rodar E2E pos-publicacao\npacote PyPI + imagem Docker]
     FinalFailed{Precisa de fix\npos-release?}
     Post[Bump para vX.Y.Z.postN\npublicar .postN no PyPI]
@@ -1579,7 +1579,7 @@ instalacao a partir do PyPI funciona.</p>
     WF-&gt;&gt;E2E: Aguardar migracoes do NetBox e /api/status/
     WF-&gt;&gt;PY: Upload do pacote
     WF-&gt;&gt;PY: Reinstalar versao exata do pacote
-    WF-&gt;&gt;DH: Publicar imagens raw, nginx e granian
+    WF-&gt;&gt;DH: Publicar imagens raw, nginx, granian e experimentais PyO3/Rust
     WF-&gt;&gt;E2E: Verificar pacote PyPI e imagem Docker publicados</code></pre>
 <h2 id="regras-do-workflow">Regras do Workflow<a class="headerlink" href="#regras-do-workflow" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1592,7 +1592,9 @@ instalacao a partir do PyPI funciona.</p>
   <code>.postN</code> ou <code>rcN</code>.</li>
 <li>Publicacao no PyPI precisa passar pela validacao de reinstalacao do pacote
   antes das imagens Docker serem publicadas.</li>
-<li>Tags Docker usam a mesma versao do pacote PyPI que passou na validacao.</li>
+<li>Tags Docker usam a mesma versao do pacote PyPI que passou na validacao. As
+  imagens experimentais PyO3/Rust adicionam sufixos <code>-pyo3-rust</code> e aliases
+  opt-in (<code>experimental</code>, <code>pyo3-rust</code> e sufixos para variantes HTTPS).</li>
 <li>Jobs E2E pre-publicacao e pos-publicacao aguardam ate 20 minutos para o
   NetBox concluir migracoes/indexacao e exigem <code>/api/status/</code> pronto antes de
   configurar tokens ou endpoints do backend.</li>

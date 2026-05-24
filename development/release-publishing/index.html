@@ -1548,7 +1548,7 @@ succeeds.</p>
     FinalTag[Create or dispatch final tag\nvX.Y.Z]
     FinalUpload[Upload vX.Y.Z to PyPI]
     FinalValidate[Install final from PyPI\non Python 3.11, 3.12, 3.13]
-    Docker[Publish Docker images\nraw, nginx, granian]
+    Docker[Publish Docker images\nraw, nginx, granian\n+ experimental PyO3/Rust]
     FinalE2E[Run post-publish E2E\npublished package + Docker image]
     FinalFailed{Post-release fix needed?}
     Post[Bump to vX.Y.Z.postN\npublish .postN to PyPI]
@@ -1579,7 +1579,7 @@ succeeds.</p>
     WF-&gt;&gt;E2E: Wait for NetBox migrations and /api/status/ readiness
     WF-&gt;&gt;PY: Upload package
     WF-&gt;&gt;PY: Reinstall exact package version
-    WF-&gt;&gt;DH: Publish raw, nginx, and granian images
+    WF-&gt;&gt;DH: Publish raw, nginx, granian, and experimental PyO3/Rust images
     WF-&gt;&gt;E2E: Verify published PyPI package and Docker image</code></pre>
 <h2 id="workflow-rules">Workflow Rules<a class="headerlink" href="#workflow-rules" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1592,7 +1592,8 @@ succeeds.</p>
 <li>PyPI publication must pass package reinstall validation before Docker images
   are published.</li>
 <li>Docker image tags use the same version as the PyPI package that passed
-  validation.</li>
+  validation. Experimental PyO3/Rust images add <code>-pyo3-rust</code> tag suffixes and
+  opt-in aliases (<code>experimental</code>, <code>pyo3-rust</code>, and HTTPS variant suffixes).</li>
 <li>Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
   migrations/search indexing and require <code>/api/status/</code> readiness before
   configuring tokens or backend endpoints.</li>

@@ -1553,12 +1553,12 @@ NetBox e publicacao em etapas.</p>
 <tr>
 <td><code>.github/workflows/docker-hub-publish.yml</code></td>
 <td>Workflow reutilizavel / dispatch manual</td>
-<td>Constroi e publica variantes raw, nginx e granian da imagem Docker.</td>
+<td>Constroi e publica variantes raw, nginx, granian e experimentais PyO3/Rust da imagem Docker.</td>
 </tr>
 <tr>
 <td><code>.github/workflows/release-docker-verify.yml</code></td>
 <td>Release / dispatch manual</td>
-<td>Baixa as tags Docker publicadas e verifica startup dos conteineres.</td>
+<td>Baixa as tags Docker publicadas, incluindo as tags experimentais PyO3/Rust, e verifica startup dos conteineres.</td>
 </tr>
 <tr>
 <td><code>.github/workflows/docs.yml</code></td>
@@ -1647,7 +1647,7 @@ todos os transportes suportados.</p>
     WF-&gt;&gt;E2E: Rodar E2E pre-publicacao com dependencias dev
     WF-&gt;&gt;PY: Publicar proxbox-api
     WF-&gt;&gt;PY: Reinstalar pacote exato
-    WF-&gt;&gt;DH: Publicar imagens raw, nginx, granian
+    WF-&gt;&gt;DH: Publicar imagens raw, nginx, granian + variantes experimentais PyO3/Rust
     WF-&gt;&gt;E2E: Rodar E2E pos-publicacao com pacote + imagem publicados</code></pre>
 <p>Uploads de pacote intencionalmente nao usam <code>twine --skip-existing</code>. Se alguma
 validacao falhar depois do upload, publique uma versao fix-forward:

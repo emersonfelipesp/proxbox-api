@@ -468,6 +468,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#experimental-pyo3rust-images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experimental PyO3/Rust images
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#docker-runtime-environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1732,6 +1743,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#experimental-pyo3rust-images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experimental PyO3/Rust images
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#docker-runtime-environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1937,7 +1959,7 @@
 <li>Network access to NetBox and Proxmox targets</li>
 </ul>
 <h2 id="option-1-docker-recommended-for-quick-start">Option 1: Docker (recommended for quick start)<a class="headerlink" href="#option-1-docker-recommended-for-quick-start" title="Permanent link">&para;</a></h2>
-<p>All Docker images are <strong>Alpine-based</strong> (smaller footprint). Three variants are available:</p>
+<p>All Docker images are <strong>Alpine-based</strong> (smaller footprint). The default tags use the Python reconciliation engine. Experimental PyO3/Rust tags are available for opt-in native-engine testing:</p>
 <table>
 <thead>
 <tr>
@@ -1961,6 +1983,21 @@
 <td><strong>Granian</strong></td>
 <td><code>latest-granian</code>, <code>&lt;version&gt;-granian</code></td>
 <td>Granian (Rust ASGI server) with native TLS via mkcert.</td>
+</tr>
+<tr>
+<td><strong>Raw PyO3/Rust</strong> (experimental)</td>
+<td><code>experimental</code>, <code>pyo3-rust</code>, <code>&lt;version&gt;-pyo3-rust</code></td>
+<td>Raw image with the optional PyO3 reconciliation engine installed and enabled.</td>
+</tr>
+<tr>
+<td><strong>Nginx PyO3/Rust</strong> (experimental)</td>
+<td><code>experimental-nginx</code>, <code>pyo3-rust-nginx</code>, <code>&lt;version&gt;-pyo3-rust-nginx</code></td>
+<td>nginx image with the optional PyO3 reconciliation engine installed and enabled.</td>
+</tr>
+<tr>
+<td><strong>Granian PyO3/Rust</strong> (experimental)</td>
+<td><code>experimental-granian</code>, <code>pyo3-rust-granian</code>, <code>&lt;version&gt;-pyo3-rust-granian</code></td>
+<td>granian image with the optional PyO3 reconciliation engine installed and enabled.</td>
 </tr>
 </tbody>
 </table>
@@ -2025,8 +2062,19 @@ nginx-image + self-signed-cert combination unreachable.</p>
 <ul>
 <li><a href="https://127.0.0.1:8443">https://127.0.0.1:8443</a></li>
 </ul>
+<h3 id="experimental-pyo3rust-images">Experimental PyO3/Rust images<a class="headerlink" href="#experimental-pyo3rust-images" title="Permanent link">&para;</a></h3>
+<p>Use the experimental images when you want the optional native reconciliation
+engine to run by default. The raw alias is the simplest Docker command:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>emersonfelipesp/proxbox-api:pyo3-rust
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-rust<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:pyo3-rust
+</code></pre></div>
+<p>HTTPS variants are published as <code>pyo3-rust-nginx</code> and <code>pyo3-rust-granian</code>.
+These images set <code>PROXBOX_RECONCILIATION_ENGINE=rust</code> and include the
+<code>proxbox-reconcile-rs</code> PyO3 extension. Switch back to <code>latest</code>, <code>latest-nginx</code>,
+or <code>latest-granian</code> to return to the Python-only implementation.</p>
 <h3 id="docker-runtime-environment-variables">Docker runtime environment variables<a class="headerlink" href="#docker-runtime-environment-variables" title="Permanent link">&para;</a></h3>
-<p>Common to all images (<code>raw</code>, <code>nginx</code>, <code>granian</code>):</p>
+<p>Common to all images, including the experimental PyO3/Rust variants:</p>
 <table>
 <thead>
 <tr>
@@ -2076,9 +2124,9 @@ nginx-image + self-signed-cert combination unreachable.</p>
 </tbody>
 </table>
 <p>Example with extra SANs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8443</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-tls<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">MKCERT_EXTRA_NAMES</span><span class="o">=</span><span class="s1">&#39;myhost.local,192.168.1.10&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest-nginx
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8443</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-tls<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">MKCERT_EXTRA_NAMES</span><span class="o">=</span><span class="s1">&#39;myhost.local,192.168.1.10&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest-nginx
 </code></pre></div>
 <h3 id="mounting-custom-certificates">Mounting custom certificates<a class="headerlink" href="#mounting-custom-certificates" title="Permanent link">&para;</a></h3>
 <p>Both the <code>nginx</code> and <code>granian</code> images detect pre-existing certificates at startup.
@@ -2086,9 +2134,9 @@ If <code>cert.pem</code> <strong>and</strong> <code>key.pem</code> are already p
 mkcert generation is <strong>skipped entirely</strong> — the container uses those files as-is.
 This lets you mount your own CA-signed, Let's Encrypt, or corporate certificates without
 any special flags.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8443</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-nginx<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-v<span class="w"> </span>./certs:/certs:ro<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest-nginx
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8443</span>:8000<span class="w"> </span>--name<span class="w"> </span>proxbox-api-nginx<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>-v<span class="w"> </span>./certs:/certs:ro<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest-nginx
 </code></pre></div>
 <p>The <code>./certs</code> directory must contain at minimum:</p>
 <table>
@@ -2110,15 +2158,15 @@ any special flags.</p>
 </tbody>
 </table>
 <p>Docker Compose example:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">services</span><span class="p">:</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">proxbox-api</span><span class="p">:</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">emersonfelipesp/proxbox-api:latest-nginx</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">proxbox-api</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8443:8000&quot;</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./certs:/certs:ro</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">services</span><span class="p">:</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">proxbox-api</span><span class="p">:</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">emersonfelipesp/proxbox-api:latest-nginx</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">proxbox-api</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8443:8000&quot;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./certs:/certs:ro</span>
 </code></pre></div>
 <h4 id="granian-image-and-pkcs8-keys">Granian image and PKCS#8 keys<a class="headerlink" href="#granian-image-and-pkcs8-keys" title="Permanent link">&para;</a></h4>
 <p>Granian's TLS layer requires the private key in <strong>PKCS#8 format</strong>.
@@ -2131,96 +2179,96 @@ The entrypoint handles this automatically:</p>
    to <code>/tmp/key-pkcs8.pem</code> (ephemeral; not persisted across container restarts).</li>
 </ol>
 <p>To pre-convert your key and avoid the <code>/tmp</code> fallback:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>openssl<span class="w"> </span>pkcs8<span class="w"> </span>-topk8<span class="w"> </span>-nocrypt<span class="w"> </span>-in<span class="w"> </span>./certs/key.pem<span class="w"> </span>-out<span class="w"> </span>./certs/key-pkcs8.pem
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>openssl<span class="w"> </span>pkcs8<span class="w"> </span>-topk8<span class="w"> </span>-nocrypt<span class="w"> </span>-in<span class="w"> </span>./certs/key.pem<span class="w"> </span>-out<span class="w"> </span>./certs/key-pkcs8.pem
 </code></pre></div>
 <p>Then mount the directory containing all three files (<code>cert.pem</code>, <code>key.pem</code>, <code>key-pkcs8.pem</code>).</p>
 <h3 id="binding-to-ipv6-dual-stack">Binding to IPv6 / dual-stack<a class="headerlink" href="#binding-to-ipv6-dual-stack" title="Permanent link">&para;</a></h3>
 <p>To listen on both IPv4 and IPv6, set <code>PROXBOX_BIND_HOST=::</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>-e<span class="w"> </span><span class="nv">PROXBOX_BIND_HOST</span><span class="o">=</span>::<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>-e<span class="w"> </span><span class="nv">PROXBOX_BIND_HOST</span><span class="o">=</span>::<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>emersonfelipesp/proxbox-api:latest
 </code></pre></div>
 <h4 id="docker-compose-quoting-caveat">Docker Compose quoting caveat<a class="headerlink" href="#docker-compose-quoting-caveat" title="Permanent link">&para;</a></h4>
 <p>In Compose <code>environment:</code> <strong>list-form</strong>, values are taken verbatim — the quotes are NOT stripped — so <code>- PROXBOX_BIND_HOST="::"</code> ends up as the literal 4-character string <code>"::"</code> inside the container, which used to crash binding with <code>[Errno -2] Name does not resolve</code>. The container now sanitizes surrounding quotes defensively, but the recommended forms are:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">environment</span><span class="p">:</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">PROXBOX_BIND_HOST=:</span><span class="p">:</span><span class="w">          </span><span class="c1"># list-form: NO quotes</span>
-</code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">environment</span><span class="p">:</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">PROXBOX_BIND_HOST</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;::&quot;</span><span class="w">         </span><span class="c1"># map-form: YAML strips the quotes</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">PROXBOX_BIND_HOST=:</span><span class="p">:</span><span class="w">          </span><span class="c1"># list-form: NO quotes</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">PROXBOX_BIND_HOST</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;::&quot;</span><span class="w">         </span><span class="c1"># map-form: YAML strips the quotes</span>
 </code></pre></div>
 <h3 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>proxbox-api:raw<span class="w"> </span>.<span class="w">                          </span><span class="c1"># raw (default)</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>docker<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </span>proxbox-api:nginx<span class="w"> </span>.<span class="w">         </span><span class="c1"># nginx</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>docker<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>granian<span class="w"> </span>-t<span class="w"> </span>proxbox-api:granian<span class="w"> </span>.<span class="w">     </span><span class="c1"># granian</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>proxbox-api:raw<span class="w"> </span>.<span class="w">                          </span><span class="c1"># raw (default)</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>docker<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </span>proxbox-api:nginx<span class="w"> </span>.<span class="w">         </span><span class="c1"># nginx</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>docker<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>granian<span class="w"> </span>-t<span class="w"> </span>proxbox-api:granian<span class="w"> </span>.<span class="w">     </span><span class="c1"># granian</span>
 </code></pre></div>
 <h2 id="option-2-pypi">Option 2: PyPI<a class="headerlink" href="#option-2-pypi" title="Permanent link">&para;</a></h2>
 <p>The package is published to <a href="https://pypi.org/project/proxbox-api/">PyPI</a> as <code>proxbox-api</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox-api
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox-api
 </code></pre></div>
 <p>Or with <code>uv</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>uv<span class="w"> </span>add<span class="w"> </span>proxbox-api
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>uv<span class="w"> </span>add<span class="w"> </span>proxbox-api
 </code></pre></div>
 <h3 id="optional-rust-reconciliation-engine">Optional Rust reconciliation engine<a class="headerlink" href="#optional-rust-reconciliation-engine" title="Permanent link">&para;</a></h3>
 <p>VM reconciliation uses the Python engine by default. An optional native package,
 <code>proxbox-reconcile-rs</code>, can be installed for compare-mode validation or explicit Rust-engine
 testing after wheels are published.</p>
 <p>Once the optional package is published, install with:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox-api<span class="o">[</span>rust<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>pip<span class="w"> </span>install<span class="w"> </span>proxbox-api<span class="o">[</span>rust<span class="o">]</span>
 </code></pre></div>
 <p>Until the native package is published, install it from a local checkout:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--group<span class="w"> </span>dev
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--group<span class="w"> </span>dev
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
 </code></pre></div>
 <p>Enable compare mode first:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nv">PROXBOX_RECONCILIATION_ENGINE</span><span class="o">=</span>compare<span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nv">PROXBOX_RECONCILIATION_ENGINE</span><span class="o">=</span>compare<span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app
 </code></pre></div>
 <p>The production default remains Python. To roll back immediately, unset
 <code>PROXBOX_RECONCILIATION_ENGINE</code> or set it to <code>python</code>.</p>
 <p>Start the server:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>
 <h2 id="option-3-local-development-from-source">Option 3: Local development from source<a class="headerlink" href="#option-3-local-development-from-source" title="Permanent link">&para;</a></h2>
 <p>Clone repository:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/emersonfelipesp/proxbox-api.git
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nb">cd</span><span class="w"> </span>proxbox-api
 </code></pre></div>
 <p>Install runtime dependencies:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
 </code></pre></div>
 <p>Or use <code>uv</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>uv<span class="w"> </span>sync
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>uv<span class="w"> </span>sync
 </code></pre></div>
 <p>Install the optional Rust reconciliation package for local parity testing:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
 </code></pre></div>
 <p>Run API:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>
 <p>Alternative with uvicorn:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
 </code></pre></div>
 <p><code>fastapi run</code> does not expose TLS flags; for HTTPS from the app process, use <strong>uvicorn</strong> with <code>--ssl-certfile</code> / <code>--ssl-keyfile</code> below, or put <strong>nginx/Caddy</strong> in front (recommended for real certificates).</p>
 <h2 id="tls-without-docker">TLS without Docker<a class="headerlink" href="#tls-without-docker" title="Permanent link">&para;</a></h2>
 <h3 id="local-certificates-mkcert">Local certificates (mkcert)<a class="headerlink" href="#local-certificates-mkcert" title="Permanent link">&para;</a></h3>
 <p>For trusted HTTPS on your own machine only:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>mkcert<span class="w"> </span>-install
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>mkcert<span class="w"> </span>proxbox.backend.local<span class="w"> </span>localhost<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>::1
-<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>./proxbox.backend.local+3-key.pem<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>./proxbox.backend.local+3.pem
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>mkcert<span class="w"> </span>-install
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>mkcert<span class="w"> </span>proxbox.backend.local<span class="w"> </span>localhost<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>::1
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>./proxbox.backend.local+3-key.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>./proxbox.backend.local+3.pem
 </code></pre></div>
 <p>Adjust file names to match what <code>mkcert</code> created.</p>
 <h3 id="publicly-trusted-or-corporate-certificates">Publicly trusted or corporate certificates<a class="headerlink" href="#publicly-trusted-or-corporate-certificates" title="Permanent link">&para;</a></h3>
 <p><strong>Recommended:</strong> terminate TLS in <strong>nginx</strong> or <strong>Caddy</strong>, run the API on <strong>HTTP</strong> on <code>127.0.0.1:8000</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>
 <p>Point the proxy at <code>http://127.0.0.1:8000</code> and set <code>ssl_certificate</code> / <code>ssl_certificate_key</code> to your PEM paths (for Let's Encrypt: <code>fullchain.pem</code> and <code>privkey.pem</code> under <code>/etc/letsencrypt/live/&lt;domain&gt;/</code>). Set <code>X-Forwarded-Proto</code> and related headers so the app sees the original scheme. See the repository <strong>README</strong> for a complete nginx <code>server</code> example.</p>
 <p><strong>Direct uvicorn TLS</strong> (small deployments): use the <strong>full certificate chain</strong> as <code>--ssl-certfile</code> and the private key as <code>--ssl-keyfile</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8443</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/fullchain.pem<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/privkey.pem
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8443</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span>--ssl-certfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/fullchain.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>--ssl-keyfile<span class="o">=</span>/etc/letsencrypt/live/api.example.com/privkey.pem
 </code></pre></div>
 <p>Ensure the process user can read those files, and renew/reload after certificate updates.</p>
 <h2 id="verify-installation">Verify installation<a class="headerlink" href="#verify-installation" title="Permanent link">&para;</a></h2>

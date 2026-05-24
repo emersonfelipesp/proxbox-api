@@ -1553,12 +1553,12 @@ matrix, and staged package publication.</p>
 <tr>
 <td><code>.github/workflows/docker-hub-publish.yml</code></td>
 <td>Reusable workflow / manual dispatch</td>
-<td>Builds and publishes raw, nginx, and granian Docker image variants.</td>
+<td>Builds and publishes raw, nginx, granian, and experimental PyO3/Rust Docker image variants.</td>
 </tr>
 <tr>
 <td><code>.github/workflows/release-docker-verify.yml</code></td>
 <td>Release / manual dispatch</td>
-<td>Pulls the published Docker image tags and verifies container startup.</td>
+<td>Pulls the published Docker image tags, including experimental PyO3/Rust tags, and verifies container startup.</td>
 </tr>
 <tr>
 <td><code>.github/workflows/docs.yml</code></td>
@@ -1646,7 +1646,7 @@ configure NetBox endpoints, and run sync tests across supported transports.</p>
     WF-&gt;&gt;E2E: Run pre-publish E2E with dev dependencies
     WF-&gt;&gt;PY: Upload proxbox-api
     WF-&gt;&gt;PY: Reinstall exact package
-    WF-&gt;&gt;DH: Publish raw, nginx, granian images
+    WF-&gt;&gt;DH: Publish raw, nginx, granian images + experimental PyO3/Rust variants
     WF-&gt;&gt;E2E: Run post-publish E2E with published package + image</code></pre>
 <p>Package uploads intentionally omit <code>twine --skip-existing</code>. If any validation
 fails after upload, publish a fixed-forward version: <code>vX.Y.Z.postN</code> for TestPyPI
