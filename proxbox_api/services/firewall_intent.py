@@ -51,7 +51,12 @@ def _path_for(payload: FirewallIntentPayload) -> tuple[str, str, bool, str]:  # 
     if action == "firewall.group.delete":
         if not payload.group:
             raise ValueError("firewall.group.delete requires group")
-        return "delete", f"cluster/firewall/groups/{payload.group}", False, "firewall_write_not_supported"
+        return (
+            "delete",
+            f"cluster/firewall/groups/{payload.group}",
+            False,
+            "firewall_write_not_supported",
+        )
 
     if action.startswith("firewall.rule."):
         base = _rule_base(payload, zone)
@@ -73,8 +78,11 @@ def _path_for(payload: FirewallIntentPayload) -> tuple[str, str, bool, str]:  # 
     if action == "firewall.alias.upsert":
         if not payload.name:
             raise ValueError("firewall.alias.upsert requires name")
-        return "put", f"{_scoped_base(payload, zone, 'aliases')}/{payload.name}", False, (
-            "firewall_write_not_supported"
+        return (
+            "put",
+            f"{_scoped_base(payload, zone, 'aliases')}/{payload.name}",
+            False,
+            ("firewall_write_not_supported"),
         )
 
     if action == "firewall.options.update":
