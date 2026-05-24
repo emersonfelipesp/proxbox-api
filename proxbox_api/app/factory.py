@@ -56,6 +56,7 @@ from proxbox_api.routes.proxmox.replication import router as px_replication_rout
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 from proxbox_api.routes.proxmox.sdn import router as px_sdn_router
 from proxbox_api.routes.proxmox_actions import router as proxmox_actions_router
+from proxbox_api.routes.ssh_terminal import router as ssh_terminal_router
 from proxbox_api.routes.sync.active import router as sync_active_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
@@ -460,6 +461,7 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(cloud_pve_template_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_templates_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_versions_router, prefix="/cloud", tags=["cloud"])
+        app.include_router(ssh_terminal_router, prefix="/ssh", tags=["ssh terminal"])
         app.include_router(
             sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
         )
