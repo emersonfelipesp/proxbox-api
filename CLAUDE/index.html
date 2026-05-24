@@ -1459,12 +1459,14 @@ Submodule layout and cross-repo links: <code>/root/personal-context/claude-refer
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── architecture/               # System overview and design patterns
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── api/                        # HTTP and WebSocket API reference
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── sync/                       # Sync workflow documentation
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>└── pt-BR/                      # Brazilian Portuguese translations
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    ├── api/
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    ├── architecture/
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    ├── development/
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    ├── getting-started/
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    └── sync/
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│   └── reconciliation-architecture.md
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>└── pt-BR/                      # Brazilian Portuguese translations
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    ├── api/
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    ├── architecture/
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    ├── development/
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    ├── getting-started/
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    └── sync/
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        └── reconciliation-architecture.md
 </code></pre></div>
 <h2 id="building-and-serving-docs">Building and Serving Docs<a class="headerlink" href="#building-and-serving-docs" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Install docs dependencies</span>
@@ -1481,6 +1483,9 @@ Submodule layout and cross-repo links: <code>/root/personal-context/claude-refer
 <li>Keep English (<code>docs/</code>) and Portuguese (<code>docs/pt-BR/</code>) files in sync when updating content.</li>
 <li>API reference in <code>docs/api/</code> should match the actual route signatures in <code>proxbox_api/routes/</code>.</li>
 <li>Architecture diagrams belong in <code>docs/architecture/</code>.</li>
+<li>Reconciliation engine docs live under <code>docs/sync/reconciliation-architecture.md</code>
+  and <code>docs/pt-BR/sync/reconciliation-architecture.md</code>; keep them aligned
+  with <code>proxbox_api/services/sync/reconciliation/</code> and <code>proxbox-reconcile-rs/</code>.</li>
 <li>Do not store generated artifacts or runtime data in <code>docs/</code>.</li>
 </ul>
 
