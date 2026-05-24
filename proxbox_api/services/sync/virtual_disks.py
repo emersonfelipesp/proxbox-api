@@ -384,8 +384,7 @@ async def create_virtual_disks(  # noqa: C901
                 disk_payloads.append(disk_payload)
 
             desired_disk_sizes = {
-                str(payload.get("name")): int(payload.get("size") or 0)
-                for payload in disk_payloads
+                str(payload.get("name")): int(payload.get("size") or 0) for payload in disk_payloads
             }
             desired_disk_total = sum(int(payload.get("size") or 0) for payload in disk_payloads)
 
