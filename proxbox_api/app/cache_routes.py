@@ -12,6 +12,10 @@ from proxbox_api.netbox_rest import (
     get_cache_metrics,
     get_cache_prometheus_metrics,
 )
+from proxbox_api.services.sync.reconciliation.metrics import (
+    get_reconciliation_metrics,
+    get_reconciliation_prometheus_metrics,
+)
 
 cache_router = APIRouter()
 
@@ -19,6 +23,7 @@ cache_router = APIRouter()
 @cache_router.get("/cache")
 async def get_cache() -> dict:
     netbox_metrics = get_cache_metrics()
+    reconciliation_metrics = get_reconciliation_metrics()
     sample_keys = [
         {"api_id": key[0], "path": key[1], "query": key[2]}
         for key in list(_netbox_get_cache.keys())[:20]
@@ -26,19 +31,20 @@ async def get_cache() -> dict:
     return {
         "proxbox_cache": global_cache.return_cache(),
         "netbox_get_cache_metrics": netbox_metrics,
+        "reconciliation_metrics": reconciliation_metrics,
         "netbox_get_cache_sample": sample_keys,
     }
 
 
 @cache_router.get("/cache/metrics")
 async def get_cache_metrics_json() -> dict:
-    return get_cache_metrics()
+    return {**get_cache_metrics(), **get_reconciliation_metrics()}
 
 
 @cache_router.get("/cache/metrics/prometheus")
 async def get_cache_metrics_prometheus() -> PlainTextResponse:
     return PlainTextResponse(
-        content=get_cache_prometheus_metrics(),
+        content=get_cache_prometheus_metrics() + get_reconciliation_prometheus_metrics(),
         media_type="text/plain; charset=utf-8",
     )
 

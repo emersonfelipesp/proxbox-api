@@ -205,6 +205,34 @@ Or with `uv`:
 uv add proxbox-api
 ```
 
+### Optional Rust reconciliation engine
+
+VM reconciliation uses the Python engine by default. An optional native package,
+`proxbox-reconcile-rs`, can be installed for compare-mode validation or explicit Rust-engine
+testing after wheels are published.
+
+Once the optional package is published, install with:
+
+```bash
+pip install proxbox-api[rust]
+```
+
+Until the native package is published, install it from a local checkout:
+
+```bash
+uv sync --extra test --group dev
+uv pip install -e proxbox-reconcile-rs
+```
+
+Enable compare mode first:
+
+```bash
+PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app
+```
+
+The production default remains Python. To roll back immediately, unset
+`PROXBOX_RECONCILIATION_ENGINE` or set it to `python`.
+
 Start the server:
 
 ```bash
@@ -230,6 +258,12 @@ Or use `uv`:
 
 ```bash
 uv sync
+```
+
+Install the optional Rust reconciliation package for local parity testing:
+
+```bash
+uv pip install -e proxbox-reconcile-rs
 ```
 
 Run API:
