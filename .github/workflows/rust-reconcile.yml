@@ -1,0 +1,84 @@
+name: rust-reconcile
+
+on:
+  push:
+    branches: [main, testing, "v*"]
+  pull_request:
+    branches: [main, testing, "v*"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+env:
+  PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+
+      - name: Sync proxbox-api dependencies
+        run: uv sync --frozen --extra test --group dev
+
+      - name: Rust unit tests
+        run: cargo test --no-default-features
+        working-directory: proxbox-reconcile-rs
+
+      - name: Install local Rust extension
+        run: uv pip install -e proxbox-reconcile-rs
+
+      - name: Strict Rust/Python parity tests
+        run: uv run pytest tests/reconciliation -q
+        env:
+          PROXBOX_RECONCILIATION_ENGINE: compare
+          PROXBOX_RECONCILIATION_COMPARE_STRICT: "true"
+          XDG_DATA_HOME: ${{ runner.temp }}/xdg-data
+
+  build-wheels:
+    name: Build wheels (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build wheel artifact
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist --manifest-path proxbox-reconcile-rs/Cargo.toml
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxbox-reconcile-rs-${{ matrix.os }}-py${{ matrix.python }}
+          path: dist/*
