@@ -21,10 +21,12 @@ from proxbox_api.routes.intent.schemas import (
     ApplyRequest,
     ApplyResponse,
     ApplyResultItem,
+    FirewallIntentPayload,
     LXCIntentPayload,
     VMIntentPayload,
 )
 from proxbox_api.runtime_settings import get_bool
+from proxbox_api.services.firewall_intent import apply_firewall_diff
 from proxbox_api.services.verb_dispatch import write_verb_journal_entry
 
 router = APIRouter()
@@ -41,6 +43,8 @@ def _overall(results: list[ApplyResultItem]) -> str:
 
 
 def _vmid(diff: ApplyDiff) -> int:
+    if isinstance(diff.payload, FirewallIntentPayload):
+        return diff.payload.vmid or 0
     return diff.payload.vmid
 
 
@@ -127,7 +131,7 @@ async def _dispatch_update_diff(
     response_model=ApplyResponse,
     summary="Apply NetBox→Proxmox intent diffs",
 )
-async def apply_intent(
+async def apply_intent(  # noqa: C901
     request: Request,
     body: ApplyRequest,
     session: SessionDep,
@@ -142,6 +146,17 @@ async def apply_intent(
                 endpoint_id=endpoint_id,
                 netbox_id=diff.netbox_id,
             )
+            if diff.kind == "firewall":
+                results.append(
+                    await apply_firewall_diff(
+                        diff=diff,
+                        endpoint_context=endpoint_context,
+                        actor=body.actor,
+                        run_uuid=body.run_uuid,
+                    )
+                )
+                continue
+
             if diff.op == "create" and diff.kind == "qemu":
                 if not isinstance(diff.payload, VMIntentPayload):
                     results.append(

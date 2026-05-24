@@ -38,6 +38,7 @@ from proxbox_api.routes.intent.schemas import (
     PlanResponse,
     PlanVerdict,
 )
+from proxbox_api.services.firewall_intent import is_firewall_plan_diff, plan_firewall_diff
 
 router = APIRouter()
 
@@ -50,6 +51,9 @@ def _verdict_for(diff: IntentDiff) -> PlanVerdict:
     endpoint end-to-end during Sub-PR D without spurious blocks while
     later sub-PRs are still in flight.
     """
+    if is_firewall_plan_diff(diff):
+        return plan_firewall_diff(diff)
+
     if diff.op == "delete":
         return PlanVerdict(
             netbox_id=diff.netbox_id,
