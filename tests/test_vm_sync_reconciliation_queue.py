@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 
@@ -228,6 +229,49 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
     assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
     assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203
+
+
+@pytest.mark.asyncio
+async def test_dispatch_vm_operation_queue_retries_disk_aggregate_validation(monkeypatch):
+    patch_payloads: list[dict[str, object]] = []
+
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
+
+    async def _fake_patch(nb, path, record_id, payload):
+        patch_payloads.append(dict(payload))
+        if len(patch_payloads) == 1:
+            raise ProxboxException(
+                message="NetBox REST request failed",
+                detail=(
+                    '{"disk":["The specified disk size (2252) must match the aggregate size '
+                    'of assigned virtual disks (2256)."]}'
+                ),
+            )
+        return {"id": record_id, **payload}
+
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
+
+    prepared_update = _prepared_vm(cluster_name="cluster-a", vmid=204, memory=4096)
+    queue = [
+        sync_vm._NetBoxVMOperation(
+            method="UPDATE",
+            prepared=prepared_update,
+            existing_record={
+                "id": 4204,
+                "custom_fields": {"proxmox_vm_id": 204},
+                "disk": 2256,
+            },
+            patch_payload={"memory": 4096, "disk": 2252},
+        )
+    ]
+
+    resolved = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert patch_payloads == [
+        {"memory": 4096, "disk": 2252},
+        {"memory": 4096, "disk": 2256},
+    ]
+    assert resolved[("cluster-a", 204, "qemu")]["disk"] == 2256
 
 
 @pytest.mark.asyncio

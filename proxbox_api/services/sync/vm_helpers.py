@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from ipaddress import ip_address, ip_interface
 from typing import Literal
 
@@ -9,6 +10,11 @@ from proxbox_api.logger import logger
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 
 PrimaryIPPreference = Literal["ipv4", "ipv6"]
+
+_VM_DISK_AGGREGATE_ERROR_RE = re.compile(
+    r"aggregate size of assigned virtual disks \((\d+)\)",
+    flags=re.IGNORECASE,
+)
 
 
 def _compute_vm_patchable_fields(
@@ -69,6 +75,19 @@ def normalize_current_virtual_machine_payload(
     if supports_virtual_machine_type_field:
         payload["virtual_machine_type"] = record.get("virtual_machine_type")
     return payload
+
+
+def extract_vm_disk_aggregate_size(error: Exception) -> int | None:
+    """Extract NetBox's current virtual-disk aggregate from VM validation errors."""
+    detail = getattr(error, "detail", None)
+    text = str(detail) if detail else str(error)
+    match = _VM_DISK_AGGREGATE_ERROR_RE.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
 
 
 def to_mapping(value: object) -> dict[str, object]:
