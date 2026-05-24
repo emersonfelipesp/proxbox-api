@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.database import FirewallIntentRequestRecord
-from proxbox_api.routes.intent.dispatchers.common import IntentEndpointContext
+from proxbox_api.routes.intent.dispatchers.common import IntentEndpointContext, scrub_message
 from proxbox_api.routes.intent.schemas import (
     ApplyDiff,
     ApplyResultItem,
@@ -114,6 +114,10 @@ def _rule_base(payload: FirewallIntentPayload, zone: str) -> str:
 def _scoped_base(payload: FirewallIntentPayload, zone: str, resource: str) -> str:
     if zone == "datacenter":
         return f"cluster/firewall/{resource}"
+    if zone == "node" and resource == "options":
+        if not payload.node:
+            raise ValueError("node options intent requires node")
+        return f"nodes/{payload.node}/firewall/options"
     if zone in {"vm_qemu", "vm_lxc"}:
         return f"{_vm_base(payload, zone)}/{resource}"
     raise ValueError(f"{resource} is not supported for firewall zone {zone}")
@@ -122,7 +126,9 @@ def _scoped_base(payload: FirewallIntentPayload, zone: str, resource: str) -> st
 def _vm_base(payload: FirewallIntentPayload, zone: str) -> str:
     if not payload.node or payload.vmid is None:
         raise ValueError(f"{zone} firewall intent requires node and vmid")
-    vm_type = payload.vm_type or ("qemu" if zone == "vm_qemu" else "lxc")
+    vm_type = "qemu" if zone == "vm_qemu" else "lxc"
+    if payload.vm_type is not None and payload.vm_type != vm_type:
+        raise ValueError(f"vm_type {payload.vm_type!r} does not match firewall zone {zone!r}")
     return f"nodes/{payload.node}/{vm_type}/{payload.vmid}/firewall"
 
 
@@ -150,6 +156,7 @@ async def apply_firewall_diff(
             message="firewall apply requires FirewallIntentPayload",
         )
 
+    raw_payload = diff.payload.model_dump(mode="python")
     try:
         method, path, probe, unsupported_reason = _path_for(diff.payload)
         result = await _firewall_write(
@@ -200,7 +207,7 @@ async def apply_firewall_diff(
             kind=diff.kind,
             status="failed",
             reason="firewall_apply_failed",
-            message=str(error),
+            message=scrub_message(str(error), raw_payload),
         )
 
 

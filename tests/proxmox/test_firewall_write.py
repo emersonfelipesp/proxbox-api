@@ -68,6 +68,14 @@ def _make_501() -> ResourceException:
     )
 
 
+def _make_404() -> ResourceException:
+    return ResourceException(
+        status_code=404,
+        status_message="Not Found",
+        content="No such rule",
+    )
+
+
 @dataclass
 class _Call:
     method: str
@@ -142,6 +150,20 @@ def test_firewall_write_requires_actor(auth_test_client, db_engine):
     assert response.json()["detail"]["reason"] == "actor_required"
 
 
+def test_firewall_group_create_requires_structured_name_error(auth_test_client):
+    response = auth_test_client.post(
+        "/proxmox/firewall/datacenter/groups",
+        headers={"X-Proxbox-Actor": "ops@example.com"},
+        json={"comment": "missing group"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "reason": "firewall_group_name_required",
+        "detail": "group or name is required",
+    }
+
+
 def test_datacenter_rule_create_dispatches_to_proxmox_sdk(
     auth_test_client,
     db_engine,
@@ -199,6 +221,28 @@ def test_vnet_501_returns_skipped(auth_test_client, db_engine, monkeypatch):
     body = response.json()
     assert body["status"] == "skipped"
     assert body["reason"] == "vnet_firewall_not_supported"
+
+
+def test_regular_firewall_write_404_returns_failure(auth_test_client, db_engine, monkeypatch):
+    endpoint_id = _make_endpoint(db_engine, allow_writes=True)
+    fake = _FakeProxmoxSession(exc=_make_404())
+
+    import proxbox_api.routes.proxmox.firewall as firewall_routes
+
+    async def _open(_endpoint):
+        return fake
+
+    monkeypatch.setattr(firewall_routes, "_open_proxmox_session", _open)
+
+    response = auth_test_client.post(
+        "/proxmox/firewall/datacenter/rules",
+        params={"endpoint_id": endpoint_id},
+        headers={"X-Proxbox-Actor": "ops@example.com"},
+        json={"type": "in", "action": "ACCEPT", "enable": True},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["reason"] == "proxmox_firewall_write_failed"
 
 
 def test_openapi_contains_full_firewall_write_matrix():

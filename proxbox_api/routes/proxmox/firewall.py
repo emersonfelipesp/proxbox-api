@@ -288,7 +288,7 @@ async def _firewall_write(
     unsupported_reason: str = "firewall_write_not_supported",
     probe_supported: bool = False,
 ) -> FirewallWriteResponse | JSONResponse:
-    """Dispatch one write through proxmox-sdk with gate and 501 handling."""
+    """Dispatch one write through proxmox-sdk with gate and unsupported-surface handling."""
     actor_value = _require_actor(actor)
     endpoint_or_response = await _firewall_gate(db, endpoint_id)
     if isinstance(endpoint_or_response, JSONResponse):
@@ -316,7 +316,7 @@ async def _firewall_write(
             write_call = getattr(resource, method)
             raw = await resolve_async(write_call(**(payload or {})))
         except ResourceException as exc:
-            if exc.status_code in {404, 501}:
+            if probe_supported and exc.status_code in {404, 501}:
                 return _unsupported_response(
                     endpoint=endpoint,
                     actor=actor_value,
@@ -595,7 +595,13 @@ async def create_datacenter_firewall_group(
 ):
     body = payload.pve_payload()
     if not body.get("group"):
-        raise HTTPException(status_code=422, detail="group or name is required")
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "firewall_group_name_required",
+                "detail": "group or name is required",
+            },
+        )
     return await _firewall_write(
         db=db,
         endpoint_id=endpoint_id,

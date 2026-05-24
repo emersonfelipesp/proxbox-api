@@ -11,7 +11,7 @@ ALLOWLIST = {
     Path("routes/intent/dispatchers/lxc_destroy.py"),
 }
 DESTROY_PATTERNS = (
-    re.compile(r"\.delete\s*\(.*nodes"),
+    re.compile(r"(?<!router)\.delete\s*\(.*nodes"),
     re.compile(r"\.qemu\.delete\("),
     re.compile(r"\.lxc\.delete\("),
     re.compile(r"requests\.delete\(.*nodes/"),

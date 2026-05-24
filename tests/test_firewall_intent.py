@@ -28,6 +28,36 @@ def test_firewall_plan_diff_returns_warning_verdict():
     assert "Firewall action" in verdict.message
 
 
+def test_firewall_options_update_supports_node_zone():
+    payload = FirewallIntentPayload(
+        action="firewall.options.update",
+        zone="node",
+        node="pve-a",
+        body={"enable": True},
+    )
+
+    method, path, probe, reason = firewall_intent._path_for(payload)
+
+    assert method == "put"
+    assert path == "nodes/pve-a/firewall/options"
+    assert probe is False
+    assert reason == "firewall_write_not_supported"
+
+
+def test_vm_zone_rejects_mismatched_vm_type():
+    payload = FirewallIntentPayload(
+        action="firewall.rule.create",
+        zone="vm_qemu",
+        node="pve-a",
+        vmid=101,
+        vm_type="lxc",
+        body={"type": "in", "action": "ACCEPT"},
+    )
+
+    with pytest.raises(ValueError, match="does not match firewall zone"):
+        firewall_intent._path_for(payload)
+
+
 @pytest.mark.asyncio
 async def test_apply_firewall_diff_dispatches_write_and_returns_upid(monkeypatch):
     calls = []
@@ -142,3 +172,32 @@ async def test_apply_firewall_diff_maps_vnet_unsupported_to_skipped(monkeypatch)
 
     assert result.status == "skipped"
     assert result.reason == "vnet_firewall_not_supported"
+
+
+@pytest.mark.asyncio
+async def test_apply_firewall_diff_scrubs_exception_message(monkeypatch):
+    async def _write(**_kwargs):
+        raise RuntimeError("upstream echoed secret value: s3cr3t-token")
+
+    monkeypatch.setattr(firewall_intent, "_firewall_write", _write)
+    diff = ApplyDiff(
+        op="update",
+        kind="firewall",
+        netbox_id=123,
+        payload=FirewallIntentPayload(
+            action="firewall.options.update",
+            zone="datacenter",
+            body={"token": "s3cr3t-token"},
+        ),
+    )
+
+    result = await firewall_intent.apply_firewall_diff(
+        diff=diff,
+        endpoint_context=IntentEndpointContext(session=SimpleNamespace(), endpoint_id=1),
+        actor="alice",
+        run_uuid="run-1",
+    )
+
+    assert result.status == "failed"
+    assert "s3cr3t-token" not in result.message
+    assert "***" in result.message
