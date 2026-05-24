@@ -9,7 +9,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 # build-base ensures C extensions (httptools, uvloop, etc.) can compile if no
 # musllinux wheel is available for the target arch.
-# git is required for uv to fetch the proxmox-sdk git dependency from uv.lock.
+# git is required for DEV_OVERRIDES that install SDK branches during CI smoke runs.
 RUN apk add --no-cache build-base git
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
