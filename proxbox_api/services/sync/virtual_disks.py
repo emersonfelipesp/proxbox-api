@@ -56,9 +56,9 @@ async def _delete_stale_virtual_disks(
     nb: object,
     *,
     vm_id: int,
-    desired_names: set[str],
+    desired_disks: dict[str, int],
 ) -> int:
-    """Delete VM disk records that no longer exist in the Proxmox config."""
+    """Delete VM disk records missing from Proxmox, including duplicate names."""
 
     existing_disks = await rest_list_async(
         nb,
@@ -66,16 +66,37 @@ async def _delete_stale_virtual_disks(
         query={"virtual_machine_id": vm_id, "limit": 500},
     )
     stale_ids: list[int] = []
+    desired_names = set(desired_disks)
+    desired_records: dict[str, list[tuple[int, int]]] = {}
     for record in existing_disks:
         data = to_mapping(record)
         name = str(data.get("name") or "").strip()
         record_id = relation_id(data.get("id"))
-        if name and name not in desired_names and record_id is not None:
+        if not name or record_id is None:
+            continue
+        if name not in desired_names:
             stale_ids.append(record_id)
+            continue
+        try:
+            size = int(data.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        desired_records.setdefault(name, []).append((record_id, size))
+
+    for name, records in desired_records.items():
+        if len(records) <= 1:
+            continue
+        desired_size = desired_disks[name]
+        keep_id = next(
+            (record_id for record_id, size in records if size == desired_size),
+            records[0][0],
+        )
+        stale_ids.extend(record_id for record_id, _size in records if record_id != keep_id)
 
     if not stale_ids:
         return 0
 
+    stale_ids = sorted(set(stale_ids))
     deleted = await rest_bulk_delete_async(nb, "/api/virtualization/virtual-disks/", stale_ids)
     logger.info(
         "Deleted %s stale virtual disk(s) for VM id=%s: %s",
@@ -362,7 +383,10 @@ async def create_virtual_disks(  # noqa: C901
                     disk_payload["custom_fields"] = custom_fields
                 disk_payloads.append(disk_payload)
 
-            desired_disk_names = {str(payload.get("name")) for payload in disk_payloads}
+            desired_disk_sizes = {
+                str(payload.get("name")): int(payload.get("size") or 0)
+                for payload in disk_payloads
+            }
             desired_disk_total = sum(int(payload.get("size") or 0) for payload in disk_payloads)
 
             if disk_payloads:
@@ -394,7 +418,7 @@ async def create_virtual_disks(  # noqa: C901
                 disks_deleted = await _delete_stale_virtual_disks(
                     nb,
                     vm_id=vm_id_int,
-                    desired_names=desired_disk_names,
+                    desired_disks=desired_disk_sizes,
                 )
                 parent_vm_disk_updated = await _sync_parent_vm_disk_total(
                     nb,

@@ -140,6 +140,7 @@ def test_create_virtual_disks_deletes_stale_disks_and_updates_vm_total(monkeypat
             assert query == {"virtual_machine_id": 7, "limit": 500}
             return [
                 {"id": 10, "virtual_machine": {"id": 7}, "name": "scsi0", "size": 2252},
+                {"id": 12, "virtual_machine": {"id": 7}, "name": "scsi0", "size": 2252},
                 {"id": 11, "virtual_machine": {"id": 7}, "name": "efidisk0", "size": 4},
             ]
         return []
@@ -203,7 +204,7 @@ def test_create_virtual_disks_deletes_stale_disks_and_updates_vm_total(monkeypat
         )
     )
 
-    assert deleted_ids == [11]
+    assert deleted_ids == [11, 12]
     assert parent_vm_patches == [{"record_id": 7, "disk": 2252}]
     assert result == {"count": 1, "created": 0, "updated": 1, "skipped": 0}
 
