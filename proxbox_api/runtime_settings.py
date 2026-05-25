@@ -128,6 +128,34 @@ def get_str(*, settings_key: str, env: str, default: str) -> str:
     return default
 
 
+def get_plugin_bool(*, settings_key: str, default: bool) -> bool:
+    """Resolve a boolean that must be controlled only by ProxboxPluginSettings."""
+    settings = _load_settings()
+    if settings is not None:
+        value = settings.get(settings_key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        if isinstance(value, (int, float)):
+            return bool(value)
+
+    return default
+
+
+def get_plugin_str(*, settings_key: str, default: str) -> str:
+    """Resolve a string that must be controlled only by ProxboxPluginSettings."""
+    settings = _load_settings()
+    if settings is not None:
+        value = settings.get(settings_key)
+        if value is not None:
+            text = str(value).strip()
+            if text:
+                return text
+
+    return default
+
+
 def _clamp_int(value: int, minimum: int | None, maximum: int | None) -> int:
     if minimum is not None and value < minimum:
         return minimum

@@ -86,14 +86,14 @@ result, and adapt operations back to the Python dataclasses used by dispatch.
 
 Engine selection is controlled by runtime settings. The NetBox plugin setting
 `ProxboxPluginSettings.reconciliation_engine` is the normal operator-facing
-control, and `PROXBOX_RECONCILIATION_ENGINE` remains an environment override.
+control; backend environment variables do not override this selector.
 
-| Variable | Value | Behavior |
+| Setting | Value | Behavior |
 |----------|-------|----------|
-| `PROXBOX_RECONCILIATION_ENGINE` | `python` | Default. Use Python output only. |
-| `PROXBOX_RECONCILIATION_ENGINE` | `compare` | Run Python and Rust when Rust is installed, log mismatches, return Python output. |
-| `PROXBOX_RECONCILIATION_ENGINE` | `rust` | Return adapted Rust output. |
-| `PROXBOX_RECONCILIATION_COMPARE_STRICT` | `true` | Raise on compare-mode mismatch. Intended for CI. |
+| `reconciliation_engine` | `python` | Default. Use Python output only. |
+| `reconciliation_engine` | `compare` | Run Python and Rust when Rust is installed, log mismatches, return Python output. |
+| `reconciliation_engine` | `rust` | Return adapted Rust output. |
+| `reconciliation_compare_strict` | `true` | Raise on compare-mode mismatch. Intended for validation. |
 
 If the Rust package is not installed, `python` mode works normally and `compare` mode returns
 Python output. `rust` mode requires the native package and fails clearly if it is unavailable.
@@ -182,8 +182,8 @@ sequenceDiagram
 
 - `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: controls concurrent VM preparation/fetch from Proxmox.
 - `PROXBOX_NETBOX_WRITE_CONCURRENCY`: defines dispatch batch window size.
-- `reconciliation_engine` / `PROXBOX_RECONCILIATION_ENGINE`: selects `python`, `compare`, or `rust`.
-- `PROXBOX_RECONCILIATION_COMPARE_STRICT`: raises on compare-mode drift when set to `true`.
+- `reconciliation_engine`: selects `python`, `compare`, or `rust` from ProxboxPluginSettings.
+- `reconciliation_compare_strict`: raises on compare-mode drift when set to `true`.
 
 Note: batch window size does not imply parallel writes; writes remain sequential to protect NetBox under single-instance operation.
 
@@ -196,10 +196,10 @@ Rust is not the default engine. Rollout is intentionally conservative:
 3. Keep `reconciliation_engine=python` as the default in `proxbox-api`.
 4. Run `reconciliation_engine=compare` in staging for at least two weeks.
 5. Watch `proxbox_reconcile_mismatch_total` and reconciliation mismatch logs.
-6. Recommend `PROXBOX_RECONCILIATION_ENGINE=rust` only after zero mismatches across diverse real syncs.
+6. Recommend `reconciliation_engine=rust` only after zero mismatches across diverse real syncs.
 7. Consider a default-engine change only in a later minor release and only after full sync wall-time benchmarks show a real win.
 
-Rollback is immediate: set `reconciliation_engine` back to `python` in NetBox, or unset `PROXBOX_RECONCILIATION_ENGINE` if an env override was used.
+Rollback is immediate: set `reconciliation_engine` back to `python` in NetBox.
 
 Current benchmark evidence does not justify making Rust the default. The full Rust path is slower
 than Python in the synthetic benchmark harness, and live measurement showed reconciliation was not

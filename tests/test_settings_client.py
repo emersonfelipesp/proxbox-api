@@ -12,6 +12,7 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["encryption_key"] == ""
     assert settings["delete_orphans"] is False
     assert settings["reconciliation_engine"] == "python"
+    assert settings["reconciliation_compare_strict"] is False
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -40,6 +41,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "encryption_key": "my-plugin-key",
         "delete_orphans": True,
         "reconciliation_engine": "rust",
+        "reconciliation_compare_strict": True,
     }
 
     mock_response = MagicMock()
@@ -57,6 +59,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["encryption_key"] == "my-plugin-key"
     assert settings["delete_orphans"] is True
     assert settings["reconciliation_engine"] == "rust"
+    assert settings["reconciliation_compare_strict"] is True
 
 
 def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):
@@ -88,6 +91,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
                 "debug_cache": True,
                 "delete_orphans": True,
                 "reconciliation_engine": "compare",
+                "reconciliation_compare_strict": True,
             }
         ],
     }
@@ -109,6 +113,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
     assert settings["debug_cache"] is True
     assert settings["delete_orphans"] is True
     assert settings["reconciliation_engine"] == "compare"
+    assert settings["reconciliation_compare_strict"] is True
 
 
 def test_delete_orphans_runtime_bool_prefers_env_over_settings(monkeypatch):
@@ -123,6 +128,34 @@ def test_delete_orphans_runtime_bool_prefers_env_over_settings(monkeypatch):
         runtime_settings.get_bool(
             settings_key="delete_orphans",
             env="PROXBOX_DELETE_ORPHANS",
+            default=False,
+        )
+        is True
+    )
+
+
+def test_plugin_only_runtime_helpers_ignore_env(monkeypatch):
+    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "python")
+    monkeypatch.setenv("PROXBOX_RECONCILIATION_COMPARE_STRICT", "false")
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {
+            "reconciliation_engine": "rust",
+            "reconciliation_compare_strict": True,
+        },
+    )
+
+    assert (
+        runtime_settings.get_plugin_str(
+            settings_key="reconciliation_engine",
+            default="python",
+        )
+        == "rust"
+    )
+    assert (
+        runtime_settings.get_plugin_bool(
+            settings_key="reconciliation_compare_strict",
             default=False,
         )
         is True

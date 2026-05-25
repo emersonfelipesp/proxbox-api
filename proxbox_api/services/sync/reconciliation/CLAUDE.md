@@ -38,15 +38,15 @@ or WebSocket code belongs here.
 ## Engine Modes
 
 The runtime value is read from `ProxboxPluginSettings.reconciliation_engine`
-through `proxbox_api.runtime_settings.get_str()`. The environment variable
-`PROXBOX_RECONCILIATION_ENGINE` remains the highest-priority override.
+through `proxbox_api.runtime_settings.get_plugin_str()`. This engine selector is
+plugin-settings only; backend environment variables must not override it.
 
-- `PROXBOX_RECONCILIATION_ENGINE=python`: default. Always available.
-- `PROXBOX_RECONCILIATION_ENGINE=compare`: run Python and Rust, log/increment
+- `reconciliation_engine=python`: default. Always available.
+- `reconciliation_engine=compare`: run Python and Rust, log/increment
   mismatches, return Python output.
-- `PROXBOX_RECONCILIATION_ENGINE=rust`: return Rust output. Requires
+- `reconciliation_engine=rust`: return Rust output. Requires
   `proxbox-reconcile-rs` to be installed.
-- `PROXBOX_RECONCILIATION_COMPARE_STRICT=true`: raise on mismatch in compare
+- `reconciliation_compare_strict=true`: raise on mismatch in compare
   mode. Use in CI and local parity debugging.
 
 ## Parity Rules
@@ -76,7 +76,5 @@ When the Rust package is installed or changed, run strict parity:
 ```bash
 cargo test --no-default-features --manifest-path proxbox-reconcile-rs/Cargo.toml
 uv pip install -e proxbox-reconcile-rs
-PROXBOX_RECONCILIATION_ENGINE=compare \
-  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
-  uv run pytest tests/reconciliation -q
+uv run pytest tests/reconciliation -q
 ```
