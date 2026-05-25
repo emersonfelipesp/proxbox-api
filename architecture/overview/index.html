@@ -1144,6 +1144,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/firecracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Firecracker Host-Agent Provisioning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1683,6 +1711,7 @@
 <li><code>/admin</code></li>
 <li><code>/admin/encryption</code> — encryption key inspection and rotation surface.</li>
 <li><code>/auth</code> — bootstrap and API-key management.</li>
+<li><code>/cloud/firecracker/provision</code> and <code>/cloud/firecracker/provision/stream</code> — Firecracker host-agent provisioning for NMS Cloud. These routes health-check the selected host, read capabilities, prepare assets, create the micro-VM, and optionally start it.</li>
 <li><code>/netbox</code></li>
 <li><code>/proxmox</code></li>
 <li><code>/proxmox/cluster/ha/*</code> — read-only High-Availability aggregation across configured clusters; see <a href="../../api/cluster-ha/">Cluster HA API</a>.</li>
@@ -1695,6 +1724,7 @@
 <li>SQLite-backed endpoint configuration and bootstrap state.</li>
 <li>NetBox API access via <code>netbox-sdk</code> sync and async clients.</li>
 <li>Proxmox API access via <code>proxmox-sdk</code> sync SDK sessions and typed helper wrappers.</li>
+<li>Firecracker host-agent access via <code>proxbox_api.firecracker_agent.client.FirecrackerHostAgentClient</code>.</li>
 <li>Runtime-generated Proxmox live routes mounted during app lifespan startup.</li>
 </ul>
 <h2 id="core-data-models">Core Data Models<a class="headerlink" href="#core-data-models" title="Permanent link">&para;</a></h2>

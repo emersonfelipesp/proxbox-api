@@ -690,6 +690,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#cloud-firecracker-cloudfirecracker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud Firecracker (/cloud/firecracker)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#netbox-routes-netbox" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1338,6 +1349,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/firecracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Firecracker Host-Agent Provisioning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1746,6 +1785,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#cloud-firecracker-cloudfirecracker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud Firecracker (/cloud/firecracker)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#netbox-routes-netbox" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2065,6 +2115,53 @@
 <li><code>GET /admin/logs</code> - In-memory backend log buffer with optional filters for <code>level</code>, <code>limit</code>, <code>offset</code>, <code>since</code>, and <code>operation_id</code>.</li>
 <li><code>GET /admin/logs/stream</code> - SSE real-time log stream. Supports query parameters <code>level</code>, <code>errors_only</code>, <code>operation_id</code>, and <code>newer_than_id</code>.</li>
 </ul>
+<h2 id="cloud-firecracker-cloudfirecracker">Cloud Firecracker (<code>/cloud/firecracker</code>)<a class="headerlink" href="#cloud-firecracker-cloudfirecracker" title="Permanent link">&para;</a></h2>
+<p>These endpoints are called by <code>nms-backend</code> after it resolves the selected
+Firecracker host/image inventory from <code>netbox-proxbox</code> and creates the
+<code>FirecrackerMicroVM</code> row in NetBox.</p>
+<ul>
+<li><code>POST /cloud/firecracker/provision</code> - Provision a Firecracker micro-VM through one host-agent and return a final JSON response.</li>
+<li><code>POST /cloud/firecracker/provision/stream</code> - Same provisioning flow as Server-Sent Events. Emits <code>provision_step</code> and <code>terminal_line</code> events, then a terminal <code>complete</code> event.</li>
+</ul>
+<p>Provisioning steps:</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host_agent_health</code></td>
+<td>Check host-agent reachability, status, Firecracker version, and KVM availability</td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td>Confirm the requested network mode and capacity fit the host</td>
+</tr>
+<tr>
+<td><code>prepare_assets</code></td>
+<td>Prepare or verify the kernel and rootfs image bundle on the host</td>
+</tr>
+<tr>
+<td><code>create_microvm</code></td>
+<td>Create the Firecracker micro-VM through the host-agent</td>
+</tr>
+<tr>
+<td><code>start_microvm</code></td>
+<td>Start the micro-VM when <code>start_after_provision=true</code>, otherwise emit <code>skipped</code></td>
+</tr>
+</tbody>
+</table>
+<p>Request fields are defined by <code>FirecrackerProvisionRequest</code>: <code>host_agent_base_url</code>,
+optional <code>host_agent_token</code>, optional <code>host_id</code> and <code>host_pool_id</code>, <code>image</code>,
+optional <code>netbox_microvm_id</code>, <code>microvm_id</code>, <code>name</code>, optional <code>tenant_id</code>,
+<code>network</code>, <code>vcpus</code>, <code>memory_mib</code>, <code>disk_mib</code>, <code>ssh_authorized_keys</code>,
+<code>metadata</code>, and <code>start_after_provision</code>.</p>
+<p>Successful responses return <code>FirecrackerProvisionResponse</code> with <code>ok</code>,
+<code>microvm_id</code>, <code>instance_ref</code>, <code>host_id</code>, <code>host_pool_id</code>, <code>image_id</code>, <code>status</code>,
+optional <code>guest_ip</code>, and optional <code>detail</code>.</p>
 <h2 id="netbox-routes-netbox">NetBox Routes (<code>/netbox</code>)<a class="headerlink" href="#netbox-routes-netbox" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>POST /netbox/endpoint</code> - Create the singleton NetBox endpoint.</li>
