@@ -53,6 +53,7 @@ ALLOWED_PROVISIONER_RECIPES = {
     "debian-base": "debian-base.sh",
     "docker-host": "docker-host.sh",
     "qemu-agent": "qemu-agent.sh",
+    "gitea": "gitea.sh",
 }
 
 
