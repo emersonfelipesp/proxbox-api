@@ -3,8 +3,6 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from proxbox_api.schemas.image_factory import PackerImageBuildRequest, PackerImageBuildResponse
 
 
