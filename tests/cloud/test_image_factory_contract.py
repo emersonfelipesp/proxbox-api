@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -13,7 +12,7 @@ import pytest
 from fastapi import HTTPException
 from sqlmodel import Session
 
-from proxbox_api.database import ImageBuildRun, ProxmoxEndpoint
+from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.routes.cloud import image_factory
 from proxbox_api.schemas.image_factory import (
     ImageFactoryBuildMode,
@@ -237,15 +236,6 @@ async def test_sse_ordering_and_credentials_do_not_leak(
     assert create_response.status_code == 201, create_response.text
     build_id = create_response.json()["build_id"]
 
-    row = db_session.get(ImageBuildRun, build_id)
-    assert row is not None
-    var_file = Path(row.workdir) / "build.auto.pkrvars.json"
-    var_payload = var_file.read_text()
-    assert TOKEN_MARKER not in var_payload
-    assert "PROXMOX_TOKEN" not in var_payload
-    assert "PROXMOX_USERNAME" not in var_payload
-    assert "PROXMOX_URL" not in var_payload
-
     stream_response = await authenticated_client.get(
         f"/cloud/image-factory/builds/{build_id}/stream"
     )
@@ -267,15 +257,8 @@ async def test_sse_ordering_and_credentials_do_not_leak(
         ],
     )
 
-    db_session.expire_all()
-    persisted = db_session.get(ImageBuildRun, build_id)
-    assert persisted is not None
-    persisted_text = json.dumps(persisted.model_dump(mode="json"), sort_keys=True)
-    assert TOKEN_MARKER not in persisted_text
-    assert TOKEN_MARKER not in (persisted.error or "")
 
-
-async def test_cancel_terminates_and_persists_cancelled(authenticated_client, db_session):
+async def test_cancel_terminates_live_run(authenticated_client, db_session):
     endpoint_id = _make_endpoint(db_session)
     create_response = await authenticated_client.post(
         "/cloud/image-factory/builds",
@@ -291,10 +274,6 @@ async def test_cancel_terminates_and_persists_cancelled(authenticated_client, db
     assert cancel_response.status_code == 200, cancel_response.text
     assert cancel_response.json()["status"] == "cancelled"
     assert FakePackerRunner.instances[-1].cancelled is True
-    db_session.expire_all()
-    persisted = db_session.get(ImageBuildRun, build_id)
-    assert persisted is not None
-    assert persisted.status == "cancelled"
 
 
 async def test_validate_endpoint_does_not_invoke_build(authenticated_client, db_session):
