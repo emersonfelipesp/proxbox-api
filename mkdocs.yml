@@ -75,6 +75,7 @@ nav:
       - Scheduler Container: sync/scheduler-container.md
   - Operations:
       - Hardware Discovery: operations/hardware-discovery.md
+      - Firecracker Host-Agent Provisioning: operations/firecracker.md
   - Development:
       - Schema Management: development/schema-management.md
       - Testing: development/testing.md

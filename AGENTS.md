@@ -85,6 +85,16 @@ the `netbox-proxbox` side, do all five — the existing fields in
 See `CLAUDE.md → Environment Variables → Adding a new tunable` for the full keep-list
 and resolution-order details.
 
+## Firecracker Cloud
+
+Firecracker provisioning lives in `proxbox_api/routes/cloud/firecracker.py`,
+`proxbox_api/firecracker_agent/`, and `proxbox_api/schemas/firecracker.py`.
+`nms-backend` resolves NetBox Proxbox host/image inventory and creates the
+`FirecrackerMicroVM` row, then calls this backend at
+`POST /cloud/firecracker/provision` or
+`POST /cloud/firecracker/provision/stream`. This repo owns the host-agent HTTP
+contract only; NetBox inventory remains in `netbox-proxbox`.
+
 ## Primary Guide
 
 - `CLAUDE.md`
@@ -112,6 +122,7 @@ and resolution-order details.
 ### proxbox_api subpackages
 - `proxbox_api/app/CLAUDE.md`
 - `proxbox_api/routes/CLAUDE.md`
+- `proxbox_api/routes/cloud/firecracker.py`
 - `proxbox_api/routes/admin/CLAUDE.md`
 - `proxbox_api/routes/dcim/CLAUDE.md`
 - `proxbox_api/routes/extras/CLAUDE.md`
@@ -128,6 +139,7 @@ and resolution-order details.
 - `proxbox_api/services/sync/individual/CLAUDE.md`
 - `proxbox_api/session/CLAUDE.md`
 - `proxbox_api/schemas/CLAUDE.md`
+- `proxbox_api/schemas/firecracker.py`
 - `proxbox_api/schemas/netbox/CLAUDE.md`
 - `proxbox_api/schemas/netbox/dcim/CLAUDE.md`
 - `proxbox_api/schemas/netbox/extras/CLAUDE.md`

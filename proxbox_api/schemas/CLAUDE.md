@@ -17,6 +17,7 @@ Top-level Pydantic schema package for plugin and API contracts.
 
 - `__init__.py`: top-level schema exports and plugin configuration schema.
 - `_base.py`: shared Proxbox base model.
+- `firecracker.py`: Firecracker host-agent, image bundle, network, micro-VM state, metrics, and Cloud provisioning contracts.
 - `proxmox.py`: Pydantic schemas for Proxmox sessions, cluster resources, node payloads, and resource payloads.
 - `stream_messages.py`: typed stream event payload schemas used by SSE and WebSocket progress reporting.
 - `netbox/`: NetBox session, endpoint, and payload schemas.
