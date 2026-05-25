@@ -192,10 +192,6 @@ the `netbox-proxbox` side, do all five — the existing fields in
 - `PROXBOX_ENCRYPTION_KEY_FILE`: optional override for the local key file path used when neither the env var nor the plugin settings provide a key. Defaults to `<repo_root>/data/encryption.key`.
 - `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: legacy opt-in flag for plaintext credential storage. No longer required for startup; kept for compatibility with operators who scripted it.
 - `PROXBOX_LOG_LEVEL`: console log verbosity (default `INFO`). Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Controls only the console handler; the in-memory buffer always receives DEBUG+ and the rotating file handler always writes WARNING+. Setting `DEBUG` also enables full `netbox_sdk.client` per-request tracing which is suppressed at all other levels to prevent INFO-level flooding.
-- `PROXBOX_RECONCILIATION_ENGINE`: VM operation-queue engine. Valid values:
-  `python` (default), `compare`, and `rust`. `compare` runs Python and Rust,
-  logs/increments mismatch metrics, and returns Python output. `rust` requires
-  the optional `proxbox-reconcile-rs` native package to be installed.
 - `PROXBOX_RECONCILIATION_COMPARE_STRICT`: when `true`, compare mode raises on
   Rust/Python mismatch. Use this in CI/parity tests, not normal production
   syncs.
@@ -211,6 +207,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_MAX_RETRIES` | `netbox_max_retries` | 5 |
 | `PROXBOX_NETBOX_RETRY_DELAY` | `netbox_retry_delay` | 2.0 s |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 |
+| `PROXBOX_RECONCILIATION_ENGINE` | `reconciliation_engine` | python |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `proxbox_fetch_max_concurrency` | 8 |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 (4 in task-history) |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in task-history/snapshots) |
@@ -324,7 +321,8 @@ Keep FastAPI routes, NetBox/Proxmox clients, SQLite, auth, retries, streaming,
 and dispatch execution in Python. Only pure, synchronous, CPU-bound queue
 construction belongs behind the Rust bridge.
 
-Engine modes:
+Engine modes are selected through `ProxboxPluginSettings.reconciliation_engine`.
+`PROXBOX_RECONCILIATION_ENGINE` remains an immediate env-var override.
 
 - `PROXBOX_RECONCILIATION_ENGINE=python`: default and production-safe path.
 - `PROXBOX_RECONCILIATION_ENGINE=compare`: run both engines, return Python,

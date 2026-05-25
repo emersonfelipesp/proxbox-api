@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from proxbox_api import runtime_settings
 from proxbox_api.app.cache_routes import (
     get_cache_metrics_json,
     get_cache_metrics_prometheus,
@@ -29,6 +30,7 @@ from tests.reconciliation.test_vm_queue_python import _prepared_vm, _snapshot_vm
 def _reset_engine_state(monkeypatch):
     monkeypatch.delenv("PROXBOX_RECONCILIATION_ENGINE", raising=False)
     monkeypatch.delenv("PROXBOX_RECONCILIATION_COMPARE_STRICT", raising=False)
+    monkeypatch.setattr(runtime_settings, "_load_settings", lambda: None)
     monkeypatch.setattr(rust_bridge, "_rust_build", None)
     reset_reconciliation_metrics()
 
@@ -76,6 +78,44 @@ def test_compare_mode_returns_python_output_and_records_mismatch(monkeypatch) ->
 
     assert [op.method for op in queue] == ["GET"]
     assert get_reconciliation_metrics()["proxbox_reconcile_mismatch_total"] == 1
+
+
+def test_plugin_settings_can_select_compare_mode(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {"reconciliation_engine": "compare"},
+    )
+    monkeypatch.setattr(rust_bridge, "_rust_build", lambda input_bytes: _rust_output("CREATE"))
+    prepared = [_prepared_vm()]
+    snapshot = [_snapshot_vm()]
+
+    queue = build_vm_operation_queue(prepared, snapshot)
+
+    assert [op.method for op in queue] == ["GET"]
+    assert get_reconciliation_metrics()["proxbox_reconcile_mismatch_total"] == 1
+
+
+def test_engine_env_override_wins_over_plugin_settings(monkeypatch) -> None:
+    calls = 0
+
+    def fake_rust_build(input_bytes: bytes) -> bytes:
+        nonlocal calls
+        calls += 1
+        return _rust_output("UPDATE")
+
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {"reconciliation_engine": "rust"},
+    )
+    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "python")
+    monkeypatch.setattr(rust_bridge, "_rust_build", fake_rust_build)
+
+    queue = build_vm_operation_queue([_prepared_vm()], [])
+
+    assert [op.method for op in queue] == ["CREATE"]
+    assert calls == 0
 
 
 def test_compare_mode_strict_raises_on_mismatch(monkeypatch) -> None:

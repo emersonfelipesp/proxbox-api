@@ -33,6 +33,7 @@ class ProxboxSettingsDict(TypedDict):
     bulk_batch_size: int
     bulk_batch_delay_ms: int
     vm_sync_max_concurrency: int
+    reconciliation_engine: NotRequired[str]
     custom_fields_request_delay: float
     ensure_netbox_objects: NotRequired[bool]
     delete_orphans: NotRequired[bool]

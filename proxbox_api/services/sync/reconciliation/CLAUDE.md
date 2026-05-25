@@ -37,6 +37,10 @@ or WebSocket code belongs here.
 
 ## Engine Modes
 
+The runtime value is read from `ProxboxPluginSettings.reconciliation_engine`
+through `proxbox_api.runtime_settings.get_str()`. The environment variable
+`PROXBOX_RECONCILIATION_ENGINE` remains the highest-priority override.
+
 - `PROXBOX_RECONCILIATION_ENGINE=python`: default. Always available.
 - `PROXBOX_RECONCILIATION_ENGINE=compare`: run Python and Rust, log/increment
   mismatches, return Python output.

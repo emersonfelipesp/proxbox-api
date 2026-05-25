@@ -11,6 +11,7 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["primary_ip_preference"] == "ipv4"
     assert settings["encryption_key"] == ""
     assert settings["delete_orphans"] is False
+    assert settings["reconciliation_engine"] == "python"
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -38,6 +39,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "explicitly_blocked_ip_ranges": "",
         "encryption_key": "my-plugin-key",
         "delete_orphans": True,
+        "reconciliation_engine": "rust",
     }
 
     mock_response = MagicMock()
@@ -54,6 +56,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["primary_ip_preference"] == "ipv6"
     assert settings["encryption_key"] == "my-plugin-key"
     assert settings["delete_orphans"] is True
+    assert settings["reconciliation_engine"] == "rust"
 
 
 def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):
@@ -84,6 +87,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
                 "netbox_get_cache_max_entries": 8192,
                 "debug_cache": True,
                 "delete_orphans": True,
+                "reconciliation_engine": "compare",
             }
         ],
     }
@@ -104,6 +108,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
     assert settings["netbox_get_cache_max_entries"] == 8192
     assert settings["debug_cache"] is True
     assert settings["delete_orphans"] is True
+    assert settings["reconciliation_engine"] == "compare"
 
 
 def test_delete_orphans_runtime_bool_prefers_env_over_settings(monkeypatch):
@@ -308,6 +313,7 @@ def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path
         "allow_private_ips": True,
         "additional_allowed_ip_ranges": "",
         "explicitly_blocked_ip_ranges": "",
+        "reconciliation_engine": "not-valid",
     }
 
     mock_response = MagicMock()
@@ -322,6 +328,7 @@ def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path
     assert settings is not None
     assert settings["backend_log_file_path"] == "/var/log/proxbox.log"
     assert settings["primary_ip_preference"] == "ipv4"
+    assert settings["reconciliation_engine"] == "python"
 
 
 def test_get_settings_uses_raw_netbox_session_when_no_session(monkeypatch):

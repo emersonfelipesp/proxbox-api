@@ -25,6 +25,7 @@ _SETTINGS_CACHE: ProxboxSettingsDict | None = None
 _SETTINGS_CACHE_TIME: float = 0.0
 _SETTINGS_CACHE_TTL: float = 300.0  # 5 minutes
 _FETCHING_SETTINGS: bool = False  # reentrance guard against credential-decryption recursion
+_VALID_RECONCILIATION_ENGINES = {"python", "compare", "rust"}
 
 
 def _coerce_role_id(value: object) -> int | None:
@@ -93,6 +94,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "bulk_batch_size": 50,
         "bulk_batch_delay_ms": 500,
         "vm_sync_max_concurrency": 4,
+        "reconciliation_engine": "python",
         "custom_fields_request_delay": 0.0,
         "ensure_netbox_objects": True,
         "delete_orphans": False,
@@ -119,6 +121,13 @@ def normalize_backend_log_file_path(value: object) -> str:
     if cleaned.endswith("/"):
         return DEFAULT_LOG_PATH
     return cleaned
+
+
+def _normalize_reconciliation_engine(value: object) -> str:
+    if not isinstance(value, str):
+        return "python"
+    engine = value.strip().lower()
+    return engine if engine in _VALID_RECONCILIATION_ENGINES else "python"
 
 
 def _extract_settings_payload(data: object) -> dict[str, object] | None:
@@ -253,6 +262,9 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "bulk_batch_size": int(settings.get("bulk_batch_size", 50)),
             "bulk_batch_delay_ms": int(settings.get("bulk_batch_delay_ms", 500)),
             "vm_sync_max_concurrency": int(settings.get("vm_sync_max_concurrency", 4)),
+            "reconciliation_engine": _normalize_reconciliation_engine(
+                settings.get("reconciliation_engine")
+            ),
             "custom_fields_request_delay": float(settings.get("custom_fields_request_delay", 0.0)),
             "ensure_netbox_objects": bool(settings.get("ensure_netbox_objects", True)),
             "delete_orphans": bool(settings.get("delete_orphans", False)),
