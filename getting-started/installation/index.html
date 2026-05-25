@@ -2249,11 +2249,13 @@ testing after wheels are published.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--group<span class="w"> </span>dev
 <a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>proxbox-reconcile-rs
 </code></pre></div>
-<p>Enable compare mode first:</p>
+<p>Enable compare mode first from NetBox's <code>/plugins/proxbox/settings/</code> page, or use
+the environment override for a one-off process:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nv">PROXBOX_RECONCILIATION_ENGINE</span><span class="o">=</span>compare<span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>run<span class="w"> </span>proxbox_api.main:app
 </code></pre></div>
-<p>The production default remains Python. To roll back immediately, unset
-<code>PROXBOX_RECONCILIATION_ENGINE</code> or set it to <code>python</code>.</p>
+<p>The production default remains Python. To roll back immediately, set
+<code>reconciliation_engine</code> back to <code>python</code> in NetBox, or unset
+<code>PROXBOX_RECONCILIATION_ENGINE</code> if an env override was used.</p>
 <p>Start the server:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>proxbox_api.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>

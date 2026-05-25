@@ -2136,6 +2136,11 @@ from NetBox. The fix is to add <code>VM.GuestAgent.Audit</code> to the role.</p>
 <td>Maximum number of concurrent VM sync write tasks.</td>
 </tr>
 <tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>python</code></td>
+<td>Optional env override for <code>ProxboxPluginSettings.reconciliation_engine</code>. Valid values are <code>python</code>, <code>compare</code>, and <code>rust</code>.</td>
+</tr>
+<tr>
 <td><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code></td>
 <td><code>8</code> (VM sync) / <code>4</code> (task-history, snapshots)</td>
 <td>Maximum number of concurrent NetBox write operations. Default varies by sync service.</td>

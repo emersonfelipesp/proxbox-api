@@ -2098,6 +2098,11 @@ correcao e adicionar <code>VM.GuestAgent.Audit</code> ao papel.</p>
 <td>Maximo de tarefas concorrentes de escrita no sync de VMs.</td>
 </tr>
 <tr>
+<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>python</code></td>
+<td>Override opcional para <code>ProxboxPluginSettings.reconciliation_engine</code>. Valores validos: <code>python</code>, <code>compare</code> e <code>rust</code>.</td>
+</tr>
+<tr>
 <td><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code></td>
 <td><code>8</code> (sync de VM) / <code>4</code> (task-history, snapshots)</td>
 <td>Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync.</td>

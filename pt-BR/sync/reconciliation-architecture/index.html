@@ -1841,7 +1841,9 @@ Registros legados sem <code>custom_fields.proxmox_vm_type</code> so sao reaprove
 continuam no Python. Quando o pacote nativo esta instalado, a ponte Python serializa a entrada com
 Pydantic v2, chama a extensao PyO3 com o GIL liberado, decodifica o resultado e adapta as operacoes
 de volta para as dataclasses usadas pelo dispatch.</p>
-<p>Selecao de engine:</p>
+<p>Selecao de engine usa runtime settings. A configuracao normal para operadores e
+<code>ProxboxPluginSettings.reconciliation_engine</code> no plugin NetBox; <code>PROXBOX_RECONCILIATION_ENGINE</code>
+continua sendo o override por variavel de ambiente.</p>
 <table>
 <thead>
 <tr>
@@ -1947,7 +1949,7 @@ disponivel.</p>
 <ul>
 <li><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code>: controla concorrencia de preparacao/fetch de VMs no Proxmox.</li>
 <li><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code>: define tamanho da janela de batch no dispatch.</li>
-<li><code>PROXBOX_RECONCILIATION_ENGINE</code>: seleciona <code>python</code>, <code>compare</code> ou <code>rust</code>.</li>
+<li><code>reconciliation_engine</code> / <code>PROXBOX_RECONCILIATION_ENGINE</code>: seleciona <code>python</code>, <code>compare</code> ou <code>rust</code>.</li>
 <li><code>PROXBOX_RECONCILIATION_COMPARE_STRICT</code>: falha em drift no compare mode quando <code>true</code>.</li>
 </ul>
 <p>Observacao: tamanho de batch nao implica escrita paralela; as escritas continuam sequenciais para proteger o NetBox em ambiente de instancia unica.</p>
@@ -1956,13 +1958,13 @@ disponivel.</p>
 <ol>
 <li>Construir e testar wheels de <code>proxbox-reconcile-rs</code> no CI.</li>
 <li>Publicar <code>proxbox-reconcile-rs</code> apenas pelo workflow de release do repositorio.</li>
-<li>Manter <code>PROXBOX_RECONCILIATION_ENGINE=python</code> como padrao no <code>proxbox-api</code>.</li>
-<li>Rodar <code>PROXBOX_RECONCILIATION_ENGINE=compare</code> em staging por pelo menos duas semanas.</li>
+<li>Manter <code>reconciliation_engine=python</code> como padrao no <code>proxbox-api</code>.</li>
+<li>Rodar <code>reconciliation_engine=compare</code> em staging por pelo menos duas semanas.</li>
 <li>Monitorar <code>proxbox_reconcile_mismatch_total</code> e logs de mismatch.</li>
 <li>Recomendar <code>PROXBOX_RECONCILIATION_ENGINE=rust</code> apenas depois de zero divergencias em syncs reais diversos.</li>
 <li>Considerar trocar o padrao apenas em uma release minor futura e somente se benchmarks de wall time do sync completo provarem ganho real.</li>
 </ol>
-<p>Rollback e imediato: remova <code>PROXBOX_RECONCILIATION_ENGINE</code> ou volte para <code>python</code>.</p>
+<p>Rollback e imediato: volte <code>reconciliation_engine</code> para <code>python</code> no NetBox ou remova <code>PROXBOX_RECONCILIATION_ENGINE</code> se um override de ambiente foi usado.</p>
 <p>A evidencia atual de benchmark nao justifica tornar Rust o padrao. O caminho Rust completo ficou
 mais lento que Python no benchmark sintetico, e a medicao real mostrou que reconciliacao nao era o
 custo dominante do sync.</p>
