@@ -397,9 +397,7 @@ async def _build_stream_generator(
             await _finish_cancelled(live)
             yield _sse_frame("complete", {"build_id": build_id, "status": "cancelled"}, secrets)
             return
-        await _finish_failed(
-            live, exc.output or [str(exc)], secrets, exit_code=exc.exit_code
-        )
+        await _finish_failed(live, exc.output or [str(exc)], secrets, exit_code=exc.exit_code)
         yield _sse_frame(
             "build_failed",
             {"build_id": build_id, "error": scrub_text(str(exc), secrets)},
