@@ -69,7 +69,11 @@ def test_default_python_mode_does_not_call_available_rust(monkeypatch) -> None:
 
 
 def test_compare_mode_returns_python_output_and_records_mismatch(monkeypatch) -> None:
-    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "compare")
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {"reconciliation_engine": "compare"},
+    )
     monkeypatch.setattr(rust_bridge, "_rust_build", lambda input_bytes: _rust_output("CREATE"))
     prepared = [_prepared_vm()]
     snapshot = [_snapshot_vm()]
@@ -96,7 +100,7 @@ def test_plugin_settings_can_select_compare_mode(monkeypatch) -> None:
     assert get_reconciliation_metrics()["proxbox_reconcile_mismatch_total"] == 1
 
 
-def test_engine_env_override_wins_over_plugin_settings(monkeypatch) -> None:
+def test_plugin_settings_engine_wins_over_env(monkeypatch) -> None:
     calls = 0
 
     def fake_rust_build(input_bytes: bytes) -> bytes:
@@ -104,23 +108,31 @@ def test_engine_env_override_wins_over_plugin_settings(monkeypatch) -> None:
         calls += 1
         return _rust_output("UPDATE")
 
+    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "python")
     monkeypatch.setattr(
         runtime_settings,
         "_load_settings",
         lambda: {"reconciliation_engine": "rust"},
     )
-    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "python")
     monkeypatch.setattr(rust_bridge, "_rust_build", fake_rust_build)
 
     queue = build_vm_operation_queue([_prepared_vm()], [])
 
-    assert [op.method for op in queue] == ["CREATE"]
-    assert calls == 0
+    assert [op.method for op in queue] == ["UPDATE"]
+    assert calls == 1
 
 
 def test_compare_mode_strict_raises_on_mismatch(monkeypatch) -> None:
-    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "compare")
-    monkeypatch.setenv("PROXBOX_RECONCILIATION_COMPARE_STRICT", "true")
+    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "python")
+    monkeypatch.setenv("PROXBOX_RECONCILIATION_COMPARE_STRICT", "false")
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {
+            "reconciliation_engine": "compare",
+            "reconciliation_compare_strict": True,
+        },
+    )
     monkeypatch.setattr(rust_bridge, "_rust_build", lambda input_bytes: _rust_output("CREATE"))
 
     with pytest.raises(AssertionError, match="Rust/Python reconciliation mismatch"):
@@ -130,7 +142,11 @@ def test_compare_mode_strict_raises_on_mismatch(monkeypatch) -> None:
 
 
 def test_rust_mode_returns_adapted_rust_output_without_running_python(monkeypatch) -> None:
-    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "rust")
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {"reconciliation_engine": "rust"},
+    )
     monkeypatch.setattr(rust_bridge, "_rust_build", lambda input_bytes: _rust_output("UPDATE"))
     monkeypatch.setattr(
         vm_queue,
@@ -145,7 +161,11 @@ def test_rust_mode_returns_adapted_rust_output_without_running_python(monkeypatc
 
 
 def test_rust_mode_raises_when_native_extension_is_unavailable(monkeypatch) -> None:
-    monkeypatch.setenv("PROXBOX_RECONCILIATION_ENGINE", "rust")
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {"reconciliation_engine": "rust"},
+    )
 
     with pytest.raises(RuntimeError, match="proxbox-reconcile-rs is not installed"):
         build_vm_operation_queue([_prepared_vm()], [])

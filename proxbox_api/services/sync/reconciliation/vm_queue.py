@@ -8,7 +8,7 @@ import logging
 from typing import Any, Literal
 
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
-from proxbox_api.runtime_settings import get_bool, get_str
+from proxbox_api.runtime_settings import get_plugin_bool, get_plugin_str
 from proxbox_api.services.sync.reconciliation.metrics import (
     increment_reconciliation_mismatch_total,
 )
@@ -26,8 +26,6 @@ from proxbox_api.services.sync.vm_helpers import (
 
 logger = logging.getLogger(__name__)
 
-_ENGINE_ENV = "PROXBOX_RECONCILIATION_ENGINE"
-_COMPARE_STRICT_ENV = "PROXBOX_RECONCILIATION_COMPARE_STRICT"
 _VALID_ENGINES = {"python", "compare", "rust"}
 _MAX_DIFF_CHARS = 12000
 
@@ -323,21 +321,22 @@ def _build_vm_operation_queue_with_rust(
 
 
 def _reconciliation_engine() -> Literal["python", "compare", "rust"]:
-    engine = get_str(
+    engine = get_plugin_str(
         settings_key="reconciliation_engine",
-        env=_ENGINE_ENV,
         default="python",
     ).lower()
     if engine not in _VALID_ENGINES:
         valid = ", ".join(sorted(_VALID_ENGINES))
-        raise ValueError(f"Invalid {_ENGINE_ENV}={engine!r}; expected one of: {valid}")
+        raise ValueError(
+            "Invalid ProxboxPluginSettings.reconciliation_engine="
+            f"{engine!r}; expected one of: {valid}"
+        )
     return engine  # type: ignore[return-value]
 
 
 def _reconciliation_compare_strict() -> bool:
-    return get_bool(
+    return get_plugin_bool(
         settings_key="reconciliation_compare_strict",
-        env=_COMPARE_STRICT_ENV,
         default=False,
     )
 

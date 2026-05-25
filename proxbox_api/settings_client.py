@@ -95,6 +95,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "bulk_batch_delay_ms": 500,
         "vm_sync_max_concurrency": 4,
         "reconciliation_engine": "python",
+        "reconciliation_compare_strict": False,
         "custom_fields_request_delay": 0.0,
         "ensure_netbox_objects": True,
         "delete_orphans": False,
@@ -128,6 +129,20 @@ def _normalize_reconciliation_engine(value: object) -> str:
         return "python"
     engine = value.strip().lower()
     return engine if engine in _VALID_RECONCILIATION_ENGINES else "python"
+
+
+def _coerce_bool(value: object, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
 
 
 def _extract_settings_payload(data: object) -> dict[str, object] | None:
@@ -264,6 +279,10 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "vm_sync_max_concurrency": int(settings.get("vm_sync_max_concurrency", 4)),
             "reconciliation_engine": _normalize_reconciliation_engine(
                 settings.get("reconciliation_engine")
+            ),
+            "reconciliation_compare_strict": _coerce_bool(
+                settings.get("reconciliation_compare_strict"),
+                default=False,
             ),
             "custom_fields_request_delay": float(settings.get("custom_fields_request_delay", 0.0)),
             "ensure_netbox_objects": bool(settings.get("ensure_netbox_objects", True)),
