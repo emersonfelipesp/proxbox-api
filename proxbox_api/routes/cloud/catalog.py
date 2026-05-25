@@ -178,6 +178,39 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
             source_build_command="make dvd",
         ),
     ],
+    CloudImageProductType.FIRECRACKER: [
+        CloudImageVersionEntry(
+            version="debian-12",
+            label="Firecracker Host (Debian 12 Bookworm)",
+            product_type=CloudImageProductType.FIRECRACKER,
+            default_provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
+            supported_providers=[CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE],
+            os_family="debian",
+            os_release="bookworm",
+            image_url=(
+                "https://cloud.debian.org/images/cloud/bookworm/latest/"
+                "debian-12-generic-amd64.qcow2"
+            ),
+            debian_codename="bookworm",
+            os_codename="bookworm",
+            notes="Proxmox VM template pre-configured as a Firecracker microVM host.",
+        ),
+        CloudImageVersionEntry(
+            version="ubuntu-24.04",
+            label="Firecracker Host (Ubuntu 24.04 LTS Noble)",
+            product_type=CloudImageProductType.FIRECRACKER,
+            default_provider=CloudImageBuildProvider.UBUNTU_CLOUD_IMAGE,
+            supported_providers=[CloudImageBuildProvider.UBUNTU_CLOUD_IMAGE],
+            os_family="ubuntu",
+            os_release="noble",
+            image_url=(
+                "https://cloud-images.ubuntu.com/noble/current/"
+                "noble-server-cloudimg-amd64.img"
+            ),
+            os_codename="noble",
+            notes="Proxmox VM template pre-configured as a Firecracker microVM host.",
+        ),
+    ],
 }
 
 

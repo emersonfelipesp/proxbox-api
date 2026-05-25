@@ -281,7 +281,14 @@ def build_pipeline_response(
 
     user_data = None
     first_boot_script = None
-    if entry.product_type.value in {"pve", "pbs", "pdm"}:
+    if entry.product_type.value == "firecracker":
+        from proxbox_api.routes.cloud.cloud_init_templates import generate_firecracker_userdata
+
+        user_data = generate_firecracker_userdata(
+            os_family=entry.os_family,
+            os_codename=entry.os_codename or entry.debian_codename or request.debian_release,
+        )
+    elif entry.product_type.value in {"pve", "pbs", "pdm"}:
         user_data = generate_cloud_init_userdata(entry, request)
     else:
         first_boot_script = generate_appliance_first_boot_script(entry, request)
