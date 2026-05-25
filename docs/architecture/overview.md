@@ -37,6 +37,7 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
   - `/admin`
   - `/admin/encryption` — encryption key inspection and rotation surface.
   - `/auth` — bootstrap and API-key management.
+  - `/cloud/firecracker/provision` and `/cloud/firecracker/provision/stream` — Firecracker host-agent provisioning for NMS Cloud. These routes health-check the selected host, read capabilities, prepare assets, create the micro-VM, and optionally start it.
   - `/netbox`
   - `/proxmox`
   - `/proxmox/cluster/ha/*` — read-only High-Availability aggregation across configured clusters; see [Cluster HA API](../api/cluster-ha.md).
@@ -49,6 +50,7 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
 - SQLite-backed endpoint configuration and bootstrap state.
 - NetBox API access via `netbox-sdk` sync and async clients.
 - Proxmox API access via `proxmox-sdk` sync SDK sessions and typed helper wrappers.
+- Firecracker host-agent access via `proxbox_api.firecracker_agent.client.FirecrackerHostAgentClient`.
 - Runtime-generated Proxmox live routes mounted during app lifespan startup.
 
 ## Core Data Models

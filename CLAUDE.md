@@ -11,7 +11,7 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Overview
 
-`proxbox-api` is a FastAPI backend that connects Proxmox inventory and lifecycle data to NetBox objects. It serves REST, SSE, and WebSocket endpoints for discovery, synchronization, endpoint management, and generated Proxmox proxy routes. The same repository also includes a standalone `nextjs-ui/` frontend for endpoint administration.
+`proxbox-api` is a FastAPI backend that connects Proxmox inventory and lifecycle data to NetBox objects. It serves REST, SSE, and WebSocket endpoints for discovery, synchronization, endpoint management, generated Proxmox proxy routes, and Firecracker host-agent provisioning for the NMS Cloud runtime. The same repository also includes a standalone `nextjs-ui/` frontend for endpoint administration.
 
 ### Companion repos (cross-link map)
 
@@ -20,6 +20,9 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
   (PVE 9.2 SDN models, CPU model, HA arm/disarm views, node-level firewall sync)
   requires `proxbox-api >= 0.0.14`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
+  Firecracker Cloud uses the plugin for host pools, host-agent inventory, image
+  templates, and `FirecrackerMicroVM` rows while this backend calls the selected
+  host-agent through `/cloud/firecracker/*`.
 - **Workspace note**:
   `personal-context/claude-reference/proxbox-api.md` (deep-dive index of this
   repo) and `personal-context/claude-reference/netbox-proxbox.md` (deep-dive
@@ -111,6 +114,7 @@ Open the nearest scoped guide for the code you are changing.
 ### Core layers
 
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
+- Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by `nms-backend`.
 - Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and bootstrap flow for first-time key registration.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
@@ -127,7 +131,8 @@ Open the nearest scoped guide for the code you are changing.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.
 5. Route handlers delegate remaining heavy work to service modules and schemas.
-6. Sync runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
+6. Firecracker Cloud routes under `/cloud/firecracker/*` call a selected host-agent VM after `nms-backend` resolves NetBox Proxbox inventory and creates the `FirecrackerMicroVM` row.
+7. Sync and provisioning runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
 
 ### Error and data rules
 

@@ -23,6 +23,11 @@
     cached GET layer (60s TTL); concurrency capped by `PROXBOX_NETBOX_MAX_CONCURRENT`.
   - **Read source** — `proxmox-sdk` → `proxmox · REST API` (7.x / 8.x). Async, read-only,
     `mock | real` modes; concurrency capped by `PROXBOX_VM_SYNC_MAX_CONCURRENCY`.
+  - **Firecracker host-agent** — `/cloud/firecracker/provision` and
+    `/cloud/firecracker/provision/stream` call the selected host-agent VM to
+    health-check KVM, read capacity, prepare kernel/rootfs assets, create the
+    micro-VM, and optionally start it. NetBox inventory still lives in
+    `netbox-proxbox`; this service owns the host-agent HTTP contract.
 
 The interactive version of this diagram lives at
 [emersonfelipesp.com/proxbox-api](https://emersonfelipesp.com/proxbox-api).
@@ -58,6 +63,10 @@ The VM reconciliation engine is documented in
 [`docs/sync/reconciliation-architecture.md`](docs/sync/reconciliation-architecture.md).
 Python is the default engine; the optional Rust engine is for compare-mode validation and explicit
 opt-in testing.
+
+Firecracker host-agent provisioning is documented in
+[`docs/operations/firecracker.md`](docs/operations/firecracker.md), including
+the Cloud endpoints, SSE events, request shape, and response shape.
 
 ### Local docs build
 

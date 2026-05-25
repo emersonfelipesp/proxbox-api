@@ -31,6 +31,35 @@ All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. 
 - `GET /admin/logs` - In-memory backend log buffer with optional filters for `level`, `limit`, `offset`, `since`, and `operation_id`.
 - `GET /admin/logs/stream` - SSE real-time log stream. Supports query parameters `level`, `errors_only`, `operation_id`, and `newer_than_id`.
 
+## Cloud Firecracker (`/cloud/firecracker`)
+
+These endpoints are called by `nms-backend` after it resolves the selected
+Firecracker host/image inventory from `netbox-proxbox` and creates the
+`FirecrackerMicroVM` row in NetBox.
+
+- `POST /cloud/firecracker/provision` - Provision a Firecracker micro-VM through one host-agent and return a final JSON response.
+- `POST /cloud/firecracker/provision/stream` - Same provisioning flow as Server-Sent Events. Emits `provision_step` and `terminal_line` events, then a terminal `complete` event.
+
+Provisioning steps:
+
+| Step | Purpose |
+|---|---|
+| `host_agent_health` | Check host-agent reachability, status, Firecracker version, and KVM availability |
+| `capabilities` | Confirm the requested network mode and capacity fit the host |
+| `prepare_assets` | Prepare or verify the kernel and rootfs image bundle on the host |
+| `create_microvm` | Create the Firecracker micro-VM through the host-agent |
+| `start_microvm` | Start the micro-VM when `start_after_provision=true`, otherwise emit `skipped` |
+
+Request fields are defined by `FirecrackerProvisionRequest`: `host_agent_base_url`,
+optional `host_agent_token`, optional `host_id` and `host_pool_id`, `image`,
+optional `netbox_microvm_id`, `microvm_id`, `name`, optional `tenant_id`,
+`network`, `vcpus`, `memory_mib`, `disk_mib`, `ssh_authorized_keys`,
+`metadata`, and `start_after_provision`.
+
+Successful responses return `FirecrackerProvisionResponse` with `ok`,
+`microvm_id`, `instance_ref`, `host_id`, `host_pool_id`, `image_id`, `status`,
+optional `guest_ip`, and optional `detail`.
+
 ## NetBox Routes (`/netbox`)
 
 - `POST /netbox/endpoint` - Create the singleton NetBox endpoint.

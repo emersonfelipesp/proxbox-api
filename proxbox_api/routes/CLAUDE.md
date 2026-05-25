@@ -16,6 +16,7 @@ Top-level namespace for FastAPI route packages.
 ## Current Subpackages
 
 - `admin/`: HTML admin dashboard and backend log buffer routes.
+- `cloud/`: Cloud runtime routes. `cloud/firecracker.py` provisions micro-VMs by calling the selected Firecracker host-agent after NMS backend resolves NetBox Proxbox inventory.
 - `dcim/`: device, interface, VLAN, and IP sync routes.
 - `extras/`: NetBox extras routes used by sync flows.
 - `netbox/`: NetBox endpoint CRUD, status, and OpenAPI routes.
