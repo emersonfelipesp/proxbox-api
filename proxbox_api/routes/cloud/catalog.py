@@ -204,8 +204,7 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
             os_family="ubuntu",
             os_release="noble",
             image_url=(
-                "https://cloud-images.ubuntu.com/noble/current/"
-                "noble-server-cloudimg-amd64.img"
+                "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
             ),
             os_codename="noble",
             notes="Proxmox VM template pre-configured as a Firecracker microVM host.",
