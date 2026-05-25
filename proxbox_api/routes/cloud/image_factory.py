@@ -1,4 +1,4 @@
-"""Packer-backed image factory routes."""
+"""Packer-backed image factory routes (stateless — no DB persistence)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ import json
 from collections.abc import AsyncGenerator
 from datetime import timezone
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
@@ -19,13 +20,10 @@ from proxbox_api.schemas.image_factory import PackerImageBuildRequest, PackerIma
 from proxbox_api.services.image_factory.logs import scrub_payload, scrub_text
 from proxbox_api.services.image_factory.models import (
     LiveImageBuildRun,
-    create_image_build_run,
     drop_live_run,
-    get_image_build_run,
     get_live_run,
     register_live_run,
-    response_from_run,
-    update_image_build_run,
+    response_from_live,
     utcnow,
 )
 from proxbox_api.services.image_factory.renderer import render_packer_workdir
@@ -163,16 +161,9 @@ async def _prepare_build(
             rendered=rendered,
             runner=runner,
         )
-        run = await create_image_build_run(
-            session,
-            build_id=build_id,
-            request=request,
-            workdir=workdir,
-            template_path=rendered.template_path,
-        )
         if register_live:
             await register_live_run(live)
-        return build_id, live, response_from_run(run)
+        return build_id, live, response_from_live(live)
     except Exception:
         cleanup_workdir(workdir)
         raise
@@ -190,7 +181,6 @@ async def _run_validation(
     secrets: tuple[str, ...],
 ) -> dict[str, Any]:
     started_at = utcnow()
-    await update_image_build_run(session, live.build_id, status="running", started_at=started_at)
     init_result = await live.runner.init(live.rendered.workdir)
     validate_result = await live.runner.validate(live.rendered.workdir, live.rendered.var_file)
     completed_at = utcnow()
@@ -205,25 +195,51 @@ async def _run_validation(
             + validate_result.stdout
         )
         error = scrub_text("\n".join(output) or "packer validate failed", secrets)
-    run = await update_image_build_run(
-        session,
-        live.build_id,
-        status=status_value,
-        completed_at=completed_at,
-        exit_code=validate_result.exit_code
-        if init_result.exit_code == 0
-        else init_result.exit_code,
-        error=error,
-    )
     cleanup_workdir(live.rendered.workdir, keep_workdir=live.keep_workdir)
     return {
         "build_id": live.build_id,
         "valid": valid,
         "status": status_value,
+        "error": error,
         "init": _result_summary(init_result),
         "validate": _result_summary(validate_result),
-        "response": response_from_run(run).model_dump(mode="json") if run is not None else None,
+        "response": response_from_live(
+            live,
+            status=status_value,
+            started_at=started_at,
+            completed_at=completed_at,
+        ).model_dump(mode="json"),
     }
+
+
+def _extract_host(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.hostname or url
+
+
+@router.get("/proxmox-endpoint/by-url")
+async def get_endpoint_by_url(
+    url: str = Query(..., description="Proxmox endpoint URL to look up"),
+    session: SessionDep = ...,
+) -> dict[str, Any]:
+    """Resolve a Proxmox endpoint URL to its proxbox-api endpoint ID."""
+    from sqlmodel import select as sql_select
+
+    host = _extract_host(url)
+    result = await _maybe_await(
+        session.exec(
+            sql_select(ProxmoxEndpoint).where(
+                (ProxmoxEndpoint.domain == host) | (ProxmoxEndpoint.ip_address == host)
+            )
+        )
+    )
+    endpoint = result.first()
+    if endpoint is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No ProxmoxEndpoint matching URL '{url}'.",
+        )
+    return {"id": endpoint.id, "name": endpoint.name or "", "url": _proxmox_api_url(endpoint)}
 
 
 @router.post(
@@ -246,12 +262,9 @@ async def create_image_factory_build(
 
     if request.dry_run:
         secrets = live.runner.secrets
-        await _run_validation(session=session, live=live, secrets=secrets)
+        result = await _run_validation(session=session, live=live, secrets=secrets)
         await drop_live_run(build_id)
-        run = await get_image_build_run(session, build_id)
-        if run is None:
-            return response
-        return response_from_run(run)
+        return response_from_live(live, status=result.get("status", "completed"))
 
     return response
 
@@ -264,16 +277,16 @@ async def get_image_factory_build(
     build_id: str,
     session: SessionDep,
 ) -> PackerImageBuildResponse | JSONResponse:
-    run = await get_image_build_run(session, build_id)
-    if run is None:
+    live = await get_live_run(build_id)
+    if live is None:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": f"No image factory build with id={build_id}."},
+            content={"detail": f"No active image factory build with id={build_id}."},
         )
-    endpoint_or_error = await _gated_endpoint(session, run.endpoint_id)
+    endpoint_or_error = await _gated_endpoint(session, live.request.endpoint_id)
     if isinstance(endpoint_or_error, JSONResponse):
         return endpoint_or_error
-    return response_from_run(run)
+    return response_from_live(live, status="running")
 
 
 async def _build_stream_generator(
@@ -296,7 +309,6 @@ async def _build_stream_generator(
 
     try:
         started_at = utcnow()
-        await update_image_build_run(session, build_id, status="running", started_at=started_at)
         yield _sse_frame(
             "build_started",
             {
@@ -315,7 +327,7 @@ async def _build_stream_generator(
             "packer_init", {"build_id": build_id, **_result_summary(init_result)}, secrets
         )
         if init_result.exit_code != 0:
-            await _finish_failed(session, live, init_result.stderr or init_result.stdout, secrets)
+            await _finish_failed(live, init_result.stderr or init_result.stdout, secrets)
             yield _sse_frame(
                 "build_failed",
                 {"build_id": build_id, "error": "packer init failed"},
@@ -332,7 +344,6 @@ async def _build_stream_generator(
         )
         if validate_result.exit_code != 0:
             await _finish_failed(
-                session,
                 live,
                 validate_result.stderr or validate_result.stdout,
                 secrets,
@@ -354,7 +365,7 @@ async def _build_stream_generator(
                 yield keepalive
 
         if live.cancel_requested.is_set():
-            await _finish_cancelled(session, live)
+            await _finish_cancelled(live)
             yield _sse_frame("complete", {"build_id": build_id, "status": "cancelled"}, secrets)
             return
 
@@ -365,24 +376,17 @@ async def _build_stream_generator(
         }
         if not artifact_seen:
             yield _sse_frame("packer_artifact", artifact_data, secrets)
-        run = await update_image_build_run(
-            session,
-            build_id,
-            status="completed",
-            completed_at=utcnow(),
-            exit_code=0,
-            artifact_metadata={
-                "template_name": live.request.output_name,
-                "output_vmid": live.request.output_vmid,
-                "packer_template_path": str(live.rendered.template_path),
-                "provisioner_recipe": live.request.provisioner_recipe,
-            },
-        )
+        completed_at = utcnow()
         cleanup_workdir(live.rendered.workdir, keep_workdir=live.keep_workdir)
         await drop_live_run(build_id)
         yield _sse_frame(
             "build_completed",
-            response_from_run(run).model_dump(mode="json") if run is not None else artifact_data,
+            response_from_live(
+                live,
+                status="completed",
+                started_at=started_at,
+                completed_at=completed_at,
+            ).model_dump(mode="json"),
             secrets,
         )
         yield _sse_frame("complete", {"build_id": build_id, "status": "completed"}, secrets)
@@ -390,11 +394,11 @@ async def _build_stream_generator(
         return
     except PackerCommandError as exc:
         if live.cancel_requested.is_set():
-            await _finish_cancelled(session, live)
+            await _finish_cancelled(live)
             yield _sse_frame("complete", {"build_id": build_id, "status": "cancelled"}, secrets)
             return
         await _finish_failed(
-            session, live, exc.output or [str(exc)], secrets, exit_code=exc.exit_code
+            live, exc.output or [str(exc)], secrets, exit_code=exc.exit_code
         )
         yield _sse_frame(
             "build_failed",
@@ -403,7 +407,7 @@ async def _build_stream_generator(
         )
         yield _sse_frame("complete", {"build_id": build_id, "status": "failed"}, secrets)
     except Exception as exc:  # noqa: BLE001
-        await _finish_failed(session, live, [str(exc)], secrets)
+        await _finish_failed(live, [str(exc)], secrets)
         yield _sse_frame(
             "build_failed",
             {"build_id": build_id, "error": scrub_text(str(exc), secrets)},
@@ -413,32 +417,17 @@ async def _build_stream_generator(
 
 
 async def _finish_failed(
-    session: SessionDep,
     live: LiveImageBuildRun,
     output: list[str],
     secrets: tuple[str, ...],
     *,
     exit_code: int | None = None,
 ) -> None:
-    await update_image_build_run(
-        session,
-        live.build_id,
-        status="failed",
-        completed_at=utcnow(),
-        exit_code=exit_code,
-        error=scrub_text("\n".join(output), secrets),
-    )
     cleanup_workdir(live.rendered.workdir, keep_workdir=live.keep_workdir)
     await drop_live_run(live.build_id)
 
 
-async def _finish_cancelled(session: SessionDep, live: LiveImageBuildRun) -> None:
-    await update_image_build_run(
-        session,
-        live.build_id,
-        status="cancelled",
-        completed_at=utcnow(),
-    )
+async def _finish_cancelled(live: LiveImageBuildRun) -> None:
     cleanup_workdir(live.rendered.workdir, keep_workdir=live.keep_workdir)
     await drop_live_run(live.build_id)
 
@@ -448,21 +437,15 @@ async def stream_image_factory_build(
     build_id: str,
     session: SessionDep,
 ) -> StreamingResponse | JSONResponse:
-    run = await get_image_build_run(session, build_id)
-    if run is None:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": f"No image factory build with id={build_id}."},
-        )
-    endpoint_or_error = await _gated_endpoint(session, run.endpoint_id)
-    if isinstance(endpoint_or_error, JSONResponse):
-        return endpoint_or_error
     live = await get_live_run(build_id)
     if live is None:
         return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content={"detail": "Image factory build is not runnable in this process."},
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": f"No active image factory build with id={build_id}."},
         )
+    endpoint_or_error = await _gated_endpoint(session, live.request.endpoint_id)
+    if isinstance(endpoint_or_error, JSONResponse):
+        return endpoint_or_error
     _, secrets = _packer_env(endpoint_or_error)
     return StreamingResponse(
         _build_stream_generator(
@@ -488,28 +471,20 @@ async def cancel_image_factory_build(
     build_id: str,
     session: SessionDep,
 ) -> PackerImageBuildResponse | JSONResponse:
-    run = await get_image_build_run(session, build_id)
-    if run is None:
+    live = await get_live_run(build_id)
+    if live is None:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": f"No image factory build with id={build_id}."},
+            content={"detail": f"No active image factory build with id={build_id}."},
         )
-    endpoint_or_error = await _gated_endpoint(session, run.endpoint_id)
+    endpoint_or_error = await _gated_endpoint(session, live.request.endpoint_id)
     if isinstance(endpoint_or_error, JSONResponse):
         return endpoint_or_error
-    live = await get_live_run(build_id)
-    if live is not None:
-        live.cancel_requested.set()
-        await live.runner.cancel(build_id)
-        cleanup_workdir(live.rendered.workdir, keep_workdir=live.keep_workdir)
-        await drop_live_run(build_id)
-    updated = await update_image_build_run(
-        session,
-        build_id,
-        status="cancelled",
-        completed_at=utcnow(),
-    )
-    return response_from_run(updated or run)
+    live.cancel_requested.set()
+    await live.runner.cancel(build_id)
+    cleanup_workdir(live.rendered.workdir, keep_workdir=live.keep_workdir)
+    await drop_live_run(build_id)
+    return response_from_live(live, status="cancelled", completed_at=utcnow())
 
 
 @router.post("/image-factory/validate", response_model=None)
