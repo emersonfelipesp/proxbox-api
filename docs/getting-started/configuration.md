@@ -186,6 +186,7 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Initial retry delay in seconds for NetBox retries. |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximum concurrent NetBox API requests. Keep low (1-2) to avoid exhausting NetBox's PostgreSQL connection pool. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent VM sync write tasks. |
+| `PROXBOX_RECONCILIATION_ENGINE` | `python` | Optional env override for `ProxboxPluginSettings.reconciliation_engine`. Valid values are `python`, `compare`, and `rust`. |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync) / `4` (task-history, snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |

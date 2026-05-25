@@ -5,10 +5,10 @@ from __future__ import annotations
 import difflib
 import json
 import logging
-import os
 from typing import Any, Literal
 
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
+from proxbox_api.runtime_settings import get_bool, get_str
 from proxbox_api.services.sync.reconciliation.metrics import (
     increment_reconciliation_mismatch_total,
 )
@@ -323,7 +323,11 @@ def _build_vm_operation_queue_with_rust(
 
 
 def _reconciliation_engine() -> Literal["python", "compare", "rust"]:
-    engine = os.getenv(_ENGINE_ENV, "python").strip().lower()
+    engine = get_str(
+        settings_key="reconciliation_engine",
+        env=_ENGINE_ENV,
+        default="python",
+    ).lower()
     if engine not in _VALID_ENGINES:
         valid = ", ".join(sorted(_VALID_ENGINES))
         raise ValueError(f"Invalid {_ENGINE_ENV}={engine!r}; expected one of: {valid}")
@@ -331,7 +335,11 @@ def _reconciliation_engine() -> Literal["python", "compare", "rust"]:
 
 
 def _reconciliation_compare_strict() -> bool:
-    return os.getenv(_COMPARE_STRICT_ENV, "false").strip().lower() == "true"
+    return get_bool(
+        settings_key="reconciliation_compare_strict",
+        env=_COMPARE_STRICT_ENV,
+        default=False,
+    )
 
 
 def _adapt_to_dataclasses(

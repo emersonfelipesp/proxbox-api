@@ -241,14 +241,16 @@ uv sync --extra test --group dev
 uv pip install -e proxbox-reconcile-rs
 ```
 
-Habilite primeiro o compare mode:
+Habilite primeiro o compare mode pela pagina `/plugins/proxbox/settings/` do
+NetBox ou use a variavel de ambiente para um processo avulso:
 
 ```bash
 PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app
 ```
 
-O padrao de producao continua sendo Python. Para rollback imediato, remova
-`PROXBOX_RECONCILIATION_ENGINE` ou defina `python`.
+O padrao de producao continua sendo Python. Para rollback imediato, volte
+`reconciliation_engine` para `python` no NetBox ou remova `PROXBOX_RECONCILIATION_ENGINE`
+se um override de ambiente foi usado.
 
 Inicie o servidor apos instalar:
 
