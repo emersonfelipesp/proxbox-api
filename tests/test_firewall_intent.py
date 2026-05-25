@@ -44,6 +44,74 @@ def test_firewall_options_update_supports_node_zone():
     assert reason == "firewall_write_not_supported"
 
 
+def test_firewall_ipset_entry_update_maps_to_entry_path():
+    payload = FirewallIntentPayload(
+        action="firewall.ipset.entry.update",
+        zone="datacenter",
+        name="mgmt",
+        cidr="10.0.0.0/8",
+        body={"comment": "management"},
+    )
+
+    method, path, probe, reason = firewall_intent._path_for(payload)
+
+    assert method == "put"
+    assert path == "cluster/firewall/ipset/mgmt/10.0.0.0/8"
+    assert probe is False
+    assert reason == "firewall_write_not_supported"
+
+
+def test_firewall_alias_create_maps_to_collection_post():
+    payload = FirewallIntentPayload(
+        action="firewall.alias.create",
+        zone="vm_qemu",
+        node="pve-a",
+        vmid=101,
+        name="web",
+        body={"name": "web", "cidr": "10.0.0.10"},
+    )
+
+    method, path, probe, reason = firewall_intent._path_for(payload)
+
+    assert method == "post"
+    assert path == "nodes/pve-a/qemu/101/firewall/aliases"
+    assert probe is False
+    assert reason == "firewall_write_not_supported"
+
+
+def test_firewall_alias_update_maps_to_named_put():
+    payload = FirewallIntentPayload(
+        action="firewall.alias.update",
+        zone="datacenter",
+        name="web",
+        body={"cidr": "10.0.0.11"},
+    )
+
+    method, path, probe, reason = firewall_intent._path_for(payload)
+
+    assert method == "put"
+    assert path == "cluster/firewall/aliases/web"
+    assert probe is False
+    assert reason == "firewall_write_not_supported"
+
+
+def test_firewall_alias_delete_maps_to_named_delete():
+    payload = FirewallIntentPayload(
+        action="firewall.alias.delete",
+        zone="vm_lxc",
+        node="pve-a",
+        vmid=102,
+        name="web",
+    )
+
+    method, path, probe, reason = firewall_intent._path_for(payload)
+
+    assert method == "delete"
+    assert path == "nodes/pve-a/lxc/102/firewall/aliases/web"
+    assert probe is False
+    assert reason == "firewall_write_not_supported"
+
+
 def test_vm_zone_rejects_mismatched_vm_type():
     payload = FirewallIntentPayload(
         action="firewall.rule.create",
