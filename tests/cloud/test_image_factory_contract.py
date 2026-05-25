@@ -310,6 +310,30 @@ async def test_validate_endpoint_does_not_invoke_build(authenticated_client, db_
     assert FakePackerRunner.instances[-1].build_called is False
 
 
+async def test_gitea_recipe_creates_build(authenticated_client, db_session):
+    endpoint_id = _make_endpoint(db_session)
+
+    response = await authenticated_client.post(
+        "/cloud/image-factory/builds",
+        json=_request_payload(endpoint_id, provisioner_recipe="gitea"),
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "queued"
+
+
+def test_gitea_recipe_renders_provisioner(tmp_path):
+    from proxbox_api.services.image_factory.renderer import render_packer_workdir
+
+    request = PackerImageBuildRequest(**_request_payload(1, provisioner_recipe="gitea"))
+    rendered = render_packer_workdir(request=request, workdir=tmp_path)
+    assert rendered.provisioner_path.exists()
+    content = rendered.provisioner_path.read_text()
+    assert "GITEA_VERSION" in content
+    assert "/usr/local/bin/gitea" in content
+    assert "gitea.service" in content
+
+
 @pytest.mark.skipif(not shutil.which("packer"), reason="packer binary is not installed")
 def test_bundled_hcl_packer_validate_smoke(tmp_path):
     endpoint_id = 1
