@@ -1868,35 +1868,35 @@ serialize inputs with Pydantic v2, call the PyO3 extension with the GIL released
 result, and adapt operations back to the Python dataclasses used by dispatch.</p>
 <p>Engine selection is controlled by runtime settings. The NetBox plugin setting
 <code>ProxboxPluginSettings.reconciliation_engine</code> is the normal operator-facing
-control, and <code>PROXBOX_RECONCILIATION_ENGINE</code> remains an environment override.</p>
+control; backend environment variables do not override this selector.</p>
 <table>
 <thead>
 <tr>
-<th>Variable</th>
+<th>Setting</th>
 <th>Value</th>
 <th>Behavior</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>reconciliation_engine</code></td>
 <td><code>python</code></td>
 <td>Default. Use Python output only.</td>
 </tr>
 <tr>
-<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>reconciliation_engine</code></td>
 <td><code>compare</code></td>
 <td>Run Python and Rust when Rust is installed, log mismatches, return Python output.</td>
 </tr>
 <tr>
-<td><code>PROXBOX_RECONCILIATION_ENGINE</code></td>
+<td><code>reconciliation_engine</code></td>
 <td><code>rust</code></td>
 <td>Return adapted Rust output.</td>
 </tr>
 <tr>
-<td><code>PROXBOX_RECONCILIATION_COMPARE_STRICT</code></td>
+<td><code>reconciliation_compare_strict</code></td>
 <td><code>true</code></td>
-<td>Raise on compare-mode mismatch. Intended for CI.</td>
+<td>Raise on compare-mode mismatch. Intended for validation.</td>
 </tr>
 </tbody>
 </table>
@@ -1974,8 +1974,8 @@ Python output. <code>rust</code> mode requires the native package and fails clea
 <ul>
 <li><code>PROXBOX_VM_SYNC_MAX_CONCURRENCY</code>: controls concurrent VM preparation/fetch from Proxmox.</li>
 <li><code>PROXBOX_NETBOX_WRITE_CONCURRENCY</code>: defines dispatch batch window size.</li>
-<li><code>reconciliation_engine</code> / <code>PROXBOX_RECONCILIATION_ENGINE</code>: selects <code>python</code>, <code>compare</code>, or <code>rust</code>.</li>
-<li><code>PROXBOX_RECONCILIATION_COMPARE_STRICT</code>: raises on compare-mode drift when set to <code>true</code>.</li>
+<li><code>reconciliation_engine</code>: selects <code>python</code>, <code>compare</code>, or <code>rust</code> from ProxboxPluginSettings.</li>
+<li><code>reconciliation_compare_strict</code>: raises on compare-mode drift when set to <code>true</code>.</li>
 </ul>
 <p>Note: batch window size does not imply parallel writes; writes remain sequential to protect NetBox under single-instance operation.</p>
 <h2 id="rust-rollout-policy">Rust Rollout Policy<a class="headerlink" href="#rust-rollout-policy" title="Permanent link">&para;</a></h2>
@@ -1986,10 +1986,10 @@ Python output. <code>rust</code> mode requires the native package and fails clea
 <li>Keep <code>reconciliation_engine=python</code> as the default in <code>proxbox-api</code>.</li>
 <li>Run <code>reconciliation_engine=compare</code> in staging for at least two weeks.</li>
 <li>Watch <code>proxbox_reconcile_mismatch_total</code> and reconciliation mismatch logs.</li>
-<li>Recommend <code>PROXBOX_RECONCILIATION_ENGINE=rust</code> only after zero mismatches across diverse real syncs.</li>
+<li>Recommend <code>reconciliation_engine=rust</code> only after zero mismatches across diverse real syncs.</li>
 <li>Consider a default-engine change only in a later minor release and only after full sync wall-time benchmarks show a real win.</li>
 </ol>
-<p>Rollback is immediate: set <code>reconciliation_engine</code> back to <code>python</code> in NetBox, or unset <code>PROXBOX_RECONCILIATION_ENGINE</code> if an env override was used.</p>
+<p>Rollback is immediate: set <code>reconciliation_engine</code> back to <code>python</code> in NetBox.</p>
 <p>Current benchmark evidence does not justify making Rust the default. The full Rust path is slower
 than Python in the synthetic benchmark harness, and live measurement showed reconciliation was not
 the dominant sync cost.</p>
