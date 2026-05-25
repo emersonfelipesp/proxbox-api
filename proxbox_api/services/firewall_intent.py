@@ -68,6 +68,17 @@ def _path_for(payload: FirewallIntentPayload) -> tuple[str, str, bool, str]:  # 
         return method, f"{base}/{payload.pos}", zone == "vnet", _unsupported_reason(zone)
 
     if action.startswith("firewall.ipset."):
+        if action.startswith("firewall.ipset.entry."):
+            if not payload.name:
+                raise ValueError(f"{action} requires name")
+            base = f"{_scoped_base(payload, zone, 'ipset')}/{payload.name}"
+            if action.endswith(".create"):
+                return "post", base, False, "firewall_write_not_supported"
+            if not payload.cidr:
+                raise ValueError(f"{action} requires cidr")
+            method = "put" if action.endswith(".update") else "delete"
+            return method, f"{base}/{payload.cidr}", False, "firewall_write_not_supported"
+
         base = _scoped_base(payload, zone, "ipset")
         if action.endswith(".create"):
             return "post", base, False, "firewall_write_not_supported"
@@ -75,15 +86,14 @@ def _path_for(payload: FirewallIntentPayload) -> tuple[str, str, bool, str]:  # 
             raise ValueError(f"{action} requires name")
         return "delete", f"{base}/{payload.name}", False, "firewall_write_not_supported"
 
-    if action == "firewall.alias.upsert":
+    if action.startswith("firewall.alias."):
         if not payload.name:
-            raise ValueError("firewall.alias.upsert requires name")
-        return (
-            "put",
-            f"{_scoped_base(payload, zone, 'aliases')}/{payload.name}",
-            False,
-            ("firewall_write_not_supported"),
-        )
+            raise ValueError(f"{action} requires name")
+        base = _scoped_base(payload, zone, "aliases")
+        if action.endswith(".create"):
+            return "post", base, False, "firewall_write_not_supported"
+        method = "delete" if action.endswith(".delete") else "put"
+        return method, f"{base}/{payload.name}", False, "firewall_write_not_supported"
 
     if action == "firewall.options.update":
         return "put", _scoped_base(payload, zone, "options"), False, "firewall_write_not_supported"
