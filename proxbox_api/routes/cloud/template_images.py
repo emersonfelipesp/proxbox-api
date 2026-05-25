@@ -13,6 +13,7 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.routes.cloud.cloud_init_templates import (
     find_product_version,
     generate_cloud_init_userdata,
+    generate_firecracker_userdata,
 )
 from proxbox_api.routes.cloud.pipeline_scripts import build_pipeline_response
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
@@ -140,7 +141,12 @@ async def build_cloud_image_template(
         )
 
     generated_userdata: str | None = None
-    if req.product_type in {ProxmoxProductType.pbs, ProxmoxProductType.pdm}:
+    if req.product_type == ProxmoxProductType.firecracker:
+        generated_userdata = generate_firecracker_userdata(
+            os_family=req.debian_release if req.debian_release != "bookworm" else "debian",
+            os_codename=req.debian_release,
+        )
+    elif req.product_type in {ProxmoxProductType.pbs, ProxmoxProductType.pdm}:
         pv = find_product_version(req.product_type, req.product_version)
         if pv is None:
             raise HTTPException(

@@ -14,18 +14,22 @@ class ProxmoxProductType(str, Enum):
     pdm = "pdm"
     pfsense = "pfsense"
     opnsense = "opnsense"
+    firecracker = "firecracker"
     PVE = "pve"
     PBS = "pbs"
     PDM = "pdm"
     PFSENSE = "pfsense"
     OPNSENSE = "opnsense"
+    FIRECRACKER = "firecracker"
 
 
 class CloudImageBuildProvider(str, Enum):
     debian_cloud_image = "debian_cloud_image"
+    ubuntu_cloud_image = "ubuntu_cloud_image"
     release_image = "release_image"
     source_tree = "source_tree"
     DEBIAN_CLOUD_IMAGE = "debian_cloud_image"
+    UBUNTU_CLOUD_IMAGE = "ubuntu_cloud_image"
     RELEASE_IMAGE = "release_image"
     SOURCE_TREE = "source_tree"
 
@@ -49,6 +53,7 @@ class CloudImageVersionEntry(BaseModel):
     source_tree_path: str | None = None
     source_build_command: str | None = None
     debian_codename: str | None = None
+    os_codename: str | None = None
     package_name: str | None = None
     repo_component: str | None = None
     repo_suite: str | None = None
