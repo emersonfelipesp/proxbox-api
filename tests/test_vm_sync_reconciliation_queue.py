@@ -185,11 +185,13 @@ def test_log_vm_reconciliation_measurement_includes_gate_fields(monkeypatch):
 @pytest.mark.asyncio
 async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch):
     calls: list[str] = []
+    create_lookups: list[dict[str, object] | None] = []
 
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 2)
 
-    async def _fake_create(nb, path, payload):
+    async def _fake_create(nb, path, payload, *, lookup=None):
         calls.append(f"create:{payload['custom_fields']['proxmox_vm_id']}")
+        create_lookups.append(lookup)
         vmid = payload["custom_fields"]["proxmox_vm_id"]
         return {"id": 3000 + vmid, **payload}
 
@@ -226,9 +228,32 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     resolved = await sync_vm._dispatch_vm_operation_queue(object(), queue)
 
     assert calls == ["create:201", "patch:4203"]
+    assert create_lookups == [{"cf_proxmox_vm_id": 201, "cluster_id": 1}]
     assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
     assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
     assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203
+
+
+@pytest.mark.asyncio
+async def test_load_netbox_virtual_machine_snapshot_can_bypass_stale_cache(monkeypatch):
+    cleared_paths: list[str] = []
+    queries: list[dict[str, object]] = []
+
+    def _fake_clear(nb, path):
+        cleared_paths.append(path)
+
+    async def _fake_list(nb, path, *, query=None):
+        queries.append(dict(query or {}))
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    monkeypatch.setattr(sync_vm, "clear_rest_get_cache_for_path", _fake_clear)
+    monkeypatch.setattr(sync_vm, "rest_list_async", _fake_list)
+
+    snapshot = await sync_vm._load_netbox_virtual_machine_snapshot(object(), fresh=True)
+
+    assert cleared_paths == ["/api/virtualization/virtual-machines/"]
+    assert queries == [{"limit": 200, "offset": 0}]
+    assert snapshot == [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
 
 
 @pytest.mark.asyncio
