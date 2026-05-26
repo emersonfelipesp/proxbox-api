@@ -1,4 +1,4 @@
-"""Shared fixtures for PBS test modules."""
+"""Shared fixtures for PDM test modules."""
 
 from __future__ import annotations
 
@@ -35,9 +35,9 @@ def client(tmp_path: Path):
             yield session
 
     with Session(engine) as session:
-        raw_key = "test-api-key-for-pbs-suite"
+        raw_key = "test-api-key-for-pdm-suite"
         key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=4)).decode()
-        session.add(ApiKey(label="test-pbs", key_hash=key_hash))
+        session.add(ApiKey(label="test-pdm", key_hash=key_hash))
         session.commit()
 
     app.dependency_overrides[get_session] = _override_get_session

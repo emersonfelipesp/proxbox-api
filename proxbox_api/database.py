@@ -178,6 +178,7 @@ class PBSEndpoint(SQLModel, table=True):
     fingerprint: str | None = Field(default=None)
     verify_ssl: bool = Field(default=True)
     allow_writes: bool = Field(default=False)
+    enabled: bool = Field(default=True)
     timeout_seconds: int = Field(default=30)
     last_seen_at: float | None = Field(default=None)
 
@@ -210,6 +211,7 @@ class PDMEndpoint(SQLModel, table=True):
     fingerprint: str | None = Field(default=None)
     verify_ssl: bool = Field(default=True)
     allow_writes: bool = Field(default=False)
+    enabled: bool = Field(default=True)
     timeout_seconds: int = Field(default=30)
     last_seen_at: float | None = Field(default=None)
 
@@ -489,6 +491,8 @@ def _migrate_pbs_endpoint_columns() -> None:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN fingerprint VARCHAR")
     if "allow_writes" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
+    if "enabled" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
     if "timeout_seconds" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 30")
     if "last_seen_at" not in existing:
@@ -514,6 +518,8 @@ def _migrate_pdm_endpoint_columns() -> None:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN fingerprint VARCHAR")
     if "allow_writes" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
+    if "enabled" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
     if "timeout_seconds" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 30")
     if "last_seen_at" not in existing:

@@ -32,7 +32,7 @@ router = APIRouter()
 
 
 async def _list_endpoints(session: SessionDep) -> list[PDMEndpoint]:
-    result = await _maybe_await(session.exec(select(PDMEndpoint)))
+    result = await _maybe_await(session.exec(select(PDMEndpoint).where(PDMEndpoint.enabled)))
     return list(result.all())
 
 
