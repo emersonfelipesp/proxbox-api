@@ -160,11 +160,14 @@ repository under `/opt/nmulticloud/deploy`:
 - Repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api`
 - Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
 - Runtime secrets: `/etc/nms/proxbox-api-production.env`
+- SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
 
 The Docker runtime uses this repo's raw uvicorn image, host networking,
 `PROXBOX_BIND_HOST=127.0.0.1`, `PORT=18800`, and `UVICORN_WORKERS=4`, matching
 the old `proxbox-api-production.service` port and worker count while keeping
-Nginx/TLS routing unchanged.
+Nginx/TLS routing unchanged. Production mounts the state directory at
+`/var/lib/proxbox-api` and sets
+`PROXBOX_DATABASE_PATH=/var/lib/proxbox-api/database.db`.
 
 Useful operations:
 
@@ -216,8 +219,8 @@ resolves **env var (override) → `ProxboxPluginSettings` → built-in default**
 
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
-`PROXBOX_BIND_HOST`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` /
-`PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
+`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
+`PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
 `PROXBOX_CORS_EXTRA_ORIGINS`. Anything that controls sync behavior, batching,
 concurrency, caching, or feature toggles belongs in `ProxboxPluginSettings`.
@@ -232,6 +235,7 @@ the `netbox-proxbox` side, do all five — the existing fields in
 ### Required in `.env` (process-level, no plugin-settings equivalent)
 
 - `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
+- `PROXBOX_DATABASE_PATH`: optional SQLite database path override. Production Docker uses `/var/lib/proxbox-api/database.db` so database state survives image rebuilds and container recreation.
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 300). Read at app construction.
 - `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins (read at app construction).
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
