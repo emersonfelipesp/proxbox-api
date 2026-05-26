@@ -114,6 +114,10 @@ Open the nearest scoped guide for the code you are changing.
   dedicated `mirror-host` runner label, `gh` authentication, and a single-branch
   `HEAD:refs/heads/main` push. Do not broaden it to tags, `--all`, or
   `--mirror`.
+- `.gitea/workflows/deploy-production.yml`: Gitea Actions production deploy from
+  `main` to `10.0.30.207` through the `prod-deploy` runner on the Gitea server
+  (`10.0.30.96`). It uses the restricted SSH alias `nmc-prod-207` and the
+  allowlisted `deploy proxbox-api <sha>` / `status proxbox-api` commands.
 
 ## Architecture
 
@@ -139,6 +143,40 @@ Open the nearest scoped guide for the code you are changing.
 5. Route handlers delegate remaining heavy work to service modules and schemas.
 6. Firecracker Cloud routes under `/cloud/firecracker/*` call a selected host-agent VM after `nms-backend` resolves NetBox Proxbox inventory and creates the `FirecrackerMicroVM` row.
 7. Sync and provisioning runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
+
+## Production Docker CI/CD
+
+Production deploys are Gitea-first. A push to Gitea `main` triggers
+`.gitea/workflows/deploy-production.yml`, which calls:
+
+```bash
+ssh nmc-prod-207 -- deploy proxbox-api "$GITHUB_SHA"
+```
+
+The production host is `10.0.30.207`. Deploy host state is kept outside the
+repository under `/opt/nmulticloud/deploy`:
+
+- Compose project: `nmc-proxbox-api`
+- Repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api`
+- Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
+- Runtime secrets: `/etc/nms/proxbox-api-production.env`
+
+The Docker runtime uses this repo's raw uvicorn image, host networking,
+`PROXBOX_BIND_HOST=127.0.0.1`, `PORT=18800`, and `UVICORN_WORKERS=4`, matching
+the old `proxbox-api-production.service` port and worker count while keeping
+Nginx/TLS routing unchanged.
+
+Useful operations:
+
+```bash
+ssh nmc-prod-207 -- status proxbox-api
+ssh nmc-prod-207 -- logs proxbox-api
+ssh nmc-prod-207 -- health proxbox-api
+curl -fsS http://127.0.0.1:18800/health
+```
+
+`proxbox-api-production.service` remains the rollback fallback. Do not start it
+while the Docker container is healthy on port `18800`.
 
 ### Error and data rules
 
