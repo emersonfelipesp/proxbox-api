@@ -137,11 +137,17 @@ class TestProxmoxEndpointCRUD:
             "username": "root@pam",
             "password": "secret",
             "verify_ssl": False,
+            "timeout": 30,
+            "max_retries": 2,
+            "retry_backoff": 1.5,
         }
         resp = auth_test_client.post("/proxmox/endpoints", json=payload)
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["name"] == "pve-test"
+        assert data["timeout"] == 30
+        assert data["max_retries"] == 2
+        assert data["retry_backoff"] == 1.5
         assert "password" not in data
 
     def test_get_created_endpoint_by_id(self, auth_test_client):

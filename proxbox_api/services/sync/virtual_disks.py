@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     RestRecord,
@@ -17,7 +19,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
-from proxbox_api.services.sync.vm_helpers import relation_id, to_mapping
+from proxbox_api.services.sync.vm_helpers import relation_id, relation_name, to_mapping
 from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
@@ -25,6 +27,134 @@ from proxbox_api.services.sync.vmid_helpers import (
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
+
+
+@dataclass(frozen=True)
+class VmConfigTarget:
+    node: str | None
+    vm_type: str
+    cluster_name: str | None
+    source: str
+    netbox_device_name: str | None
+    custom_field_node: str | None
+
+
+def _text_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _proxmox_node_custom_field(vm: dict[str, object]) -> str | None:
+    vm_data = to_mapping(vm)
+    for key in ("proxmox_node", "cf_proxmox_node"):
+        value = _text_or_none(vm_data.get(key))
+        if value:
+            return value
+    custom_fields = vm_data.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        for key in ("proxmox_node", "cf_proxmox_node"):
+            value = _text_or_none(custom_fields.get(key))
+            if value:
+                return value
+    return None
+
+
+def _iter_cluster_vm_resources(
+    cluster_resources: list[dict[str, object]] | None,
+    *,
+    vmid: str,
+):
+    for cluster_entry in cluster_resources or []:
+        if not isinstance(cluster_entry, dict):
+            continue
+        for cluster_key, resources in cluster_entry.items():
+            if not isinstance(resources, list):
+                continue
+            cluster_key_text = _text_or_none(cluster_key)
+            for resource in resources:
+                if isinstance(resource, dict) and normalize_vmid(resource.get("vmid")) == vmid:
+                    yield cluster_key_text, resource
+
+
+def _cluster_resource_target(
+    cluster_resources: list[dict[str, object]] | None,
+    *,
+    vmid: str,
+    vm_type: str,
+    cluster_name: str | None,
+    allow_type_override: bool,
+) -> tuple[str | None, str, str] | None:
+    candidates: list[tuple[str | None, str, str]] = []
+    for cluster_key_text, resource in _iter_cluster_vm_resources(cluster_resources, vmid=vmid):
+        resource_type = (_text_or_none(resource.get("type")) or "").lower()
+        if resource_type not in ("qemu", "lxc"):
+            resource_type = ""
+        if resource_type and resource_type != vm_type and not allow_type_override:
+            continue
+        node = _text_or_none(resource.get("node"))
+        if node:
+            candidates.append((cluster_key_text, node, resource_type or vm_type))
+
+    if not candidates:
+        return None
+    if cluster_name:
+        for candidate in candidates:
+            if candidate[0] == cluster_name:
+                return candidate
+    return candidates[0]
+
+
+def _resolve_vm_config_target(
+    *,
+    vm: dict[str, object],
+    vmid: str,
+    vm_type: str,
+    vm_type_was_explicit: bool,
+    cluster_name: str | None,
+    cluster_resources: list[dict[str, object]] | None,
+) -> VmConfigTarget:
+    vm_data = to_mapping(vm)
+    device_name = relation_name(vm_data.get("device"))
+    custom_field_node = _proxmox_node_custom_field(vm_data)
+
+    cluster_target = _cluster_resource_target(
+        cluster_resources,
+        vmid=vmid,
+        vm_type=vm_type,
+        cluster_name=cluster_name,
+        allow_type_override=not vm_type_was_explicit,
+    )
+    if cluster_target:
+        target_cluster, node, target_vm_type = cluster_target
+        return VmConfigTarget(
+            node=node,
+            vm_type=target_vm_type,
+            cluster_name=target_cluster or cluster_name,
+            source="cluster_resources",
+            netbox_device_name=device_name,
+            custom_field_node=custom_field_node,
+        )
+
+    if custom_field_node:
+        return VmConfigTarget(
+            node=custom_field_node,
+            vm_type=vm_type,
+            cluster_name=cluster_name,
+            source="custom_fields.proxmox_node",
+            netbox_device_name=device_name,
+            custom_field_node=custom_field_node,
+        )
+
+    return VmConfigTarget(
+        node=device_name,
+        vm_type=vm_type,
+        cluster_name=cluster_name,
+        source="device.name" if device_name else "unresolved",
+        netbox_device_name=device_name,
+        custom_field_node=custom_field_node,
+    )
 
 
 async def _list_all_vms_with_proxmox_id(
@@ -273,35 +403,37 @@ async def create_virtual_disks(  # noqa: C901
                 )
 
             if not cluster_name:
-                for cs in cluster_status:
+                for cs in cluster_status or []:
                     cs_name = getattr(cs, "name", None)
                     if cs_name:
                         cluster_name = cs_name
                         break
 
-            node_name = (
-                vm.get("device", {}).get("name") if isinstance(vm.get("device"), dict) else None
+            extracted_vm_type = extract_proxmox_vm_type(vm)
+            vm_type = extracted_vm_type or "qemu"
+            target = _resolve_vm_config_target(
+                vm=vm,
+                vmid=vmid,
+                vm_type=vm_type,
+                vm_type_was_explicit=extracted_vm_type is not None,
+                cluster_name=cluster_name,
+                cluster_resources=cluster_resources,
             )
-
-            if not node_name and cluster_resources:
-                for cluster in cluster_resources:
-                    cluster_name_key = (
-                        list(cluster.keys())[0] if isinstance(cluster, dict) else None
-                    )
-                    if cluster_name_key:
-                        resources = cluster[cluster_name_key]
-                        for resource in resources:
-                            if normalize_vmid(resource.get("vmid")) == vmid:
-                                node_name = resource.get("node")
-                                cluster_name = cluster_name_key
-                                break
-                    if node_name:
-                        break
-
-            vm_type = extract_proxmox_vm_type(vm) or "qemu"
+            node_name = target.node
+            vm_type = target.vm_type
+            cluster_name = target.cluster_name
 
             if not node_name:
-                logger.warning(f"No node found for VM {vm_name} (vmid: {vmid}), skipping disk sync")
+                logger.warning(
+                    "No node found for VM %s (vmid=%s type=%s cluster=%s, "
+                    "device=%s custom_field_node=%s), skipping disk sync",
+                    vm_name,
+                    vmid,
+                    vm_type,
+                    cluster_name,
+                    target.netbox_device_name,
+                    target.custom_field_node,
+                )
                 skipped += 1
                 if use_websocket and websocket:
                     await websocket.send_json(
@@ -319,6 +451,17 @@ async def create_virtual_disks(  # noqa: C901
                     )
                 continue
 
+            logger.debug(
+                "Resolved virtual disk VM config target for %s "
+                "(vmid=%s type=%s cluster=%s node=%s source=%s)",
+                vm_name,
+                vmid,
+                vm_type,
+                cluster_name,
+                node_name,
+                target.source,
+            )
+
             vm_config = None
             try:
                 vm_config = await resolve_vm_config(
@@ -328,7 +471,17 @@ async def create_virtual_disks(  # noqa: C901
                     vmid=vmid,
                 )
             except Exception as e:
-                logger.error(f"Error getting VM config for {vm_name}: {e}")
+                logger.error(
+                    "Error getting VM config for %s (vmid=%s type=%s cluster=%s "
+                    "node=%s source=%s): %s",
+                    vm_name,
+                    vmid,
+                    vm_type,
+                    cluster_name,
+                    node_name,
+                    target.source,
+                    e,
+                )
 
             if not vm_config:
                 logger.warning(f"Could not get VM config for VM {vm_name} (vmid: {vmid})")
