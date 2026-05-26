@@ -1,0 +1,24 @@
+name: Deploy proxbox-api production
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to proxbox-api.nmulti.cloud
+    runs-on: prod-deploy
+    steps:
+      - name: Check deploy target
+        run: ssh nmc-prod-207 -- status proxbox-api
+
+      - name: Deploy pushed commit
+        run: ssh nmc-prod-207 -- deploy proxbox-api "${{ github.sha }}"
+
+      - name: Report deploy target status
+        if: always()
+        run: ssh nmc-prod-207 -- status proxbox-api

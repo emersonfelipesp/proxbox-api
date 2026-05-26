@@ -69,6 +69,35 @@ label, authenticates with `gh`, configures GitHub git credentials through
 `HEAD:refs/heads/${{ gitea.ref_name }}`. Do not replace it with `git push
 --all`, `git push --mirror`, or tag synchronization.
 
+## Production Docker CI/CD
+
+Production deploys run from Gitea `main` through
+`.gitea/workflows/deploy-production.yml` on the `prod-deploy` runner hosted by
+the Gitea server (`10.0.30.96`). The workflow uses the restricted SSH alias
+`nmc-prod-207` and the allowlisted command:
+
+```bash
+ssh nmc-prod-207 -- deploy proxbox-api "$GITHUB_SHA"
+```
+
+The deployment target is `10.0.30.207`. Docker Compose metadata lives outside
+the repo under `/opt/nmulticloud/deploy`, with the production image built from
+this repo's `Dockerfile` raw uvicorn target. The container uses host networking,
+binds `PROXBOX_BIND_HOST=127.0.0.1`, listens on `PORT=18800`, and sets
+`UVICORN_WORKERS=4` to match the previous systemd unit. Runtime secrets stay
+outside Git in `/etc/nms/proxbox-api-production.env`.
+
+Operational checks:
+
+```bash
+ssh nmc-prod-207 -- status proxbox-api
+ssh nmc-prod-207 -- health proxbox-api
+curl -fsS http://127.0.0.1:18800/health
+```
+
+`proxbox-api-production.service` is the fallback systemd unit only during
+cutover or rollback. Do not restart it while the Docker container is healthy.
+
 ## Configuration policy
 
 **Prefer DB-backed plugin settings over `.env` variables.**

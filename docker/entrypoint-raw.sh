@@ -15,4 +15,7 @@ HOST=$(printf '%s' "${PROXBOX_BIND_HOST:-0.0.0.0}" \
         -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 [ -z "$HOST" ] && HOST=0.0.0.0
 
-exec uvicorn proxbox_api.main:app --host "$HOST" --port "${PORT:-8000}"
+exec uvicorn proxbox_api.main:app \
+  --host "$HOST" \
+  --port "${PORT:-8000}" \
+  --workers "${UVICORN_WORKERS:-1}"
