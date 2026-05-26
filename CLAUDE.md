@@ -109,10 +109,11 @@ Open the nearest scoped guide for the code you are changing.
 - `Dockerfile` and `docker/`: runtime and reverse-proxy images for local and published deployments.
 - `.github/workflows/`: CI/CD pipelines for test, lint, publish, and docs.
 - `.gitea/workflows/mirror-github.yml`: Gitea Actions mirror from Gitea `main`
-  to `github.com/emersonfelipesp/proxbox-api` using the `GH_MIRROR_TOKEN`
-  secret, the dedicated `mirror-host` runner label, `gh` authentication, and a
-  single-branch `HEAD:refs/heads/main` push. Do not broaden it to tags, `--all`,
-  or `--mirror`.
+  to `github.com/emersonfelipesp/proxbox-api` using `GH_MIRROR_TOKEN` for
+  GitHub, `SOURCE_MIRROR_TOKEN` for authenticated Gitea source fetches, the
+  dedicated `mirror-host` runner label, `gh` authentication, and a single-branch
+  `HEAD:refs/heads/main` push. Do not broaden it to tags, `--all`, or
+  `--mirror`.
 
 ## Architecture
 

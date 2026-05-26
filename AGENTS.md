@@ -62,8 +62,9 @@ Fix failures locally before finishing the task.
 
 The Gitea workflow at `.gitea/workflows/mirror-github.yml` mirrors only `main`
 to `github.com/emersonfelipesp/proxbox-api`. It requires the Gitea Actions
-secret `GH_MIRROR_TOKEN`, runs on the dedicated `mirror-host` runner label,
-authenticates with `gh`, configures GitHub git credentials through
+secrets `GH_MIRROR_TOKEN` for GitHub and `SOURCE_MIRROR_TOKEN` for
+authenticated Gitea source fetches, runs on the dedicated `mirror-host` runner
+label, authenticates with `gh`, configures GitHub git credentials through
 `gh auth setup-git`, and pushes only
 `HEAD:refs/heads/${{ gitea.ref_name }}`. Do not replace it with `git push
 --all`, `git push --mirror`, or tag synchronization.
