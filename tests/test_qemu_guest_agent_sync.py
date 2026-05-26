@@ -191,12 +191,17 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
         resolved_color_maps.append(color_map)
         return [201]
 
-    async def _fake_rest_create(_nb, _path, payload):
+    async def _fake_rest_create(_nb, _path, payload, **_kwargs):
         vmid = int(payload["custom_fields"]["proxmox_vm_id"])
         return {"id": 1000 + vmid, **payload}
 
     async def _fake_task_history(**_kwargs):
         return 0
+
+    stamp_calls: list[tuple[int, str]] = []
+
+    async def _fake_stamp(_nb, vm_record, run_id):
+        stamp_calls.append((int(vm_record["id"]), str(run_id)))
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_tag_color_map",
@@ -214,6 +219,10 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
         _fake_task_history,
     )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.stamp_vm_last_run_id",
+        _fake_stamp,
+    )
 
     result = asyncio.run(
         create_virtual_machines(
@@ -224,12 +233,19 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
             custom_fields=data["custom_fields"],
             tag=data["tag"],
             sync_vm_network=False,
+            run_id="issue-519-run",
         )
     )
 
     assert len(result) == 4
     assert len(fetch_calls) == 1
     assert resolved_color_maps == [{"critical": "ff5722"}] * 4
+    assert stamp_calls == [
+        (1100, "issue-519-run"),
+        (1101, "issue-519-run"),
+        (1102, "issue-519-run"),
+        (1103, "issue-519-run"),
+    ]
 
 
 def test_vm_sync_prefers_guest_agent_ip(monkeypatch):

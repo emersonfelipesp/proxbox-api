@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import (
+    clear_rest_get_cache_for_path,
+    rest_list_async,
+    rest_reconcile_async,
+)
 from proxbox_api.netbox_version import detect_netbox_version, supports_virtual_machine_type
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
@@ -347,6 +351,7 @@ async def sync_vm_individual(
         px_port = getattr(px, "http_port", 8006)
         px_url = f"https://{px_domain}:{px_port}" if px_domain else None
 
+        clear_rest_get_cache_for_path(nb, "/api/virtualization/virtual-machines/")
         existing_vms = await rest_list_async(
             nb,
             "/api/virtualization/virtual-machines/",

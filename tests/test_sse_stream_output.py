@@ -5,6 +5,11 @@ Verifies that the backend produces SSE events in the correct format
 for the plugin to consume. These tests ensure the SSE contract is maintained.
 """
 
+from types import SimpleNamespace
+
+from proxbox_api.routes.virtualization.virtual_machines import sync_vm
+from proxbox_api.schemas.sync import SyncOverwriteFlags
+
 
 class TestPluginAPIPath:
     """Test paths expected by the plugin."""
@@ -105,3 +110,63 @@ class TestNonStreamEndpoints:
         assert resp.headers.get("content-type", "").startswith("application/json")
         data = resp.json()
         assert isinstance(data, dict)
+
+
+async def test_vms_create_stream_forwards_run_id(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_create_virtual_machines(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(sync_vm, "create_virtual_machines", _fake_create_virtual_machines)
+
+    response = await sync_vm.create_virtual_machines_stream(
+        netbox_session=SimpleNamespace(),
+        pxs=[],
+        cluster_status=[],
+        cluster_resources=[],
+        custom_fields=[],
+        tag=SimpleNamespace(id=7),
+        sync_vm_network=False,
+        overwrite_flags=SyncOverwriteFlags(),
+        run_id="issue-519-run",
+    )
+
+    async for _chunk in response.body_iterator:
+        pass
+
+    assert captured["run_id"] == "issue-519-run"
+    assert captured["sync_vm_network"] is False
+
+
+async def test_vm_by_id_create_stream_forwards_run_id(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_create_virtual_machine_by_netbox_id(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        sync_vm,
+        "_create_virtual_machine_by_netbox_id",
+        _fake_create_virtual_machine_by_netbox_id,
+    )
+
+    response = await sync_vm.create_virtual_machine_by_netbox_id_stream(
+        netbox_vm_id=248,
+        netbox_session=SimpleNamespace(),
+        pxs=[],
+        cluster_status=[],
+        cluster_resources=[],
+        custom_fields=[],
+        tag=SimpleNamespace(id=7),
+        overwrite_flags=SyncOverwriteFlags(),
+        run_id="issue-519-run",
+    )
+
+    async for _chunk in response.body_iterator:
+        pass
+
+    assert captured["netbox_vm_id"] == 248
+    assert captured["run_id"] == "issue-519-run"

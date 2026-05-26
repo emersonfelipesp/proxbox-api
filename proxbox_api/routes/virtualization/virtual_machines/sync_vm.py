@@ -23,6 +23,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import VirtualMachine
 from proxbox_api.netbox_rest import (
+    clear_rest_get_cache_for_path,
     rest_create_async,
     rest_first_async,
     rest_list_async,
@@ -178,8 +179,15 @@ async def _resolve_vm_dns_name(
         return None
 
 
-async def _load_netbox_virtual_machine_snapshot(nb: object) -> list[dict[str, object]]:
+async def _load_netbox_virtual_machine_snapshot(
+    nb: object,
+    *,
+    fresh: bool = False,
+) -> list[dict[str, object]]:
     """Fetch all NetBox virtual machines once and keep them in-memory for comparison."""
+
+    if fresh:
+        clear_rest_get_cache_for_path(nb, "/api/virtualization/virtual-machines/")
 
     page_size = 200
     offset = 0
@@ -493,6 +501,7 @@ async def _dispatch_vm_operation_queue(
                         nb,
                         "/api/virtualization/virtual-machines/",
                         operation.prepared.desired_payload,
+                        lookup=operation.prepared.lookup,
                     )
                     resolved_records[key] = _to_mapping(created)
                 except ProxboxException:
@@ -997,6 +1006,7 @@ async def _create_virtual_machine_by_netbox_id(
     overwrite_vm_description: bool | None = None,
     overwrite_vm_custom_fields: bool | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
+    run_id: str | None = None,
 ):
     """Create a single virtual machine by its NetBox ID.
 
@@ -1084,6 +1094,7 @@ async def _create_virtual_machine_by_netbox_id(
         overwrite_vm_description=overwrite_vm_description,
         overwrite_vm_custom_fields=overwrite_vm_custom_fields,
         overwrite_flags=overwrite_flags if overwrite_flags is not None else SyncOverwriteFlags(),
+        run_id=run_id,
     )
 
 
@@ -1694,7 +1705,7 @@ async def create_virtual_machines(  # noqa: C901
         if not prepared_vms:
             return []
 
-        netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
+        netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb, fresh=True)
         await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
         reconciliation_t0 = time.perf_counter()
         operation_queue = _build_vm_operation_queue(
@@ -1733,6 +1744,7 @@ async def create_virtual_machines(  # noqa: C901
                     operation.method,
                 )
                 continue
+            await stamp_vm_last_run_id(nb, vm_record, effective_run_id)
             results.append(vm_record)
 
             vm_id = _relation_id(vm_record.get("id"))
@@ -3348,6 +3360,14 @@ async def create_virtual_machine_by_netbox_id(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    run_id: str | None = Query(
+        default=None,
+        title="Run ID",
+        description=(
+            "UUID stamped on each touched VM's proxbox_last_run_id custom field. "
+            "When omitted, a fresh UUID is generated."
+        ),
+    ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     return await _create_virtual_machine_by_netbox_id(
@@ -3362,6 +3382,7 @@ async def create_virtual_machine_by_netbox_id(
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         overwrite_flags=overwrite_flags,
+        run_id=run_id,
     )
 
 
@@ -3452,6 +3473,14 @@ async def create_virtual_machines_stream(
             "Use when a dedicated network-sync stage follows immediately after."
         ),
     ),
+    run_id: str | None = Query(
+        default=None,
+        title="Run ID",
+        description=(
+            "UUID stamped on each touched VM's proxbox_last_run_id custom field. "
+            "When omitted, a fresh UUID is generated."
+        ),
+    ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     (
@@ -3505,6 +3534,7 @@ async def create_virtual_machines_stream(
                     overwrite_vm_custom_fields=overwrite_vm_custom_fields,
                     sync_vm_network=sync_vm_network,
                     overwrite_flags=overwrite_flags,
+                    run_id=run_id,
                 )
             finally:
                 await bridge.close()
@@ -3683,6 +3713,14 @@ async def create_virtual_machine_by_netbox_id_stream(
             "When unset, falls back to overwrite_flags.overwrite_vm_custom_fields."
         ),
     ),
+    run_id: str | None = Query(
+        default=None,
+        title="Run ID",
+        description=(
+            "UUID stamped on each touched VM's proxbox_last_run_id custom field. "
+            "When omitted, a fresh UUID is generated."
+        ),
+    ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     (
@@ -3724,6 +3762,7 @@ async def create_virtual_machine_by_netbox_id_stream(
                     overwrite_vm_description=overwrite_vm_description,
                     overwrite_vm_custom_fields=overwrite_vm_custom_fields,
                     overwrite_flags=overwrite_flags,
+                    run_id=run_id,
                 )
             finally:
                 await bridge.close()
