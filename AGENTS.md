@@ -85,7 +85,9 @@ the repo under `/opt/nmulticloud/deploy`, with the production image built from
 this repo's `Dockerfile` raw uvicorn target. The container uses host networking,
 binds `PROXBOX_BIND_HOST=127.0.0.1`, listens on `PORT=18800`, and sets
 `UVICORN_WORKERS=4` to match the previous systemd unit. Runtime secrets stay
-outside Git in `/etc/nms/proxbox-api-production.env`.
+outside Git in `/etc/nms/proxbox-api-production.env`, and SQLite state is
+mounted from `/opt/nmulticloud/deploy/state/proxbox-api/database.db` through
+`PROXBOX_DATABASE_PATH=/var/lib/proxbox-api/database.db`.
 
 Operational checks:
 
@@ -109,8 +111,8 @@ resolves **env var (override) → `ProxboxPluginSettings` → built-in default**
 
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
-`PROXBOX_BIND_HOST`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` /
-`PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
+`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
+`PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
 `PROXBOX_CORS_EXTRA_ORIGINS`. Anything that controls sync behavior, batching,
 concurrency, caching, or feature toggles belongs in `ProxboxPluginSettings`.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
@@ -19,7 +20,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api.credentials import decrypt_value, encrypt_value
 
 root_dir = Path(__file__).parent.parent
-sqlite_file_name = root_dir / "database.db"
+sqlite_file_name = Path(os.getenv("PROXBOX_DATABASE_PATH", root_dir / "database.db")).expanduser()
+sqlite_file_name.parent.mkdir(parents=True, exist_ok=True)
 sqlite_url = f"sqlite:///{sqlite_file_name}"
 async_sqlite_url = f"sqlite+aiosqlite:///{sqlite_file_name}"
 
