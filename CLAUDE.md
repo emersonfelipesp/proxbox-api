@@ -108,6 +108,10 @@ Open the nearest scoped guide for the code you are changing.
 - `tasks/`: Development task tracking.
 - `Dockerfile` and `docker/`: runtime and reverse-proxy images for local and published deployments.
 - `.github/workflows/`: CI/CD pipelines for test, lint, publish, and docs.
+- `.gitea/workflows/mirror-github.yml`: Gitea Actions mirror from Gitea `main`
+  to `github.com/emersonfelipesp/proxbox-api` using the `GH_MIRROR_TOKEN`
+  secret, `gh` authentication, and a single-branch `HEAD:refs/heads/main` push.
+  Do not broaden it to tags, `--all`, or `--mirror`.
 
 ## Architecture
 

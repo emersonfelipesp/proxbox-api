@@ -58,6 +58,15 @@ npm run build
 
 Fix failures locally before finishing the task.
 
+## Gitea-to-GitHub Mirror
+
+The Gitea workflow at `.gitea/workflows/mirror-github.yml` mirrors only `main`
+to `github.com/emersonfelipesp/proxbox-api`. It requires the Gitea Actions
+secret `GH_MIRROR_TOKEN`, authenticates with `gh`, configures GitHub git
+credentials through `gh auth setup-git`, and pushes only
+`HEAD:refs/heads/${{ gitea.ref_name }}`. Do not replace it with `git push
+--all`, `git push --mirror`, or tag synchronization.
+
 ## Configuration policy
 
 **Prefer DB-backed plugin settings over `.env` variables.**
