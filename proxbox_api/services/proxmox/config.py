@@ -9,6 +9,24 @@ from proxbox_api.logger import logger
 from proxbox_api.services.proxmox_helpers import get_vm_config as get_typed_vm_config
 
 
+def _session_label(px: object) -> str:
+    return (
+        str(getattr(px, "name", "") or "")
+        or str(getattr(px, "domain", "") or "")
+        or str(getattr(px, "ip_address", "") or "")
+        or "unknown"
+    )
+
+
+def _format_session_error(error: ProxboxException) -> str:
+    parts = [str(error.message)]
+    if error.detail:
+        parts.append(f"detail={error.detail}")
+    if error.python_exception:
+        parts.append(f"python_exception={error.python_exception}")
+    return " | ".join(parts)
+
+
 async def resolve_vm_config(
     *,
     pxs: Iterable[object],
@@ -45,7 +63,7 @@ async def resolve_vm_config(
                         exclude_none=True,
                     )
             except ProxboxException as error:
-                errors.append(str(error.message))
+                errors.append(f"{_session_label(px)}: {_format_session_error(error)}")
 
         raise ProxboxException(
             message="VM Config not found.",

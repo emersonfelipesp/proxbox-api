@@ -34,6 +34,9 @@ class ProxmoxEndpointCreate(BaseModel):
     tenant_id: int | None = Field(default=None, ge=1)
     tenant_slug: str | None = Field(default=None, max_length=255)
     tenant_name: str | None = Field(default=None, max_length=255)
+    timeout: int | None = Field(default=None, ge=1, le=3600)
+    max_retries: int | None = Field(default=None, ge=0, le=100)
+    retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
 
 
 class ProxmoxEndpointUpdate(BaseModel):
@@ -53,6 +56,9 @@ class ProxmoxEndpointUpdate(BaseModel):
     tenant_id: int | None = Field(default=None, ge=1)
     tenant_slug: str | None = Field(default=None, max_length=255)
     tenant_name: str | None = Field(default=None, max_length=255)
+    timeout: int | None = Field(default=None, ge=1, le=3600)
+    max_retries: int | None = Field(default=None, ge=0, le=100)
+    retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
 
 
 class ProxmoxEndpointPublic(BaseModel):
@@ -74,6 +80,9 @@ class ProxmoxEndpointPublic(BaseModel):
     tenant_id: int | None = None
     tenant_slug: str | None = None
     tenant_name: str | None = None
+    timeout: int | None = None
+    max_retries: int | None = None
+    retry_backoff: float | None = None
 
 
 def _validate_auth_fields(

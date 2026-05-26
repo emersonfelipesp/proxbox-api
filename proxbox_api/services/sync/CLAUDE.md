@@ -44,6 +44,10 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - The VM helpers split orchestration, filtering, network processing, and object creation so the route layer does not need to duplicate state handling.
 - `reconciliation/` is the deterministic sync seam: it receives prepared state
   and NetBox snapshots, returns queue operations, and performs no I/O.
+- `virtual_disks.py` resolves VM config targets from live Proxmox
+  `cluster/resources` VMID/type data before falling back to NetBox VM custom
+  fields or `device.name`; this avoids disk sync calls against stale or FQDN
+  NetBox node names.
 
 ## Extension Guidance
 

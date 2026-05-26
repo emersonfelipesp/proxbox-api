@@ -7,6 +7,52 @@ from unittest.mock import AsyncMock, MagicMock
 from proxbox_api.services.sync.virtual_disks import create_virtual_disks
 
 
+def _run_virtual_disk_sync_for_vm(monkeypatch, *, vm, cluster_resources):
+    calls = {"resolve_vm_config": []}
+
+    async def _fake_rest_list(_nb, _path, query=None):
+        if _path == "/api/virtualization/virtual-machines/":
+            return [vm]
+        if _path == "/api/plugins/proxbox/storage/":
+            return []
+        if _path == "/api/virtualization/virtual-disks/":
+            return []
+        return []
+
+    async def _fake_resolve_vm_config(**kwargs):
+        calls["resolve_vm_config"].append(kwargs)
+        return {"scsi0": "local-lvm:vm-101-disk-0,size=1G"}
+
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        return SimpleNamespace(records=[], created=len(payloads), updated=0, unchanged=0, failed=0)
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.resolve_vm_config",
+        _fake_resolve_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
+    )
+
+    result = asyncio.run(
+        create_virtual_disks(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=cluster_resources,
+            tag=None,
+            use_websocket=False,
+            use_css=False,
+        )
+    )
+    return result, calls["resolve_vm_config"]
+
+
 def _virtual_disk_normalizer(record):
     return {
         "virtual_machine": record.get("virtual_machine"),
@@ -117,6 +163,67 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     assert reconciled_payloads[0]["virtual_machine"] == 7
     assert reconciled_payloads[0]["name"] == "scsi0"
     assert reconciled_payloads[0].get("custom_fields", {}).get("proxbox_storage_id") == 42
+
+
+def test_create_virtual_disks_prefers_cluster_resource_node_over_vm_device(monkeypatch):
+    result, calls = _run_virtual_disk_sync_for_vm(
+        monkeypatch,
+        vm={
+            "id": 7,
+            "name": "vm-101",
+            "cluster": {"name": "cluster-a"},
+            "device": {"name": "pve01.example.com"},
+            "custom_fields": {
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+                "proxmox_node": "stale-node",
+            },
+        },
+        cluster_resources=[
+            {"cluster-a": [{"type": "qemu", "name": "vm-101", "vmid": 101, "node": "pve02"}]}
+        ],
+    )
+
+    assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0}
+    assert calls[0]["node"] == "pve02"
+    assert calls[0]["vm_type"] == "qemu"
+
+
+def test_create_virtual_disks_uses_proxmox_node_custom_field_when_resource_missing(monkeypatch):
+    result, calls = _run_virtual_disk_sync_for_vm(
+        monkeypatch,
+        vm={
+            "id": 7,
+            "name": "vm-101",
+            "cluster": {"name": "cluster-a"},
+            "custom_fields": {
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+                "proxmox_node": "pve03",
+            },
+        },
+        cluster_resources=[],
+    )
+
+    assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0}
+    assert calls[0]["node"] == "pve03"
+
+
+def test_create_virtual_disks_uses_device_name_as_last_resort(monkeypatch):
+    result, calls = _run_virtual_disk_sync_for_vm(
+        monkeypatch,
+        vm={
+            "id": 7,
+            "name": "vm-101",
+            "cluster": {"name": "cluster-a"},
+            "device": {"name": "pve04"},
+            "custom_fields": {"proxmox_vm_id": 101, "proxmox_vm_type": "qemu"},
+        },
+        cluster_resources=[],
+    )
+
+    assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0}
+    assert calls[0]["node"] == "pve04"
 
 
 def test_create_virtual_disks_deletes_stale_disks_and_updates_vm_total(monkeypatch):

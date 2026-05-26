@@ -15,7 +15,7 @@ from sqlmodel import Session
 from proxbox_api.app.netbox_session import get_raw_netbox_session
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
-from proxbox_api.exception import ProxboxException
+from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.netbox_rest import (
     clear_rest_get_cache,
     ensure_tag_async,
@@ -1778,6 +1778,35 @@ def test_vm_config_resolves_without_cluster_status_preflight():
     assert result["digest"] == "abc123"
     assert result["memory"] == "4096"
     assert result["net0"].startswith("virtio=")
+
+
+def test_vm_config_resolution_preserves_session_error_details(monkeypatch):
+    async def _fake_get_vm_config(_px, *, node, vm_type, vmid):
+        raise ProxmoxAPIError(
+            message="Error fetching Proxmox VM config",
+            original_error=RuntimeError("HTTP 500 proxy loop detected: proxy loop detected"),
+        )
+
+    monkeypatch.setattr(
+        "proxbox_api.services.proxmox.config.get_typed_vm_config",
+        _fake_get_vm_config,
+    )
+
+    with pytest.raises(ProxboxException) as exc_info:
+        asyncio.run(
+            resolve_vm_config(
+                pxs=[SimpleNamespace(name="lab-cluster")],
+                node="pve01",
+                vm_type="qemu",
+                vmid=101,
+            )
+        )
+
+    error_text = str(exc_info.value)
+    assert "VM Config not found" in error_text
+    assert "lab-cluster" in error_text
+    assert "Error fetching Proxmox VM config" in error_text
+    assert "proxy loop detected" in error_text
 
 
 def test_cluster_status_accepts_minimal_cluster_payloads():
