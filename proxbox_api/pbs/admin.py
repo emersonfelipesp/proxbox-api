@@ -23,6 +23,7 @@ class PBSEndpointCreate(BaseModel):
     token_secret: str = Field(max_length=2000)
     fingerprint: str | None = Field(default=None, max_length=200)
     verify_ssl: bool = True
+    enabled: bool = True
     timeout_seconds: int = Field(default=30, ge=1, le=600)
 
 
@@ -34,6 +35,7 @@ class PBSEndpointUpdate(BaseModel):
     token_secret: str | None = Field(default=None, max_length=2000)
     fingerprint: str | None = Field(default=None, max_length=200)
     verify_ssl: bool | None = None
+    enabled: bool | None = None
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
 
 
@@ -50,6 +52,7 @@ class PBSEndpointPublic(BaseModel):
     fingerprint: str | None = None
     verify_ssl: bool
     allow_writes: bool
+    enabled: bool
     timeout_seconds: int
 
 
