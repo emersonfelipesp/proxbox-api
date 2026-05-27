@@ -178,7 +178,7 @@ class PBSEndpoint(SQLModel, table=True):
     token_id: str = Field()
     token_secret: str = Field()
     fingerprint: str | None = Field(default=None)
-    verify_ssl: bool = Field(default=True)
+    verify_ssl: bool = Field(default=False)
     allow_writes: bool = Field(default=False)
     enabled: bool = Field(default=True)
     timeout_seconds: int = Field(default=30)
