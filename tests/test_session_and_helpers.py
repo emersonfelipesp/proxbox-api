@@ -1848,6 +1848,79 @@ def test_netbox_v2_config_produces_bearer_authorization():
     assert auth == "Bearer nbt_myid.s3cr37"
 
 
+def test_netbox_config_verify_ssl_false_disables_ssl_on_https_endpoint():
+    """verify_ssl=False must reach netbox-sdk Config.ssl_verify=False so the
+    aiohttp connector disables TLS certificate verification.
+
+    This is the regression test for netbox-proxbox issue #544:
+    "proxbox-api ignoring ssl setting" — users with self-signed or hostname-
+    mismatched certificates on their NetBox instance set verify_ssl=False in
+    the proxbox-api admin UI, but kept receiving SSL errors because the value
+    was not reaching the connector.
+    """
+    from netbox_sdk.http_ssl import connector_for_config
+
+    from proxbox_api.session.netbox import netbox_config_from_endpoint
+
+    ep = NetBoxEndpoint(
+        name="nb-no-ssl",
+        ip_address="127.0.0.1",
+        domain="localhost",
+        port=443,
+        token_version="v1",
+        token="test-token",
+        verify_ssl=False,
+    )
+    cfg = netbox_config_from_endpoint(ep)
+
+    # ssl_verify must be exactly False (not None) so the is-False identity check passes.
+    assert cfg.ssl_verify is False, (
+        f"Expected ssl_verify=False, got {cfg.ssl_verify!r}. "
+        "When it is None the connector defaults to SSL verification enabled."
+    )
+
+    # The URL must be HTTPS (port 443 forces https regardless of verify_ssl).
+    assert cfg.base_url is not None and cfg.base_url.startswith("https://"), (
+        f"Expected https:// URL, got {cfg.base_url!r}"
+    )
+
+    # connector_for_config must return a non-None connector (TCPConnector with ssl=False).
+    connector = connector_for_config(cfg)
+    assert connector is not None, (
+        "connector_for_config returned None — SSL verification is NOT disabled. "
+        "Requests to NetBox will fail with certificate errors."
+    )
+
+
+def test_netbox_config_verify_ssl_true_uses_default_ssl():
+    """verify_ssl=True must leave ssl_verify unset (None) or True so aiohttp
+    verifies certificates by default."""
+    from netbox_sdk.http_ssl import connector_for_config
+
+    from proxbox_api.session.netbox import netbox_config_from_endpoint
+
+    ep = NetBoxEndpoint(
+        name="nb-with-ssl",
+        ip_address="10.0.0.1",
+        domain="netbox.example.com",
+        port=443,
+        token_version="v1",
+        token="test-token",
+        verify_ssl=True,
+    )
+    cfg = netbox_config_from_endpoint(ep)
+
+    assert cfg.ssl_verify is not False, (
+        "verify_ssl=True must NOT produce ssl_verify=False on the Config"
+    )
+    # connector_for_config returns None for verify_ssl=True (use aiohttp default SSL).
+    connector = connector_for_config(cfg)
+    assert connector is None, (
+        "connector_for_config should return None when ssl_verify=True so aiohttp "
+        "uses its default certificate-verifying behavior."
+    )
+
+
 def test_netbox_v1_config_produces_token_authorization():
     from netbox_sdk.config import authorization_header_value
 

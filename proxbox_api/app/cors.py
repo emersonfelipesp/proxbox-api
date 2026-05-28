@@ -9,7 +9,12 @@ def build_cors_origins(netbox_endpoints: list[object]) -> list[str]:
     """Return unique allowed origins for CORSMiddleware."""
     origins: list[str] = []
     for netbox_endpoint in netbox_endpoints:
-        protocol = "https" if bool(getattr(netbox_endpoint, "verify_ssl", False)) else "http"
+        # Protocol matches the endpoint.url logic: port 443 or verify_ssl=True → https.
+        # verify_ssl=False means "skip cert check" for proxbox-api's OWN client, not
+        # that the endpoint itself uses plain HTTP.
+        port = int(getattr(netbox_endpoint, "port", 443) or 443)
+        verify_ssl = bool(getattr(netbox_endpoint, "verify_ssl", True))
+        protocol = "https" if port == 443 or verify_ssl else "http"
         domain = getattr(netbox_endpoint, "domain", None)
         if not domain:
             continue

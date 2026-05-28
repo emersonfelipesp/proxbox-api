@@ -424,6 +424,8 @@ def _migrate_netbox_endpoint_columns() -> None:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN token_key VARCHAR")
     if "enabled" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
+    if "verify_ssl" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN verify_ssl BOOLEAN NOT NULL DEFAULT 1")
     if not stmts:
         return
     with engine.begin() as conn:
@@ -435,6 +437,8 @@ def _migrate_netbox_endpoint_columns() -> None:
                 "WHERE token_version IS NULL OR TRIM(COALESCE(token_version, '')) = ''"
             )
         )
+        # Ensure verify_ssl is never NULL (NULL → True means "verify by default").
+        conn.execute(text(f"UPDATE {table} SET verify_ssl = 1 WHERE verify_ssl IS NULL"))
 
 
 def _migrate_deletion_request_columns() -> None:
