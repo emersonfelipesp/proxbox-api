@@ -401,6 +401,8 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
         stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
     if "enabled" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
+    if "verify_ssl" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN verify_ssl BOOLEAN NOT NULL DEFAULT 1")
     if not stmts:
         return
     with engine.begin() as conn:
@@ -492,17 +494,20 @@ def _migrate_pbs_endpoint_columns() -> None:
         existing = {c["name"] for c in insp.get_columns(table)}
     except Exception:
         return
-    stmts: list[str] = []
-    if "fingerprint" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN fingerprint VARCHAR")
-    if "allow_writes" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
-    if "enabled" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
-    if "timeout_seconds" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 30")
-    if "last_seen_at" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN last_seen_at REAL")
+    # PBS commonly uses self-signed certs, so verify_ssl defaults to 0 (False).
+    column_specs: dict[str, str] = {
+        "fingerprint": "VARCHAR",
+        "allow_writes": "BOOLEAN NOT NULL DEFAULT 0",
+        "enabled": "BOOLEAN NOT NULL DEFAULT 1",
+        "timeout_seconds": "INTEGER NOT NULL DEFAULT 30",
+        "last_seen_at": "REAL",
+        "verify_ssl": "BOOLEAN NOT NULL DEFAULT 0",
+    }
+    stmts = [
+        f"ALTER TABLE {table} ADD COLUMN {col} {spec}"
+        for col, spec in column_specs.items()
+        if col not in existing
+    ]
     if not stmts:
         return
     with engine.begin() as conn:
@@ -519,17 +524,19 @@ def _migrate_pdm_endpoint_columns() -> None:
         existing = {c["name"] for c in insp.get_columns(table)}
     except Exception:
         return
-    stmts: list[str] = []
-    if "fingerprint" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN fingerprint VARCHAR")
-    if "allow_writes" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
-    if "enabled" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
-    if "timeout_seconds" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 30")
-    if "last_seen_at" not in existing:
-        stmts.append(f"ALTER TABLE {table} ADD COLUMN last_seen_at REAL")
+    column_specs: dict[str, str] = {
+        "fingerprint": "VARCHAR",
+        "allow_writes": "BOOLEAN NOT NULL DEFAULT 0",
+        "enabled": "BOOLEAN NOT NULL DEFAULT 1",
+        "timeout_seconds": "INTEGER NOT NULL DEFAULT 30",
+        "last_seen_at": "REAL",
+        "verify_ssl": "BOOLEAN NOT NULL DEFAULT 1",
+    }
+    stmts = [
+        f"ALTER TABLE {table} ADD COLUMN {col} {spec}"
+        for col, spec in column_specs.items()
+        if col not in existing
+    ]
     if not stmts:
         return
     with engine.begin() as conn:

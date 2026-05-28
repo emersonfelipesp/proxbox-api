@@ -26,6 +26,7 @@ class ProxmoxEndpointCreate(BaseModel):
     password: str | None = Field(default=None, max_length=1000)
     verify_ssl: bool = True
     enabled: bool = True
+    allow_writes: bool = False
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
     site_id: int | None = Field(default=None, ge=1)
@@ -48,6 +49,7 @@ class ProxmoxEndpointUpdate(BaseModel):
     password: str | None = Field(default=None, max_length=1000)
     verify_ssl: bool | None = None
     enabled: bool | None = None
+    allow_writes: bool | None = None
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
     site_id: int | None = Field(default=None, ge=1)
@@ -74,6 +76,7 @@ class ProxmoxEndpointPublic(BaseModel):
     username: str
     verify_ssl: bool
     enabled: bool
+    allow_writes: bool
     site_id: int | None = None
     site_slug: str | None = None
     site_name: str | None = None

@@ -22,7 +22,7 @@ class PBSEndpointCreate(BaseModel):
     token_id: str = Field(max_length=255)
     token_secret: str = Field(max_length=2000)
     fingerprint: str | None = Field(default=None, max_length=200)
-    verify_ssl: bool = True
+    verify_ssl: bool = False
     enabled: bool = True
     timeout_seconds: int = Field(default=30, ge=1, le=600)
 

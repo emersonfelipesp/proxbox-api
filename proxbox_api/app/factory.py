@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 import time
@@ -214,7 +215,9 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
         session_factory = get_session_factory(request.app)
         with session_factory() as session:
-            authorized, error_message = check_auth_header_with_session(session, api_key, client_ip)
+            authorized, error_message = await asyncio.to_thread(
+                check_auth_header_with_session, session, api_key, client_ip
+            )
 
         if not authorized:
             status_code = 429 if "Too many failed" in (error_message or "") else 401
