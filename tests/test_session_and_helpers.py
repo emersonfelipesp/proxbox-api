@@ -1857,6 +1857,12 @@ def test_netbox_config_verify_ssl_false_disables_ssl_on_https_endpoint():
     mismatched certificates on their NetBox instance set verify_ssl=False in
     the proxbox-api admin UI, but kept receiving SSL errors because the value
     was not reaching the connector.
+
+    connector_for_config creates an aiohttp.TCPConnector which requires a
+    running event loop in Python 3.10+.  The assertion on cfg.ssl_verify is
+    the critical one: it proves the value propagates correctly through
+    netbox_config_from_endpoint.  The connector_for_config call is wrapped in
+    asyncio.run() so the event loop is available.
     """
     from netbox_sdk.http_ssl import connector_for_config
 
@@ -1885,11 +1891,17 @@ def test_netbox_config_verify_ssl_false_disables_ssl_on_https_endpoint():
     )
 
     # connector_for_config must return a non-None connector (TCPConnector with ssl=False).
-    connector = connector_for_config(cfg)
+    # TCPConnector requires a running event loop; wrap in asyncio.run so one exists.
+    async def _make_connector():
+        return connector_for_config(cfg)
+
+    connector = asyncio.run(_make_connector())
     assert connector is not None, (
         "connector_for_config returned None — SSL verification is NOT disabled. "
         "Requests to NetBox will fail with certificate errors."
     )
+    # Close the connector to avoid resource-leak warnings.
+    asyncio.run(connector.close())
 
 
 def test_netbox_config_verify_ssl_true_uses_default_ssl():
@@ -1913,7 +1925,7 @@ def test_netbox_config_verify_ssl_true_uses_default_ssl():
     assert cfg.ssl_verify is not False, (
         "verify_ssl=True must NOT produce ssl_verify=False on the Config"
     )
-    # connector_for_config returns None for verify_ssl=True (use aiohttp default SSL).
+    # connector_for_config returns None for verify_ssl=True — no TCPConnector needed.
     connector = connector_for_config(cfg)
     assert connector is None, (
         "connector_for_config should return None when ssl_verify=True so aiohttp "
