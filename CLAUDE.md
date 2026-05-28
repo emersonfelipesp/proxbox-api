@@ -558,6 +558,23 @@ cancelled to avoid wasted CI and to keep the run history clean.
 - Tracked in issue: <https://github.com/emersonfelipesp/proxbox-api/issues/152>.
 - Paired consumer: `netbox-proxbox v0.0.18`.
 
+### What was done for v0.0.15
+
+- Bumped version to `0.0.15`.
+- Added `allow_writes` field to `ProxmoxEndpointCreate`, `ProxmoxEndpointUpdate`, and `ProxmoxEndpointPublic` — previously locked to `False` with no API path to enable VM operational verbs.
+- Fixed `_migrate_proxmox_endpoint_columns()` missing `verify_ssl` guard (parallel gap left after commit `72b7883` only patched `NetBoxEndpoint`).
+- Fixed `_migrate_pbs_endpoint_columns()` and `_migrate_pdm_endpoint_columns()` missing `verify_ssl` migration guards.
+- Aligned `PBSEndpointCreate.verify_ssl` default to `False` (matching the `PBSEndpoint` SQLModel default for self-signed cert deployments).
+- Switched `APIKeyAuthMiddleware` to offload `bcrypt.checkpw()` to the thread pool via `asyncio.to_thread()` — was blocking the event loop per request.
+- Added compatibility properties to `PBSEndpoint` and `PDMEndpoint` Django models: `host` (maps `domain or ip`) and `timeout_seconds` (maps `timeout or 30`) to bridge field-name differences with the proxbox-api SQLite models.
+- Fixed `FastAPIEndpoint.save()` to detect explicit token changes and re-register with the backend (`skip_bootstrap_check=True`) so operators can recover from a backend key rotation.
+
+### What was done for v0.0.16
+
+- Bumped version to `0.0.16`.
+- **Gitea-first publish pipeline**: added `.gitea/workflows/publish-gitea.yml` — on any `v*` tag push to Gitea, validates version against `pyproject.toml`, builds with `uv build`, uploads to the Gitea PyPI package registry (`https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi`), verifies via the Gitea Packages API, then pushes the tag to GitHub. For non-RC tags, also creates the GitHub release to trigger the existing PyPI/Docker Hub publish pipeline.
+- Paired consumer: `netbox-proxbox v0.0.19`.
+
 ### Don't
 
 - Don't add `twine --skip-existing` to the upload step. If a version is
