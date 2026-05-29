@@ -118,6 +118,34 @@ Open the nearest scoped guide for the code you are changing.
   `main` to `10.0.30.207` through the `prod-deploy` runner on the Gitea server
   (`10.0.30.96`). It uses the restricted SSH alias `nmc-prod-207` and the
   allowlisted `deploy proxbox-api <sha>` / `status proxbox-api` commands.
+- `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
+  committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
+  events. Due to limitations in Gitea 1.26.2 (dispatch returns 500, tag triggers
+  don't fire), the current process uses direct uploads. Secret name: `PKG_TOKEN`
+  (GITEA_ prefix is reserved by Gitea, cannot be used).
+
+  **Gitea-first RC release process:**
+  ```bash
+  # 1. Build from the release worktree
+  cd /root/personal-context/worktrees/proxbox-api-vX.Y.Z
+  uv build
+
+  # 2. Publish to Gitea registry
+  uv run --with twine twine upload \
+    --repository-url https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi \
+    --username emersonfelipesp --password $PKG_TOKEN \
+    --non-interactive dist/*
+
+  # 3. Verify
+  curl "https://git.nmulti.cloud/api/v1/packages/emersonfelipesp?type=pypi&q=proxbox-api" \
+    -H "Authorization: token $PKG_TOKEN"
+
+  # 4. Push RC tag to GitHub (triggers TestPyPI pipeline)
+  git push origin vX.Y.ZrcN
+  ```
+
+  For official releases, after TestPyPI + E2E green: bump to final version, repeat
+  Gitea registry publish, then create the GitHub release with `gh release create`.
 
 ## Architecture
 
@@ -571,9 +599,19 @@ cancelled to avoid wasted CI and to keep the run history clean.
 
 ### What was done for v0.0.16
 
-- Bumped version to `0.0.16`.
-- **Gitea-first publish pipeline**: added `.gitea/workflows/publish-gitea.yml` — on any `v*` tag push to Gitea, validates version against `pyproject.toml`, builds with `uv build`, uploads to the Gitea PyPI package registry (`https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi`), verifies via the Gitea Packages API, then pushes the tag to GitHub. For non-RC tags, also creates the GitHub release to trigger the existing PyPI/Docker Hub publish pipeline.
-- Paired consumer: `netbox-proxbox v0.0.19`.
+- Bumped version to `0.0.16`. Paired consumer: `netbox-proxbox v0.0.19`.
+- **Gitea-first publish pipeline**: added `.gitea/workflows/publish-gitea.yml` to `main`
+  (and `develop` for netbox-proxbox). The workflow is active but Gitea 1.26.2's
+  `workflow_dispatch` API and `push: tags:` triggers are not operational on this
+  instance. Until resolved, Gitea registry publish is done directly:
+  ```bash
+  uv build
+  uv run --with twine twine upload \
+    --repository-url https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi \
+    --username emersonfelipesp --password $PKG_TOKEN dist/*
+  ```
+  Then push the RC tag to GitHub to trigger the TestPyPI/PyPI pipeline.
+- Note: The secret for Gitea package uploads is `PKG_TOKEN` (GITEA_ prefix is reserved).
 
 ### Don't
 
