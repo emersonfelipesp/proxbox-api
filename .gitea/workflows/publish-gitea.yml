@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or ref to process'
+        required: true
+        default: 'v0.0.16rc1'
 
 jobs:
   validate-version:
