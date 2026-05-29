@@ -4,12 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  create:
   workflow_dispatch:
     inputs:
-      ref:
-        description: 'Tag or ref to process'
-        required: true
-        default: 'v0.0.16rc1'
+      tag_name:
+        description: 'Tag to publish (e.g. v0.0.16rc1)'
+        required: false
 
 jobs:
   validate-version:
