@@ -17,6 +17,7 @@ GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.git
 
 | File | Trigger | What it does |
 |------|---------|--------------|
+| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`), create event, or workflow_dispatch | Builds dist, publishes to Gitea Package Registry, pushes tag to GitHub, creates/publishes GitHub release for non-RC tags (which fires `release: published` on GitHub Actions). Secrets: `PKG_TOKEN` (Gitea package upload), `GH_MIRROR_TOKEN` (tag push + release create). Runner: `mirror-host`. |
 | `ci.yml` | Push / PR to any branch; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run `tests/` with coverage, then E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |

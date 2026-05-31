@@ -58,6 +58,35 @@ npm run build
 
 Fix failures locally before finishing the task.
 
+## CI/CD Workflows
+
+### End-to-end release pipeline (Gitea-first)
+
+The official release pipeline for proxbox-api runs in this order:
+
+1. **Gitea tag push** — annotated tag `vX.Y.Z` pushed to Gitea (`git push gitea vX.Y.Z`).
+2. **Gitea Actions: `.gitea/workflows/publish-gitea.yml`** — builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes tag to GitHub, creates or publishes GitHub release (`GH_MIRROR_TOKEN`).
+3. **GitHub Actions: `push: tags: v*` trigger** — fires when Gitea workflow pushes tag to GitHub. Validates version, runs validate and E2E checks, then publishes to PyPI.
+4. **GitHub Actions: `release: published` trigger** — fires when Gitea workflow creates the GitHub release. The `publish-pypi` job has a pre-check: if the version already exists on PyPI (from the tag-push run), the upload is skipped and the run succeeds.
+5. **Docker Hub** — `publish-docker` job in `publish-testpypi.yml` calls `docker-hub-publish.yml` after PyPI validation.
+
+### RC (release-candidate) pipeline
+
+1. Push `vX.Y.ZrcN` tag → `.gitea/workflows/publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
+2. `.github/workflows/publish-testpypi.yml` fires on `push: tags: v*rc*` → TestPyPI publish + validate.
+
+### Secrets required
+
+- `PKG_TOKEN`: Gitea Personal Access Token with `write:packages` scope. Name must be exactly `PKG_TOKEN` — `GITEA_` prefix is reserved by Gitea Actions.
+- `GH_MIRROR_TOKEN`: GitHub PAT with `repo` and `workflow` scopes for tag push and release creation.
+- `PYPI_TOKEN` / `PYPI_USERNAME`: PyPI credentials for GitHub Actions upload.
+- `TEST_PYPI_TOKEN` / `TEST_PYPI_USERNAME`: TestPyPI credentials for RC validation.
+- `DOCKERHUB_TOKEN` / `DOCKERHUB_USERNAME`: Docker Hub credentials.
+
+### Idempotency
+
+The `publish-pypi` job checks the PyPI API before uploading. If `proxbox-api==${VERSION}` already exists (HTTP 200), the upload step is skipped and the job succeeds. This prevents failures when `release: published` re-triggers after the tag-push run already published.
+
 ## Gitea-to-GitHub Mirror
 
 The Gitea workflow at `.gitea/workflows/mirror-github.yml` mirrors only `main`
