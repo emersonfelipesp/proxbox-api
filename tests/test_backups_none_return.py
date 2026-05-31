@@ -4,7 +4,6 @@ Tests that _create_all_virtual_machine_backups returns an empty list (not None)
 when no backups are found, preventing TypeError: len(None) in full_update.py.
 """
 
-import asyncio
 import pytest
 
 
@@ -60,6 +59,7 @@ async def test_full_update_defensive_guard_len_on_backups():
     The defensive guard `sync_backups = await_result or []` ensures this never
     raises TypeError: len(None).
     """
+
     # Simulate the defensive guard pattern in full_update.py
     async def mock_backups_task():
         # Simulate the case where the function returns None
