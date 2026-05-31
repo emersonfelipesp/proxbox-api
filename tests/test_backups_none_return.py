@@ -16,32 +16,28 @@ async def test_create_all_virtual_machine_backups_returns_empty_list_on_no_backu
     Regression for: TypeError: object of type 'NoneType' has no len()
     at full_update.py line 442: "backups_count": len(sync_backups)
     """
-    from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
-        _create_all_virtual_machine_backups,
-    )
+    from proxbox_api.routes.virtualization.virtual_machines import backups_vm
 
-    # Mock dependencies with minimal shapes
     class MockNetBox:
-        async def get(self, *args, **kwargs):
-            return []
-
-        async def fetch_all(self, *args, **kwargs):
-            return []
-
-    class MockProxmox:
-        pass
-
-    class MockClusterStatus:
         pass
 
     class MockTag:
         pass
 
+    async def empty_storage_index(_nb):
+        return {}
+
+    async def empty_vm_cache(_nb):
+        return {}
+
+    monkeypatch.setattr(backups_vm, "_load_storage_index", empty_storage_index)
+    monkeypatch.setattr(backups_vm, "_prefetch_vm_cache", empty_vm_cache)
+
     # Call the function with no backups to discover (empty Proxmox cluster)
-    result = await _create_all_virtual_machine_backups(
+    result = await backups_vm._create_all_virtual_machine_backups(
         netbox_session=MockNetBox(),
-        pxs={"default": MockProxmox()},
-        cluster_status={"default": MockClusterStatus()},
+        pxs=[],
+        cluster_status=[],
         tag=MockTag(),
         delete_nonexistent_backup=True,
         fetch_max_concurrency=None,
