@@ -279,14 +279,16 @@ async def _full_update_sync_impl(  # noqa: C901
             ) from error
 
         try:
-            sync_backups = await create_all_virtual_machine_backups(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                tag=tag,
-                delete_nonexistent_backup=True,
-                fetch_max_concurrency=fetch_max_concurrency,
-            )
+            sync_backups = (
+                await create_all_virtual_machine_backups(
+                    netbox_session=netbox_session,
+                    pxs=pxs,
+                    cluster_status=cluster_status,
+                    tag=tag,
+                    delete_nonexistent_backup=True,
+                    fetch_max_concurrency=fetch_max_concurrency,
+                )
+            ) or []
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -822,7 +824,7 @@ async def full_update_sync_stream(  # noqa: C901
                 backups_task = asyncio.create_task(_run_backups_sync())
                 async for frame in backups_bridge.iter_sse():
                     yield frame
-                sync_backups = await backups_task
+                sync_backups = (await backups_task) or []
 
                 yield sse_event(
                     "step",
