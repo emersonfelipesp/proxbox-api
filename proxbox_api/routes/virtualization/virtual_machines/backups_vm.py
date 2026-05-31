@@ -897,7 +897,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
             # so the SSE stream emits complete with ok=True and the full-sync job
             # continues to the next stage.
             logger.info("Backup sync: %s — skipping reconcile", warning_msg)
-            return
+            return results
 
         if use_websocket and websocket:
             await websocket.send_json(
