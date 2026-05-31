@@ -284,10 +284,12 @@ jobs:
             --build-arg "NETBOX_PATH=.netbox" \
             -t "${NETBOX_IMAGE}" \
             /tmp/netbox-docker
+
+      - name: Save NetBox image artifact
+        run: |
           docker save "${NETBOX_IMAGE}" | gzip > /tmp/netbox-image.tar.gz
 
       - name: Upload NetBox image artifact
-        if: steps.check.outputs.image_built == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: netbox-image-${{ matrix.netbox-version }}
