@@ -31,3 +31,23 @@ def resolve_proxmox_fetch_concurrency() -> int:
         default=8,
         minimum=1,
     )
+
+
+def resolve_interface_batch_size() -> int:
+    """Number of VM interfaces synced per batch (prevents NetBox overwhelming)."""
+    return get_int(
+        settings_key="interface_batch_size",
+        env="PROXBOX_INTERFACE_BATCH_SIZE",
+        default=5,
+        minimum=1,
+    )
+
+
+def resolve_interface_batch_delay_ms() -> int:
+    """Milliseconds to wait between interface batches."""
+    return get_int(
+        settings_key="interface_batch_delay_ms",
+        env="PROXBOX_INTERFACE_BATCH_DELAY_MS",
+        default=100,
+        minimum=0,
+    )

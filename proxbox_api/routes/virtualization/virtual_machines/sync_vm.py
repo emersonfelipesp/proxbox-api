@@ -2141,7 +2141,21 @@ async def create_virtual_machines(  # noqa: C901
                             )
                         )
 
-                interface_results = await asyncio.gather(*interface_tasks, return_exceptions=True)
+                # Batch interface tasks to prevent overwhelming NetBox with concurrent API calls
+                from proxbox_api.routes.virtualization.virtual_machines.helpers import (
+                    resolve_interface_batch_delay_ms,
+                    resolve_interface_batch_size,
+                )
+
+                batch_size = resolve_interface_batch_size()
+                batch_delay_ms = resolve_interface_batch_delay_ms()
+                interface_results = []
+                for i in range(0, len(interface_tasks), batch_size):
+                    batch = interface_tasks[i : i + batch_size]
+                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                    interface_results.extend(batch_results)
+                    if i + batch_size < len(interface_tasks) and batch_delay_ms > 0:
+                        await asyncio.sleep(batch_delay_ms / 1000.0)
                 for result in interface_results:
                     if isinstance(result, Exception):
                         error_detail = getattr(result, "detail", str(result))
