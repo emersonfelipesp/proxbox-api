@@ -87,6 +87,70 @@ The official release pipeline for proxbox-api runs in this order:
 
 The `publish-pypi` job checks the PyPI API before uploading. If `proxbox-api==${VERSION}` already exists (HTTP 200), the upload step is skipped and the job succeeds. This prevents failures when `release: published` re-triggers after the tag-push run already published.
 
+## Code Quality Standards
+
+All changes to proxbox-api MUST conform to these quality gates before PR review:
+
+### Code Coverage
+- Maintain ≥85% coverage: `uv run pytest tests --cov=proxbox_api --cov-report=term-missing`
+- Coverage is enforced in CI; failing coverage blocks merge
+- Document uncovered code with a rationale comment (e.g., "# pragma: no cover - network outage only")
+
+### Regression Testing
+- Add a test that fails on pre-fix code before implementing any fix
+- Run the full test suite: `uv run pytest tests/ --timeout=60 -v`
+- Run reconciliation tests if you touch sync: `uv run pytest tests/reconciliation -q`
+- Validate against E2E Docker stack before final release (see CLAUDE.md)
+
+### Static Analysis
+
+**Ruff (linting & formatting):**
+```bash
+uv run ruff check .          # Errors, style, unused imports
+uv run ruff format --check . # Code formatting
+```
+All violations block CI. Fix before pushing.
+
+**Type Checking (Pyright strict):**
+```bash
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+```
+Type mismatches block merge. Use `# type: ignore` only with justification.
+
+**Defect Categories Detected:**
+- Undefined variables, imports, method/attribute access
+- Unused imports and dead code
+- Security: SQL injection, unsafe exec/eval, insecure deserialization
+- Type mismatches (via Pyright strict)
+- Maintainability and complexity issues
+
+### Requirements Validation
+
+Before writing code, confirm:
+1. The feature is traceable to a GitHub issue (link it in the PR description)
+2. The design is documented (update nearest CLAUDE.md with route/schema changes)
+3. You've identified downstream impacts (netbox-proxbox plugin, NMS frontend, Firecracker host-agents)
+4. You've identified all derived requirements (e.g., "requires NetBox ≥X.Y.Z")
+
+### Configuration Control
+
+Changes to these configuration items require explicit PR description and CLAUDE.md update:
+- Backend version (`pyproject.toml`, `proxbox_api/__init__.py`)
+- NetBox compatibility floor (`proxbox_api/constants.py` `MIN_NETBOX_VERSION`)
+- API route signatures and schemas (backward-compatibility impact)
+- Database schema (any SQLModel/model changes require migrations)
+- Environment variable additions (document in CLAUDE.md)
+
+### Firecracker Cloud Invariants
+
+If your change touches Cloud provisioning:
+1. Verify the host-agent provisioning contract is documented
+2. Confirm `FirecrackerMicroVM` rows use `kind="firecracker"` and `instance_ref="firecracker:<id>"`
+3. Check that provisioning streams conform to the nms-backend contract
+4. Validate that netbox-proxbox inventory calls are compatible with the current plugin version
+
+Violating these invariants breaks production cloud provisioning.
+
 ## Gitea-to-GitHub Mirror
 
 The Gitea workflow at `.gitea/workflows/mirror-github.yml` mirrors only `main`

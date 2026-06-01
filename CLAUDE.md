@@ -447,6 +447,142 @@ Never leave merged branches lingering. The only branches that should persist
 long-term are `main`, active release branches, and any branch the user has
 explicitly asked to keep.
 
+## Software Engineering Life Cycle Requirements
+
+This section establishes project-wide quality standards derived from industry-standard software engineering practices. All changes must conform to these requirements before release.
+
+### Requirements Traceability and Design Documentation
+
+**Architectural Design:** The backend's architecture is documented across:
+- **Route contracts** (`proxbox_api/routes/`, `.github/workflows/*.yml`) — API surface and CI/CD integration points
+- **Service layers** (`proxbox_api/services/`) — subsystem decomposition and dependency definitions
+- **Schema definitions** (`proxbox_api/schemas/`) — NetBox, Proxmox, and Firecracker payload contracts
+- **Database models** (`proxbox_api/session/`, `proxbox_api/models/`) — state management and persistence
+
+Changes to routes, services, or schemas MUST include an updated architecture note in the closest CLAUDE.md explaining:
+- What interface or subsystem changed
+- Why the change is necessary (traceability to an issue or feature)
+- What downstream systems are affected (NetBox plugin, NMS frontend, Firecracker host-agents)
+- Any breaking changes or version floor bumps
+
+**Verification:** Before opening a PR, confirm:
+1. Route contracts match their docstrings and `.openapi` metadata
+2. All new schemas are documented in the nearest CLAUDE.md
+3. Breaking changes to Proxmox/NetBox/Firecracker contracts are flagged in the PR description
+4. The netbox-proxbox plugin compatibility floor is noted (version `X.Y.Z` or later required)
+
+### Code Coverage and Quality Metrics
+
+**Coverage Target:** Maintain ≥85% code coverage for the `proxbox_api/` package. Coverage is measured by `pytest-cov` and reported in CI.
+
+**Coverage Reporting:**
+- Local: `uv run pytest tests --cov=proxbox_api --cov-report=term-missing`
+- CI: GitHub Actions enforces coverage thresholds; failing coverage blocks merge
+- Exclusions: `proxbox_api/generated/` (auto-generated), database layer (SQLAlchemy), test fixtures
+
+**Uncovered Code:** If code cannot be easily covered, document the rationale with an inline comment:
+```python
+try:
+    ...
+except ConnectionError:  # pragma: no cover - occurs only on network outage
+    pass
+```
+
+### Testing and Regression Requirements
+
+**Test Suite:** All changes must include unit and integration tests:
+- **Unit tests** (`tests/test_*.py`) — verify individual routes, schemas, and services
+- **Integration tests** (`tests/integration/`) — verify backend + NetBox + Proxmox workflows end-to-end
+- **Regression tests** — add a test that would fail on pre-fix code before implementing any fix
+
+**Regression Testing:** Before release, run:
+```bash
+uv run pytest tests/ --timeout=60 -v --cov=proxbox_api --cov-report=term-missing
+uv run pytest tests/reconciliation -q  # if you changed sync reconciliation
+```
+This verifies that no previously passing test was broken by the change.
+
+**E2E Validation:** Changes to VM sync, reconciliation, Firecracker provisioning, or NetBox integration must be validated against the full E2E Docker stack:
+```bash
+docker compose -f e2e/docker/docker-compose.yml up --build -d
+bash e2e/docker/wait-for-stack.sh
+bash e2e/docker/smoke.sh
+```
+
+### Static Analysis and Quality Gates
+
+**Ruff (Linting & Formatting):**
+```bash
+uv run ruff check .          # Detect errors, style violations, unused imports
+uv run ruff format --check . # Enforce code formatting
+```
+All violations block CI. Fix before pushing.
+
+**Type Checking (Pyright strict):**
+```bash
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+```
+Type mismatches block merge. Use `# type: ignore` only with justification.
+
+**Defect Categories Detected:**
+- Undefined variables, imports, method/attribute access
+- Unused imports and dead code
+- Security: SQL injection, unsafe exec/eval, insecure deserialization
+- Type mismatches (Pyright strict mode)
+- Complexity and maintainability
+
+**Pre-commit Enforcement:**
+```bash
+uv run python -m compileall proxbox_api tests
+uv run ruff check . && uv run ruff format --check .
+uv run py check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+uv run pytest tests --timeout=60
+```
+All checks MUST pass before committing.
+
+### Configuration Control and Change Management
+
+**Configuration Items:** The following are managed under strict change control:
+- Backend version (`pyproject.toml` version, `proxbox_api/__init__.py` `__version__`)
+- NetBox compatibility floor (`proxbox_api/constants.py` `MIN_NETBOX_VERSION`)
+- Proxbox API contracts (route signatures, schema payloads, SSE/WebSocket events)
+- Database schema and migrations (any model/SQLModel changes)
+- Environment variable list (all new `.env` variables must be documented in CLAUDE.md)
+
+**Change Control Process:**
+1. **Before changing a configuration item**, post a comment on the related GitHub issue explaining the change and impact.
+2. **After merging**, update the relevant CLAUDE.md file to document the new requirement or floor.
+3. **Release notes** MUST include breaking changes (e.g., "requires NetBox ≥4.5.8").
+
+**Version Management:** Follow PEP 440:
+- Use `X.Y.ZrcN` for release candidates (TestPyPI validation only)
+- Use `X.Y.Z` for official releases
+- Use `X.Y.Z.postN` for bug-fix releases (never `twine --skip-existing`)
+
+### Pre-Release Verification Checklist
+
+**Before opening a release PR or tag, verify ALL of the following:**
+
+- [ ] All requirements are implemented and verified in code
+- [ ] Code passes pre-commit checklist (syntax, lint, type-check, tests)
+- [ ] Coverage is ≥85% (`pytest-cov --cov-report=term-missing`)
+- [ ] Regression testing passes (`pytest tests/ --timeout=60 -v`)
+- [ ] E2E Docker stack validation is green (if touching sync/Firecracker/NetBox paths)
+- [ ] Changelog (`docs/release-notes/version-X.Y.Z.md`) is complete
+- [ ] Architecture documentation (CLAUDE.md files) is updated
+- [ ] NetBox compatibility floor is documented (version `X.Y.Z` or later required)
+- [ ] Proxbox API breaking changes (if any) are flagged for netbox-proxbox
+- [ ] All CI checks are green (GitHub Actions)
+
+**During release publishing**:
+
+- [ ] Only use Gitea `push: tags: vX.Y.Z` or `gh release create` (never force-push tags)
+- [ ] Monitor both Gitea Actions and GitHub Actions for successful publication
+- [ ] Verify dist is live on PyPI and Docker Hub before declaring success
+- [ ] Update netbox-proxbox compatibility floor if this release changes the API contract
+
+---
+
 ## Release Procedure
 
 The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: tags: v*` (RC and final), `release: published`, and `workflow_dispatch`. The **Gitea-first** pipeline (introduced in v0.0.16) uses `.gitea/workflows/publish-gitea.yml` to publish to the Gitea Package Registry, push the tag to GitHub, and create the GitHub release — which fires the `release: published` event and triggers the PyPI publish.
