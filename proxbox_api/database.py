@@ -19,8 +19,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.credentials import decrypt_value, encrypt_value
 
-root_dir = Path(__file__).parent.parent
-sqlite_file_name = Path(os.getenv("PROXBOX_DATABASE_PATH", root_dir / "database.db")).expanduser()
+_DEFAULT_DB_PATH = "/data/database.db"
+sqlite_file_name = Path(os.getenv("PROXBOX_DATABASE_PATH", _DEFAULT_DB_PATH)).expanduser()
 sqlite_file_name.parent.mkdir(parents=True, exist_ok=True)
 sqlite_url = f"sqlite:///{sqlite_file_name}"
 async_sqlite_url = f"sqlite+aiosqlite:///{sqlite_file_name}"
