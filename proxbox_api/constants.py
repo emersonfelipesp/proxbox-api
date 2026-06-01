@@ -103,7 +103,7 @@ HTTP_CONFLICT = 409
 HTTP_INTERNAL_ERROR = 500
 
 # File paths
-DEFAULT_DB_PATH = "database.db"
+DEFAULT_DB_PATH = "/data/database.db"
 DEFAULT_LOG_PATH = "/var/log/proxbox.log"
 
 # Proxmox node name validation — must start with alphanumeric, then allow dots/hyphens/underscores.

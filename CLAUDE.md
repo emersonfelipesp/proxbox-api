@@ -243,7 +243,7 @@ the `netbox-proxbox` side, do all five — the existing fields in
 ### Required in `.env` (process-level, no plugin-settings equivalent)
 
 - `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
-- `PROXBOX_DATABASE_PATH`: optional SQLite database path override. Production Docker uses `/var/lib/proxbox-api/database.db` so database state survives image rebuilds and container recreation.
+- `PROXBOX_DATABASE_PATH`: optional SQLite database path override. Default is `/data/database.db` (a Docker volume mount point). Docker volumes should be mounted at `/data` to persist the database across container restarts and image upgrades. Production deployments can override this to `/var/lib/proxbox-api/database.db` if needed.
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 300). Read at app construction.
 - `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins (read at app construction).
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.

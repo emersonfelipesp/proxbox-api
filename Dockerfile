@@ -44,9 +44,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 COPY --from=builder /app/.venv /app/.venv
 
-RUN mkdir -p /app/scripts
+RUN mkdir -p /app/scripts /data
 
 EXPOSE 8000
+VOLUME ["/data"]
 
 # Application tree + venv only (shared by PyO3/Rust runtime images).
 FROM python:3.13-alpine AS runtime-base-pyo3-rust
@@ -61,10 +62,11 @@ ENV PATH="/app/.venv/bin:$PATH" \
 COPY --from=builder-pyo3-rust /app/.venv /app/.venv
 
 RUN apk add --no-cache libgcc && \
-    mkdir -p /app/scripts && \
+    mkdir -p /app/scripts /data && \
     /app/.venv/bin/python -c "from proxbox_reconcile_rs._native import build_vm_operation_queue_json"
 
 EXPOSE 8000
+VOLUME ["/data"]
 
 # Default image: raw uvicorn, no proxy, HTTP only. Smallest possible image.
 FROM runtime-base AS raw

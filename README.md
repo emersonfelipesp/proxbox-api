@@ -192,6 +192,57 @@ docker run -d -p 8443:8000 --name proxbox-api-tls \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
+### Database Persistence
+
+The SQLite database is stored at `/data/database.db` by default. The `/data` directory is declared as a Docker volume mount point, allowing you to persist the database across container restarts and image upgrades.
+
+**Mount a volume for persistence:**
+
+```bash
+docker run -d -p 8000:8000 \
+  -v proxbox-data:/data \
+  --name proxbox-api \
+  emersonfelipesp/proxbox-api:latest
+```
+
+**Or mount a host directory:**
+
+```bash
+docker run -d -p 8000:8000 \
+  -v /host/path/to/data:/data \
+  --name proxbox-api \
+  emersonfelipesp/proxbox-api:latest
+```
+
+**Override the database path (optional):**
+
+If you prefer a custom database location, set `PROXBOX_DATABASE_PATH`:
+
+```bash
+docker run -d -p 8000:8000 \
+  -e PROXBOX_DATABASE_PATH=/custom/path/database.db \
+  -v /custom/path:/custom/path \
+  --name proxbox-api \
+  emersonfelipesp/proxbox-api:latest
+```
+
+**With Docker Compose:**
+
+```yaml
+services:
+  proxbox-api:
+    image: emersonfelipesp/proxbox-api:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - proxbox-data:/data
+    environment:
+      - PROXBOX_BIND_HOST=0.0.0.0
+
+volumes:
+  proxbox-data:
+```
+
 ### Binding to IPv6 / dual-stack
 
 ```bash
