@@ -21,7 +21,15 @@ from proxbox_api.credentials import decrypt_value, encrypt_value
 
 _DEFAULT_DB_PATH = "/data/database.db"
 sqlite_file_name = Path(os.getenv("PROXBOX_DATABASE_PATH", _DEFAULT_DB_PATH)).expanduser()
-sqlite_file_name.parent.mkdir(parents=True, exist_ok=True)
+
+# Attempt to create the parent directory. If the default `/data` path is not
+# writable (e.g., in CI without Docker), fall back to a temporary location.
+try:
+    sqlite_file_name.parent.mkdir(parents=True, exist_ok=True)
+except (PermissionError, OSError):
+    # Fall back to current working directory if /data is not writable.
+    sqlite_file_name = Path.cwd() / "database.db"
+    sqlite_file_name.parent.mkdir(parents=True, exist_ok=True)
 sqlite_url = f"sqlite:///{sqlite_file_name}"
 async_sqlite_url = f"sqlite+aiosqlite:///{sqlite_file_name}"
 
