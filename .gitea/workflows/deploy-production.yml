@@ -14,11 +14,11 @@ jobs:
     runs-on: prod-deploy
     steps:
       - name: Check deploy target
-        run: ssh nmc-prod-207 -- status proxbox-api
+        run: /opt/nmulticloud/deploy/bin/status-app proxbox-api
 
       - name: Deploy pushed commit
-        run: ssh nmc-prod-207 -- deploy proxbox-api "${{ github.sha }}"
+        run: /opt/nmulticloud/deploy/bin/deploy-app proxbox-api "${{ github.sha }}"
 
       - name: Report deploy target status
         if: always()
-        run: ssh nmc-prod-207 -- status proxbox-api
+        run: /opt/nmulticloud/deploy/bin/status-app proxbox-api
