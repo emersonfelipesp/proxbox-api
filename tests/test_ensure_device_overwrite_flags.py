@@ -59,8 +59,16 @@ class _FakePhaseRecord(_FakeExistingDevice):
         object.__setattr__(self, "id", current.get("id"))
 
 
-def _existing_payload(*, device_type_id: int, role_id: int) -> dict[str, Any]:
-    """Return a NetBox-shape device payload with the given FKs."""
+def _existing_payload(*, device_type_id: int, role_id: int, tagged: bool = True) -> dict[str, Any]:
+    """Return a NetBox-shape device payload with the given FKs.
+
+    ``tagged`` controls whether the record carries the ``proxbox`` tag, which is
+    the operator opt-in that allows Proxbox to adopt a pre-existing device whose
+    site/cluster differ from the Proxmox target (issue #561).
+    """
+    tags: list[dict[str, Any]] = (
+        [{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}] if tagged else []
+    )
     return {
         "name": "pve01",
         "status": "active",
@@ -69,7 +77,7 @@ def _existing_payload(*, device_type_id: int, role_id: int) -> dict[str, Any]:
         "role": role_id,
         "site": 41,
         "description": "Proxmox Node pve01",
-        "tags": [{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+        "tags": tags,
         "custom_fields": {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"},
     }
 
@@ -140,11 +148,15 @@ async def test_existing_device_preserves_device_type_when_flag_disabled(
 
 
 @pytest.mark.asyncio
-async def test_existing_device_different_site_and_cluster_is_not_reused(
+async def test_existing_untagged_device_different_site_is_not_reused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Do not patch a same-name node from another cluster/site into the target cluster."""
-    existing = _FakeExistingDevice(_existing_payload(device_type_id=42, role_id=10))
+    """An untagged same-name node from another cluster/site is never adopted.
+
+    Without the ``proxbox`` tag the operator has not opted in, so sync creates a
+    fresh device in the target site instead of merging into the foreign record.
+    """
+    existing = _FakeExistingDevice(_existing_payload(device_type_id=42, role_id=10, tagged=False))
     existing._current.update({"cluster": 77, "site": 99})
 
     async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
@@ -180,10 +192,55 @@ async def test_existing_device_different_site_and_cluster_is_not_reused(
 
 
 @pytest.mark.asyncio
-async def test_bulk_device_reconcile_uses_name_and_site_for_same_name_nodes(
+async def test_existing_tagged_device_different_site_is_adopted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Same-name nodes in different cluster sites must not reuse the old-site record."""
+    """Issue #561: a ``proxbox``-tagged same-name device in another site is reused.
+
+    The operator opted in by tagging the pre-existing physical hypervisor, so
+    Proxbox adopts it: it is pinned to its own existing site (preserving the
+    manual data) and attached to the Proxmox cluster, with no duplicate created.
+    """
+    existing = _FakeExistingDevice(_existing_payload(device_type_id=42, role_id=10, tagged=True))
+    existing._current.update({"cluster": 77, "site": 99})
+
+    async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [existing]
+
+    async def _fail_rest_reconcile(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("adopted device must be patched in place, not re-created")
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(device_ensure, "rest_reconcile_async", _fail_rest_reconcile)
+
+    await device_ensure._ensure_device(
+        nb=object(),
+        device_name="pve01",
+        cluster_id=11,
+        device_type_id=42,
+        role_id=10,
+        site_id=41,
+        tag_refs=[{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+        overwrite_flags=SyncOverwriteFlags(),
+    )
+
+    # Existing record is updated in place: attached to the target cluster while
+    # pinned to its own site (99), so the unique-name-per-site constraint holds
+    # and the manually-curated data on the device is preserved.
+    assert existing.saved is True
+    assert existing.applied.get("cluster") == 11
+    assert existing.applied.get("site") in (None, 99)
+
+
+@pytest.mark.asyncio
+async def test_bulk_device_reconcile_does_not_reuse_untagged_same_name_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Untagged same-name nodes in another site must not reuse the old-site record.
+
+    Without the ``proxbox`` opt-in tag the bulk reconcile targets the desired
+    Proxmox site (41) and lets name+site lookup create a fresh record there.
+    """
     captured_device_phase: dict[str, Any] = {}
 
     async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
@@ -194,7 +251,7 @@ async def test_bulk_device_reconcile_uses_name_and_site_for_same_name_nodes(
                     "name": "pve01",
                     "site": 99,
                     "cluster": 77,
-                    "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                    "tags": [],
                 }
             )
         ]
@@ -269,6 +326,99 @@ async def test_bulk_device_reconcile_uses_name_and_site_for_same_name_nodes(
     assert captured_device_phase["lookup_query_field_map"] == {"site": "site_id"}
     assert captured_device_phase["payload"]["cluster"] == 11
     assert captured_device_phase["payload"]["site"] == 41
+
+
+@pytest.mark.asyncio
+async def test_bulk_device_reconcile_adopts_tagged_same_name_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #561: a ``proxbox``-tagged same-name node in another site is adopted.
+
+    The bulk path pins the existing record's own site (99) so name+site lookup
+    targets and updates it in place, attaching it to the Proxmox cluster instead
+    of creating a duplicate in the default Proxmox site.
+    """
+    captured_device_phase: dict[str, Any] = {}
+
+    async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [
+            _FakePhaseRecord(
+                {
+                    "id": 200,
+                    "name": "pve01",
+                    "site": 99,
+                    "cluster": 77,
+                    "tags": [{"slug": "proxbox", "name": "Proxbox"}],
+                }
+            )
+        ]
+
+    async def _fake_bulk_phases(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        phases = kwargs["phases"] if "phases" in kwargs else args[1]
+        phase_names = {phase.name for phase in phases}
+
+        if "cluster_types" in phase_names:
+            return {
+                "cluster_types": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 1, "name": "Cluster", "slug": "cluster"})]
+                ),
+                "manufacturers": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 2, "name": "Proxmox", "slug": "proxmox"})]
+                ),
+                "device_roles": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 3, "name": "Proxmox Node"})]
+                ),
+                "sites": SimpleNamespace(
+                    records=[
+                        _FakePhaseRecord(
+                            {
+                                "id": 41,
+                                "name": "Proxmox Default Site - PVE-CLUSTER-01",
+                                "slug": "proxmox-default-site-pve-cluster-01",
+                            }
+                        )
+                    ]
+                ),
+            }
+
+        if "clusters" in phase_names:
+            return {
+                "clusters": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 11, "name": "PVE-CLUSTER-01"})]
+                ),
+                "device_types": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 4, "model": "Proxmox Generic Device"})]
+                ),
+            }
+
+        device_phase = phases[0]
+        captured_device_phase["lookup_fields"] = list(device_phase.lookup_fields)
+        captured_device_phase["payload"] = dict(device_phase.payloads[0])
+        return {
+            "devices": SimpleNamespace(
+                records=[_FakePhaseRecord({"id": 200, **device_phase.payloads[0]})]
+            )
+        }
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(device_ensure, "rest_bulk_reconcile_phases_async", _fake_bulk_phases)
+
+    await device_ensure.ensure_proxmox_devices_bulk(
+        object(),
+        clusters_status=[
+            SimpleNamespace(
+                name="PVE-CLUSTER-01",
+                mode="cluster",
+                node_list=[SimpleNamespace(name="pve01")],
+            )
+        ],
+        tag_refs=[{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+        overwrite_flags=SyncOverwriteFlags(),
+    )
+
+    assert captured_device_phase["lookup_fields"] == ["name", "site"]
+    assert captured_device_phase["payload"]["cluster"] == 11
+    assert captured_device_phase["payload"]["site"] == 99
 
 
 @pytest.mark.asyncio

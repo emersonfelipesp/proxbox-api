@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from proxbox_api.constants import DISCOVERY_TAG_CLUSTER, DISCOVERY_TAG_NODE
+from proxbox_api.constants import DISCOVERY_TAG_CLUSTER, DISCOVERY_TAG_NODE, PROXBOX_TAG
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
     BulkReconcilePhase,
@@ -158,13 +158,30 @@ def _ordered_device_candidates(records: list[object]) -> list[NetBoxRecord]:
     return [*proxbox_records, *[record for record in records if id(record) not in proxbox_ids]]
 
 
+def _first_proxbox_tagged(records: list[object]) -> NetBoxRecord | None:
+    """Return the first record carrying the ``proxbox`` tag, else ``None``."""
+    for record in records:
+        if _record_has_tag(record, PROXBOX_TAG):
+            return record
+    return None
+
+
 def _select_existing_device_for_target(
     records: list[object],
     *,
     desired_site_id: int | None,
     cluster_id: int | None,
 ) -> NetBoxRecord | None:
-    """Select an existing device only when it is compatible with the target placement."""
+    """Select an existing device when it is compatible with the target placement.
+
+    A same-name device is adopted when it already sits in the target site or
+    cluster. When neither matches, an existing device is reused only if the
+    operator has explicitly opted in by assigning the ``proxbox`` tag to it
+    (issue #561): tagging a pre-existing Device flags it as adoptable, so
+    Proxbox attaches it to the Proxmox cluster (pinned to its existing site via
+    ``_existing_device_site_pin``) instead of creating a duplicate. Untagged
+    same-name devices in a different site/cluster are never silently adopted.
+    """
     candidates = _ordered_device_candidates(records)
     if not candidates:
         return None
@@ -181,7 +198,10 @@ def _select_existing_device_for_target(
 
     if desired_site_id is None and cluster_id is None:
         return candidates[0]
-    return None
+
+    # Operator opt-in (issue #561): reuse a same-name device whose site/cluster
+    # differ from the target only when it carries the ``proxbox`` tag.
+    return _first_proxbox_tagged(candidates)
 
 
 def _existing_device_site_pin(
