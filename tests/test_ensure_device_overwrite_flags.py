@@ -156,9 +156,7 @@ async def test_existing_untagged_device_different_site_is_not_reused(
     Without the ``proxbox`` tag the operator has not opted in, so sync creates a
     fresh device in the target site instead of merging into the foreign record.
     """
-    existing = _FakeExistingDevice(
-        _existing_payload(device_type_id=42, role_id=10, tagged=False)
-    )
+    existing = _FakeExistingDevice(_existing_payload(device_type_id=42, role_id=10, tagged=False))
     existing._current.update({"cluster": 77, "site": 99})
 
     async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
