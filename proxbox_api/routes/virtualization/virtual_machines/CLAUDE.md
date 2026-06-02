@@ -50,6 +50,15 @@ Main synchronization endpoints for virtual machines and related resources.
   `failed_interfaces` and `total_interfaces`, and a VM with any failed interface
   is reported with `status="warning"` (degraded) instead of `completed`. Keep
   the WebSocket and SSE item payloads aligned when changing these fields.
+- **VM batch failures are counted, not reported as success (issue #563).**
+  `_run_full_update_vm_batch` returns `(results, failed_vms)`. A VM that raises
+  during preparation or fails to resolve increments `failed_vms`; the caller
+  computes `total_vms = len(results) + failed_vms` so a stage where every VM
+  failed reports `total>0, failed>0` instead of the misleading
+  `total=0 ok=0 failed=0` that previously let a fully-failed stage look
+  "completed". When changing the batch contract, keep the failure count flowing
+  into the stage summary so multi-endpoint mis-scoping can never masquerade as
+  an empty-but-successful run.
 
 ## Extension Guidance
 
