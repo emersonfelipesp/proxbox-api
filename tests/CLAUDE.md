@@ -35,6 +35,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
 | `test_logger_settings.py` | Logger configuration via env vars |
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
+| `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
