@@ -31,6 +31,20 @@ Endpoints that expose Proxmox sessions, cluster data, node data, viewer generati
 - Runtime-generated routes are mounted during application lifespan and also cached to disk so they can be restored on reload.
 - Generated routes are served under `/proxmox/api2/{version_tag}` with `/proxmox/api2/*` kept as the `latest` alias.
 
+## Multi-endpoint dedup (issue #563)
+
+`cluster.py::cluster_resources` deduplicates resources **per cluster identity**
+(`px.name`), never globally. Multiple sessions that are nodes of the *same*
+cluster each return the full resource list, so same-cluster duplicates are
+collapsed; but two *separate* clusters can legitimately share a VMID
+(`qemu/100`), so a single global `seen` set would silently drop the second
+cluster's resource. Keep the dedup set keyed by cluster identity.
+
+`cluster_status` / `get_node` honor the `proxmox_sessions` selector
+(`proxmox_endpoint_ids` / `name` / `domain` / `ip_address`), so the
+netbox-proxbox plugin can scope a read to one endpoint and receive only that
+endpoint's record(s).
+
 ## Extension Guidance
 
 - Keep API wrappers resilient to upstream Proxmox errors and convert them to `ProxboxException`.

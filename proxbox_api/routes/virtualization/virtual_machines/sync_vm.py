@@ -1682,7 +1682,16 @@ async def create_virtual_machines(  # noqa: C901
             vm_type=vm_type,
         )
 
-    async def _run_full_update_vm_batch() -> list[dict[str, object]]:  # noqa: C901
+    async def _run_full_update_vm_batch() -> tuple[list[dict[str, object]], int]:  # noqa: C901
+        """Run the batched full-update VM sync.
+
+        Returns ``(synced_records, failed_count)``. ``failed_count`` counts VMs
+        that existed in the input but could not be synced (preparation raised, or
+        the dispatched operation produced no resolved NetBox record). It is kept
+        separate from a legitimately empty input so callers can distinguish
+        "nothing to sync" from "everything failed" instead of reporting silent
+        success.
+        """
         batch_t0 = time.perf_counter()
         operation_inputs: list[tuple[str, dict]] = []
         for cluster in filtered_cluster_resources:
@@ -1696,7 +1705,7 @@ async def create_virtual_machines(  # noqa: C901
                         operation_inputs.append((str(cluster_name), resource))
 
         if not operation_inputs:
-            return []
+            return [], 0
 
         fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
 
@@ -1713,14 +1722,16 @@ async def create_virtual_machines(  # noqa: C901
         )
 
         prepared_vms: list[_PreparedVMState] = []
+        failed_vms = 0
         for prepared_result in prepared_results:
             if isinstance(prepared_result, Exception):
                 logger.warning("VM preparation failed: %s", prepared_result)
+                failed_vms += 1
                 continue
             prepared_vms.append(prepared_result)
 
         if not prepared_vms:
-            return []
+            return [], failed_vms
 
         netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb, fresh=True)
         await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
@@ -1760,6 +1771,7 @@ async def create_virtual_machines(  # noqa: C901
                     vmid,
                     operation.method,
                 )
+                failed_vms += 1
                 continue
             await stamp_vm_last_run_id(nb, vm_record, effective_run_id)
             results.append(vm_record)
@@ -1800,19 +1812,26 @@ async def create_virtual_machines(  # noqa: C901
             len(netbox_snapshot),
         )
 
-        return results
+        return results, failed_vms
 
     if not sync_vm_network:
-        flattened_results = await _run_full_update_vm_batch()
-        total_vms = len(flattened_results)
+        flattened_results, failed_vms = await _run_full_update_vm_batch()
         successful_vms = len(flattened_results)
-        failed_vms = 0
+        total_vms = successful_vms + failed_vms
         if bridge:
+            summary_message = (
+                f"Virtual machine sync completed: {successful_vms} synchronized"
+                if failed_vms == 0
+                else (
+                    "Virtual machine sync completed with errors: "
+                    f"{successful_vms} synchronized, {failed_vms} failed"
+                )
+            )
             await bridge.emit_phase_summary(
                 phase="virtual-machines",
                 created=successful_vms,
                 failed=failed_vms,
-                message=(f"Virtual machine sync completed: {successful_vms} synchronized"),
+                message=summary_message,
             )
         if all([use_websocket, websocket]):
             await websocket.send_json({"object": "virtual_machine", "end": True})

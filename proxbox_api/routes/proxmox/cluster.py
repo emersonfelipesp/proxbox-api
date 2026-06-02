@@ -203,18 +203,29 @@ async def cluster_resources(
 
     resource_type = type if isinstance(type, str) else None
 
-    # Deduplicate resources across sessions that belong to the same Proxmox cluster.
-    # When multiple Proxmox endpoints are nodes of the same cluster, each one returns
-    # the full cluster resource list.  Track seen resource IDs globally so that the
-    # same VM/LXC is never submitted to NetBox twice.
+    # Deduplicate resources *per cluster*, never globally.
+    #
+    # When multiple Proxmox endpoints are nodes of the SAME cluster, each one
+    # returns the full cluster resource list, so the same VM/LXC must not be
+    # submitted to NetBox twice. Those duplicates share the same cluster
+    # identity (``px.name`` resolves to the cluster name), so a per-cluster set
+    # collapses them correctly.
+    #
+    # Proxmox resource IDs (e.g. ``qemu/100``) are only unique *within* one
+    # cluster. Two SEPARATE clusters can legitimately both own VMID 100, so a
+    # single global ``seen`` set would silently drop the second cluster's
+    # resource. Keying the dedup set by cluster identity keeps distinct clusters
+    # independent while still collapsing same-cluster duplicates.
     cluster_resource_map: dict[str, list[dict]] = {}
-    seen_resource_ids: set[str] = set()
+    seen_resource_ids_by_cluster: dict[str, set[str]] = {}
 
     for px in pxs:
         resources = await get_typed_cluster_resources(px, resource_type=resource_type)
         cluster_name = px.name
         if cluster_name not in cluster_resource_map:
             cluster_resource_map[cluster_name] = []
+            seen_resource_ids_by_cluster[cluster_name] = set()
+        seen_resource_ids = seen_resource_ids_by_cluster[cluster_name]
         for resource in resources:
             resource_id: str = resource.id
             if resource_id in seen_resource_ids:
