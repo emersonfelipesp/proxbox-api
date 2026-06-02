@@ -331,6 +331,12 @@ async def _resolve_vm_names_pre_pass(
                 vmid = 0
             candidate = str(prepared.desired_payload.get("name") or "")
             if not candidate or vmid == 0:
+                logger.warning(
+                    "Skipping VM name pre-pass for vmid=%s: empty name (name=%r). "
+                    "The VM record may be created/left without a resolved name.",
+                    vmid or "?",
+                    candidate,
+                )
                 continue
 
             existing = _select_existing_vm_record(
@@ -612,7 +618,7 @@ def _filter_cluster_resources_for_vm(  # noqa: C901
                     continue
                 if resource.get("type") not in ("qemu", "lxc"):
                     continue
-                same_name = str(resource.get("name", "")).strip() == vm_name
+                same_name = bool(vm_name) and str(resource.get("name", "")).strip() == vm_name
                 same_vmid = proxmox_vm_id is not None and str(
                     resource.get("vmid", "")
                 ).strip() == str(proxmox_vm_id)
@@ -1044,11 +1050,6 @@ async def _create_virtual_machine_by_netbox_id(
 
     vm_data = _to_mapping(vm_record)
     vm_name = str(vm_data.get("name", "")).strip()
-    if not vm_name:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Virtual machine id={netbox_vm_id} has no name to match in Proxmox.",
-        )
     vm_cluster_name = _relation_name(vm_data.get("cluster"))
     vm_cluster_id = _relation_id(vm_data.get("cluster"))
     cf = vm_data.get("custom_fields")
@@ -1057,6 +1058,22 @@ async def _create_virtual_machine_by_netbox_id(
         raw_id = cf.get("proxmox_vm_id")
         if raw_id is not None and str(raw_id).strip().isdigit():
             proxmox_vm_id = int(str(raw_id).strip())
+
+    # A NetBox VM row can exist with a blank name -- for example after a partial
+    # prior sync, or when Proxmox briefly reported an empty name during a rename.
+    # Such a record is still matchable as long as the Proxmox VM ID is known,
+    # because _filter_cluster_resources_for_vm matches on name OR vmid and the
+    # downstream create/update flow heals the name from the matched Proxmox
+    # resource. Only refuse the sync when neither a name nor a proxmox_vm_id is
+    # available to match on.
+    if not vm_name and proxmox_vm_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Virtual machine id={netbox_vm_id} has no name and no "
+                "proxmox_vm_id custom field to match in Proxmox."
+            ),
+        )
 
     filtered_resources = _filter_cluster_resources_for_vm(
         cluster_resources,
@@ -1070,7 +1087,7 @@ async def _create_virtual_machine_by_netbox_id(
             status_code=404,
             detail=(
                 "No matching Proxmox VM was found for NetBox virtual machine "
-                f"id={netbox_vm_id} (name={vm_name!r})."
+                f"id={netbox_vm_id} (name={vm_name!r}, proxmox_vm_id={proxmox_vm_id})."
             ),
         )
 
@@ -2037,6 +2054,8 @@ async def create_virtual_machines(  # noqa: C901
         netbox_vm_interfaces = []
         first_ipv4_id: int | None = None
         first_ipv6_id: int | None = None
+        total_interface_count = 0
+        failed_interface_count = 0
         if virtual_machine and vm_config and sync_vm_network:
             guest_agent_interfaces: list[dict] = []
             guest_agent_diagnostic: str | None = None
@@ -2105,7 +2124,11 @@ async def create_virtual_machines(  # noqa: C901
             )
 
             if vm_networks:
-                interface_tasks = []
+                # Build interface kwargs up front so each interface can be
+                # retried independently on a transient NetBox failure. Storing
+                # kwargs (instead of pre-created coroutines) lets the retry
+                # helper re-invoke the creation cleanly.
+                interface_kwargs: list[dict] = []
                 for network in vm_networks:
                     for interface_name, value in network.items():
                         config_interface_name = (
@@ -2123,8 +2146,8 @@ async def create_virtual_machines(  # noqa: C901
                             if guest_name:
                                 resolved_interface_name = guest_name
 
-                        interface_tasks.append(
-                            _create_vm_interface_parallel(
+                        interface_kwargs.append(
+                            dict(
                                 nb=nb,
                                 virtual_machine=virtual_machine,
                                 interface_name=resolved_interface_name,
@@ -2141,6 +2164,34 @@ async def create_virtual_machines(  # noqa: C901
                             )
                         )
 
+                total_interface_count = len(interface_kwargs)
+
+                async def _create_interface_with_retry(kwargs: dict, attempts: int = 2):
+                    """Create one VM interface, retrying transient failures.
+
+                    NetBox can return transient 5xx/timeout errors when a VM has
+                    many interfaces and the API is under load. Without a retry,
+                    those interfaces were silently dropped. Retry a bounded
+                    number of times before surfacing the failure.
+                    """
+                    last_error: Exception | None = None
+                    for attempt in range(1, attempts + 1):
+                        try:
+                            return await _create_vm_interface_parallel(**kwargs)
+                        except Exception as error:  # noqa: BLE001 - re-raised below
+                            last_error = error
+                            if attempt < attempts:
+                                logger.warning(
+                                    "Interface %r creation failed (attempt %d/%d): %s -- retrying",
+                                    kwargs.get("interface_name"),
+                                    attempt,
+                                    attempts,
+                                    getattr(error, "detail", str(error)),
+                                )
+                                await asyncio.sleep(0.5 * attempt)
+                    assert last_error is not None
+                    return last_error
+
                 # Batch interface tasks to prevent overwhelming NetBox with concurrent API calls
                 from proxbox_api.routes.virtualization.virtual_machines.helpers import (
                     resolve_interface_batch_delay_ms,
@@ -2150,14 +2201,18 @@ async def create_virtual_machines(  # noqa: C901
                 batch_size = resolve_interface_batch_size()
                 batch_delay_ms = resolve_interface_batch_delay_ms()
                 interface_results = []
-                for i in range(0, len(interface_tasks), batch_size):
-                    batch = interface_tasks[i : i + batch_size]
+                for i in range(0, len(interface_kwargs), batch_size):
+                    batch = [
+                        _create_interface_with_retry(kwargs)
+                        for kwargs in interface_kwargs[i : i + batch_size]
+                    ]
                     batch_results = await asyncio.gather(*batch, return_exceptions=True)
                     interface_results.extend(batch_results)
-                    if i + batch_size < len(interface_tasks) and batch_delay_ms > 0:
+                    if i + batch_size < len(interface_kwargs) and batch_delay_ms > 0:
                         await asyncio.sleep(batch_delay_ms / 1000.0)
                 for result in interface_results:
                     if isinstance(result, Exception):
+                        failed_interface_count += 1
                         error_detail = getattr(result, "detail", str(result))
                         error_msg = f"{type(result).__name__}: {error_detail}"
                         logger.warning("Interface creation failed: %s", error_msg)
@@ -2172,6 +2227,16 @@ async def create_virtual_machines(  # noqa: C901
                                 first_ipv6_id = ip_id
                             elif ":" not in addr and first_ipv4_id is None:
                                 first_ipv4_id = ip_id
+
+                if failed_interface_count:
+                    logger.error(
+                        "VM %s (vmid=%s): %d of %d interface(s) failed to sync; "
+                        "the synchronization is degraded, not complete.",
+                        resource.get("name"),
+                        resource.get("vmid"),
+                        failed_interface_count,
+                        total_interface_count,
+                    )
 
             disk_tasks = [
                 _create_vm_disk_parallel(
@@ -2259,6 +2324,16 @@ async def create_virtual_machines(  # noqa: C901
             )
 
         if bridge:
+            if failed_interface_count:
+                emit_status = "warning"
+                emit_message = (
+                    f"Synced VM '{vm_name}' with degraded interfaces: "
+                    f"{failed_interface_count} of {total_interface_count} "
+                    "interface(s) failed"
+                )
+            else:
+                emit_status = "completed"
+                emit_message = f"Synced VM '{vm_name}'"
             await bridge.emit_item_progress(
                 phase="virtual-machines",
                 item={
@@ -2268,10 +2343,12 @@ async def create_virtual_machines(  # noqa: C901
                     "node": str(resource.get("node") or ""),
                     "netbox_id": virtual_machine.get("id"),
                     "netbox_url": virtual_machine.get("display_url"),
+                    "failed_interfaces": failed_interface_count,
+                    "total_interfaces": total_interface_count,
                 },
                 operation=ItemOperation.CREATED,
-                status="completed",
-                message=f"Synced VM '{vm_name}'",
+                status=emit_status,
+                message=emit_message,
                 progress_current=0,
                 progress_total=0,
                 timing_key=timing_key,

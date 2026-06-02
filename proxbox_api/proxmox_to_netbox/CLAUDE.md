@@ -43,6 +43,14 @@ That means:
 4. Validate schemas with Pydantic validators and computed fields.
 5. Emit validated NetBox payload dictionaries ready for API create or update operations.
 
+## Behavior Notes
+
+- `ProxmoxVmResourceInput` guarantees a non-empty `name`. Proxmox can briefly
+  report an empty name (mid-rename or transient resource state); the model's
+  `ensure_name` validator falls back to a deterministic `vm-<vmid>` so a
+  nameless NetBox `VirtualMachine` is never created (a nameless record cannot be
+  matched back to Proxmox by the single-VM sync route).
+
 ## Extension Guidance
 
 - Always add parsing and normalization logic to Pydantic schemas first.

@@ -37,6 +37,20 @@ Main synchronization endpoints for virtual machines and related resources.
   classification (`CREATE`, `GET`, `UPDATE`) belongs to the reconciliation
   service seam.
 
+## Behavior Notes
+
+- **Blank-name VM recovery.** `_create_virtual_machine_by_netbox_id` matches a
+  NetBox VM to Proxmox by name **or** `proxmox_vm_id`. It only rejects (HTTP
+  422) a VM that has neither a name nor a `proxmox_vm_id` custom field — a
+  blank-name record with a known `proxmox_vm_id` is matched by vmid and its
+  name is healed from the matched Proxmox resource on the next sync.
+- **Interface failures are surfaced, not swallowed.** Per-interface creation is
+  retried a bounded number of times for transient NetBox errors; interfaces
+  that still fail are counted. The per-VM progress item carries
+  `failed_interfaces` and `total_interfaces`, and a VM with any failed interface
+  is reported with `status="warning"` (degraded) instead of `completed`. Keep
+  the WebSocket and SSE item payloads aligned when changing these fields.
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.

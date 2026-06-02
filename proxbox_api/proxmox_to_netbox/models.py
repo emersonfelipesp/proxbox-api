@@ -947,6 +947,31 @@ class ProxmoxVmResourceInput(BaseModel):
             return text
         return "unknown"
 
+    @model_validator(mode="after")
+    def ensure_name(self) -> "ProxmoxVmResourceInput":
+        """Guarantee a non-empty VM name.
+
+        Proxmox can briefly report an empty ``name`` (for example mid-rename or
+        in a transient resource state). NetBox's ``VirtualMachine.name`` is a
+        required field, and persisting a blank name produces a record that the
+        single-VM sync route can never match back to Proxmox. Fall back to a
+        deterministic ``vm-<vmid>`` so a row is never created nameless.
+        """
+        if not str(self.name or "").strip():
+            fallback = f"vm-{self.vmid}"
+            from proxbox_api.logger import logger
+
+            logger.warning(
+                "Proxmox VM resource vmid=%s on node %r has no name; using "
+                "deterministic fallback %r so the NetBox record is not created "
+                "nameless.",
+                self.vmid,
+                self.node,
+                fallback,
+            )
+            self.name = fallback
+        return self
+
     @computed_field(return_type=int)
     @property
     def memory_mb(self) -> int:
