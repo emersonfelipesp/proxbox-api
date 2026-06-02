@@ -616,8 +616,12 @@ def _migrate_ceph_operation_run_columns() -> None:
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
-        conn.execute(text(f"UPDATE {table} SET created_at = :now WHERE created_at = 0"), {"now": now})
-        conn.execute(text(f"UPDATE {table} SET updated_at = :now WHERE updated_at = 0"), {"now": now})
+        conn.execute(
+            text(f"UPDATE {table} SET created_at = :now WHERE created_at = 0"), {"now": now}
+        )
+        conn.execute(
+            text(f"UPDATE {table} SET updated_at = :now WHERE updated_at = 0"), {"now": now}
+        )
 
 
 def create_db_and_tables() -> None:
