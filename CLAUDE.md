@@ -152,6 +152,18 @@ Open the nearest scoped guide for the code you are changing.
 6. Firecracker Cloud routes under `/cloud/firecracker/*` call a selected host-agent VM after `nms-backend` resolves NetBox Proxbox inventory and creates the `FirecrackerMicroVM` row.
 7. Sync and provisioning runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
 
+### Route Group Map
+
+- **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`):
+  - `POST /proxmox/{vm_type}/{vmid}/start?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `POST /proxmox/{vm_type}/{vmid}/stop?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `POST /proxmox/{vm_type}/{vmid}/snapshot?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `POST /proxmox/{vm_type}/{vmid}/migrate?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `POST /proxmox/{vm_type}/{vmid}/reboot?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `DELETE /proxmox/{vm_type}/{vmid}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `POST /proxmox/{vm_type}/{vmid}/backup?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `DELETE /proxmox/{vm_type}/{vmid}/snapshot/{snapname}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+
 ## Production Docker CI/CD
 
 Production deploys are Gitea-first. A push to Gitea `main` triggers

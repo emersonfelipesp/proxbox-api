@@ -23,6 +23,11 @@ Top-level namespace for FastAPI route packages.
 - `proxbox/`: Proxbox plugin configuration routes.
 - `proxbox/clusters/`: reserved namespace for cluster-specific Proxbox routes.
 - `proxmox/`: Proxmox session, node, cluster, replication, viewer, and codegen routes.
+- `proxmox_actions.py`: operational VM verbs mounted at `/proxmox`, including start, stop, snapshot, migrate, reboot, delete, backup, and snapshot-delete for both QEMU and LXC guests. These handlers enforce `ProxmoxEndpoint.allow_writes` before NetBox/Proxmox side effects, support idempotency keys, and write journal/audit entries per invocation.
+  - `POST /proxmox/{vm_type}/{vmid}/reboot?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `DELETE /proxmox/{vm_type}/{vmid}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `POST /proxmox/{vm_type}/{vmid}/backup?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+  - `DELETE /proxmox/{vm_type}/{vmid}/snapshot/{snapname}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
 - `virtualization/`: virtualization bootstrap and VM sync routes.
 - `sync/`: internal sync route helpers used by other route packages, including `sync/individual/`.
 
