@@ -5,7 +5,7 @@ Implements the contract pinned by ``docs/design/operational-verbs.md`` §4:
 - Key scope: ``(endpoint_id, verb, vmid, key)``. Same key reused across
   different VMs or verbs does not collide.
 - Window: 60 seconds, sliding from first observed POST.
-- Resolution: the second POST within the window returns the cached
+- Resolution: the second request within the window returns the cached
   response of the first; the Proxmox API is called once.
 - Storage: in-memory dict in proxbox-api. Entries are cleared by a
   60-second TTL; no SQLite write. Process restart clears the dict —
@@ -22,7 +22,16 @@ import time
 from dataclasses import dataclass
 from typing import Literal
 
-Verb = Literal["start", "stop", "snapshot", "migrate"]
+Verb = Literal[
+    "start",
+    "stop",
+    "snapshot",
+    "migrate",
+    "reboot",
+    "delete",
+    "backup",
+    "delete_snapshot",
+]
 TTL_SECONDS = 60.0
 
 

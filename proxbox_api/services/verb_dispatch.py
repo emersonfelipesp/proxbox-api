@@ -1,7 +1,7 @@
 """Shared infrastructure for operational verb routes (issue #376).
 
 Per ``docs/design/operational-verbs.md`` §8.2–§8.3, every verb route
-(start / stop / snapshot / migrate) needs the same three primitives:
+needs the same three primitives:
 
 1. **Node resolver** — given an endpoint and a Proxmox ``vmid``, find
    the node hosting the VM via ``cluster/resources``.
@@ -31,7 +31,16 @@ from proxbox_api.netbox_rest import rest_create_async, rest_first_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
 from proxbox_api.utils.log_scrubbing import scrub_cloud_init
 
-Verb = Literal["start", "stop", "snapshot", "migrate"]
+Verb = Literal[
+    "start",
+    "stop",
+    "snapshot",
+    "migrate",
+    "reboot",
+    "delete",
+    "backup",
+    "delete_snapshot",
+]
 VmType = Literal["qemu", "lxc"]
 JournalKind = Literal["info", "success", "warning", "danger"]
 

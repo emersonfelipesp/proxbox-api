@@ -1,4 +1,4 @@
-"""Operational verb routes (start / stop / snapshot / migrate).
+"""Operational verb routes (start / stop / snapshot / migrate / lifecycle).
 
 Issue #376. Sub-PR B introduced the gate stub; sub-PR C wired the
 ``start`` verb; sub-PR D wires ``stop``; sub-PR E wires ``snapshot``;
@@ -38,8 +38,9 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Literal
+from uuid import uuid4
 
-from fastapi import APIRouter, Body, Header, Query, status
+from fastapi import APIRouter, Body, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -49,12 +50,15 @@ from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.services.idempotency import CacheKey, get_idempotency_cache
 from proxbox_api.services.proxmox_helpers import (
+    backup_vm,
     cancel_task,
     create_vm_snapshot,
+    delete_vm_snapshot,
     get_node_task_status,
     get_vm_status,
     migrate_preflight,
     migrate_vm,
+    reboot_vm,
     start_vm,
     stop_vm,
 )
@@ -74,10 +78,26 @@ from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 router = APIRouter()
 
 VmType = Literal["qemu", "lxc"]
-Verb = Literal["start", "stop", "snapshot", "migrate"]
+Verb = Literal[
+    "start",
+    "stop",
+    "snapshot",
+    "migrate",
+    "reboot",
+    "delete",
+    "backup",
+    "delete_snapshot",
+]
+
+LIFECYCLE_WRITES_DISABLED_REASON = "writes_disabled_for_endpoint"
 
 
-async def _gate(session: SessionDep, endpoint_id: int | None) -> JSONResponse | ProxmoxEndpoint:
+async def _gate(
+    session: SessionDep,
+    endpoint_id: int | None,
+    *,
+    writes_disabled_reason: str = "endpoint_writes_disabled",
+) -> JSONResponse | ProxmoxEndpoint:
     """Resolve the target endpoint and enforce ``allow_writes``."""
     if endpoint_id is None:
         return JSONResponse(
@@ -105,7 +125,7 @@ async def _gate(session: SessionDep, endpoint_id: int | None) -> JSONResponse | 
         return JSONResponse(
             status_code=status.HTTP_403_FORBIDDEN,
             content={
-                "reason": "endpoint_writes_disabled",
+                "reason": writes_disabled_reason,
                 "detail": (
                     "Operational verbs are disabled on this endpoint. Enable "
                     "ProxmoxEndpoint.allow_writes on the NetBox side after "
@@ -144,6 +164,39 @@ def _is_running(vm_type: str, status_payload: object) -> bool:
     """
     value = getattr(status_payload, "status", None)
     return value == "running"
+
+
+async def delete_vm_via_intent_dispatcher(
+    endpoint: ProxmoxEndpoint,
+    session: SessionDep,
+    vm_type: VmType,
+    vmid: int,
+    node: str,
+    *,
+    actor: str,
+) -> str | None:
+    """Destroy a VM through the existing intent deletion dispatcher."""
+    from proxbox_api.routes.intent.dispatchers.common import IntentEndpointContext
+    from proxbox_api.routes.intent.dispatchers.lxc_destroy import dispatch_lxc_destroy
+    from proxbox_api.routes.intent.dispatchers.qemu_destroy import dispatch_qemu_destroy
+
+    endpoint_id = endpoint.id
+    assert endpoint_id is not None
+    endpoint_context = IntentEndpointContext(session=session, endpoint_id=endpoint_id)
+    run_uuid = uuid4()
+
+    try:
+        if vm_type == "qemu":
+            result = await dispatch_qemu_destroy(
+                endpoint_context, vmid, node, run_uuid, actor=actor
+            )
+        else:
+            result = await dispatch_lxc_destroy(endpoint_context, vmid, node, run_uuid, actor=actor)
+    except HTTPException as error:
+        raise ProxmoxAPIError(message=str(error.detail), original_error=error) from error
+
+    upid = result.get("upid")
+    return str(upid) if upid is not None else None
 
 
 async def _dispatch_start(
@@ -410,6 +463,275 @@ async def _dispatch_stop(
     )
 
 
+async def _dispatch_reboot(
+    *,
+    endpoint: ProxmoxEndpoint,
+    vm_type: VmType,
+    vmid: int,
+    nb: object,
+    idempotency_key: str | None,
+    actor: str,
+) -> JSONResponse:
+    """Execute the reboot verb: resolve node, pre-flight, dispatch, audit.
+
+    Reboot mirrors ``start``/``stop``: it checks current state first and
+    treats an already-stopped guest as a no-op instead of asking Proxmox
+    to reboot something that is not running.
+    """
+    endpoint_id = endpoint.id
+    assert endpoint_id is not None
+
+    cache = get_idempotency_cache()
+    cache_key: CacheKey | None = None
+    if idempotency_key:
+        cache_key = CacheKey(endpoint_id=endpoint_id, verb="reboot", vmid=vmid, key=idempotency_key)
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except ProxboxException as error:
+        logger.warning("Failed to open Proxmox session for endpoint=%s: %s", endpoint_id, error)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "proxmox_session_unreachable",
+                "detail": str(error),
+                "endpoint_id": endpoint_id,
+            },
+        )
+
+    node_or_error = await resolve_proxmox_node(proxmox, vm_type, vmid)
+    if isinstance(node_or_error, JSONResponse):
+        return node_or_error
+    node: str = node_or_error
+
+    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    dispatched_at = utcnow_iso()
+
+    try:
+        current = await get_vm_status(proxmox, node, vm_type, vmid)
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="reboot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_status_unreachable",
+        )
+
+    if _is_stopped(vm_type, current):
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="reboot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="already_stopped",
+            kind="info",
+            proxmox_task_upid=None,
+            error_detail=None,
+        )
+
+    try:
+        upid = await reboot_vm(proxmox, node, vm_type, vmid)
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="reboot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_dispatch_failed",
+        )
+
+    return await _audit_and_respond(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="reboot",
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
+        result="ok",
+        kind="info",
+        proxmox_task_upid=upid,
+        error_detail=None,
+    )
+
+
+async def _dispatch_delete(
+    *,
+    endpoint: ProxmoxEndpoint,
+    session: SessionDep,
+    vm_type: VmType,
+    vmid: int,
+    nb: object,
+    idempotency_key: str | None,
+    actor: str,
+) -> JSONResponse:
+    """Execute the delete verb: stop if running, delete, audit once."""
+    endpoint_id = endpoint.id
+    assert endpoint_id is not None
+
+    cache = get_idempotency_cache()
+    cache_key: CacheKey | None = None
+    if idempotency_key:
+        cache_key = CacheKey(endpoint_id=endpoint_id, verb="delete", vmid=vmid, key=idempotency_key)
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except ProxboxException as error:
+        logger.warning("Failed to open Proxmox session for endpoint=%s: %s", endpoint_id, error)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "proxmox_session_unreachable",
+                "detail": str(error),
+                "endpoint_id": endpoint_id,
+            },
+        )
+
+    node_or_error = await resolve_proxmox_node(proxmox, vm_type, vmid)
+    if isinstance(node_or_error, JSONResponse):
+        return node_or_error
+    node: str = node_or_error
+
+    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    dispatched_at = utcnow_iso()
+
+    try:
+        current = await get_vm_status(proxmox, node, vm_type, vmid)
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="delete",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_status_unreachable",
+        )
+
+    stop_task_upid: str | None = None
+    if _is_running(vm_type, current):
+        try:
+            stop_task_upid = await stop_vm(proxmox, node, vm_type, vmid)
+        except ProxmoxAPIError as error:
+            return await _audit_and_respond(
+                nb=nb,
+                netbox_vm_id=netbox_vm_id,
+                verb="delete",
+                vm_type=vm_type,
+                vmid=vmid,
+                endpoint=endpoint,
+                actor=actor,
+                dispatched_at=dispatched_at,
+                idempotency_key=idempotency_key,
+                cache=cache,
+                cache_key=cache_key,
+                result="failed",
+                kind="warning",
+                proxmox_task_upid=None,
+                error_detail=str(error),
+                http_status=status.HTTP_502_BAD_GATEWAY,
+                reason="proxmox_dispatch_failed",
+            )
+
+    extra = {"stop_task_upid": stop_task_upid} if stop_task_upid is not None else None
+    try:
+        upid = await delete_vm_via_intent_dispatcher(
+            endpoint, session, vm_type, vmid, node, actor=actor
+        )
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="delete",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_dispatch_failed",
+            extra=extra,
+        )
+
+    return await _audit_and_respond(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="delete",
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
+        result="ok",
+        kind="info",
+        proxmox_task_upid=upid,
+        error_detail=None,
+        extra=extra,
+    )
+
+
 class SnapshotRequest(BaseModel):
     """Optional request body for the snapshot verb.
 
@@ -532,6 +854,221 @@ async def _dispatch_snapshot(
         proxmox_task_upid=upid,
         error_detail=None,
         extra={"snapname": effective_snapname},
+    )
+
+
+class BackupRequest(BaseModel):
+    """Request body for the backup verb.
+
+    ``storage`` is required but validated after the §2.3 gate so a
+    write-disabled endpoint still returns 403 instead of leaking body
+    validation details.
+    """
+
+    storage: str | None = None
+    mode: str = "snapshot"
+    compress: str = "zstd"
+    notes: str | None = None
+
+
+async def _dispatch_backup(
+    *,
+    endpoint: ProxmoxEndpoint,
+    vm_type: VmType,
+    vmid: int,
+    nb: object,
+    idempotency_key: str | None,
+    actor: str,
+    storage_name: str,
+    mode: str,
+    compress: str,
+    notes: str | None,
+) -> JSONResponse:
+    """Execute the backup verb: resolve node, dispatch vzdump, audit."""
+    endpoint_id = endpoint.id
+    assert endpoint_id is not None
+
+    cache = get_idempotency_cache()
+    cache_key: CacheKey | None = None
+    if idempotency_key:
+        cache_key = CacheKey(endpoint_id=endpoint_id, verb="backup", vmid=vmid, key=idempotency_key)
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except ProxboxException as error:
+        logger.warning("Failed to open Proxmox session for endpoint=%s: %s", endpoint_id, error)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "proxmox_session_unreachable",
+                "detail": str(error),
+                "endpoint_id": endpoint_id,
+            },
+        )
+
+    node_or_error = await resolve_proxmox_node(proxmox, vm_type, vmid)
+    if isinstance(node_or_error, JSONResponse):
+        return node_or_error
+    node: str = node_or_error
+
+    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    dispatched_at = utcnow_iso()
+
+    try:
+        upid = await backup_vm(
+            proxmox,
+            node,
+            vmid,
+            storage=storage_name,
+            mode=mode,
+            compress=compress,
+            notes=notes,
+        )
+    except ProxmoxAPIError as error:
+        extra: dict[str, object] = {
+            "storage": storage_name,
+            "mode": mode,
+            "compress": compress,
+        }
+        if notes is not None:
+            extra["notes"] = notes
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="backup",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_dispatch_failed",
+            extra=extra,
+        )
+
+    extra = {
+        "storage": storage_name,
+        "mode": mode,
+        "compress": compress,
+    }
+    if notes is not None:
+        extra["notes"] = notes
+    return await _audit_and_respond(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="backup",
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
+        result="ok",
+        kind="info",
+        proxmox_task_upid=upid,
+        error_detail=None,
+        extra=extra,
+    )
+
+
+async def _dispatch_delete_snapshot(
+    *,
+    endpoint: ProxmoxEndpoint,
+    vm_type: VmType,
+    vmid: int,
+    nb: object,
+    idempotency_key: str | None,
+    actor: str,
+    snapname: str,
+) -> JSONResponse:
+    """Execute the delete-snapshot verb: resolve node, dispatch, audit."""
+    endpoint_id = endpoint.id
+    assert endpoint_id is not None
+
+    cache = get_idempotency_cache()
+    cache_key: CacheKey | None = None
+    if idempotency_key:
+        cache_key = CacheKey(
+            endpoint_id=endpoint_id, verb="delete_snapshot", vmid=vmid, key=idempotency_key
+        )
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except ProxboxException as error:
+        logger.warning("Failed to open Proxmox session for endpoint=%s: %s", endpoint_id, error)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "proxmox_session_unreachable",
+                "detail": str(error),
+                "endpoint_id": endpoint_id,
+            },
+        )
+
+    node_or_error = await resolve_proxmox_node(proxmox, vm_type, vmid)
+    if isinstance(node_or_error, JSONResponse):
+        return node_or_error
+    node: str = node_or_error
+
+    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    dispatched_at = utcnow_iso()
+
+    try:
+        upid = await delete_vm_snapshot(proxmox, node, vm_type, vmid, snapname)
+    except ProxmoxAPIError as error:
+        return await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            verb="delete_snapshot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_dispatch_failed",
+            extra={"snapname": snapname},
+        )
+
+    return await _audit_and_respond(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="delete_snapshot",
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
+        result="ok",
+        kind="info",
+        proxmox_task_upid=upid,
+        error_detail=None,
+        extra={"snapname": snapname},
     )
 
 
@@ -941,6 +1478,162 @@ async def _handle_snapshot(
     )
 
 
+async def _handle_reboot(
+    vm_type: VmType,
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None,
+    idempotency_key: str | None,
+    actor: str,
+) -> JSONResponse:
+    gated = await _gate(
+        session,
+        endpoint_id,
+        writes_disabled_reason=LIFECYCLE_WRITES_DISABLED_REASON,
+    )
+    if isinstance(gated, JSONResponse):
+        return gated
+    try:
+        nb_session = await get_netbox_async_session(database_session=session)
+    except ProxboxException as error:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "netbox_session_unavailable",
+                "detail": str(error),
+            },
+        )
+    return await _dispatch_reboot(
+        endpoint=gated,
+        vm_type=vm_type,
+        vmid=vmid,
+        nb=nb_session,
+        idempotency_key=idempotency_key,
+        actor=actor,
+    )
+
+
+async def _handle_delete(
+    vm_type: VmType,
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None,
+    idempotency_key: str | None,
+    actor: str,
+) -> JSONResponse:
+    gated = await _gate(
+        session,
+        endpoint_id,
+        writes_disabled_reason=LIFECYCLE_WRITES_DISABLED_REASON,
+    )
+    if isinstance(gated, JSONResponse):
+        return gated
+    try:
+        nb_session = await get_netbox_async_session(database_session=session)
+    except ProxboxException as error:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "netbox_session_unavailable",
+                "detail": str(error),
+            },
+        )
+    return await _dispatch_delete(
+        endpoint=gated,
+        session=session,
+        vm_type=vm_type,
+        vmid=vmid,
+        nb=nb_session,
+        idempotency_key=idempotency_key,
+        actor=actor,
+    )
+
+
+async def _handle_backup(
+    vm_type: VmType,
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None,
+    idempotency_key: str | None,
+    actor: str,
+    body: BackupRequest | None,
+) -> JSONResponse:
+    gated = await _gate(
+        session,
+        endpoint_id,
+        writes_disabled_reason=LIFECYCLE_WRITES_DISABLED_REASON,
+    )
+    if isinstance(gated, JSONResponse):
+        return gated
+    if body is None or not body.storage:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "reason": "storage_required",
+                "detail": "Backup verb requires a JSON body with a non-empty 'storage' field.",
+            },
+        )
+    try:
+        nb_session = await get_netbox_async_session(database_session=session)
+    except ProxboxException as error:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "netbox_session_unavailable",
+                "detail": str(error),
+            },
+        )
+    return await _dispatch_backup(
+        endpoint=gated,
+        vm_type=vm_type,
+        vmid=vmid,
+        nb=nb_session,
+        idempotency_key=idempotency_key,
+        actor=actor,
+        storage_name=body.storage,
+        mode=body.mode,
+        compress=body.compress,
+        notes=body.notes,
+    )
+
+
+async def _handle_delete_snapshot(
+    vm_type: VmType,
+    vmid: int,
+    snapname: str,
+    session: SessionDep,
+    endpoint_id: int | None,
+    idempotency_key: str | None,
+    actor: str,
+) -> JSONResponse:
+    gated = await _gate(
+        session,
+        endpoint_id,
+        writes_disabled_reason=LIFECYCLE_WRITES_DISABLED_REASON,
+    )
+    if isinstance(gated, JSONResponse):
+        return gated
+    try:
+        nb_session = await get_netbox_async_session(database_session=session)
+    except ProxboxException as error:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "netbox_session_unavailable",
+                "detail": str(error),
+            },
+        )
+    return await _dispatch_delete_snapshot(
+        endpoint=gated,
+        vm_type=vm_type,
+        vmid=vmid,
+        nb=nb_session,
+        idempotency_key=idempotency_key,
+        actor=actor,
+        snapname=snapname,
+    )
+
+
 async def _handle_migrate(
     vm_type: VmType,
     vmid: int,
@@ -1262,6 +1955,114 @@ async def snapshot_lxc(
 ) -> JSONResponse:
     return await _handle_snapshot(
         "lxc", vmid, session, endpoint_id, idempotency_key, _actor_label(actor), body
+    )
+
+
+@router.post("/qemu/{vmid}/reboot")
+async def reboot_qemu(
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+) -> JSONResponse:
+    return await _handle_reboot(
+        "qemu", vmid, session, endpoint_id, idempotency_key, _actor_label(actor)
+    )
+
+
+@router.post("/lxc/{vmid}/reboot")
+async def reboot_lxc(
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+) -> JSONResponse:
+    return await _handle_reboot(
+        "lxc", vmid, session, endpoint_id, idempotency_key, _actor_label(actor)
+    )
+
+
+@router.delete("/qemu/{vmid}")
+async def delete_qemu(
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+) -> JSONResponse:
+    return await _handle_delete(
+        "qemu", vmid, session, endpoint_id, idempotency_key, _actor_label(actor)
+    )
+
+
+@router.delete("/lxc/{vmid}")
+async def delete_lxc(
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+) -> JSONResponse:
+    return await _handle_delete(
+        "lxc", vmid, session, endpoint_id, idempotency_key, _actor_label(actor)
+    )
+
+
+@router.post("/qemu/{vmid}/backup")
+async def backup_qemu(
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+    body: BackupRequest | None = Body(default=None),
+) -> JSONResponse:
+    return await _handle_backup(
+        "qemu", vmid, session, endpoint_id, idempotency_key, _actor_label(actor), body
+    )
+
+
+@router.post("/lxc/{vmid}/backup")
+async def backup_lxc(
+    vmid: int,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+    body: BackupRequest | None = Body(default=None),
+) -> JSONResponse:
+    return await _handle_backup(
+        "lxc", vmid, session, endpoint_id, idempotency_key, _actor_label(actor), body
+    )
+
+
+@router.delete("/qemu/{vmid}/snapshot/{snapname}")
+async def delete_snapshot_qemu(
+    vmid: int,
+    snapname: str,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+) -> JSONResponse:
+    return await _handle_delete_snapshot(
+        "qemu", vmid, snapname, session, endpoint_id, idempotency_key, _actor_label(actor)
+    )
+
+
+@router.delete("/lxc/{vmid}/snapshot/{snapname}")
+async def delete_snapshot_lxc(
+    vmid: int,
+    snapname: str,
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+) -> JSONResponse:
+    return await _handle_delete_snapshot(
+        "lxc", vmid, snapname, session, endpoint_id, idempotency_key, _actor_label(actor)
     )
 
 

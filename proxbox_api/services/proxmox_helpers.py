@@ -25,6 +25,16 @@ def _model_dump(model: object) -> dict[str, object]:
     return model.model_dump(mode="python", by_alias=True, exclude_none=True)
 
 
+def _task_upid_from_payload(payload: object) -> str:
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, str):
+            return data
+    return str(payload)
+
+
 _T = TypeVar("_T")
 
 
@@ -839,6 +849,45 @@ async def stop_vm(
 
 
 @_dual_mode
+async def reboot_vm(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/{vm_type}/{vmid}/status/reboot``.
+
+    Returns the Proxmox task ``UPID`` string. ``ProxmoxAPIError`` is
+    raised on timeout / connection failure per the existing convention.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).status.reboot.post()
+            )
+        elif vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).status.reboot.post()
+            )
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        return _task_upid_from_payload(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM reboot request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM reboot", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM reboot",
+            original_error=error,
+        )
+
+
+@_dual_mode
 async def create_vm_snapshot(  # noqa: C901
     session: ProxmoxSession,
     node: str,
@@ -884,6 +933,90 @@ async def create_vm_snapshot(  # noqa: C901
     except Exception as error:
         raise ProxmoxAPIError(
             message="Error dispatching Proxmox VM snapshot",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def backup_vm(
+    session: ProxmoxSession,
+    node: str,
+    vmid: int,
+    storage: str,
+    mode: str = "snapshot",
+    compress: str = "zstd",
+    notes: str | None = None,
+) -> str:
+    """Dispatch ``POST /nodes/{node}/vzdump`` for one guest.
+
+    Returns the Proxmox task ``UPID`` string. ``notes`` maps to
+    Proxmox's ``notes-template`` parameter.
+    """
+    body: dict[str, object] = {
+        "vmid": str(vmid),
+        "storage": storage,
+        "mode": mode,
+        "compress": compress,
+    }
+    if notes is not None:
+        body["notes-template"] = notes
+    try:
+        payload = await resolve_async(session.session.nodes(node).vzdump.post(**body))
+        return _task_upid_from_payload(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(message="Proxmox VM backup request timed out", original_error=error)
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM backup", original_error=error
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM backup",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def delete_vm_snapshot(
+    session: ProxmoxSession,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    snapname: str,
+) -> str:
+    """Dispatch ``DELETE /nodes/{node}/{vm_type}/{vmid}/snapshot/{snapname}``.
+
+    Returns the Proxmox task ``UPID`` string. ``ProxmoxAPIError`` is
+    raised on timeout / connection failure per the existing convention.
+    """
+    try:
+        if vm_type == "qemu":
+            payload = await resolve_async(
+                session.session.nodes(node).qemu(vmid).snapshot(snapname).delete()
+            )
+        elif vm_type == "lxc":
+            payload = await resolve_async(
+                session.session.nodes(node).lxc(vmid).snapshot(snapname).delete()
+            )
+        else:
+            raise ValueError(f"Unsupported VM type: {vm_type}")
+        return _task_upid_from_payload(payload)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message="Proxmox VM snapshot delete request timed out", original_error=error
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message="Unable to connect to Proxmox for VM snapshot delete",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message="Error dispatching Proxmox VM snapshot delete",
             original_error=error,
         )
 
