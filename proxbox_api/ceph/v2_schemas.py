@@ -152,6 +152,59 @@ class ProviderOperation(BaseModel):
         return values
 
 
+def _coerce_netbox_operation_payload(values: dict[str, Any]) -> dict[str, Any]:
+    """Adapt the ``netbox-ceph`` ``CephOperation`` HTTP shape into a bundle.
+
+    The ``netbox-ceph`` orchestrator posts a single operation shaped like
+    ``{operation_type, target_kind, target_ref, desired, provider_kind,
+    is_destructive, confirmed, ...}``. Map it to a one-object
+    :class:`DesiredStateBundle` (plus a ``provider`` hint) so the plan engine can
+    build a real :class:`ProviderOperation` from it. Without this, ``desired``
+    (a params dict) was treated as a bundle and produced zero objects.
+    """
+    if "target_kind" not in values:
+        return values
+    if values.get("desired_state") is not None or values.get("operations"):
+        return values
+    desired = values.get("desired")
+    obj: dict[str, Any] = {
+        "kind": values.get("target_kind"),
+        "action": values.get("operation_type") or "ensure",
+        "target_ref": values.get("target_ref"),
+        "payload": dict(desired) if isinstance(desired, dict) else {},
+    }
+    provider_kind = values.get("provider_kind")
+    if provider_kind:
+        obj["provider"] = provider_kind
+        values.setdefault("provider", provider_kind)
+    values["desired_state"] = {"objects": [obj]}
+    return values
+
+
+def _coerce_operations_and_desired(values: dict[str, Any]) -> dict[str, Any]:
+    """Shared plan/apply coercion: inline operation, desired_state, branch id."""
+    if "operation" in values and "operations" not in values:
+        values["operations"] = [values["operation"]]
+    elif (
+        "operations" not in values
+        and "kind" in values
+        and ("action" in values or "target_ref" in values or "ref" in values)
+    ):
+        values["operations"] = [values]
+
+    if "desired_state" not in values:
+        if "desired" in values:
+            values["desired_state"] = values["desired"]
+        elif "desired_objects" in values:
+            values["desired_state"] = {"objects": values["desired_objects"]}
+        elif "objects" in values or any(key in values for key in _BUNDLE_KIND_KEYS):
+            values["desired_state"] = values
+
+    if values.get("source_branch_schema_id") is None:
+        values["source_branch_schema_id"] = values.get("netbox_branch_schema_id")
+    return values
+
+
 class PlanRequest(BaseModel):
     """Build a Ceph v2 plan from NetBox desired state and provider state."""
 
@@ -173,28 +226,8 @@ class PlanRequest(BaseModel):
             return {}
         if not isinstance(data, dict):
             return data
-        values = dict(data)
-
-        if "operation" in values and "operations" not in values:
-            values["operations"] = [values["operation"]]
-        elif (
-            "operations" not in values
-            and "kind" in values
-            and ("action" in values or "target_ref" in values or "ref" in values)
-        ):
-            values["operations"] = [values]
-
-        if "desired_state" not in values:
-            if "desired" in values:
-                values["desired_state"] = values["desired"]
-            elif "desired_objects" in values:
-                values["desired_state"] = {"objects": values["desired_objects"]}
-            elif "objects" in values or any(key in values for key in _BUNDLE_KIND_KEYS):
-                values["desired_state"] = values
-
-        if values.get("source_branch_schema_id") is None:
-            values["source_branch_schema_id"] = values.get("netbox_branch_schema_id")
-        return values
+        values = _coerce_netbox_operation_payload(dict(data))
+        return _coerce_operations_and_desired(values)
 
     @property
     def branch_schema_id(self) -> str | None:
@@ -245,25 +278,10 @@ class ApplyRequest(BaseModel):
             return {}
         if not isinstance(data, dict):
             return data
-        values = dict(data)
-        if "operation" in values and "operations" not in values:
-            values["operations"] = [values["operation"]]
-        elif (
-            "operations" not in values
-            and "kind" in values
-            and ("action" in values or "target_ref" in values or "ref" in values)
-        ):
-            values["operations"] = [values]
-        if "desired_state" not in values:
-            if "desired" in values:
-                values["desired_state"] = values["desired"]
-            elif "desired_objects" in values:
-                values["desired_state"] = {"objects": values["desired_objects"]}
-            elif "objects" in values or any(key in values for key in _BUNDLE_KIND_KEYS):
-                values["desired_state"] = values
-        if values.get("source_branch_schema_id") is None:
-            values["source_branch_schema_id"] = values.get("netbox_branch_schema_id")
-        return values
+        values = _coerce_netbox_operation_payload(dict(data))
+        if "confirm_destructive" not in values and "confirmed" in values:
+            values["confirm_destructive"] = bool(values.get("confirmed"))
+        return _coerce_operations_and_desired(values)
 
     @property
     def branch_schema_id(self) -> str | None:
