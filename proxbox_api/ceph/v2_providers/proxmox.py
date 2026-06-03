@@ -8,6 +8,12 @@ from fastapi import HTTPException
 
 from proxbox_api.ceph.routes import _client_for, _node_names, _session_host, _session_name
 from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephProviderAdapter
+from proxbox_api.ceph.v2_providers.proxmox_writer import (
+    cephwrite_importable,
+    execute_operation,
+    operation_kinds,
+    resolve_node,
+)
 from proxbox_api.ceph.v2_schemas import (
     DesiredObject,
     DesiredStateBundle,
@@ -88,27 +94,42 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         self._pxs = list(pxs or [])
 
     async def capabilities(self) -> ProviderCapabilities:
+        writes = cephwrite_importable()
+        kinds: dict[str, bool] = {
+            "noop": True,
+            "pool:noop": True,
+            "osd:noop": True,
+            "filesystem:noop": True,
+            "crush_rule:noop": True,
+            "flag:noop": True,
+        }
+        kinds.update(operation_kinds(writes))
+        if writes:
+            notes = [
+                "Proxmox Ceph v2 adapter reads, plans, and applies PVE-managed Ceph "
+                "writes (pools, flags, OSD/MON/MGR/MDS lifecycle, CephFS) through the "
+                "proxmox-sdk CephWrite helpers. Destructive operations require "
+                "confirm_destructive."
+            ]
+        else:
+            notes = [
+                "Proxmox Ceph v2 adapter reads and plans from PVE Ceph state. Write "
+                "execution is unavailable: the installed proxmox-sdk does not ship the "
+                "CephWrite domain. Pin proxmox-sdk to a release that includes it to "
+                "enable Proxmox-backed Ceph writes."
+            ]
         return ProviderCapabilities(
             provider=self.provider,
             supported=True,
             read_state=True,
             diff=True,
             plan=True,
-            apply=False,
+            apply=writes,
             reconcile=True,
             metrics=True,
-            operation_kinds={
-                "noop": True,
-                "pool:noop": True,
-                "osd:noop": True,
-                "filesystem:noop": True,
-                "crush_rule:noop": True,
-                "flag:noop": True,
-            },
-            notes=[
-                "Proxmox Ceph v2 adapter currently reads and plans from PVE Ceph state. "
-                "Write operations are blocked until guarded write support is implemented."
-            ],
+            operation_kinds=kinds,
+            destructive_operations=writes,
+            notes=notes,
         )
 
     async def read_state(self, scope: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG002
@@ -254,7 +275,7 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         self,
         operation: ProviderOperation,
         *,
-        confirm_destructive: bool,  # noqa: ARG002
+        confirm_destructive: bool,
     ) -> dict[str, Any]:
         if operation.action == "noop":
             return {
@@ -262,9 +283,22 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
                 "result": "noop",
                 "target_ref": operation.target_ref,
             }
-        raise CephCapabilityUnsupported(
-            "Proxmox Ceph writes are not enabled in the v2 adapter yet; "
-            f"blocked {operation.action} {operation.kind} {operation.target_ref}."
+        if not self._pxs:
+            raise CephCapabilityUnsupported(
+                "No Proxmox session is available to apply Ceph write operations."
+            )
+        px = self._pxs[0]
+        client = _client_for(px)
+        write = getattr(client, "write", None)
+        if write is None:
+            raise CephCapabilityUnsupported(
+                "The installed proxmox-sdk does not expose Ceph write support; "
+                "upgrade to a release that ships the CephWrite domain to enable "
+                "Proxmox-backed Ceph writes."
+            )
+        node = resolve_node(operation, _node_names(px))
+        return await execute_operation(
+            write, operation, node, confirm_destructive=confirm_destructive
         )
 
     async def reconcile(self, scope: dict[str, Any]) -> dict[str, Any]:
