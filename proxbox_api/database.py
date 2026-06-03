@@ -236,6 +236,36 @@ class PDMEndpoint(SQLModel, table=True):
         self.token_secret = encrypt_value(value) or value
 
 
+class CephOperationRunRecord(SQLModel, table=True):
+    """Persisted Ceph v2 plan/apply/reconcile run state."""
+
+    __tablename__: ClassVar[str] = "ceph_operation_run"
+    __table_args__ = {"extend_existing": True}
+
+    id: str = Field(primary_key=True)
+    plan_id: str | None = Field(default=None, index=True)
+    status: str = Field(default="pending", index=True)
+    actor: str | None = Field(default=None, index=True)
+    source_branch_schema_id: str | None = Field(default=None, index=True)
+    provider: str = Field(index=True)
+    request_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    provider_task_refs: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+    )
+    created_at: float = Field(default_factory=time.time, index=True)
+    updated_at: float = Field(default_factory=time.time, index=True)
+    warnings: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    errors: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    result_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+
+
 class AuthLockout(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
@@ -552,6 +582,48 @@ def _migrate_pdm_endpoint_columns() -> None:
             conn.execute(text(stmt))
 
 
+def _migrate_ceph_operation_run_columns() -> None:
+    table = CephOperationRunRecord.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    column_specs: dict[str, str] = {
+        "plan_id": "VARCHAR",
+        "status": "VARCHAR NOT NULL DEFAULT 'pending'",
+        "actor": "VARCHAR",
+        "source_branch_schema_id": "VARCHAR",
+        "provider": "VARCHAR NOT NULL DEFAULT 'proxmox'",
+        "request_summary": "JSON NOT NULL DEFAULT '{}'",
+        "provider_task_refs": "JSON NOT NULL DEFAULT '[]'",
+        "created_at": "REAL NOT NULL DEFAULT 0",
+        "updated_at": "REAL NOT NULL DEFAULT 0",
+        "warnings": "JSON NOT NULL DEFAULT '[]'",
+        "errors": "JSON NOT NULL DEFAULT '[]'",
+        "result_summary": "JSON NOT NULL DEFAULT '{}'",
+    }
+    stmts = [
+        f"ALTER TABLE {table} ADD COLUMN {col} {spec}"
+        for col, spec in column_specs.items()
+        if col not in existing
+    ]
+    if not stmts:
+        return
+    now = time.time()
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+        conn.execute(
+            text(f"UPDATE {table} SET created_at = :now WHERE created_at = 0"), {"now": now}
+        )
+        conn.execute(
+            text(f"UPDATE {table} SET updated_at = :now WHERE updated_at = 0"), {"now": now}
+        )
+
+
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_proxmox_endpoint_columns()
@@ -559,6 +631,7 @@ def create_db_and_tables() -> None:
     _migrate_deletion_request_columns()
     _migrate_pbs_endpoint_columns()
     _migrate_pdm_endpoint_columns()
+    _migrate_ceph_operation_run_columns()
 
 
 def get_session() -> Generator[Session, None, None]:

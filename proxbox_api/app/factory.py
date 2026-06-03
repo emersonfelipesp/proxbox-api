@@ -489,6 +489,12 @@ def create_app() -> FastAPI:  # noqa: C901
             logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
         else:
             app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
+        try:
+            from proxbox_api.ceph.v2_routes import router as ceph_v2_router  # noqa: PLC0415
+        except ImportError as exc:
+            logger.info("Ceph v2 subpackage unavailable; /ceph/v2/* routes disabled (%s)", exc)
+        else:
+            app.include_router(ceph_v2_router, prefix="/ceph/v2", tags=["ceph-v2"])
 
     if include_pdm:
         try:
