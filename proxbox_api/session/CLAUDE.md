@@ -19,7 +19,7 @@ Session management utilities for NetBox and Proxmox API clients.
   - `get_netbox_session()`: resolves endpoint credentials from the SQLite database and returns a `netbox-sdk` `Api` facade for explicit sync callers such as startup/bootstrap helpers and direct tests.
   - `netbox_config_from_endpoint()`: builds a `netbox_sdk.Config` from the stored `NetBoxEndpoint` record, including token v1/v2 support, and applies `PROXBOX_NETBOX_TIMEOUT`.
   - `get_netbox_async_session()`: async dependency entrypoint for FastAPI routes; it tolerates both `AsyncSession` runtime usage and sync SQLModel test sessions.
-  - `NetBoxSessionDep` / `NetBoxAsyncSessionDep`: FastAPI dependency aliases that both resolve through the async session provider.
+  - `NetBoxSessionDep` / `NetBoxAsyncSessionDep`: FastAPI dependency aliases, typed `Annotated[Api, Depends(...)]` (the concrete `netbox-sdk` facade returned by the providers), so route handlers that inject a session get a checked `Api` type instead of `object`. The typed writer facade in `services/netbox_writers.py` mirrors this — its `upsert_*` helpers take `nb: Api` (imported under `TYPE_CHECKING`). Annotate new session-consuming params as `Api`, not bare `object`.
 - `proxmox.py`: Proxmox session management module that re-exports the session types and helper functions.
 - `proxmox_core.py`: shared Proxmox client core helpers.
 - `proxmox_providers.py`: dependency helpers that resolve `ProxmoxSession` instances from DB or NetBox plugin endpoints.

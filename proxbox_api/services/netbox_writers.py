@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -44,6 +44,8 @@ from proxbox_api.proxmox_to_netbox.models import (
 from proxbox_api.schemas.netbox.extras import TagSchema
 
 if TYPE_CHECKING:
+    from netbox_sdk.facade import Api
+
     from proxbox_api.netbox_rest import RestRecord
 
 
@@ -83,7 +85,7 @@ def _from_reconcile(result: ReconcileResult) -> UpsertResult:
 
 def _relation_id_or_none(value: object) -> int | None:
     if isinstance(value, dict):
-        candidate = value.get("id")
+        candidate = cast("dict[str, object]", value).get("id")
         return int(candidate) if isinstance(candidate, int) else None
     if isinstance(value, int):
         return value
@@ -95,7 +97,7 @@ def _last_updated_cf() -> dict[str, str]:
 
 
 async def upsert_cluster_type(
-    nb: object,
+    nb: Api,
     *,
     mode: str,
     tag_refs: list[dict[str, object]],
@@ -129,7 +131,7 @@ async def upsert_cluster_type(
 
 
 async def upsert_cluster(
-    nb: object,
+    nb: Api,
     *,
     cluster_name: str,
     cluster_type_id: int | None,
@@ -169,7 +171,7 @@ async def upsert_cluster(
 
 
 async def upsert_manufacturer(
-    nb: object,
+    nb: Api,
     *,
     name: str,
     slug: str,
@@ -198,7 +200,7 @@ async def upsert_manufacturer(
 
 
 async def upsert_device_type(
-    nb: object,
+    nb: Api,
     *,
     model: str,
     slug: str,
@@ -230,7 +232,7 @@ async def upsert_device_type(
 
 
 async def upsert_device_role(
-    nb: object,
+    nb: Api,
     *,
     name: str,
     slug: str,
@@ -275,7 +277,7 @@ async def upsert_device_role(
 
 
 async def upsert_vm_role(
-    nb: object,
+    nb: Api,
     *,
     name: str,
     slug: str,
@@ -296,7 +298,7 @@ async def upsert_vm_role(
 
 
 async def upsert_vm_type(
-    nb: object,
+    nb: Api,
     *,
     name: str,
     slug: str,
@@ -334,7 +336,7 @@ async def upsert_vm_type(
 
 
 async def upsert_custom_field(
-    nb: object,
+    nb: Api,
     *,
     name: str,
     type: str,
@@ -416,7 +418,7 @@ async def upsert_custom_field(
 
 
 async def upsert_tag(
-    nb: object,
+    nb: Api,
     *,
     name: str,
     slug: str,
@@ -447,7 +449,7 @@ async def upsert_tag(
 
 
 async def upsert_choice_set(
-    nb: object,
+    nb: Api,
     *,
     name: str,
     extra_choices: list[list[str]] | None = None,

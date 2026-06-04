@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import Depends
 from netbox_sdk.client import NetBoxApiClient
@@ -19,6 +19,18 @@ from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_s
 from proxbox_api.exception import ProxboxException
 from proxbox_api.runtime_settings import get_float
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _ConfiguredApi(Protocol):
+        config: Config
+
+    class _EndpointResult(Protocol):
+        def all(self) -> list[NetBoxEndpoint]: ...
+
+        def first(self) -> NetBoxEndpoint | None: ...
+
 
 _DEFAULT_NETBOX_TIMEOUT = 120.0
 
@@ -152,7 +164,7 @@ def get_netbox_session(
             netbox_endpoint = database_session.exec(
                 select(NetBoxEndpoint)
                 .where(NetBoxEndpoint.enabled == True)  # noqa: E712
-                .order_by(NetBoxEndpoint.id)
+                .order_by(cast("Any", NetBoxEndpoint.id))
             ).first()
 
         if not netbox_endpoint:
@@ -193,7 +205,10 @@ async def get_netbox_async_session(
     """
     try:
         if netbox_id is not None:
-            netbox_endpoint = await _maybe_await(database_session.get(NetBoxEndpoint, netbox_id))
+            netbox_endpoint = cast(
+                "NetBoxEndpoint | None",
+                await _maybe_await(database_session.get(NetBoxEndpoint, netbox_id)),
+            )
             if not netbox_endpoint:
                 raise ProxboxException(
                     message=f"NetBox endpoint {netbox_id} not found",
@@ -202,10 +217,13 @@ async def get_netbox_async_session(
             return netbox_api_from_endpoint(netbox_endpoint)
 
         # Fetch all enabled endpoints to determine how many exist
-        endpoints = await _maybe_await(
-            database_session.exec(
-                select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)  # noqa: E712
-            )
+        endpoints = cast(
+            "_EndpointResult | None",
+            await _maybe_await(
+                database_session.exec(
+                    select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)  # noqa: E712
+                )
+            ),
         )
         endpoints_list = endpoints.all() if endpoints else []
         count = len(endpoints_list) if endpoints_list else 0
@@ -217,12 +235,15 @@ async def get_netbox_async_session(
             )
 
         # Fetch the first enabled endpoint ordered by ID
-        result = await _maybe_await(
-            database_session.exec(
-                select(NetBoxEndpoint)
-                .where(NetBoxEndpoint.enabled == True)  # noqa: E712
-                .order_by(NetBoxEndpoint.id)
-            )
+        result = cast(
+            "_EndpointResult",
+            await _maybe_await(
+                database_session.exec(
+                    select(NetBoxEndpoint)
+                    .where(NetBoxEndpoint.enabled == True)  # noqa: E712
+                    .order_by(cast("Any", NetBoxEndpoint.id))
+                )
+            ),
         )
         netbox_endpoint = result.first()
 
@@ -243,8 +264,8 @@ async def get_netbox_async_session(
         )
 
 
-NetBoxSessionDep = Annotated[object, Depends(get_netbox_session)]
-NetBoxAsyncSessionDep = Annotated[object, Depends(get_netbox_async_session)]
+NetBoxSessionDep = Annotated[Api, Depends(get_netbox_session)]
+NetBoxAsyncSessionDep = Annotated[Api, Depends(get_netbox_async_session)]
 
 
 async def check_netbox_connection(nb: Api) -> dict[str, object]:
@@ -257,14 +278,15 @@ async def check_netbox_connection(nb: Api) -> dict[str, object]:
     from proxbox_api.netbox_rest import rest_list_async
 
     try:
-        url = nb.config.base_url
+        configured_nb = cast("_ConfiguredApi", nb)
+        url = configured_nb.config.base_url
         await rest_list_async(nb, "/api/", query={"limit": 1})
         return {"available": True, "url": url, "error": None}
     except ProxboxException as e:
         return {
             "available": False,
             "url": getattr(nb, "config", None)
-            and getattr(nb.config, "base_url", "unknown")
+            and getattr(configured_nb.config, "base_url", "unknown")
             or "unknown",
             "error": e.detail or e.message,
         }
