@@ -266,6 +266,37 @@ class CephOperationRunRecord(SQLModel, table=True):
     )
 
 
+class PrometheusSource(SQLModel, table=True):
+    """Prometheus metric source for a Ceph cluster (Ceph v2 #94).
+
+    Stores only connection metadata and an optional encrypted bearer token; no
+    time-series data is persisted here. ``cluster_ref`` binds the source to a
+    Ceph cluster / object reference so the metrics route can resolve the right
+    source for a scope.
+    """
+
+    __tablename__: ClassVar[str] = "prometheus_source"
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    url: str = Field()
+    bearer_token: str | None = Field(default=None)
+    credential_ref: str | None = Field(default=None)
+    cluster_ref: str | None = Field(default=None, index=True)
+    verify_ssl: bool = Field(default=True)
+    enabled: bool = Field(default=True)
+    timeout_seconds: int = Field(default=15)
+    scrape_interval_seconds: int = Field(default=60)
+    last_seen_at: float | None = Field(default=None)
+
+    def get_decrypted_bearer_token(self) -> str | None:
+        return decrypt_value(self.bearer_token) if self.bearer_token else None
+
+    def set_encrypted_bearer_token(self, value: str | None) -> None:
+        self.bearer_token = encrypt_value(value) if value else None
+
+
 class AuthLockout(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
@@ -624,6 +655,37 @@ def _migrate_ceph_operation_run_columns() -> None:
         )
 
 
+def _migrate_prometheus_source_columns() -> None:
+    table = PrometheusSource.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    column_specs: dict[str, str] = {
+        "bearer_token": "VARCHAR",
+        "credential_ref": "VARCHAR",
+        "cluster_ref": "VARCHAR",
+        "verify_ssl": "BOOLEAN NOT NULL DEFAULT 1",
+        "enabled": "BOOLEAN NOT NULL DEFAULT 1",
+        "timeout_seconds": "INTEGER NOT NULL DEFAULT 15",
+        "scrape_interval_seconds": "INTEGER NOT NULL DEFAULT 60",
+        "last_seen_at": "REAL",
+    }
+    stmts = [
+        f"ALTER TABLE {table} ADD COLUMN {col} {spec}"
+        for col, spec in column_specs.items()
+        if col not in existing
+    ]
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_proxmox_endpoint_columns()
@@ -632,6 +694,7 @@ def create_db_and_tables() -> None:
     _migrate_pbs_endpoint_columns()
     _migrate_pdm_endpoint_columns()
     _migrate_ceph_operation_run_columns()
+    _migrate_prometheus_source_columns()
 
 
 def get_session() -> Generator[Session, None, None]:

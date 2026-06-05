@@ -8,10 +8,10 @@ from proxbox_api.ceph.v2_providers.base import (
     CephProviderAdapter,
     DashboardCephProviderAdapter,
     ExternalCephProviderAdapter,
-    PrometheusCephProviderAdapter,
     RBDCephProviderAdapter,
     RGWAdminCephProviderAdapter,
 )
+from proxbox_api.ceph.v2_providers.prometheus import PrometheusCephProviderAdapter
 from proxbox_api.ceph.v2_providers.proxmox import ProxmoxCephProviderAdapter
 
 ProviderFactory = Callable[[list[object] | None], CephProviderAdapter]

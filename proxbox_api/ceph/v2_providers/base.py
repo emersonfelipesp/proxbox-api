@@ -115,17 +115,12 @@ class DashboardCephProviderAdapter(UnsupportedCephProviderAdapter):
 
 class RGWAdminCephProviderAdapter(UnsupportedCephProviderAdapter):
     provider = "rgw_admin"
-    followup = "#94"
+    followup = "#435 / proxmox-sdk#12"
 
 
 class RBDCephProviderAdapter(UnsupportedCephProviderAdapter):
     provider = "rbd"
-    followup = "#12"
-
-
-class PrometheusCephProviderAdapter(UnsupportedCephProviderAdapter):
-    provider = "prometheus"
-    followup = "#97"
+    followup = "#436 / proxmox-sdk#12"
 
 
 class ExternalCephProviderAdapter(UnsupportedCephProviderAdapter):
@@ -138,7 +133,6 @@ __all__ = [
     "CephProviderAdapter",
     "DashboardCephProviderAdapter",
     "ExternalCephProviderAdapter",
-    "PrometheusCephProviderAdapter",
     "RBDCephProviderAdapter",
     "RGWAdminCephProviderAdapter",
     "UnsupportedCephProviderAdapter",

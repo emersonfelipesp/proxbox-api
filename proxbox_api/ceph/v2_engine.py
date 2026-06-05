@@ -14,6 +14,7 @@ from sqlmodel import select
 from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephProviderAdapter
 from proxbox_api.ceph.v2_schemas import (
     ApplyRequest,
+    CephMetricSnapshot,
     DesiredObject,
     DesiredStateBundle,
     OperationRun,
@@ -144,6 +145,44 @@ def validation_results_for_request(request: PlanRequest) -> list[ValidationResul
                     code="target_ref_required",
                     message="Provider operations require target_ref, ref, target, or name.",
                     target=operation.kind,
+                )
+            )
+    return results
+
+
+def metric_safety_validations(
+    snapshot: CephMetricSnapshot | None,
+    operations: list[ProviderOperation],
+) -> list[ValidationResult]:
+    """Warn when destructive ops are planned while the cluster is degraded.
+
+    Consumes a Prometheus-derived metric snapshot (#94). When health is non-OK
+    or recovery/backfill is in flight, each destructive operation gets a
+    ``warning`` (surfaced, not a hard block — destructive ops already require
+    explicit confirmation) so operators can override deliberately.
+    """
+
+    if snapshot is None or not snapshot.is_degraded:
+        return []
+    reason = f"cluster health is {snapshot.cluster_health}"
+    if snapshot.recovering_pgs or snapshot.degraded_pgs or snapshot.misplaced_pgs:
+        reason += (
+            f" (recovering={snapshot.recovering_pgs or 0}, "
+            f"degraded={snapshot.degraded_pgs or 0}, "
+            f"misplaced={snapshot.misplaced_pgs or 0})"
+        )
+    results: list[ValidationResult] = []
+    for operation in operations:
+        if operation.is_destructive:
+            results.append(
+                ValidationResult(
+                    severity="warning",
+                    code="cluster_degraded",
+                    message=(
+                        f"Destructive operation while {reason}; proceed only with "
+                        "explicit confirmation."
+                    ),
+                    target=operation.target_ref or operation.kind,
                 )
             )
     return results
@@ -290,9 +329,27 @@ async def _raw_operations(
     return operations, live
 
 
+def _snapshot_from_request(
+    request: PlanRequest, metric_snapshot: CephMetricSnapshot | None
+) -> CephMetricSnapshot | None:
+    if metric_snapshot is not None:
+        return metric_snapshot
+    raw = request.scope.get("metric_snapshot")
+    if isinstance(raw, CephMetricSnapshot):
+        return raw
+    if isinstance(raw, dict):
+        try:
+            return CephMetricSnapshot.model_validate(raw)
+        except ValidationError:
+            return None
+    return None
+
+
 async def build_plan(
     request: PlanRequest,
     adapter: CephProviderAdapter,
+    *,
+    metric_snapshot: CephMetricSnapshot | None = None,
 ) -> PlanResponse:
     capabilities = await adapter.capabilities()
     validations = validation_results_for_request(request)
@@ -315,6 +372,8 @@ async def build_plan(
         (_normalize_operation(operation, capabilities) for operation in operations),
         key=_operation_priority,
     )
+    snapshot = _snapshot_from_request(request, metric_snapshot)
+    validations = validations + metric_safety_validations(snapshot, normalized)
     blocked_actions = [operation for operation in normalized if not operation.supported]
     branch_id = request.branch_schema_id
     plan = PlanResponse(
