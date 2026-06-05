@@ -99,6 +99,10 @@ def test_resolve_vm_interface_ips_emits_phase_summary_for_skipped_ips():
 
         with (
             patch(
+                "proxbox_api.services.sync.network.rest_list_async",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
                 "proxbox_api.services.sync.network.rest_reconcile_async",
                 new=AsyncMock(side_effect=_fake_reconcile),
             ),
@@ -176,6 +180,10 @@ def test_resolve_vm_interface_ips_no_summary_when_nothing_skipped():
             return {"id": 1}
 
         with (
+            patch(
+                "proxbox_api.services.sync.network.rest_list_async",
+                new=AsyncMock(return_value=[]),
+            ),
             patch(
                 "proxbox_api.services.sync.network.rest_reconcile_async",
                 new=AsyncMock(side_effect=_fake_reconcile),
@@ -274,6 +282,10 @@ def test_resolve_vm_interface_ips_forwards_dns_name_to_payload():
 
         with (
             patch(
+                "proxbox_api.services.sync.network.rest_list_async",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
                 "proxbox_api.services.sync.network.rest_reconcile_async",
                 new=AsyncMock(side_effect=_fake_reconcile),
             ),
@@ -308,6 +320,10 @@ def test_resolve_vm_interface_ips_passes_empty_dns_name_when_unset():
             return {"id": 99}
 
         with (
+            patch(
+                "proxbox_api.services.sync.network.rest_list_async",
+                new=AsyncMock(return_value=[]),
+            ),
             patch(
                 "proxbox_api.services.sync.network.rest_reconcile_async",
                 new=AsyncMock(side_effect=_fake_reconcile),
