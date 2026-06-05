@@ -340,10 +340,62 @@ class CapabilitiesResponse(BaseModel):
     providers: list[ProviderCapabilities]
 
 
+CephHealthStatus = Literal["HEALTH_OK", "HEALTH_WARN", "HEALTH_ERR", "unknown"]
+
+
+class CephMetricSnapshot(BaseModel):
+    """Bounded, latest-only Ceph metric snapshot normalized from Prometheus.
+
+    Deliberately stores a single current snapshot (not a time series): the
+    fields needed for health, capacity, and drift/safety decisions. ``unknown``
+    health and ``None`` metric values mean "no data" rather than zero.
+    """
+
+    cluster_health: CephHealthStatus = "unknown"
+    captured_at: datetime
+    source_url: str | None = None
+    # capacity
+    bytes_total: int | None = None
+    bytes_used: int | None = None
+    bytes_avail: int | None = None
+    percent_used: float | None = None
+    # daemons
+    osd_up: int | None = None
+    osd_in: int | None = None
+    osd_total: int | None = None
+    mon_quorum: int | None = None
+    mgr_active: int | None = None
+    # placement groups
+    pgs_total: int | None = None
+    pg_states: dict[str, int] = Field(default_factory=dict)
+    degraded_pgs: int | None = None
+    misplaced_pgs: int | None = None
+    recovering_pgs: int | None = None
+    # performance
+    iops_read: float | None = None
+    iops_write: float | None = None
+    throughput_read_bps: float | None = None
+    throughput_write_bps: float | None = None
+    # pools / rgw / cephfs counters
+    pools: int | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+    @property
+    def is_degraded(self) -> bool:
+        """True when health is non-OK or recovery/backfill is in flight."""
+        if self.cluster_health in ("HEALTH_WARN", "HEALTH_ERR"):
+            return True
+        for value in (self.degraded_pgs, self.misplaced_pgs, self.recovering_pgs):
+            if value:
+                return True
+        return False
+
+
 class MetricsResponse(BaseModel):
     provider: str
     scope: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
+    snapshot: CephMetricSnapshot | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -362,6 +414,8 @@ class SSEEvent(BaseModel):
 __all__ = [
     "ApplyRequest",
     "CapabilitiesResponse",
+    "CephHealthStatus",
+    "CephMetricSnapshot",
     "DesiredObject",
     "DesiredStateBundle",
     "MetricsResponse",
