@@ -17,7 +17,7 @@ Per-object synchronization services that sync individual objects from Proxmox to
 
 - `__init__.py`: package exports for all individual sync functions.
 - `base.py`: `BaseIndividualSyncService` with reusable helper methods for dependency creation.
-- `helpers.py`: utility functions such as `normalize_mac()`, `resolve_proxmox_session()`, lookup-key builders, and Proxmox config parsers.
+- `helpers.py`: utility functions such as `normalize_mac()`, `resolve_proxmox_session()`, lookup-key builders, Proxmox config parsers, and `ensure_vm_record()`.
 - `cluster_sync.py`: `sync_cluster_individual()` for a single cluster.
 - `device_sync.py`: `sync_node_individual()` for a single node or device.
 - `vm_sync.py`: `sync_vm_individual()` and `sync_vm_with_related()` for a single VM.
@@ -38,6 +38,20 @@ Per-object synchronization services that sync individual objects from Proxmox to
 3. Dry runs should report `dependencies_synced`.
 4. Missing dependencies should be created automatically instead of failing early.
 5. Use targeted Proxmox endpoints rather than broad bulk fetches.
+
+## Cross-Cluster VMID Scoping (issue #223)
+
+`ensure_vm_record()` resolves the NetBox VM for a Proxmox `vmid` scoped by its
+NetBox cluster, because `vmid` is only unique within a single Proxmox cluster.
+Callers pass `cluster_name` (and optionally a pre-resolved `cluster_id`); the
+helper resolves the cluster id by name via
+`resolve_netbox_cluster_id_by_name` (`services/sync/vm_helpers.py`) and queries
+`virtual-machines` with both `cf_proxmox_vm_id` **and** `cluster_id`. If the
+cluster cannot be resolved, it falls back to a vmid-only match **only when it is
+globally unambiguous** (exactly one NetBox VM); an ambiguous vmid is reported as
+not-found instead of being mapped to the wrong cluster's VM. `snapshot_sync`,
+`backup_sync`, and `task_history_sync` route their VM resolution through this
+helper so every individual sync path is cluster-safe.
 
 ## Dependency Order
 

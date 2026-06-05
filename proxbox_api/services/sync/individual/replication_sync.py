@@ -18,6 +18,7 @@ from proxbox_api.services.sync.individual.helpers import (
     ensure_vm_record,
     get_serialized_first_record,
 )
+from proxbox_api.services.sync.vm_helpers import record_id
 
 
 async def _resolve_node_id(nb: object, node_name: str | None) -> int | None:
@@ -53,7 +54,7 @@ async def _build_replication_dry_run_result(
         vm_type=vm_type,
         auto_create_vm=False,
     )
-    vm_id = getattr(vm_record, "id", None) if vm_record is not None else None
+    vm_id = record_id(vm_record) if vm_record is not None else None
     netbox_object = None
     if vm_id:
         netbox_object = await get_serialized_first_record(
@@ -173,7 +174,7 @@ async def sync_replication_individual(
                 error=vm_error,
             )
 
-        vm_id = getattr(vm_record, "id", None)
+        vm_id = record_id(vm_record)
         if vm_id is None:
             return build_sync_response(
                 object_type="replication",

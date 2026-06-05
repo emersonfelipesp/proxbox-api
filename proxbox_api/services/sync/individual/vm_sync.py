@@ -35,6 +35,7 @@ from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     normalize_current_virtual_machine_payload,
+    resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
 )
 
@@ -150,6 +151,35 @@ async def _apply_name_collision_resolution(
             resolution.operator_renamed,
         )
         netbox_vm_payload["name"] = resolution.resolved_name
+
+
+async def _lookup_existing_vm_for_dry_run(
+    nb: object,
+    *,
+    cluster_name: str,
+    vmid: int,
+) -> object | None:
+    """Resolve an existing VM for dry-run output without guessing ambiguous vmids."""
+    cluster_id = await resolve_netbox_cluster_id_by_name(nb, cluster_name)
+    vm_query: dict[str, object] = {"cf_proxmox_vm_id": vmid}
+    if cluster_id is not None:
+        vm_query["cluster_id"] = cluster_id
+    existing = await rest_list_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        query=vm_query,
+    )
+    if cluster_id is None and len(existing) > 1:
+        logger.warning(
+            "ambiguous vmid across clusters: dry-run cluster=%s vmid=%s matched %s NetBox VMs",
+            cluster_name,
+            vmid,
+            len(existing),
+        )
+        return None
+    if existing:
+        return existing[0]
+    return None
 
 
 def _build_netbox_vm_payload(
@@ -297,14 +327,14 @@ async def sync_vm_individual(
     }
 
     if dry_run:
-        existing = await rest_list_async(
+        existing_vm = await _lookup_existing_vm_for_dry_run(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            cluster_name=cluster_name,
+            vmid=vmid,
         )
         netbox_object = None
-        if existing:
-            netbox_object = existing[0].serialize() if hasattr(existing[0], "serialize") else None
+        if existing_vm is not None:
+            netbox_object = existing_vm.serialize() if hasattr(existing_vm, "serialize") else None
 
         cluster_dep: dict[str, object] = {
             "object_type": "cluster",

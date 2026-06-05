@@ -59,6 +59,22 @@ Main synchronization endpoints for virtual machines and related resources.
   "completed". When changing the batch contract, keep the failure count flowing
   into the stage summary so multi-endpoint mis-scoping can never masquerade as
   an empty-but-successful run.
+- **VM lookups are scoped by `(cluster_id, vmid)`, not vmid alone (issue #223).**
+  Proxmox `vmid` is only unique within one cluster, so the same `vmid` can exist
+  on several clusters. The VM snapshot index is keyed by the
+  `(NetBox cluster id, proxmox_vm_id)` tuple
+  (`_build_vm_index_by_proxmox_id`), and interface/IP sync resolve their NetBox
+  VM through `_resolve_vm_from_index_or_unique_vmid` and
+  `_resolve_netbox_virtual_machine_by_proxmox_id`, both of which take a
+  `cluster_id`/`cluster_name`. The NetBox cluster id is resolved by name once
+  per cluster via `resolve_netbox_cluster_id_by_name`
+  (`services/sync/vm_helpers.py`) and memoized in a per-run cache. When the
+  cluster cannot be resolved, the code falls back to a vmid-only lookup **only
+  when it is globally unambiguous** (exactly one NetBox VM matches); an
+  ambiguous vmid is logged and skipped rather than mapped to the wrong VM. This
+  prevents interfaces/IPs from attaching to a same-vmid VM on another cluster
+  and is why the interface-collection loop also filters Proxmox resources by
+  `cluster_name`. Regression coverage: `tests/test_vm_cross_cluster_vmid.py`.
 
 ## Extension Guidance
 

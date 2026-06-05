@@ -14,6 +14,12 @@ from proxbox_api.netbox_rest import (
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.sync._helpers import _extract_choice_value, _extract_fk_id
 from proxbox_api.services.sync.backup_routines import _get_netbox_endpoint_id
+from proxbox_api.services.sync.reconciliation.vm_queue import extract_cluster_and_proxmox_vmid
+from proxbox_api.services.sync.vm_helpers import (
+    record_id,
+    resolve_netbox_cluster_id_by_name,
+    to_mapping,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 
@@ -69,6 +75,75 @@ async def _mark_stale_replications(
     return len(stale_ids)
 
 
+def _extract_proxmox_vmid(record: object) -> int | None:
+    """Extract a positive Proxmox VMID custom field from a NetBox VM record."""
+    mapped = to_mapping(record)
+    custom_fields = mapped.get("custom_fields")
+    if not isinstance(custom_fields, dict):
+        return None
+    return _coerce_positive_vmid(custom_fields.get("proxmox_vm_id"))
+
+
+def _coerce_positive_vmid(value: object) -> int | None:
+    """Coerce a Proxmox VMID-like value to a positive integer."""
+    try:
+        vmid = int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return vmid if vmid > 0 else None
+
+
+def _add_vmid_candidate(
+    index: dict[int, list[int]],
+    *,
+    vmid: int,
+    vm_id: int,
+) -> None:
+    """Append a VM candidate once for a vmid-only fallback index."""
+    candidates = index.setdefault(vmid, [])
+    if vm_id not in candidates:
+        candidates.append(vm_id)
+
+
+def _resolve_replication_vm_id(
+    *,
+    cluster_id: int | None,
+    cluster_name: str,
+    replication_id: object,
+    guest_vmid: object,
+    vms_by_cluster_and_proxmox_id: dict[tuple[int, int], int],
+    vms_by_proxmox_id: dict[int, list[int]],
+) -> int | None:
+    """Resolve the NetBox VM ID for a replication job without guessing collisions."""
+    guest_vmid_int = _coerce_positive_vmid(guest_vmid)
+    if guest_vmid_int is None:
+        return None
+
+    if cluster_id is not None:
+        scoped_vm_id = vms_by_cluster_and_proxmox_id.get((cluster_id, guest_vmid_int))
+        if scoped_vm_id:
+            return scoped_vm_id
+
+    candidates = vms_by_proxmox_id.get(guest_vmid_int, [])
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        logger.debug(
+            "Skipping replication %s for cluster=%s vmid=%s: ambiguous vmid across clusters",
+            replication_id,
+            cluster_name or "unknown",
+            guest_vmid,
+        )
+        return None
+
+    logger.debug(
+        "VM with cluster_id=%s proxmox_vm_id=%s not found in NetBox, skipping replication",
+        cluster_id,
+        guest_vmid,
+    )
+    return None
+
+
 async def sync_all_replications(  # noqa: C901
     netbox_session: object,
     pxs: ProxmoxSessionsDep,
@@ -88,16 +163,25 @@ async def sync_all_replications(  # noqa: C901
     results: dict[str, int] = {"created": 0, "updated": 0, "stale": 0, "errors": 0}
     _tag_refs = tag_refs or []
 
-    # Pre-fetch all VMs once, indexed by proxmox_vm_id
+    # Pre-fetch all VMs once, indexed by (cluster_id, proxmox_vm_id)
     try:
         all_vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
-        vms_by_proxmox_id = {}
+        vms_by_cluster_and_proxmox_id: dict[tuple[int, int], int] = {}
+        vms_by_proxmox_id: dict[int, list[int]] = {}
         for vm in all_vms or []:
-            proxmox_id = vm.get("custom_fields", {}).get("proxmox_vm_id")
-            if proxmox_id:
-                vms_by_proxmox_id[str(proxmox_id)] = vm.get("id")
+            vm_id = record_id(vm)
+            if vm_id is None:
+                continue
+            mapped_vm = to_mapping(vm)
+            key = extract_cluster_and_proxmox_vmid(mapped_vm)
+            if key is not None:
+                vms_by_cluster_and_proxmox_id[key] = vm_id
+            vmid = _extract_proxmox_vmid(mapped_vm)
+            if vmid is not None:
+                _add_vmid_candidate(vms_by_proxmox_id, vmid=vmid, vm_id=vm_id)
     except Exception as e:
         logger.warning("Error pre-fetching NetBox VMs: %s", e)
+        vms_by_cluster_and_proxmox_id = {}
         vms_by_proxmox_id = {}
 
     # Pre-fetch all ProxmoxNode records from the NetBox plugin, indexed by name
@@ -118,6 +202,8 @@ async def sync_all_replications(  # noqa: C901
     ) -> tuple[int | None, list[dict[str, object]]]:
         """Fetch replications for a single Proxmox session. Returns (endpoint_id, payloads)."""
         endpoint_id = await _get_netbox_endpoint_id(nb, px)
+        cluster_name = str(getattr(px, "name", "") or "").strip()
+        cluster_id = await resolve_netbox_cluster_id_by_name(nb, cluster_name)
 
         try:
             replications = await resolve_async(px.session.cluster.replication.get())
@@ -133,12 +219,15 @@ async def sync_all_replications(  # noqa: C901
                     continue
 
                 # Look up NetBox VM using pre-fetched cache
-                netbox_vm_id = vms_by_proxmox_id.get(str(guest_vmid))
+                netbox_vm_id = _resolve_replication_vm_id(
+                    cluster_id=cluster_id,
+                    cluster_name=cluster_name,
+                    replication_id=rep.get("id"),
+                    guest_vmid=guest_vmid,
+                    vms_by_cluster_and_proxmox_id=vms_by_cluster_and_proxmox_id,
+                    vms_by_proxmox_id=vms_by_proxmox_id,
+                )
                 if not netbox_vm_id:
-                    logger.debug(
-                        "VM with proxmox_vm_id=%s not found in NetBox, skipping replication",
-                        guest_vmid,
-                    )
                     continue
 
                 target_node_name = rep.get("target") or ""

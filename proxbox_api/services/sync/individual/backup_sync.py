@@ -11,9 +11,9 @@ from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.helpers import (
     build_sync_response,
     ensure_vm_record,
-    get_first_record,
     get_serialized_first_record,
 )
+from proxbox_api.services.sync.vm_helpers import record_id
 
 
 async def _resolve_storage_id(
@@ -101,10 +101,15 @@ async def sync_backup_individual(
 
     if dry_run:
         netbox_object = None
-        vm_record = await get_first_record(
+        vm_type_inferred = "lxc" if "vzdump-lxc-" in volid else "qemu"
+        vm_record, _vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type=vm_type_inferred,
+            auto_create_vm=False,
         )
         if vm_record is not None:
             netbox_object = await get_serialized_first_record(
@@ -148,7 +153,7 @@ async def sync_backup_individual(
                 error=vm_error,
             )
 
-        vm_id = getattr(vm_record, "id", None)
+        vm_id = record_id(vm_record)
         if vm_id is None:
             return build_sync_response(
                 object_type="backup",

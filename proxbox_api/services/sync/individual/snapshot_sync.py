@@ -11,9 +11,11 @@ from proxbox_api.services.proxmox_helpers import (
     get_vm_snapshots_individual,
 )
 from proxbox_api.services.sync.individual.helpers import (
+    ensure_vm_record,
     parse_disk_config_entry,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_helpers import record_id
 
 
 async def sync_snapshot_individual(  # noqa: C901
@@ -73,14 +75,19 @@ async def sync_snapshot_individual(  # noqa: C901
     }
 
     if dry_run:
-        existing_vms = await rest_list_async(
+        vm_record, _vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type=vm_type,
+            auto_create_vm=False,
+            cluster_name=cluster_name,
         )
         netbox_object = None
-        if existing_vms:
-            vm_id = getattr(existing_vms[0], "id", None)
+        if vm_record is not None:
+            vm_id = record_id(vm_record)
             if vm_id:
                 existing = await rest_list_async(
                     nb,
@@ -104,43 +111,28 @@ async def sync_snapshot_individual(  # noqa: C901
         }
 
     try:
-        existing_vms = await rest_list_async(
+        vm_record, vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type=vm_type,
+            auto_create_vm=auto_create_vm,
+            cluster_name=cluster_name,
         )
-        if not existing_vms:
-            if auto_create_vm:
-                from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
+        if vm_error:
+            return {
+                "object_type": "snapshot",
+                "action": "error",
+                "proxmox_resource": proxmox_resource,
+                "netbox_object": None,
+                "dry_run": False,
+                "dependencies_synced": [],
+                "error": vm_error,
+            }
 
-                await sync_vm_individual(
-                    nb,
-                    px,
-                    tag,
-                    cluster_name or getattr(px, "name", "unknown"),
-                    node,
-                    vm_type,
-                    vmid,
-                    dry_run=False,
-                )
-                existing_vms = await rest_list_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    query={"cf_proxmox_vm_id": vmid},
-                )
-            else:
-                return {
-                    "object_type": "snapshot",
-                    "action": "error",
-                    "proxmox_resource": proxmox_resource,
-                    "netbox_object": None,
-                    "dry_run": False,
-                    "dependencies_synced": [],
-                    "error": f"VM with vmid={vmid} not found in NetBox",
-                }
-
-        vm_record = existing_vms[0]
-        vm_id = getattr(vm_record, "id", None)
+        vm_id = record_id(vm_record)
         if vm_id is None:
             return {
                 "object_type": "snapshot",

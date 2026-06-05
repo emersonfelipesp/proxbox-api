@@ -141,6 +141,75 @@ def relation_id(value: object) -> int | None:
     return None
 
 
+def record_id(value: object) -> int | None:
+    """Extract a NetBox record ID from dict, serialized, or object-shaped values."""
+    direct_id = relation_id(value)
+    if direct_id is not None:
+        return direct_id
+
+    attr_id = getattr(value, "id", None)
+    attr_id_int = relation_id(attr_id)
+    if attr_id_int is not None:
+        return attr_id_int
+
+    mapped = to_mapping(value)
+    if mapped:
+        return relation_id(mapped)
+    return None
+
+
+def _match_cluster_id(clusters: object, cache_key: str) -> int | None:
+    """Pick the cluster ID whose name matches ``cache_key``, else a nameless candidate."""
+    nameless_candidate: int | None = None
+    for cluster in clusters or []:
+        cluster_id = record_id(cluster)
+        if cluster_id is None:
+            continue
+        mapped = to_mapping(cluster)
+        resolved_name = relation_name(mapped) or getattr(cluster, "name", None)
+        if resolved_name is None:
+            nameless_candidate = nameless_candidate or cluster_id
+            continue
+        if str(resolved_name).strip().casefold() == cache_key:
+            return cluster_id
+    return nameless_candidate
+
+
+async def resolve_netbox_cluster_id_by_name(
+    nb: object,
+    cluster_name: str | None,
+    *,
+    cache: dict[str, int | None] | None = None,
+) -> int | None:
+    """Resolve a NetBox virtualization cluster ID by exact cluster name without creating it."""
+    name = str(cluster_name or "").strip()
+    if not name:
+        return None
+
+    cache_key = name.casefold()
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
+    from proxbox_api.netbox_rest import rest_list_async
+
+    try:
+        clusters = await rest_list_async(
+            nb,
+            "/api/virtualization/clusters/",
+            query={"name": name, "limit": 2},
+        )
+    except Exception as error:
+        logger.warning("Could not resolve NetBox cluster %s: %s", name, error)
+        if cache is not None:
+            cache[cache_key] = None
+        return None
+
+    resolved_id = _match_cluster_id(clusters, cache_key)
+    if cache is not None:
+        cache[cache_key] = resolved_id
+    return resolved_id
+
+
 def normalized_mac(value: str | None) -> str:
     """Normalize MAC address to lowercase stripped string."""
     return str(value or "").strip().lower()

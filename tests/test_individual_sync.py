@@ -293,6 +293,10 @@ async def test_sync_snapshot_individual_links_storage(monkeypatch):
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
         "proxbox_api.services.sync.individual.snapshot_sync.rest_reconcile_async",
         _fake_rest_reconcile_async,
     )
@@ -649,6 +653,10 @@ async def test_sync_task_history_individual_accepts_cluster_name_and_reports_upd
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.task_history_sync.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.helpers.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(

@@ -24,6 +24,7 @@ from proxbox_api.services.sync.individual.helpers import (
     get_serialized_first_record,
     resolve_guest_interface,
 )
+from proxbox_api.services.sync.vm_helpers import record_id
 
 
 async def _resolve_vlan_id(
@@ -153,7 +154,7 @@ async def sync_interface_individual(  # noqa: C901
             vm_type=vm_type,
             auto_create_vm=False,
         )
-        vm_id = getattr(vm_record, "id", None) if vm_record is not None else None
+        vm_id = record_id(vm_record) if vm_record is not None else None
         netbox_object = None
         if vm_id:
             netbox_object = await get_serialized_first_record(
@@ -200,7 +201,7 @@ async def sync_interface_individual(  # noqa: C901
                 error=vm_error,
             )
 
-        vm_id = getattr(vm_record, "id", None)
+        vm_id = record_id(vm_record)
         if vm_id is None:
             return build_sync_response(
                 object_type="interface",

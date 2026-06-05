@@ -20,6 +20,7 @@ from proxbox_api.services.sync.individual.helpers import (
     get_serialized_first_record,
     resolve_guest_interface_by_ip,
 )
+from proxbox_api.services.sync.vm_helpers import record_id
 
 
 def _resolve_dns_name(px: object, node: str, vm_type: str, vmid: int) -> str | None:
@@ -45,7 +46,8 @@ async def _resolve_interface_id(
     *,
     node: str,
     vm_type: str,
-    vmid: int,
+    netbox_vm_id: int,
+    proxmox_vmid: int,
     resolved_interface: str | None,
     auto_create_interface: bool,
 ) -> int | None:
@@ -55,10 +57,10 @@ async def _resolve_interface_id(
     existing_ifaces = await rest_list_async(
         nb,
         "/api/virtualization/interfaces/",
-        query={"virtual_machine_id": vmid, "name": resolved_interface},
+        query={"virtual_machine_id": netbox_vm_id, "name": resolved_interface},
     )
     if existing_ifaces:
-        return getattr(existing_ifaces[0], "id", None)
+        return record_id(existing_ifaces[0])
 
     if not auto_create_interface:
         return None
@@ -71,7 +73,7 @@ async def _resolve_interface_id(
         tag,
         node,
         vm_type,
-        vmid,
+        proxmox_vmid,
         resolved_interface,
         auto_create_vm=False,
         dry_run=False,
@@ -197,7 +199,7 @@ async def sync_ip_individual(
                 error=vm_error,
             )
 
-        vm_id = getattr(vm_record, "id", None)
+        vm_id = record_id(vm_record)
         if vm_id is None:
             return build_sync_response(
                 object_type="ip_address",
@@ -215,7 +217,8 @@ async def sync_ip_individual(
             tag,
             node=node,
             vm_type=vm_type,
-            vmid=vmid,
+            netbox_vm_id=vm_id,
+            proxmox_vmid=vmid,
             resolved_interface=resolved_interface,
             auto_create_interface=auto_create_interface,
         )

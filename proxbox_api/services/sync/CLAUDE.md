@@ -31,7 +31,12 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `vm_coordinator.py`: VM sync orchestration.
 - `vm_create.py`: VM create path helpers.
 - `vm_filter.py`: VM filtering helpers.
-- `vm_helpers.py`: shared VM helper functions.
+- `vm_helpers.py`: shared VM helper functions, including `record_id()` (extracts
+  a NetBox record id from dict/serialized/object values) and
+  `resolve_netbox_cluster_id_by_name()` (read-only cluster-id lookup by name,
+  with optional caching; returns `None` when the cluster does not exist). These
+  back the `(cluster_id, vmid)` scoping that keeps same-`vmid` VMs on different
+  clusters from being conflated (issue #223).
 - `vm_network.py`: VM network sync helpers.
 - `vm_network_processor.py`: VM network parsing and processing helpers.
 - `vmid_helpers.py`: VMID lookup and coordination helpers.

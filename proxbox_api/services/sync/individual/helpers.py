@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
-from proxbox_api.services.sync.vm_helpers import parse_key_value_string
+from proxbox_api.services.sync.vm_helpers import (
+    parse_key_value_string,
+    resolve_netbox_cluster_id_by_name,
+)
 
 
 def normalize_mac(value: str | None) -> str:
@@ -254,6 +258,57 @@ async def get_serialized_first_record(
     return serialize_record(record)
 
 
+async def _lookup_unique_vm_by_vmid(
+    nb: object,
+    *,
+    vmid: int,
+    cluster_name: str,
+) -> tuple[object | None, bool]:
+    """Return a vmid-only match only when it is globally unambiguous."""
+    existing_vms = await rest_list_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        query={"cf_proxmox_vm_id": vmid},
+    )
+    if len(existing_vms) == 1:
+        return existing_vms[0], False
+    if len(existing_vms) > 1:
+        logger.warning(
+            "ambiguous vmid across clusters: cluster=%s vmid=%s matched %s NetBox VMs",
+            cluster_name or "unknown",
+            vmid,
+            len(existing_vms),
+        )
+        return None, True
+    return None, False
+
+
+async def _lookup_vm_by_scope_or_unique_vmid(
+    nb: object,
+    *,
+    vmid: int,
+    cluster_id: int | None,
+    cluster_name: str,
+) -> tuple[object | None, bool]:
+    """Resolve by scoped VMID when possible, otherwise by unique vmid-only fallback."""
+    if cluster_id is not None:
+        existing_vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
+        )
+        if existing_vms:
+            return existing_vms[0], False
+        return None, False
+    return await _lookup_unique_vm_by_vmid(nb, vmid=vmid, cluster_name=cluster_name)
+
+
+def _vm_not_found_message(vmid: int, cluster_name: str) -> str:
+    """Build the existing VM-not-found message with optional cluster context."""
+    cluster_msg = f" in cluster {cluster_name}" if cluster_name else ""
+    return f"VM with vmid={vmid}{cluster_msg} not found in NetBox"
+
+
 async def ensure_vm_record(
     nb: object,
     px: object,
@@ -263,30 +318,55 @@ async def ensure_vm_record(
     node: str | None,
     vm_type: str,
     auto_create_vm: bool,
+    cluster_name: str | None = None,
+    cluster_id: int | None = None,
 ) -> tuple[object | None, str | None]:
     """Resolve the NetBox VM record for a Proxmox VM ID, creating it if requested."""
-    existing_vms = await rest_list_async(
+    resolved_cluster_name = str(cluster_name or getattr(px, "name", "") or "").strip()
+    resolved_cluster_id = cluster_id
+    if resolved_cluster_id is None:
+        resolved_cluster_id = await resolve_netbox_cluster_id_by_name(nb, resolved_cluster_name)
+
+    vm_record, ambiguous = await _lookup_vm_by_scope_or_unique_vmid(
         nb,
-        "/api/virtualization/virtual-machines/",
-        query={"cf_proxmox_vm_id": vmid},
+        vmid=vmid,
+        cluster_id=resolved_cluster_id,
+        cluster_name=resolved_cluster_name,
     )
-    if existing_vms:
-        return existing_vms[0], None
+    if vm_record is not None:
+        return vm_record, None
+    if ambiguous:
+        return None, _vm_not_found_message(vmid, resolved_cluster_name)
 
     if not auto_create_vm:
-        return None, f"VM with vmid={vmid} not found in NetBox"
+        return None, _vm_not_found_message(vmid, resolved_cluster_name)
 
     from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
 
-    cluster_name = getattr(px, "name", "unknown")
-    await sync_vm_individual(nb, px, tag, cluster_name, node, vm_type, vmid, dry_run=False)
-    existing_vms = await rest_list_async(
+    await sync_vm_individual(
         nb,
-        "/api/virtualization/virtual-machines/",
-        query={"cf_proxmox_vm_id": vmid},
+        px,
+        tag,
+        resolved_cluster_name or "unknown",
+        node or "",
+        vm_type,
+        vmid,
+        dry_run=False,
     )
-    if existing_vms:
-        return existing_vms[0], None
+
+    if resolved_cluster_id is None:
+        resolved_cluster_id = await resolve_netbox_cluster_id_by_name(nb, resolved_cluster_name)
+
+    vm_record, ambiguous = await _lookup_vm_by_scope_or_unique_vmid(
+        nb,
+        vmid=vmid,
+        cluster_id=resolved_cluster_id,
+        cluster_name=resolved_cluster_name,
+    )
+    if vm_record is not None:
+        return vm_record, None
+    if ambiguous:
+        return None, _vm_not_found_message(vmid, resolved_cluster_name)
 
     return None, f"VM with vmid={vmid} could not be created in NetBox"
 

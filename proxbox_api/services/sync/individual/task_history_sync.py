@@ -8,10 +8,12 @@ from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
 from proxbox_api.services.proxmox_helpers import get_vm_tasks_individual
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
+from proxbox_api.services.sync.individual.helpers import ensure_vm_record
 from proxbox_api.services.sync.task_history import (
     _extract_fk_id,
     _format_task_description,
 )
+from proxbox_api.services.sync.vm_helpers import record_id
 
 
 def _normalize_task_datetime(value: object) -> str | None:
@@ -170,43 +172,28 @@ async def sync_task_history_individual(  # noqa: C901
         }
 
     try:
-        existing_vms = await rest_list_async(
+        vm_record, vm_error = await ensure_vm_record(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid},
+            px,
+            tag,
+            vmid=vmid,
+            node=node,
+            vm_type=vm_type,
+            auto_create_vm=auto_create_vm,
+            cluster_name=cluster_name,
         )
-        if not existing_vms:
-            if auto_create_vm:
-                from proxbox_api.services.sync.individual.vm_sync import sync_vm_individual
+        if vm_error:
+            return {
+                "object_type": "task_history",
+                "action": "error",
+                "proxmox_resource": proxmox_resource,
+                "netbox_object": None,
+                "dry_run": False,
+                "dependencies_synced": [],
+                "error": vm_error,
+            }
 
-                await sync_vm_individual(
-                    nb,
-                    px,
-                    tag,
-                    cluster_name or getattr(px, "name", "unknown"),
-                    node,
-                    vm_type,
-                    vmid,
-                    dry_run=False,
-                )
-                existing_vms = await rest_list_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    query={"cf_proxmox_vm_id": vmid},
-                )
-            else:
-                return {
-                    "object_type": "task_history",
-                    "action": "error",
-                    "proxmox_resource": proxmox_resource,
-                    "netbox_object": None,
-                    "dry_run": False,
-                    "dependencies_synced": [],
-                    "error": f"VM with vmid={vmid} not found in NetBox",
-                }
-
-        vm_record = existing_vms[0]
-        vm_id = getattr(vm_record, "id", None)
+        vm_id = record_id(vm_record)
         if vm_id is None:
             return {
                 "object_type": "task_history",
