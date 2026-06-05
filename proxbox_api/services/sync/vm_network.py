@@ -28,10 +28,6 @@ from proxbox_api.services.sync.vm_helpers import (
     normalized_mac,
 )
 
-_PRIMARY_IP_REASSIGN_ERROR = (
-    "Cannot reassign IP address while it is designated as the primary IP for the parent object"
-)
-
 
 def _primary_field_from_ip_address(address: object) -> str | None:
     """Map an IP address value to the appropriate NetBox VM primary field."""
@@ -332,49 +328,6 @@ async def sync_vm_disks(
     return disk_count
 
 
-async def _clear_primary_ip_on_parent(nb: object, ip_id: int) -> bool:
-    """Remove the primary IP designation from any VM that claims ip_id as its primary.
-
-    NetBox rejects reassigning an IP while it is set as the primary IP of its parent object.
-    This helper finds the owning VM and clears the ``primary_ip4`` or ``primary_ip6`` field
-    so the IP can subsequently be reassigned.
-
-    Returns True if a parent was found and successfully patched, False otherwise.
-    """
-    for field in ("primary_ip4", "primary_ip6"):
-        vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={f"{field}_id": ip_id, "limit": 5},
-        )
-        for vm in vms:
-            parent_vm_id = vm.get("id") if isinstance(vm, dict) else getattr(vm, "id", None)
-            if not parent_vm_id:
-                continue
-            try:
-                await rest_patch_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    parent_vm_id,
-                    {field: None},
-                )
-                logger.info(
-                    "_clear_primary_ip_on_parent: cleared %s (IP id=%s) from VM id=%s",
-                    field,
-                    ip_id,
-                    parent_vm_id,
-                )
-                return True
-            except Exception as clear_exc:
-                logger.warning(
-                    "_clear_primary_ip_on_parent: failed to clear %s from VM id=%s: %s",
-                    field,
-                    parent_vm_id,
-                    clear_exc,
-                )
-    return False
-
-
 async def ensure_ip_assigned_to_vm(
     nb: object,
     ip_id: int,
@@ -382,12 +335,17 @@ async def ensure_ip_assigned_to_vm(
 ) -> tuple[bool, str]:
     """Verify the IP address is assigned to an interface on the given VM.
 
-    If the IP exists but is assigned to the wrong object (or unassigned), this
-    function PATCHes the IP to assign it to the VM's first interface so that
-    NetBox will accept it as the VM's primary IP.
+    If the IP is currently *unassigned*, it is adopted onto the VM's first
+    interface so NetBox will accept it as the VM's primary IP. An IP already
+    assigned to a *different* object (another VM/device interface) is **never**
+    reassigned -- stealing the address that way is exactly what surfaced as a VM
+    interface "wrongly matched to another server's IP". In that case the
+    function returns ``(False, "assigned_to_other_object")`` and the caller
+    skips primary assignment.
 
-    Returns (True, reason) if the IP is (or was fixed to be) assigned to the VM,
-    (False, reason) otherwise. The reason string describes the outcome for diagnostics.
+    Returns (True, reason) if the IP is (or was adopted to be) assigned to the
+    VM, (False, reason) otherwise. The reason string describes the outcome for
+    diagnostics.
     """
     try:
         ip_record = await rest_first_async(nb, "/api/ipam/ip-addresses/", query={"id": ip_id})
@@ -425,7 +383,22 @@ async def ensure_ip_assigned_to_vm(
         ):
             return True, "already_assigned"
 
-        # IP is not assigned to this VM — reassign to the first available interface
+        # The IP already belongs to a different object. Never reassign it onto
+        # this VM -- doing so would steal another server's address and is the
+        # root cause of the "interface wrongly matched to another server's IP"
+        # defect. Skip primary assignment instead.
+        if assigned_object_id is not None and assigned_object_type is not None:
+            logger.info(
+                "ensure_ip_assigned_to_vm: IP id=%s already assigned to %s id=%s; "
+                "refusing to reassign to VM id=%s",
+                ip_id,
+                assigned_object_type,
+                assigned_object_id,
+                vm_id,
+            )
+            return False, "assigned_to_other_object"
+
+        # IP is unassigned -- safe to adopt it onto the VM's first interface.
         first_iface = ifaces[0]
         first_iface_id = (
             first_iface.get("id")
@@ -436,34 +409,12 @@ async def ensure_ip_assigned_to_vm(
             "assigned_object_type": "virtualization.vminterface",
             "assigned_object_id": first_iface_id,
         }
-        try:
-            patched = await rest_patch_async(
-                nb,
-                "/api/ipam/ip-addresses/",
-                ip_id,
-                assign_payload,
-            )
-        except Exception as patch_exc:
-            if _PRIMARY_IP_REASSIGN_ERROR not in str(patch_exc):
-                raise
-            logger.info(
-                "ensure_ip_assigned_to_vm: IP id=%s is designated as primary on its parent; "
-                "clearing primary designation and retrying",
-                ip_id,
-            )
-            cleared = await _clear_primary_ip_on_parent(nb, ip_id)
-            if not cleared:
-                logger.warning(
-                    "ensure_ip_assigned_to_vm: could not clear primary IP for id=%s; giving up",
-                    ip_id,
-                )
-                return False, "primary_ip_clear_failed"
-            patched = await rest_patch_async(
-                nb,
-                "/api/ipam/ip-addresses/",
-                ip_id,
-                assign_payload,
-            )
+        patched = await rest_patch_async(
+            nb,
+            "/api/ipam/ip-addresses/",
+            ip_id,
+            assign_payload,
+        )
         # Verify the PATCH took effect by inspecting the returned record
         patched_obj_id = patched.get("assigned_object_id") if isinstance(patched, dict) else None
         if isinstance(patched_obj_id, dict):
@@ -473,12 +424,13 @@ async def ensure_ip_assigned_to_vm(
         )
         if patched_obj_type == "virtualization.vminterface" and patched_obj_id == first_iface_id:
             logger.info(
-                "ensure_ip_assigned_to_vm: reassigned IP id=%s to interface id=%s on VM id=%s",
+                "ensure_ip_assigned_to_vm: adopted unassigned IP id=%s onto interface id=%s "
+                "on VM id=%s",
                 ip_id,
                 first_iface_id,
                 vm_id,
             )
-            return True, "reassigned"
+            return True, "assigned"
         logger.warning(
             "ensure_ip_assigned_to_vm: PATCH did not take effect for IP id=%s "
             "(got type=%s obj_id=%s, expected type=virtualization.vminterface obj_id=%s)",
@@ -487,7 +439,7 @@ async def ensure_ip_assigned_to_vm(
             patched_obj_id,
             first_iface_id,
         )
-        return False, f"reassign_failed(type={patched_obj_type},obj_id={patched_obj_id})"
+        return False, f"assign_failed(type={patched_obj_type},obj_id={patched_obj_id})"
     except Exception as exc:
         logger.warning(
             "ensure_ip_assigned_to_vm: failed for IP id=%s VM id=%s: %s",

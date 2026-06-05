@@ -53,6 +53,15 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   `cluster/resources` VMID/type data before falling back to NetBox VM custom
   fields or `device.name`; this avoids disk sync calls against stale or FQDN
   NetBox node names.
+- **VM-interface IP ownership invariant.** IP sync must never reassign an
+  address that already belongs to a *different* object. `network.py`
+  (`_reconcile_interface_ip`) resolves ownership before writing: it reuses an
+  IP already on this interface, adopts an *unassigned* IP, or creates a new
+  record scoped to this interface — a foreign-owned address is left untouched.
+  `vm_network.py` (`ensure_ip_assigned_to_vm`) likewise only adopts unassigned
+  IPs onto a VM and returns `assigned_to_other_object` instead of stealing an
+  address owned elsewhere. This prevents the "VM interface wrongly matched to
+  another server's IP" defect; both paths stay idempotent across re-syncs.
 
 ## Extension Guidance
 
