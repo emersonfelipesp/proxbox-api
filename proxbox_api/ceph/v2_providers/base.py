@@ -118,15 +118,9 @@ class RBDCephProviderAdapter(UnsupportedCephProviderAdapter):
     followup = "#436 / proxmox-sdk#12"
 
 
-class ExternalCephProviderAdapter(UnsupportedCephProviderAdapter):
-    provider = "external"
-    followup = "external-provider implementation"
-
-
 __all__ = [
     "CephCapabilityUnsupported",
     "CephProviderAdapter",
-    "ExternalCephProviderAdapter",
     "RBDCephProviderAdapter",
     "RGWAdminCephProviderAdapter",
     "UnsupportedCephProviderAdapter",
