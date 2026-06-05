@@ -26,6 +26,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
+from proxbox_api.ceph.dashboard_client import (
+    DashboardEndpointConfig,
+    validate_dashboard_endpoint,
+)
 from proxbox_api.ceph.prometheus import (
     PrometheusSourceConfig,
     validate_source,
@@ -42,6 +46,9 @@ from proxbox_api.ceph.v2_engine import (
     validate_payload,
 )
 from proxbox_api.ceph.v2_providers import adapter_for_provider, provider_names
+from proxbox_api.ceph.v2_providers.base import CephProviderAdapter
+from proxbox_api.ceph.v2_providers.dashboard import DashboardCephProviderAdapter
+from proxbox_api.ceph.v2_providers.prometheus import PrometheusCephProviderAdapter
 from proxbox_api.ceph.v2_schemas import (
     ApplyRequest,
     CapabilitiesResponse,
@@ -56,6 +63,7 @@ from proxbox_api.ceph.v2_schemas import (
 )
 from proxbox_api.database import (
     AsyncDatabaseSessionDep,
+    CephDashboardEndpoint,
     CephOperationRunRecord,
     PrometheusSource,
 )
@@ -90,6 +98,61 @@ async def _resolve_prometheus_source(
     return rows[0] if rows else None
 
 
+def _dashboard_to_config(endpoint: CephDashboardEndpoint) -> DashboardEndpointConfig:
+    return DashboardEndpointConfig(
+        base_url=endpoint.base_url,
+        username=endpoint.username,
+        password=endpoint.get_decrypted_password(),
+        token=endpoint.get_decrypted_token(),
+        verify_ssl=endpoint.verify_ssl,
+        api_version=endpoint.api_version,
+        timeout=endpoint.timeout_seconds,
+    )
+
+
+async def _resolve_dashboard_endpoint(
+    session: AsyncDatabaseSessionDep, cluster_ref: str | None
+) -> CephDashboardEndpoint | None:
+    """Pick the enabled Ceph Dashboard endpoint bound to ``cluster_ref``, else any."""
+
+    stmt = select(CephDashboardEndpoint).where(CephDashboardEndpoint.enabled == True)  # noqa: E712
+    rows = list((await session.exec(stmt)).all())
+    if cluster_ref:
+        for row in rows:
+            if row.cluster_ref == cluster_ref:
+                return row
+    return rows[0] if rows else None
+
+
+def _scope_object_ref(scope: dict[str, Any]) -> str | None:
+    value = scope.get("object_ref") or scope.get("cluster_ref")
+    return str(value) if value else None
+
+
+async def build_adapter(
+    provider: str | None,
+    pxs: list[object],
+    session: AsyncDatabaseSessionDep,
+    *,
+    object_ref: str | None = None,
+) -> CephProviderAdapter:
+    """Resolve a provider adapter, injecting DB-stored endpoints where needed.
+
+    Dashboard/Prometheus adapters get their endpoint config wired at construction
+    so ``apply()`` (which receives no scope) and ``read_state()`` both work.
+    """
+    name = (provider or "proxmox").strip().lower().replace("-", "_")
+    if name == "dashboard":
+        endpoint = await _resolve_dashboard_endpoint(session, object_ref)
+        config = _dashboard_to_config(endpoint) if endpoint else None
+        return DashboardCephProviderAdapter(list(pxs), endpoint=config)
+    if name == "prometheus":
+        source = await _resolve_prometheus_source(session, object_ref)
+        config = _source_to_config(source) if source else None
+        return PrometheusCephProviderAdapter(list(pxs), source=config)
+    return adapter_for_provider(provider, list(pxs))
+
+
 def _with_actor(model: Any, actor: str | None) -> None:
     """Prefer an explicit body actor, else fall back to the request header."""
 
@@ -119,8 +182,14 @@ async def ceph_v2_validate(payload: dict[str, Any]) -> ValidationResponse:
     return validate_payload(payload)
 
 
-async def _build_and_remember(request: PlanRequest, pxs: ProxmoxSessionsDep) -> PlanResponse:
-    adapter = adapter_for_provider(request.provider, list(pxs))
+async def _build_and_remember(
+    request: PlanRequest,
+    pxs: ProxmoxSessionsDep,
+    session: AsyncDatabaseSessionDep,
+) -> PlanResponse:
+    adapter = await build_adapter(
+        request.provider, list(pxs), session, object_ref=_scope_object_ref(request.scope)
+    )
     plan = await build_plan(request, adapter)
     remember_plan(plan)
     return plan
@@ -130,12 +199,13 @@ async def _build_and_remember(request: PlanRequest, pxs: ProxmoxSessionsDep) -> 
 async def ceph_v2_create_plan(
     request: PlanRequest,
     pxs: ProxmoxSessionsDep,
+    session: AsyncDatabaseSessionDep,
     actor: ActorHeader = None,
 ) -> PlanResponse:
     """Build a plan from NetBox desired state and current provider state."""
 
     _with_actor(request, actor)
-    return await _build_and_remember(request, pxs)
+    return await _build_and_remember(request, pxs, session)
 
 
 @router.get("/plans/{plan_id}", response_model=PlanResponse)
@@ -163,7 +233,9 @@ async def ceph_v2_apply_plan(
         plan = get_plan(plan_id)
     except CephPlanNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Plan {plan_id!r} not found.") from exc
-    adapter = adapter_for_provider(plan.provider, list(pxs))
+    adapter = await build_adapter(
+        plan.provider, list(pxs), session, object_ref=_scope_object_ref(request.scope)
+    )
     try:
         return await apply_plan(plan, request, adapter, session)
     except CephApplyError as exc:
@@ -174,12 +246,13 @@ async def ceph_v2_apply_plan(
 async def ceph_v2_plan_compat(
     request: PlanRequest,
     pxs: ProxmoxSessionsDep,
+    session: AsyncDatabaseSessionDep,
     actor: ActorHeader = None,
 ) -> PlanResponse:
     """Flat client-contract alias for ``POST /plans`` (netbox-ceph orchestrator)."""
 
     _with_actor(request, actor)
-    return await _build_and_remember(request, pxs)
+    return await _build_and_remember(request, pxs, session)
 
 
 @router.post("/apply", response_model=OperationRun)
@@ -202,10 +275,12 @@ async def ceph_v2_apply_compat(
         source_branch_schema_id=request.source_branch_schema_id,
         request_id=request.request_id,
     )
-    plan = await _build_and_remember(plan_request, pxs)
+    plan = await _build_and_remember(plan_request, pxs, session)
     if request.plan_id is None:
         request.plan_id = plan.id
-    adapter = adapter_for_provider(plan.provider, list(pxs))
+    adapter = await build_adapter(
+        plan.provider, list(pxs), session, object_ref=_scope_object_ref(request.scope)
+    )
     try:
         return await apply_plan(plan, request, adapter, session)
     except CephApplyError as exc:
@@ -284,7 +359,9 @@ async def ceph_v2_reconcile(
     """Reconcile provider state back into NetBox inventory/current-state summaries."""
 
     _with_actor(request, actor)
-    adapter = adapter_for_provider(request.provider, list(pxs))
+    adapter = await build_adapter(
+        request.provider, list(pxs), session, object_ref=_scope_object_ref(request.scope)
+    )
     return await reconcile_provider(request, adapter, session)
 
 
@@ -297,36 +374,30 @@ async def ceph_v2_metrics(
 ) -> MetricsResponse:
     """Return the latest provider metrics for the requested scope.
 
-    For ``provider=prometheus`` the configured Prometheus source is resolved
-    from the DB and injected into the adapter scope, and the result is parsed
-    into a typed :class:`CephMetricSnapshot`.
+    For ``provider=prometheus`` (and ``dashboard``) the configured endpoint is
+    resolved from the DB and wired into the adapter; the result is parsed into a
+    typed :class:`CephMetricSnapshot` where it matches that shape.
     """
 
-    adapter = adapter_for_provider(provider, list(pxs))
-    scope: dict[str, Any] = {}
-    if object_ref:
-        scope["object_ref"] = object_ref
+    adapter = await build_adapter(provider, list(pxs), session, object_ref=object_ref)
+    scope: dict[str, Any] = {"object_ref": object_ref} if object_ref else {}
     warnings: list[str] = []
-    if provider == "prometheus":
-        source = await _resolve_prometheus_source(session, object_ref)
-        if source is None:
-            warnings.append("no Prometheus source configured")
-        else:
-            scope["prometheus_source"] = _source_to_config(source)
     try:
         metrics = await adapter.metrics(scope)
     except Exception as exc:  # noqa: BLE001 - surface adapter gaps as a warning, not a 500
         logger.warning("Ceph v2 metrics unavailable for provider %s: %s", provider, exc)
         metrics = {}
         warnings.append(str(exc))
+    if not metrics and provider == "prometheus":
+        warnings.append("no Prometheus source configured")
+    if not metrics and provider == "dashboard":
+        warnings.append("no Ceph Dashboard endpoint configured")
     snapshot: CephMetricSnapshot | None = None
     if metrics:
         try:
             snapshot = CephMetricSnapshot.model_validate(metrics)
         except Exception:  # noqa: BLE001 - non-snapshot providers return free-form metrics
             snapshot = None
-    # Drop the (unserializable) source config from the echoed scope.
-    scope.pop("prometheus_source", None)
     return MetricsResponse(
         provider=provider, scope=scope, metrics=metrics, snapshot=snapshot, warnings=warnings
     )
@@ -427,3 +498,111 @@ async def ceph_v2_validate_prometheus_source(
         raise HTTPException(status_code=404, detail="Prometheus source not found.")
     ok, error = await validate_source(_source_to_config(source))
     return {"id": source_id, "ok": ok, "error": error}
+
+
+# --------------------------------------------------------------------------- #
+# Ceph Dashboard endpoint registration (#98)
+# --------------------------------------------------------------------------- #
+class DashboardEndpointCreate(BaseModel):
+    """Request body to register a direct Ceph Dashboard endpoint."""
+
+    name: str = Field(..., min_length=1)
+    base_url: str = Field(..., min_length=1)
+    username: str | None = None
+    password: str | None = None
+    token: str | None = None
+    credential_ref: str | None = None
+    cluster_ref: str | None = None
+    api_version: str = "1.0"
+    verify_ssl: bool = True
+    enabled: bool = True
+    timeout_seconds: int = 30
+
+
+class DashboardEndpointOut(BaseModel):
+    """Redacted Ceph Dashboard endpoint record (never exposes secrets)."""
+
+    id: int
+    name: str
+    base_url: str
+    username: str | None = None
+    credential_ref: str | None = None
+    cluster_ref: str | None = None
+    api_version: str
+    verify_ssl: bool
+    enabled: bool
+    timeout_seconds: int
+    has_secret: bool
+
+
+def _dashboard_out(endpoint: CephDashboardEndpoint) -> DashboardEndpointOut:
+    return DashboardEndpointOut(
+        id=endpoint.id or 0,
+        name=endpoint.name,
+        base_url=endpoint.base_url,
+        username=endpoint.username,
+        credential_ref=endpoint.credential_ref,
+        cluster_ref=endpoint.cluster_ref,
+        api_version=endpoint.api_version,
+        verify_ssl=endpoint.verify_ssl,
+        enabled=endpoint.enabled,
+        timeout_seconds=endpoint.timeout_seconds,
+        has_secret=bool(endpoint.password or endpoint.token),
+    )
+
+
+@router.get("/dashboard/endpoints", response_model=list[DashboardEndpointOut])
+async def ceph_v2_list_dashboard_endpoints(
+    session: AsyncDatabaseSessionDep,
+) -> list[DashboardEndpointOut]:
+    """List configured Ceph Dashboard endpoints (passwords/tokens redacted)."""
+
+    rows = list((await session.exec(select(CephDashboardEndpoint))).all())
+    return [_dashboard_out(row) for row in rows]
+
+
+@router.post("/dashboard/endpoints", response_model=DashboardEndpointOut, status_code=201)
+async def ceph_v2_create_dashboard_endpoint(
+    payload: DashboardEndpointCreate,
+    session: AsyncDatabaseSessionDep,
+) -> DashboardEndpointOut:
+    """Register a Ceph Dashboard endpoint. Password/token are encrypted at rest."""
+
+    existing = (
+        await session.exec(
+            select(CephDashboardEndpoint).where(CephDashboardEndpoint.name == payload.name)
+        )
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="An endpoint with that name already exists.")
+    endpoint = CephDashboardEndpoint(
+        name=payload.name,
+        base_url=payload.base_url,
+        username=payload.username,
+        credential_ref=payload.credential_ref,
+        cluster_ref=payload.cluster_ref,
+        api_version=payload.api_version,
+        verify_ssl=payload.verify_ssl,
+        enabled=payload.enabled,
+        timeout_seconds=payload.timeout_seconds,
+    )
+    endpoint.set_encrypted_password(payload.password)
+    endpoint.set_encrypted_token(payload.token)
+    session.add(endpoint)
+    await session.commit()
+    await session.refresh(endpoint)
+    return _dashboard_out(endpoint)
+
+
+@router.post("/dashboard/endpoints/{endpoint_id}/validate")
+async def ceph_v2_validate_dashboard_endpoint(
+    endpoint_id: int,
+    session: AsyncDatabaseSessionDep,
+) -> dict[str, Any]:
+    """Probe a registered Ceph Dashboard endpoint (auth + capability detection)."""
+
+    endpoint = await session.get(CephDashboardEndpoint, endpoint_id)
+    if endpoint is None:
+        raise HTTPException(status_code=404, detail="Ceph Dashboard endpoint not found.")
+    ok, error = await validate_dashboard_endpoint(_dashboard_to_config(endpoint))
+    return {"id": endpoint_id, "ok": ok, "error": error}

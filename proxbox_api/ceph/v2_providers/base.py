@@ -108,11 +108,6 @@ class UnsupportedCephProviderAdapter(CephProviderAdapter):
         raise self._unsupported()
 
 
-class DashboardCephProviderAdapter(UnsupportedCephProviderAdapter):
-    provider = "dashboard"
-    followup = "#98"
-
-
 class RGWAdminCephProviderAdapter(UnsupportedCephProviderAdapter):
     provider = "rgw_admin"
     followup = "#435 / proxmox-sdk#12"
@@ -131,7 +126,6 @@ class ExternalCephProviderAdapter(UnsupportedCephProviderAdapter):
 __all__ = [
     "CephCapabilityUnsupported",
     "CephProviderAdapter",
-    "DashboardCephProviderAdapter",
     "ExternalCephProviderAdapter",
     "RBDCephProviderAdapter",
     "RGWAdminCephProviderAdapter",

@@ -297,6 +297,45 @@ class PrometheusSource(SQLModel, table=True):
         self.bearer_token = encrypt_value(value) if value else None
 
 
+class CephDashboardEndpoint(SQLModel, table=True):
+    """Direct Ceph Dashboard API endpoint for Ceph v2 (#98).
+
+    Stores connection metadata plus an encrypted password (or token) used to
+    authenticate to the Ceph Manager Dashboard REST API. No Proxmox endpoint is
+    required, so this works for external/standalone clusters. ``cluster_ref``
+    binds the endpoint to a Ceph cluster / object reference.
+    """
+
+    __tablename__: ClassVar[str] = "ceph_dashboard_endpoint"
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    base_url: str = Field()
+    username: str | None = Field(default=None)
+    password: str | None = Field(default=None)
+    token: str | None = Field(default=None)
+    credential_ref: str | None = Field(default=None)
+    cluster_ref: str | None = Field(default=None, index=True)
+    api_version: str = Field(default="1.0")
+    verify_ssl: bool = Field(default=True)
+    enabled: bool = Field(default=True)
+    timeout_seconds: int = Field(default=30)
+    last_seen_at: float | None = Field(default=None)
+
+    def get_decrypted_password(self) -> str | None:
+        return decrypt_value(self.password) if self.password else None
+
+    def set_encrypted_password(self, value: str | None) -> None:
+        self.password = encrypt_value(value) if value else None
+
+    def get_decrypted_token(self) -> str | None:
+        return decrypt_value(self.token) if self.token else None
+
+    def set_encrypted_token(self, value: str | None) -> None:
+        self.token = encrypt_value(value) if value else None
+
+
 class AuthLockout(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
@@ -686,6 +725,39 @@ def _migrate_prometheus_source_columns() -> None:
             conn.execute(text(stmt))
 
 
+def _migrate_ceph_dashboard_endpoint_columns() -> None:
+    table = CephDashboardEndpoint.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    column_specs: dict[str, str] = {
+        "username": "VARCHAR",
+        "password": "VARCHAR",
+        "token": "VARCHAR",
+        "credential_ref": "VARCHAR",
+        "cluster_ref": "VARCHAR",
+        "api_version": "VARCHAR NOT NULL DEFAULT '1.0'",
+        "verify_ssl": "BOOLEAN NOT NULL DEFAULT 1",
+        "enabled": "BOOLEAN NOT NULL DEFAULT 1",
+        "timeout_seconds": "INTEGER NOT NULL DEFAULT 30",
+        "last_seen_at": "REAL",
+    }
+    stmts = [
+        f"ALTER TABLE {table} ADD COLUMN {col} {spec}"
+        for col, spec in column_specs.items()
+        if col not in existing
+    ]
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_proxmox_endpoint_columns()
@@ -695,6 +767,7 @@ def create_db_and_tables() -> None:
     _migrate_pdm_endpoint_columns()
     _migrate_ceph_operation_run_columns()
     _migrate_prometheus_source_columns()
+    _migrate_ceph_dashboard_endpoint_columns()
 
 
 def get_session() -> Generator[Session, None, None]:
