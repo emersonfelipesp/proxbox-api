@@ -34,6 +34,7 @@ from proxbox_api.ceph.prometheus import (
     PrometheusSourceConfig,
     validate_source,
 )
+from proxbox_api.ceph.rgw_client import RGWAdminConfig
 from proxbox_api.ceph.v2_engine import (
     CephApplyError,
     CephPlanNotFound,
@@ -48,6 +49,7 @@ from proxbox_api.ceph.v2_engine import (
 from proxbox_api.ceph.v2_providers import adapter_for_provider, provider_names
 from proxbox_api.ceph.v2_providers.base import CephProviderAdapter
 from proxbox_api.ceph.v2_providers.dashboard import DashboardCephProviderAdapter
+from proxbox_api.ceph.v2_providers.external import ExternalCephProviderAdapter
 from proxbox_api.ceph.v2_providers.prometheus import PrometheusCephProviderAdapter
 from proxbox_api.ceph.v2_schemas import (
     ApplyRequest,
@@ -64,6 +66,7 @@ from proxbox_api.ceph.v2_schemas import (
 from proxbox_api.database import (
     AsyncDatabaseSessionDep,
     CephDashboardEndpoint,
+    CephExternalCluster,
     CephOperationRunRecord,
     PrometheusSource,
 )
@@ -129,6 +132,57 @@ def _scope_object_ref(scope: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+async def _resolve_external_cluster(
+    session: AsyncDatabaseSessionDep, cluster_ref: str | None
+) -> CephExternalCluster | None:
+    stmt = select(CephExternalCluster).where(CephExternalCluster.enabled == True)  # noqa: E712
+    rows = list((await session.exec(stmt)).all())
+    if cluster_ref:
+        for row in rows:
+            if row.cluster_ref == cluster_ref or row.name == cluster_ref:
+                return row
+    return rows[0] if rows else None
+
+
+def _rgw_config_from_cluster(cluster: CephExternalCluster) -> RGWAdminConfig | None:
+    access = cluster.get_decrypted_rgw_access_key()
+    secret = cluster.get_decrypted_rgw_secret_key()
+    if cluster.rgw_admin_url and access and secret:
+        return RGWAdminConfig(
+            base_url=cluster.rgw_admin_url,
+            access_key=access,
+            secret_key=secret,
+            verify_ssl=cluster.verify_ssl,
+        )
+    return None
+
+
+async def _external_adapter(
+    cluster: CephExternalCluster | None,
+    pxs: list[object],
+    session: AsyncDatabaseSessionDep,
+) -> ExternalCephProviderAdapter:
+    if cluster is None:
+        return ExternalCephProviderAdapter(list(pxs))
+    dashboard_cfg = None
+    if cluster.dashboard_endpoint_id is not None:
+        endpoint = await session.get(CephDashboardEndpoint, cluster.dashboard_endpoint_id)
+        if endpoint is not None:
+            dashboard_cfg = _dashboard_to_config(endpoint)
+    prometheus_cfg = None
+    if cluster.prometheus_source_id is not None:
+        source = await session.get(PrometheusSource, cluster.prometheus_source_id)
+        if source is not None:
+            prometheus_cfg = _source_to_config(source)
+    return ExternalCephProviderAdapter(
+        list(pxs),
+        dashboard=dashboard_cfg,
+        prometheus=prometheus_cfg,
+        rgw=_rgw_config_from_cluster(cluster),
+        ceph_version=cluster.ceph_version_hint,
+    )
+
+
 async def build_adapter(
     provider: str | None,
     pxs: list[object],
@@ -138,8 +192,9 @@ async def build_adapter(
 ) -> CephProviderAdapter:
     """Resolve a provider adapter, injecting DB-stored endpoints where needed.
 
-    Dashboard/Prometheus adapters get their endpoint config wired at construction
-    so ``apply()`` (which receives no scope) and ``read_state()`` both work.
+    Dashboard/Prometheus/External adapters get their endpoint config wired at
+    construction so ``apply()`` (which receives no scope) and ``read_state()``
+    both work.
     """
     name = (provider or "proxmox").strip().lower().replace("-", "_")
     if name == "dashboard":
@@ -150,6 +205,9 @@ async def build_adapter(
         source = await _resolve_prometheus_source(session, object_ref)
         config = _source_to_config(source) if source else None
         return PrometheusCephProviderAdapter(list(pxs), source=config)
+    if name == "external":
+        cluster = await _resolve_external_cluster(session, object_ref)
+        return await _external_adapter(cluster, list(pxs), session)
     return adapter_for_provider(provider, list(pxs))
 
 
@@ -392,6 +450,8 @@ async def ceph_v2_metrics(
         warnings.append("no Prometheus source configured")
     if not metrics and provider == "dashboard":
         warnings.append("no Ceph Dashboard endpoint configured")
+    if not metrics and provider == "external":
+        warnings.append("no metrics provider configured for the external cluster")
     snapshot: CephMetricSnapshot | None = None
     if metrics:
         try:
@@ -606,3 +666,118 @@ async def ceph_v2_validate_dashboard_endpoint(
         raise HTTPException(status_code=404, detail="Ceph Dashboard endpoint not found.")
     ok, error = await validate_dashboard_endpoint(_dashboard_to_config(endpoint))
     return {"id": endpoint_id, "ok": ok, "error": error}
+
+
+# --------------------------------------------------------------------------- #
+# External (non-Proxmox) Ceph cluster registration (#97)
+# --------------------------------------------------------------------------- #
+class ExternalClusterCreate(BaseModel):
+    """Request body to register an external (non-Proxmox) Ceph cluster."""
+
+    name: str = Field(..., min_length=1)
+    cluster_ref: str | None = None
+    ceph_version_hint: str | None = None
+    dashboard_endpoint_id: int | None = None
+    prometheus_source_id: int | None = None
+    rgw_admin_url: str | None = None
+    rgw_access_key: str | None = None
+    rgw_secret_key: str | None = None
+    ssh_host: str | None = None
+    ssh_user: str | None = None
+    ssh_credential_ref: str | None = None
+    verify_ssl: bool = True
+    enabled: bool = True
+
+
+class ExternalClusterOut(BaseModel):
+    """Redacted external cluster record (never exposes RGW secret keys)."""
+
+    id: int
+    name: str
+    cluster_ref: str | None = None
+    ceph_version_hint: str | None = None
+    dashboard_endpoint_id: int | None = None
+    prometheus_source_id: int | None = None
+    rgw_admin_url: str | None = None
+    has_rgw_credentials: bool
+    ssh_host: str | None = None
+    ssh_user: str | None = None
+    verify_ssl: bool
+    enabled: bool
+
+
+def _external_out(cluster: CephExternalCluster) -> ExternalClusterOut:
+    return ExternalClusterOut(
+        id=cluster.id or 0,
+        name=cluster.name,
+        cluster_ref=cluster.cluster_ref,
+        ceph_version_hint=cluster.ceph_version_hint,
+        dashboard_endpoint_id=cluster.dashboard_endpoint_id,
+        prometheus_source_id=cluster.prometheus_source_id,
+        rgw_admin_url=cluster.rgw_admin_url,
+        has_rgw_credentials=bool(cluster.rgw_access_key and cluster.rgw_secret_key),
+        ssh_host=cluster.ssh_host,
+        ssh_user=cluster.ssh_user,
+        verify_ssl=cluster.verify_ssl,
+        enabled=cluster.enabled,
+    )
+
+
+@router.get("/external/clusters", response_model=list[ExternalClusterOut])
+async def ceph_v2_list_external_clusters(
+    session: AsyncDatabaseSessionDep,
+) -> list[ExternalClusterOut]:
+    """List configured external Ceph clusters (RGW secret keys redacted)."""
+
+    rows = list((await session.exec(select(CephExternalCluster))).all())
+    return [_external_out(row) for row in rows]
+
+
+@router.post("/external/clusters", response_model=ExternalClusterOut, status_code=201)
+async def ceph_v2_create_external_cluster(
+    payload: ExternalClusterCreate,
+    session: AsyncDatabaseSessionDep,
+) -> ExternalClusterOut:
+    """Register an external Ceph cluster. RGW secret keys are encrypted at rest."""
+
+    existing = (
+        await session.exec(
+            select(CephExternalCluster).where(CephExternalCluster.name == payload.name)
+        )
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="A cluster with that name already exists.")
+    cluster = CephExternalCluster(
+        name=payload.name,
+        cluster_ref=payload.cluster_ref,
+        ceph_version_hint=payload.ceph_version_hint,
+        dashboard_endpoint_id=payload.dashboard_endpoint_id,
+        prometheus_source_id=payload.prometheus_source_id,
+        rgw_admin_url=payload.rgw_admin_url,
+        ssh_host=payload.ssh_host,
+        ssh_user=payload.ssh_user,
+        ssh_credential_ref=payload.ssh_credential_ref,
+        verify_ssl=payload.verify_ssl,
+        enabled=payload.enabled,
+    )
+    cluster.set_encrypted_rgw_access_key(payload.rgw_access_key)
+    cluster.set_encrypted_rgw_secret_key(payload.rgw_secret_key)
+    session.add(cluster)
+    await session.commit()
+    await session.refresh(cluster)
+    return _external_out(cluster)
+
+
+@router.post("/external/clusters/{cluster_id}/capabilities", response_model=CapabilitiesResponse)
+async def ceph_v2_external_cluster_capabilities(
+    cluster_id: int,
+    pxs: ProxmoxSessionsDep,
+    session: AsyncDatabaseSessionDep,
+) -> CapabilitiesResponse:
+    """Detect capabilities for an external cluster from its configured providers."""
+
+    cluster = await session.get(CephExternalCluster, cluster_id)
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="External Ceph cluster not found.")
+    adapter = await _external_adapter(cluster, list(pxs), session)
+    return CapabilitiesResponse(providers=[await adapter.capabilities()])

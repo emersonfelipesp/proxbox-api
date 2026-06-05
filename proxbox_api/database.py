@@ -336,6 +336,47 @@ class CephDashboardEndpoint(SQLModel, table=True):
         self.token = encrypt_value(value) if value else None
 
 
+class CephExternalCluster(SQLModel, table=True):
+    """External (non-Proxmox) Ceph cluster binding for Ceph v2 (#97).
+
+    Provider-neutral: references an optional Ceph Dashboard endpoint and
+    Prometheus source (by id) and carries inline RGW Admin Ops credentials.
+    No Proxmox endpoint / node / storage / task fields. ``ceph_version_hint``
+    feeds capability detection.
+    """
+
+    __tablename__: ClassVar[str] = "ceph_external_cluster"
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    cluster_ref: str | None = Field(default=None, index=True)
+    ceph_version_hint: str | None = Field(default=None)
+    dashboard_endpoint_id: int | None = Field(default=None)
+    prometheus_source_id: int | None = Field(default=None)
+    rgw_admin_url: str | None = Field(default=None)
+    rgw_access_key: str | None = Field(default=None)
+    rgw_secret_key: str | None = Field(default=None)
+    ssh_host: str | None = Field(default=None)
+    ssh_user: str | None = Field(default=None)
+    ssh_credential_ref: str | None = Field(default=None)
+    verify_ssl: bool = Field(default=True)
+    enabled: bool = Field(default=True)
+    last_seen_at: float | None = Field(default=None)
+
+    def get_decrypted_rgw_access_key(self) -> str | None:
+        return decrypt_value(self.rgw_access_key) if self.rgw_access_key else None
+
+    def set_encrypted_rgw_access_key(self, value: str | None) -> None:
+        self.rgw_access_key = encrypt_value(value) if value else None
+
+    def get_decrypted_rgw_secret_key(self) -> str | None:
+        return decrypt_value(self.rgw_secret_key) if self.rgw_secret_key else None
+
+    def set_encrypted_rgw_secret_key(self, value: str | None) -> None:
+        self.rgw_secret_key = encrypt_value(value) if value else None
+
+
 class AuthLockout(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
@@ -758,6 +799,42 @@ def _migrate_ceph_dashboard_endpoint_columns() -> None:
             conn.execute(text(stmt))
 
 
+def _migrate_ceph_external_cluster_columns() -> None:
+    table = CephExternalCluster.__tablename__
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        existing = {c["name"] for c in insp.get_columns(table)}
+    except Exception:
+        return
+    column_specs: dict[str, str] = {
+        "cluster_ref": "VARCHAR",
+        "ceph_version_hint": "VARCHAR",
+        "dashboard_endpoint_id": "INTEGER",
+        "prometheus_source_id": "INTEGER",
+        "rgw_admin_url": "VARCHAR",
+        "rgw_access_key": "VARCHAR",
+        "rgw_secret_key": "VARCHAR",
+        "ssh_host": "VARCHAR",
+        "ssh_user": "VARCHAR",
+        "ssh_credential_ref": "VARCHAR",
+        "verify_ssl": "BOOLEAN NOT NULL DEFAULT 1",
+        "enabled": "BOOLEAN NOT NULL DEFAULT 1",
+        "last_seen_at": "REAL",
+    }
+    stmts = [
+        f"ALTER TABLE {table} ADD COLUMN {col} {spec}"
+        for col, spec in column_specs.items()
+        if col not in existing
+    ]
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_proxmox_endpoint_columns()
@@ -768,6 +845,7 @@ def create_db_and_tables() -> None:
     _migrate_ceph_operation_run_columns()
     _migrate_prometheus_source_columns()
     _migrate_ceph_dashboard_endpoint_columns()
+    _migrate_ceph_external_cluster_columns()
 
 
 def get_session() -> Generator[Session, None, None]:
