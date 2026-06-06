@@ -133,6 +133,7 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
         retry_backoff_seconds=0.35,
         checkpoint_path=None,
         checkpoint_every=50,
+        allow_insecure_ssl=False,
     ):
         if checkpoint_path:
             Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
@@ -145,6 +146,7 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
             "retry_backoff_seconds": retry_backoff_seconds,
             "checkpoint_path": checkpoint_path,
             "checkpoint_every": checkpoint_every,
+            "allow_insecure_ssl": allow_insecure_ssl,
             "endpoint_count": 1,
             "discovered_navigation_items": 1,
             "method_count": 1,
@@ -187,7 +189,7 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "fetch_apidoc_js",
-        lambda url: (
+        lambda url, allow_insecure_ssl=False: (
             'const apiSchema = [{"path":"/version","text":"version","leaf":1,"info":{"GET":{"name":"version","parameters":{"additionalProperties":0},"returns":{"type":"object"}}}}];'
         ),
     )
