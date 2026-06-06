@@ -54,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Write crawl checkpoint after this many processed endpoints.",
     )
+    parser.add_argument(
+        "--allow-insecure-ssl",
+        action="store_true",
+        help="Disable TLS verification for self-signed Proxmox API viewer endpoints.",
+    )
     return parser
 
 
@@ -72,6 +77,7 @@ def main() -> int:
         retry_count=max(0, args.retry_count),
         retry_backoff_seconds=max(0.0, args.retry_backoff),
         checkpoint_every=max(1, args.checkpoint_every),
+        allow_insecure_ssl=args.allow_insecure_ssl,
     )
     viewer_capture = bundle.capture.get("viewer", {})
     completeness = bundle.capture.get("completeness", {})
@@ -99,6 +105,7 @@ def main() -> int:
             "retry_count": max(0, args.retry_count),
             "retry_backoff_seconds": max(0.0, args.retry_backoff),
             "checkpoint_every": max(1, args.checkpoint_every),
+            "allow_insecure_ssl": args.allow_insecure_ssl,
         },
     )
     return 0

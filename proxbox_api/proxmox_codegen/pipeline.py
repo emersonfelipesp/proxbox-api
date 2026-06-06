@@ -184,6 +184,7 @@ def generate_proxmox_codegen_bundle(
     retry_count: int = 2,
     retry_backoff_seconds: float = 0.35,
     checkpoint_every: int = 50,
+    allow_insecure_ssl: bool = False,
 ) -> GenerationBundle:
     """Sync wrapper for async generation pipeline."""
 
@@ -196,6 +197,7 @@ def generate_proxmox_codegen_bundle(
             retry_count=retry_count,
             retry_backoff_seconds=retry_backoff_seconds,
             checkpoint_every=checkpoint_every,
+            allow_insecure_ssl=allow_insecure_ssl,
         )
     )
 
@@ -209,6 +211,7 @@ async def generate_proxmox_codegen_bundle_async(
     retry_count: int = 2,
     retry_backoff_seconds: float = 0.35,
     checkpoint_every: int = 50,
+    allow_insecure_ssl: bool = False,
 ) -> GenerationBundle:
     """Run full generation pipeline and optionally persist artifacts."""
 
@@ -229,6 +232,7 @@ async def generate_proxmox_codegen_bundle_async(
                 else None
             ),
             checkpoint_every=checkpoint_every,
+            allow_insecure_ssl=allow_insecure_ssl,
         )
     else:
         viewer_capture = {
@@ -239,7 +243,10 @@ async def generate_proxmox_codegen_bundle_async(
             "duration_seconds": 0.0,
         }
 
-    apidoc_source = fetch_apidoc_js(url=_viewer_apidoc_js_url(source_url))
+    apidoc_source = fetch_apidoc_js(
+        url=_viewer_apidoc_js_url(source_url),
+        allow_insecure_ssl=allow_insecure_ssl,
+    )
     apidoc_tree = parse_api_schema(apidoc_source)
     apidoc_flat = flatten_api_schema(apidoc_tree)
 

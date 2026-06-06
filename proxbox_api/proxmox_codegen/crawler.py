@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
 
 HTTP_METHODS = ("GET", "POST", "PUT", "DELETE")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -27,6 +29,7 @@ class CrawlConfig:
     retry_count: int = 2
     retry_backoff_seconds: float = 0.35
     checkpoint_every: int = 50
+    allow_insecure_ssl: bool = False
 
 
 def _normalize_doc_section_text(value: object) -> str | None:
@@ -425,6 +428,7 @@ async def crawl_proxmox_api_viewer_async(
     retry_backoff_seconds: float = 0.35,
     checkpoint_path: str | Path | None = None,
     checkpoint_every: int = 50,
+    allow_insecure_ssl: bool = False,
 ) -> dict[str, object]:
     """Recursively traverse all navigation items and capture endpoint raw data in parallel."""
 
@@ -438,12 +442,20 @@ async def crawl_proxmox_api_viewer_async(
         retry_count=max(0, retry_count),
         retry_backoff_seconds=max(0.0, retry_backoff_seconds),
         checkpoint_every=max(1, checkpoint_every),
+        allow_insecure_ssl=allow_insecure_ssl,
     )
     checkpoint_file = Path(checkpoint_path) if checkpoint_path else None
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(ignore_https_errors=True)
+        context_kwargs: dict[str, object] = {}
+        if config.allow_insecure_ssl:
+            logger.critical(
+                "SSL verification disabled for Playwright crawl from %s (allow_insecure_ssl=True)",
+                config.url,
+            )
+            context_kwargs["ignore_https_errors"] = True
+        context = await browser.new_context(**context_kwargs)
 
         seed_page = await context.new_page()
         tree_paths = await _setup_page(seed_page, config)
@@ -509,6 +521,7 @@ async def crawl_proxmox_api_viewer_async(
         "retry_count": config.retry_count,
         "retry_backoff_seconds": config.retry_backoff_seconds,
         "checkpoint_every": config.checkpoint_every,
+        "allow_insecure_ssl": config.allow_insecure_ssl,
         "checkpoint_path": str(checkpoint_file) if checkpoint_file else None,
         "endpoint_count": len(results),
         "discovered_navigation_items": len(all_items),
@@ -528,6 +541,7 @@ def crawl_proxmox_api_viewer(
     retry_backoff_seconds: float = 0.35,
     checkpoint_path: str | Path | None = None,
     checkpoint_every: int = 50,
+    allow_insecure_ssl: bool = False,
 ) -> dict[str, object]:
     """Synchronous wrapper for async crawler, preserving existing call sites."""
 
@@ -542,5 +556,6 @@ def crawl_proxmox_api_viewer(
             retry_backoff_seconds=retry_backoff_seconds,
             checkpoint_path=checkpoint_path,
             checkpoint_every=checkpoint_every,
+            allow_insecure_ssl=allow_insecure_ssl,
         )
     )
