@@ -1,11 +1,35 @@
 """Cloud-init driven VM provisioning schemas."""
 
+import ipaddress
+import os
+import re
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from proxbox_api.routes.intent.cloud_init import CloudInitPayload
+from proxbox_api.settings_client import get_settings
+from proxbox_api.ssrf import validate_endpoint_url
+
+_DEFAULT_SSH_KEY_DIR = Path("/etc/proxbox/ssh_keys")
+_HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+_SSH_USER_RE = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$")
+
+
+def _is_valid_hostname(value: str) -> bool:
+    if not value or len(value) > 253:
+        return False
+    hostname = value[:-1] if value.endswith(".") else value
+    if not hostname:
+        return False
+    return all(_HOST_LABEL_RE.fullmatch(label) for label in hostname.split("."))
+
+
+def _ssh_key_dir() -> Path:
+    configured = os.environ.get("PROXBOX_SSH_KEY_DIR", "").strip()
+    return Path(configured).resolve() if configured else _DEFAULT_SSH_KEY_DIR.resolve()
 
 
 class ProxmoxProductType(str, Enum):
@@ -165,6 +189,59 @@ class CloudImageTemplateBuildRequest(BaseModel):
     ssh_port: int = Field(22, ge=1, le=65535)
     ssh_identity_file: str | None = None
     ssh_authorized_keys: list[str] = Field(default_factory=list)
+
+    @field_validator("image_url")
+    @classmethod
+    def validate_image_url_ssrf(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        safe, reason = validate_endpoint_url(value, get_settings())
+        if not safe:
+            raise ValueError(f"image_url rejected by SSRF protection: {reason}")
+        return value
+
+    @field_validator("ssh_host")
+    @classmethod
+    def validate_ssh_host(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        host = value.strip()
+        if not host:
+            raise ValueError("ssh_host must be a non-empty hostname or IP address.")
+        if host.startswith("-"):
+            raise ValueError("ssh_host must not start with '-' or resemble an ssh option.")
+        if "%" in host:
+            raise ValueError("ssh_host must not include an IPv6 zone identifier.")
+        try:
+            ipaddress.ip_address(host)
+            return host
+        except ValueError:
+            pass
+        if not _is_valid_hostname(host):
+            raise ValueError("ssh_host must be a valid hostname, IPv4 address, or IPv6 address.")
+        return host
+
+    @field_validator("ssh_user")
+    @classmethod
+    def validate_ssh_user(cls, value: str) -> str:
+        if not _SSH_USER_RE.fullmatch(value):
+            raise ValueError("ssh_user must match ^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$.")
+        return value
+
+    @field_validator("ssh_identity_file")
+    @classmethod
+    def validate_ssh_identity_file(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        resolved = Path(value).resolve()
+        allowed_dir = _ssh_key_dir()
+        try:
+            resolved.relative_to(allowed_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"ssh_identity_file must resolve under PROXBOX_SSH_KEY_DIR ({allowed_dir})."
+            ) from exc
+        return str(resolved)
 
 
 class CloudImageTemplateBuildResponse(BaseModel):

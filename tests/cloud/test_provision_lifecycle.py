@@ -15,6 +15,9 @@ from sqlmodel import Session
 
 from proxbox_api.database import ProxmoxEndpoint, get_async_session
 from proxbox_api.main import app
+from proxbox_api.routes.cloud import provision as provision_route
+from proxbox_api.routes.intent.cloud_init import CloudInitPayload
+from proxbox_api.schemas.cloud_provision import CloudVMProvisionRequest
 from proxbox_api.testing.proxmox_mock import reset_mock_state
 
 
@@ -148,3 +151,71 @@ async def test_cloud_provision_writes_disabled_returns_gate_reason(
 
     assert response.status_code == 403
     assert response.json()["reason"] == "endpoint_writes_disabled"
+
+
+@pytest.mark.asyncio
+async def test_cloud_provision_waits_for_config_upid_before_start(monkeypatch) -> None:
+    events: list[str] = []
+
+    class _Proxmox:
+        async def aclose(self) -> None:
+            events.append("close")
+
+    async def _gate(_session, _endpoint_id):
+        events.append("gate")
+        return object()
+
+    async def _open(_endpoint):
+        events.append("open")
+        return _Proxmox()
+
+    async def _clone(_proxmox, _req):
+        events.append("clone")
+        return "clone-result"
+
+    async def _configure(_proxmox, _req):
+        events.append("configure")
+        return "UPID:pve:config"
+
+    async def _wait(_proxmox, node, upid):
+        events.append(f"wait:{node}:{upid}")
+
+    async def _start(_proxmox, _req):
+        events.append("start")
+        return "start-result"
+
+    async def _journal(**_kwargs):
+        events.append("journal")
+
+    monkeypatch.setattr(provision_route, "_gate", _gate)
+    monkeypatch.setattr(provision_route, "_open_proxmox_session", _open)
+    monkeypatch.setattr(provision_route, "_clone_template_vm", _clone)
+    monkeypatch.setattr(provision_route, "_configure_cloud_init_vm", _configure)
+    monkeypatch.setattr(provision_route, "_wait_for_upid", _wait)
+    monkeypatch.setattr(provision_route, "_start_vm_after_provision", _start)
+    monkeypatch.setattr(provision_route, "_journal_provision_best_effort", _journal)
+    monkeypatch.setattr(provision_route, "_should_wait_for_upid", lambda: True)
+
+    response = await provision_route.provision_vm(
+        CloudVMProvisionRequest(
+            endpoint_id=1,
+            template_vmid=9000,
+            new_vmid=9100,
+            new_name="tenant-vm-9100",
+            target_node="pve",
+            cloud_init=CloudInitPayload(user="ubuntu", ssh_keys=["ssh-rsa AAA"]),
+        ),
+        session=object(),
+    )
+
+    assert response.config_upid == "UPID:pve:config"
+    assert events == [
+        "gate",
+        "open",
+        "clone",
+        "configure",
+        "wait:pve:UPID:pve:config",
+        "start",
+        "journal",
+        "close",
+    ]

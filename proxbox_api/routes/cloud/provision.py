@@ -353,6 +353,8 @@ async def provision_vm(
             config_upid = await _configure_cloud_init_vm(proxmox, req)
         except Exception as error:  # noqa: BLE001
             raise _proxmox_step_failed("configure_cloud_init", error) from error
+        if _is_upid(config_upid) and _should_wait_for_upid():
+            await _wait_for_upid(proxmox, req.target_node, config_upid)
 
         try:
             start_upid = await _start_vm_after_provision(proxmox, req)

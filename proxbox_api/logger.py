@@ -3,6 +3,7 @@
 import contextvars
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -22,6 +23,68 @@ _THIRD_PARTY_NOISY = [
 ]
 
 _VALID_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+_SENSITIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(
+            r"(X-Proxbox-API-Key\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(
+            r"(Authorization\s*[:=]\s*)"
+            r"(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+(?:\s+[^\s,;}\]]+)?)",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
+    (re.compile(r"\bBearer\s+[^\s,;}\]]+", re.IGNORECASE), "Bearer [REDACTED]"),
+    (
+        re.compile(
+            r"((?:[A-Za-z0-9_-]*(?:token|key|password|secret)[A-Za-z0-9_-]*)"
+            r"\s*=\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(
+            r"(\"[^\"]*(?:token|key|password|secret)[^\"]*\"\s*:\s*)"
+            r"(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)",
+            re.IGNORECASE,
+        ),
+        r'\1"[REDACTED]"',
+    ),
+]
+
+
+def _redact(text: str) -> str:
+    for pattern, replacement in _SENSITIVE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+class SensitiveDataFilter(logging.Filter):
+    """Redact known credential patterns from log records before output."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _redact(record.msg)
+        if record.args:
+            if isinstance(record.args, tuple):
+                record.args = tuple(
+                    _redact(arg) if isinstance(arg, str) else arg for arg in record.args
+                )
+            elif isinstance(record.args, dict):
+                record.args = {
+                    key: _redact(value) if isinstance(value, str) else value
+                    for key, value in record.args.items()
+                }
+            elif isinstance(record.args, str):
+                record.args = _redact(record.args)
+        return True
 
 
 def _parse_log_level(raw: str, default: int = logging.INFO) -> int:
@@ -107,6 +170,7 @@ def _create_file_handler(
 
     file_handler.setLevel(logging.WARNING)
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(SensitiveDataFilter())
     return file_handler
 
 
@@ -173,6 +237,7 @@ def setup_logger() -> logging.Logger:
     # always receive DEBUG+ and WARNING+ respectively.
     console_level = _parse_log_level(os.environ.get("PROXBOX_LOG_LEVEL", "INFO"))
     console_handler.setLevel(console_level)
+    console_handler.addFilter(SensitiveDataFilter())
 
     formatter = ColorizedFormatter(
         "%(name)s [%(asctime)s] [%(levelname)-8s] %(module)s: %(message)s"

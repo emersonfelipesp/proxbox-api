@@ -7,6 +7,7 @@ import logging
 import proxbox_api.logger as logger_module
 from proxbox_api.constants import DEFAULT_LOG_PATH
 from proxbox_api.logger import (
+    SensitiveDataFilter,
     _configure_third_party_levels,
     _parse_log_level,
     configure_file_logging_path,
@@ -219,3 +220,85 @@ def test_third_party_loggers_not_suppressed_at_debug_level():
         assert nb_client_logger.level == logging.DEBUG
     finally:
         nb_client_logger.setLevel(original_level)
+
+
+# ---------------------------------------------------------------------------
+# Sensitive data redaction
+# ---------------------------------------------------------------------------
+
+
+def test_sensitive_data_filter_redacts_headers_and_secret_pairs():
+    record = logging.LogRecord(
+        name="proxbox",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg=(
+            "Authorization: Bearer auth-token X-Proxbox-API-Key: proxbox-key "
+            'password="db-password" token_value=token-secret '
+            '{"client_secret": "json-secret", "api_key": "json-key"} '
+            "Bearer loose-token"
+        ),
+        args=(),
+        exc_info=None,
+    )
+
+    assert SensitiveDataFilter().filter(record) is True
+    message = record.getMessage()
+
+    for leaked in (
+        "auth-token",
+        "proxbox-key",
+        "db-password",
+        "token-secret",
+        "json-secret",
+        "json-key",
+        "loose-token",
+    ):
+        assert leaked not in message
+    assert "[REDACTED]" in message
+
+
+def test_sensitive_data_filter_redacts_string_args():
+    record = logging.LogRecord(
+        name="proxbox",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg="headers=%s payload=%s",
+        args=("Bearer arg-token", '{"password": "arg-password"}'),
+        exc_info=None,
+    )
+
+    SensitiveDataFilter().filter(record)
+    message = record.getMessage()
+
+    assert "arg-token" not in message
+    assert "arg-password" not in message
+    assert "Bearer [REDACTED]" in message
+
+
+def test_setup_logger_attaches_sensitive_data_filter_to_console_and_file(monkeypatch):
+    monkeypatch.setattr(logger_module, "TimedRotatingFileHandler", _FakeTimedRotatingFileHandler)
+
+    original_handlers = list(logger.handlers)
+    logger.handlers = []
+    _FakeTimedRotatingFileHandler.created_paths = []
+    _FakeTimedRotatingFileHandler.fail_paths = set()
+    try:
+        result_logger = logger_module.setup_logger()
+        console_handlers = [
+            h
+            for h in result_logger.handlers
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+        ]
+        file_handlers = [
+            h for h in result_logger.handlers if isinstance(h, _FakeTimedRotatingFileHandler)
+        ]
+
+        assert console_handlers
+        assert file_handlers
+        assert any(isinstance(f, SensitiveDataFilter) for f in console_handlers[0].filters)
+        assert any(isinstance(f, SensitiveDataFilter) for f in file_handlers[0].filters)
+    finally:
+        logger.handlers = original_handlers
