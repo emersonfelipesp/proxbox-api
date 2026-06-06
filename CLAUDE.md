@@ -15,10 +15,11 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ### Companion repos (cross-link map)
 
-- **`netbox-proxbox` v0.0.18** — the NetBox plugin that consumes this backend.
-  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The v0.0.18 release
-  (PVE 9.2 SDN models, CPU model, HA arm/disarm views, node-level firewall sync)
-  requires `proxbox-api >= 0.0.14`; firewall model scaffolding and intent tag
+- **`netbox-proxbox` v0.0.20** — the NetBox plugin that consumes this backend.
+  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
+  pairing is `netbox-proxbox 0.0.20` ↔ `proxbox-api 0.0.17` ↔ `proxmox-sdk 0.0.11`
+  ↔ `netbox-sdk 0.0.8.post1`. Operational-verb routes (start/stop/snapshot/migrate)
+  require `proxbox-api >= 0.0.17`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
   Firecracker Cloud uses the plugin for host pools, host-agent inventory, image
   templates, and `FirecrackerMicroVM` rows while this backend calls the selected
