@@ -41,6 +41,10 @@ def _run_resolve(monkeypatch, existing_for_address):
     monkeypatch.setattr(
         "proxbox_api.services.sync.network.rest_reconcile_async", _fake_rest_reconcile
     )
+    monkeypatch.setattr("proxbox_api.services.sync.ip_ownership.rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.ip_ownership.rest_reconcile_async", _fake_rest_reconcile
+    )
 
     results = asyncio.run(
         _resolve_vm_interface_ips(

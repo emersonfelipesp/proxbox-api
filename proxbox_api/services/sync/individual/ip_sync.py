@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
+from proxbox_api.netbox_rest import rest_first_async, rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxIpAddressSyncState
 from proxbox_api.services.proxmox_helpers import (
     get_qemu_guest_agent_hostname,
@@ -20,6 +20,7 @@ from proxbox_api.services.sync.individual.helpers import (
     get_serialized_first_record,
     resolve_guest_interface_by_ip,
 )
+from proxbox_api.services.sync.ip_ownership import _reconcile_interface_ip
 from proxbox_api.services.sync.vm_helpers import record_id
 
 
@@ -223,40 +224,61 @@ async def sync_ip_individual(
             auto_create_interface=auto_create_interface,
         )
 
-        ip_payload: dict[str, object] = {
-            "address": ip_address,
-            "status": "active",
-            "dns_name": dns_name or "",
-            "tags": tag_refs,
-            "custom_fields": {"proxmox_last_updated": now.isoformat()},
-        }
-
-        if interface_id:
-            ip_payload["assigned_object_type"] = "virtualization.vminterface"
-            ip_payload["assigned_object_id"] = interface_id
-
         existing_ips = await rest_list_async(
             nb,
             "/api/ipam/ip-addresses/",
             query={"address": ip_address.split("/")[0]},
         )
-        ip_record = await rest_reconcile_async(
-            nb,
-            "/api/ipam/ip-addresses/",
-            lookup=build_ip_lookup_key(ip_address),
-            payload=ip_payload,
-            schema=NetBoxIpAddressSyncState,
-            current_normalizer=lambda record: {
-                "address": record.get("address"),
-                "assigned_object_type": record.get("assigned_object_type"),
-                "assigned_object_id": record.get("assigned_object_id"),
-                "status": record.get("status"),
-                "dns_name": record.get("dns_name"),
-                "tags": record.get("tags"),
-            },
-        )
+        if interface_id:
+            ip_id = await _reconcile_interface_ip(
+                nb,
+                ip_addr=ip_address,
+                interface_id=interface_id,
+                tag_refs=tag_refs,
+                now=now,
+                dns_name=dns_name,
+                interface_name=resolved_interface or "",
+            )
+            ip_record = (
+                await rest_first_async(
+                    nb,
+                    "/api/ipam/ip-addresses/",
+                    query={"id": ip_id, "limit": 1},
+                )
+                if ip_id is not None
+                else None
+            )
+        else:
+            ip_payload: dict[str, object] = {
+                "address": ip_address,
+                "status": "active",
+                "dns_name": dns_name or "",
+                "tags": tag_refs,
+                "custom_fields": {"proxmox_last_updated": now.isoformat()},
+            }
+            ip_record = await rest_reconcile_async(
+                nb,
+                "/api/ipam/ip-addresses/",
+                lookup=build_ip_lookup_key(ip_address),
+                payload=ip_payload,
+                schema=NetBoxIpAddressSyncState,
+                current_normalizer=lambda record: {
+                    "address": record.get("address"),
+                    "assigned_object_type": record.get("assigned_object_type"),
+                    "assigned_object_id": record.get("assigned_object_id"),
+                    "status": record.get("status"),
+                    "dns_name": record.get("dns_name"),
+                    "tags": record.get("tags"),
+                },
+            )
 
-        netbox_object = ip_record.serialize() if hasattr(ip_record, "serialize") else None
+        netbox_object = (
+            ip_record.serialize()
+            if hasattr(ip_record, "serialize")
+            else dict(ip_record)
+            if isinstance(ip_record, dict)
+            else None
+        )
         action = "updated" if existing_ips else "created"
 
         dependencies: list[dict] = [

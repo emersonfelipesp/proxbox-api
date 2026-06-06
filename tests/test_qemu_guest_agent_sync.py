@@ -168,6 +168,14 @@ def _install_common_sync_patches(  # noqa: C901
         "proxbox_api.services.sync.network.rest_list_async",
         _fake_rest_list,
     )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.ip_ownership.rest_reconcile_async",
+        _fake_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.ip_ownership.rest_list_async",
+        _fake_rest_list,
+    )
 
 
 def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkeypatch):

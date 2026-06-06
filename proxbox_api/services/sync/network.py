@@ -21,6 +21,10 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVlanSyncState,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.sync.ip_ownership import (
+    _ip_address_current_normalizer,
+    _reconcile_interface_ip,
+)
 from proxbox_api.services.sync.vm_helpers import (
     _is_skippable_ip,
     all_guest_agent_ips,
@@ -119,28 +123,16 @@ async def sync_node_interface_and_ip(
 
     if node_cidr and interface_id is not None:
         try:
-            ip_record = await rest_reconcile_async(
+            ip_id = await _reconcile_interface_ip(
                 nb,
-                "/api/ipam/ip-addresses/",
-                lookup={"address": node_cidr},
-                payload={
-                    "address": node_cidr,
-                    "assigned_object_type": "dcim.interface",
-                    "assigned_object_id": int(interface_id),
-                    "status": "active",
-                    "tags": tag_refs,
-                },
-                schema=NetBoxIpAddressSyncState,
-                current_normalizer=lambda record: {
-                    "address": record.get("address"),
-                    "assigned_object_type": record.get("assigned_object_type"),
-                    "assigned_object_id": record.get("assigned_object_id"),
-                    "status": record.get("status"),
-                    "tags": record.get("tags"),
-                },
-            )
-            ip_id = getattr(ip_record, "id", None) or (
-                ip_record.get("id") if isinstance(ip_record, dict) else None
+                ip_addr=node_cidr,
+                interface_id=int(interface_id),
+                tag_refs=tag_refs,
+                now=datetime.now(timezone.utc),
+                dns_name=None,
+                interface_name=interface_name,
+                assigned_object_type="dcim.interface",
+                interface_lookup_field="interface_id",
             )
             result["ip_id"] = ip_id
             result["ip_address"] = node_cidr
@@ -604,17 +596,11 @@ async def bulk_reconcile_vm_interface_ips(
             nb,
             "/api/ipam/ip-addresses/",
             payloads=ip_payloads,
-            lookup_fields=["address"],
+            lookup_fields=["address", "assigned_object_id"],
             schema=NetBoxIpAddressSyncState,
-            current_normalizer=lambda record: {
-                "address": record.get("address"),
-                "assigned_object_type": record.get("assigned_object_type"),
-                "assigned_object_id": record.get("assigned_object_id"),
-                "status": record.get("status"),
-                "dns_name": record.get("dns_name"),
-                "tags": record.get("tags"),
-            },
+            current_normalizer=_ip_address_current_normalizer,
             patchable_fields=patchable_fields,
+            base_query={"assigned_object_type": "virtualization.vminterface"},
         )
         return result.records if result and hasattr(result, "records") else []
     except Exception as e:
@@ -694,140 +680,6 @@ async def cleanup_stale_ips_for_interface(
     except Exception as exc:
         logger.warning("Failed to bulk-delete stale IPs for interface id=%s: %s", interface_id, exc)
         return 0
-
-
-def _ip_address_current_normalizer(record: dict) -> dict:
-    """Shared normalizer for ip-address reconcile drift comparison."""
-    return {
-        "address": record.get("address"),
-        "assigned_object_type": record.get("assigned_object_type"),
-        "assigned_object_id": record.get("assigned_object_id"),
-        "status": record.get("status"),
-        "dns_name": record.get("dns_name"),
-        "tags": record.get("tags"),
-    }
-
-
-def _record_field(record: object, key: str, default: object = None) -> object:
-    """Read a field from a NetBox record that may be a dict or a RestRecord."""
-    if isinstance(record, dict):
-        return record.get(key, default)
-    serialize = getattr(record, "serialize", None)
-    if callable(serialize):
-        try:
-            return serialize().get(key, default)
-        except Exception:
-            pass
-    return getattr(record, key, default)
-
-
-async def _reconcile_interface_ip(
-    nb,
-    *,
-    ip_addr: str,
-    interface_id: int,
-    tag_refs: list[dict],
-    now: datetime,
-    dns_name: str | None,
-    interface_name: str,
-) -> int | None:
-    """Reconcile a single VM-interface IP without stealing another object's address.
-
-    NetBox allows the same address to exist on multiple objects. Looking an IP
-    up by address alone and PATCHing its assignment (the previous behavior)
-    reassigned -- i.e. *stole* -- an address that already belonged to a
-    different interface or device, which surfaced as a VM interface "wrongly
-    matched to another server's IP".
-
-    To prevent that, ownership is resolved before any write:
-
-    * reuse a record already assigned to *this* interface (idempotent update),
-    * adopt a record that is currently *unassigned*, or
-    * create a new record scoped to this interface.
-
-    A record assigned to a *different* object is never reused or reassigned. The
-    interface-scoped lookup on the create path also guarantees the reconcile can
-    never fall back to matching (and stealing) a foreign address.
-    """
-    payload = {
-        "address": ip_addr,
-        "assigned_object_type": "virtualization.vminterface",
-        "assigned_object_id": interface_id,
-        "status": "active",
-        "dns_name": dns_name or "",
-        "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
-    }
-
-    try:
-        existing = await rest_list_async(
-            nb,
-            "/api/ipam/ip-addresses/",
-            query={"address": ip_addr, "limit": 50},
-        )
-    except Exception as list_exc:
-        # If ownership cannot be resolved, fall back to the interface-scoped
-        # create path below (which still never matches a foreign address)
-        # rather than aborting the whole IP sync.
-        logger.debug(
-            "Ownership lookup for IP %s failed (%s); using interface-scoped create",
-            ip_addr,
-            list_exc,
-        )
-        existing = []
-
-    own_record: object | None = None
-    adoptable_record: object | None = None
-    for record in existing or []:
-        assigned_type = _record_field(record, "assigned_object_type")
-        assigned_id = _record_field(record, "assigned_object_id")
-        if isinstance(assigned_id, dict):
-            assigned_id = assigned_id.get("id")
-        if assigned_type == "virtualization.vminterface" and assigned_id == interface_id:
-            own_record = record
-            break
-        if adoptable_record is None and (assigned_id is None or assigned_type is None):
-            adoptable_record = record
-
-    target = own_record or adoptable_record
-    try:
-        if target is not None:
-            # Reconcile the specific record we own/adopt by id. For an owned
-            # record the assignment already matches; for an unassigned record
-            # the assignment fields are patched, adopting it onto this interface.
-            record_id = _record_field(target, "id")
-            reconciled = await rest_reconcile_async(
-                nb,
-                "/api/ipam/ip-addresses/",
-                lookup={"id": record_id},
-                payload=payload,
-                schema=NetBoxIpAddressSyncState,
-                current_normalizer=_ip_address_current_normalizer,
-                strict_lookup=True,
-            )
-        else:
-            # No reusable record exists. Create one scoped to this interface; the
-            # strict, interface-scoped lookup means the reconcile fallback can
-            # never match a foreign address and reassign it.
-            reconciled = await rest_reconcile_async(
-                nb,
-                "/api/ipam/ip-addresses/",
-                lookup={"address": ip_addr, "vminterface_id": interface_id},
-                payload=payload,
-                schema=NetBoxIpAddressSyncState,
-                current_normalizer=_ip_address_current_normalizer,
-                strict_lookup=True,
-            )
-    except Exception as ip_exc:
-        logger.warning(
-            "Failed to sync IP %s for VM interface %s: %s",
-            ip_addr,
-            interface_name,
-            ip_exc,
-        )
-        return None
-
-    return _record_field(reconciled, "id")
 
 
 async def _resolve_vm_interface_ips(  # noqa: C901
