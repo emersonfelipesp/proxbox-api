@@ -1626,7 +1626,7 @@ async def rest_bulk_delete_async(
                 pass
             raise ProxboxException(message="NetBox REST bulk delete failed", detail=detail)
         _invalidate_get_cache_for_path(api, normalized_path)
-        return len(ids)
+        return len(unique_ids)
 
     max_retries = _resolve_netbox_max_retries()
     base_delay = _resolve_netbox_retry_delay()

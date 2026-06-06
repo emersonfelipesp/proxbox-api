@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
@@ -42,7 +42,7 @@ async def process_vm_network_interface(  # noqa: C901
         Processed interface data dict or None if failed
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
     # Early returns for validation
     if not isinstance(interface_config, dict):

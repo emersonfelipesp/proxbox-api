@@ -1,7 +1,7 @@
 """Internal read-only Ceph facade over the existing Proxmox SDK client.
 
-The public ``proxmox_sdk.ceph`` namespace is not available in the current
-``proxmox-sdk==0.0.4.post2`` dependency.  Keep the proxbox-api ``/ceph/*``
+The public ``proxmox_sdk.ceph`` read namespace is not available in the current
+``proxmox-sdk==0.0.10`` dependency.  Keep the proxbox-api ``/ceph/*``
 routes operational by calling the same Proxmox VE API paths directly through
 the already-authenticated SDK session.
 """

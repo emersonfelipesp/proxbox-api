@@ -69,7 +69,7 @@ jobs:
             echo "Official release: ${VERSION}"
           fi
           # Validate pyproject.toml matches tag
-          PYVER=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          PYVER=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
           if [ "${VERSION}" != "${PYVER}" ]; then
             echo "ERROR: tag ${TAG} (${VERSION}) does not match pyproject.toml version ${PYVER}"
             exit 1
@@ -121,7 +121,7 @@ jobs:
           GITEA_TOKEN: ${{ secrets.PKG_TOKEN }}
         run: |
           set -euo pipefail
-          PKG_NAME=$(grep '^name' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          PKG_NAME=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['name'])")
           sleep 5
           COUNT=$(curl -sf \
             "https://git.nmulti.cloud/api/v1/packages/emersonfelipesp?type=pypi&q=${PKG_NAME}&limit=50" \
