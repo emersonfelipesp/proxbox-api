@@ -7,10 +7,14 @@ Encryption is applied to sensitive fields stored in the SQLite database:
 - ProxmoxEndpoint.token_value
 
 The encryption key is derived from the PROXBOX_ENCRYPTION_KEY environment
-variable. If not set, credentials are stored in plaintext (dev mode only).
+variable. If no key is configured, credential writes are refused at the write
+sink (``encrypt_value``) unless plaintext storage is explicitly opted in via
+PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS — a deny-by-default guard that prevents
+silently persisting secrets in plaintext.
 
-WARNING: Running without encryption key is insecure and should never happen
-in production. All credentials will be stored in plaintext in the database.
+WARNING: Running without an encryption key is insecure and should never happen
+in production. Setting PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS stores all
+credentials in plaintext in the database and must only be used for dev/tests.
 """
 
 from __future__ import annotations
@@ -239,10 +243,35 @@ def clear_local_encryption_key() -> bool:
     return removed
 
 
+def _require_credential_storage_allowed() -> None:
+    """Refuse to persist a secret in plaintext unless plaintext storage is opted in.
+
+    Deny-by-default guard for the credential-write sink: when no encryption key
+    resolves and ``PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`` is not set, raise instead
+    of silently storing the secret as plaintext. Unlike a startup gate, this never
+    aborts the process — it only blocks the specific write, so reads and the rest
+    of the service keep working while encryption is unconfigured.
+    """
+    if is_encryption_enabled() or _allow_plaintext_credentials():
+        return
+    raise ProxboxException(
+        message=(
+            "Credential encryption is not configured, so this secret cannot be stored. "
+            "Set PROXBOX_ENCRYPTION_KEY, configure the ProxboxPluginSettings "
+            "'encryption_key' field, create a local key via POST /admin/encryption/key, "
+            "or set PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS=1 to explicitly allow plaintext "
+            "storage."
+        ),
+    )
+
+
 def encrypt_value(plaintext: str | None) -> str | None:
     """Encrypt a plaintext string.
 
-    Returns None if encryption is disabled or input is None.
+    Returns None if input is None. When encryption is disabled, a non-empty secret
+    is only returned as plaintext if plaintext storage is explicitly opted in via
+    ``PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS``; otherwise this raises ``ProxboxException``
+    rather than persisting the secret unencrypted (deny-by-default at the write sink).
     Returns the encrypted value as a base64 string prefixed with 'enc:'.
     """
     if plaintext is None:
@@ -250,6 +279,8 @@ def encrypt_value(plaintext: str | None) -> str | None:
 
     fernet = _get_fernet()
     if fernet is None:
+        if plaintext:
+            _require_credential_storage_allowed()
         return plaintext
 
     encrypted = fernet.encrypt(plaintext.encode())
