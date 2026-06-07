@@ -16,9 +16,9 @@ and snapshots, so the stub list and call signature differ from the
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 
 
@@ -107,8 +107,8 @@ def test_stream_activates_branch_with_schema_id(monkeypatch):
     entered = 0
     exited = 0
 
-    @contextmanager
-    def _activate(schema_id: Any) -> Iterator[None]:
+    @asynccontextmanager
+    async def _activate(schema_id: Any) -> AsyncIterator[None]:
         nonlocal entered, exited
         captured.append(schema_id)
         entered += 1

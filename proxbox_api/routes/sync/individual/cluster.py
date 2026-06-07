@@ -58,5 +58,5 @@ async def sync_cluster(
     branch_scope = (
         nb.activate_branch(netbox_branch_schema_id) if netbox_branch_schema_id else nullcontext()
     )
-    with branch_scope:
+    async with branch_scope:
         return await sync_cluster_individual(ctx, cluster_name, dry_run=dry_run)

@@ -15,9 +15,9 @@ wrapper ``full_update_sync`` → ``_full_update_sync_run`` → ``_full_update_sy
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Iterator
+from typing import AsyncIterator
 from unittest.mock import AsyncMock
 
 # ---------------------------------------------------------------------------
@@ -36,8 +36,8 @@ class _RecordingSession:
         self._active: str | None = None
         self.calls: list[tuple[bool, str | None]] = []
 
-    @contextmanager
-    def activate_branch(self, schema_id: str) -> Iterator["_RecordingSession"]:
+    @asynccontextmanager
+    async def activate_branch(self, schema_id: str) -> AsyncIterator["_RecordingSession"]:
         prior = self._active
         self._active = schema_id
         try:
@@ -54,10 +54,10 @@ class _RecordingSession:
 # ---------------------------------------------------------------------------
 
 
-def test_activate_branch_sets_value_inside_scope():
+async def test_activate_branch_sets_value_inside_scope():
     session = _RecordingSession()
     session.record_call()
-    with session.activate_branch("abcd1234"):
+    async with session.activate_branch("abcd1234"):
         session.record_call()
     session.record_call()
 
@@ -68,11 +68,11 @@ def test_activate_branch_sets_value_inside_scope():
     ]
 
 
-def test_nested_activate_branch_restores_outer():
+async def test_nested_activate_branch_restores_outer():
     session = _RecordingSession()
-    with session.activate_branch("outer-id"):
+    async with session.activate_branch("outer-id"):
         session.record_call()
-        with session.activate_branch("inner-id"):
+        async with session.activate_branch("inner-id"):
             session.record_call()
         session.record_call()
 
@@ -152,8 +152,8 @@ def test_full_update_sync_invokes_activate_branch_with_schema_id(monkeypatch):
 
     captured: list[str] = []
 
-    @contextmanager
-    def _activate(schema_id: str):
+    @asynccontextmanager
+    async def _activate(schema_id: str) -> AsyncIterator[None]:
         captured.append(schema_id)
         yield
 

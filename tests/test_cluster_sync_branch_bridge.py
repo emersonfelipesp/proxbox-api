@@ -19,9 +19,9 @@ real reconciler — ``sync_cluster_individual`` itself is stubbed.
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Iterator
+from typing import AsyncIterator
 
 from proxbox_api.services.run_session import SyncContext
 
@@ -38,8 +38,8 @@ class _RecordingSession:
         self.activated_with: list[str] = []
         self.calls: list[tuple[bool, str | None]] = []
 
-    @contextmanager
-    def activate_branch(self, schema_id: str) -> Iterator["_RecordingSession"]:
+    @asynccontextmanager
+    async def activate_branch(self, schema_id: str) -> AsyncIterator["_RecordingSession"]:
         self.activated_with.append(schema_id)
         prior = self._active
         self._active = schema_id

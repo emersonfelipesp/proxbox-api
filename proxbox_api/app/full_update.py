@@ -127,7 +127,7 @@ async def _full_update_sync_run(
         if netbox_branch_schema_id
         else nullcontext()
     )
-    with branch_scope:
+    async with branch_scope:
         return await _full_update_sync_impl(
             netbox_session=netbox_session,
             pxs=pxs,
@@ -1257,7 +1257,7 @@ async def full_update_sync_stream(  # noqa: C901
             if netbox_branch_schema_id
             else nullcontext()
         )
-        with branch_scope:
+        async with branch_scope:
             async for frame in event_stream():
                 yield frame
 
