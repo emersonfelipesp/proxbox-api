@@ -2639,6 +2639,7 @@ async def create_only_vm_interfaces(  # noqa: C901
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
     overwrite_flags: SyncOverwriteFlags | None = None,
+    sync_mac: bool = True,
 ) -> list[dict]:
     """Sync VM interfaces only (no VM creation) with per-interface progress events.
 
@@ -2989,33 +2990,34 @@ async def create_only_vm_interfaces(  # noqa: C901
                 reconcile_mac_for_vm_interface,
             )
 
-            for key, info in all_interface_info.items():
-                mac_value = info.get("mac_address")
-                if not mac_value:
-                    continue
-                vm_id_for_mac = info.get("vm_id")
-                iface_name_for_mac = info.get("resolved_name")
-                if not vm_id_for_mac or not iface_name_for_mac:
-                    continue
-                iface_id_for_mac = interface_name_vm_to_id.get(
-                    (iface_name_for_mac, int(vm_id_for_mac))
-                )
-                if not iface_id_for_mac:
-                    continue
-                try:
-                    await reconcile_mac_for_vm_interface(
-                        nb,
-                        vminterface_id=int(iface_id_for_mac),
-                        mac=mac_value,
-                        tag_refs=tag_refs,
+            if sync_mac:
+                for key, info in all_interface_info.items():
+                    mac_value = info.get("mac_address")
+                    if not mac_value:
+                        continue
+                    vm_id_for_mac = info.get("vm_id")
+                    iface_name_for_mac = info.get("resolved_name")
+                    if not vm_id_for_mac or not iface_name_for_mac:
+                        continue
+                    iface_id_for_mac = interface_name_vm_to_id.get(
+                        (iface_name_for_mac, int(vm_id_for_mac))
                     )
-                except Exception as mac_exc:
-                    logger.warning(
-                        "Failed to reconcile MAC %s for VM interface %s: %s",
-                        mac_value,
-                        iface_id_for_mac,
-                        mac_exc,
-                    )
+                    if not iface_id_for_mac:
+                        continue
+                    try:
+                        await reconcile_mac_for_vm_interface(
+                            nb,
+                            vminterface_id=int(iface_id_for_mac),
+                            mac=mac_value,
+                            tag_refs=tag_refs,
+                        )
+                    except Exception as mac_exc:
+                        logger.warning(
+                            "Failed to reconcile MAC %s for VM interface %s: %s",
+                            mac_value,
+                            iface_id_for_mac,
+                            mac_exc,
+                        )
 
             # Emit WebSocket progress for each created interface
             if use_websocket and websocket:

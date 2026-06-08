@@ -55,6 +55,14 @@ async def create_vm_interfaces_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    sync_vm_interface_macs: bool = Query(
+        default=True,
+        title="Sync VM Interface MACs",
+        description=(
+            "When false, VM interfaces are still created/updated but "
+            "MAC address reconciliation is skipped."
+        ),
+    ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Stream VM interface sync progress as SSE events."""
@@ -77,6 +85,7 @@ async def create_vm_interfaces_stream(
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
                     overwrite_flags=overwrite_flags,
+                    sync_mac=sync_vm_interface_macs,
                 )
             finally:
                 await bridge.close()
