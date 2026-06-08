@@ -38,7 +38,7 @@ Open the nearest scoped guide for the code you are changing.
 
 - `proxbox_api/CLAUDE.md` — Core FastAPI package overview
 - `proxbox-reconcile-rs/CLAUDE.md` — Optional Rust VM reconciliation engine
-- `proxmox-sdk/CLAUDE.md` — Proxmox OpenAPI package (mock + real API modes)
+- `proxmox-mock/CLAUDE.md` — Local dev mock Proxmox service (`proxmox-mock-api`; editable dep)
 - `nextjs-ui/CLAUDE.md` — Next.js frontend for endpoint management
 - `nextjs-ui/AGENTS.md` — Frontend agent quick-reference
 
@@ -99,7 +99,7 @@ Open the nearest scoped guide for the code you are changing.
 
 - `proxbox_api/`: FastAPI package, session factories, schemas, routes, sync services, code generation, and shared utilities.
 - `proxbox-reconcile-rs/`: optional PyO3/maturin Rust package for VM operation-queue reconciliation parity testing and opt-in execution.
-- `proxmox-sdk/`: Schema-driven Proxmox API package used for both mock endpoints and real API access.
+- `proxmox-mock/`: Standalone `proxmox-mock-api` dev-dependency package (editable install from `pyproject.toml` `[tool.uv.sources]`). Used in tests as the mock Proxmox server. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.11.post2` in `pyproject.toml`), not a local subdirectory.
 - `nextjs-ui/`: Next.js frontend used to manage one NetBox endpoint and multiple Proxmox endpoints.
 - `tests/`: Unit, integration, and end-to-end tests for the backend package.
 - `benchmarks/`: local benchmark helpers, including VM reconciliation queue datasets and timers.
@@ -155,15 +155,21 @@ Open the nearest scoped guide for the code you are changing.
 
 ### Route Group Map
 
-- **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`):
-  - `POST /proxmox/{vm_type}/{vmid}/start?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-  - `POST /proxmox/{vm_type}/{vmid}/stop?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-  - `POST /proxmox/{vm_type}/{vmid}/snapshot?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-  - `POST /proxmox/{vm_type}/{vmid}/migrate?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-  - `POST /proxmox/{vm_type}/{vmid}/reboot?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-  - `DELETE /proxmox/{vm_type}/{vmid}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-  - `POST /proxmox/{vm_type}/{vmid}/backup?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-  - `DELETE /proxmox/{vm_type}/{vmid}/snapshot/{snapname}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
+For the complete HTTP route reference including schemas and error shapes, see [`docs/api/http-reference.md`](docs/api/http-reference.md).
+
+Key route groups mounted in `proxbox_api/app/factory.py`:
+
+- **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`): start, stop, snapshot, migrate, reboot, delete, backup, and snapshot-delete for QEMU and LXC guests. All gated by `ProxmoxEndpoint.allow_writes`.
+- **High-Availability** (`routes/proxmox/ha.py`, `/proxmox/cluster/ha/*`): status, resources, groups, rules, summary, disarm, arm, manager-status, CRS config.
+- **Firewall** (`routes/proxmox/firewall.py`, `/proxmox/firewall/*`): datacenter, node, and VM-level rules, security groups, IP sets, aliases, and options. Write endpoints gated by `allow_writes`.
+- **SDN** (`routes/proxmox/sdn.py`, `/proxmox/sdn/*`): fabrics, fabrics/all, route-maps, prefix-lists (PVE 9.2+; returns 501 on older).
+- **Datacenter** (`routes/proxmox/datacenter.py`, `/proxmox/datacenter/*`): custom CPU models CRUD + datacenter options (PVE 9.2+).
+- **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
+- **Cloud** (`routes/cloud/`, `/cloud/*`): QEMU templates, image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions.
+- **Intent** (`routes/intent/`, `/intent/*`): plan, apply, deletion-requests, tag/untag pending-deletion.
+- **SSH Terminal** (`routes/ssh_terminal.py`, `/ssh/*`): `POST /ssh/sessions` creates a one-time ticket; WebSocket `/ssh/sessions/{session_id}/ws` bridges the PTY.
+- **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.
+- **Optional sidecars** (conditionally mounted): `/pbs/*`, `/ceph/*`, `/pdm/*` when the corresponding `proxmox-sdk` extras are installed and `PROXBOX_FEATURES` includes them.
 
 ## Production Docker CI/CD
 
@@ -221,7 +227,7 @@ while the Docker container is healthy on port `18800`.
 
 ## Dependencies
 
-- Runtime: `fastapi[standard]`, `proxmox-sdk`, `netbox-sdk`, `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`
+- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.11.post2` (external PyPI package), `netbox-sdk==0.0.9.post1` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`
 - Tests: `pytest`, `httpx`, `playwright`, `pytest-cov`, `pytest-asyncio`, `pytest-xdist`
 - Docs: `mkdocs`, `mkdocs-material`, `mkdocs-static-i18n`
 

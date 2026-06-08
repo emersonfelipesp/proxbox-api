@@ -16,11 +16,16 @@ Endpoints that expose Proxmox sessions, cluster data, node data, viewer generati
 ## Current Files
 
 - `__init__.py`: Proxmox route handlers for sessions, storage, top-level resource access, and typed VM config helpers.
+- `access.py`: Proxmox API token info (GET) and token regeneration (PUT) endpoints (PVE 9.2+).
 - `cluster.py`: Proxmox cluster endpoints and cluster response schemas.
+- `datacenter.py`: Custom CPU models CRUD and datacenter options endpoints (PVE 9.2+).
 - `endpoints.py`: Proxmox endpoint CRUD handlers.
+- `firewall.py`: Datacenter, node, and VM-level firewall endpoints (rules, security groups, IP sets, aliases, options). Read-only by default; write endpoints gated by `ProxmoxEndpoint.allow_writes`.
+- `ha.py`: Cluster High-Availability endpoints: status, resources, groups, rules, summary (PVE ≤ 8.x/9.x), plus PVE 9.2+ disarm/arm, manager-status, and CRS config.
 - `nodes.py`: Proxmox node endpoints and node interface response schemas.
 - `replication.py`: Proxmox cluster replication endpoints.
 - `runtime_generated.py`: runtime-generated route registration helpers and cache management.
+- `sdn.py`: Software Defined Networking endpoints: fabrics, route-maps, prefix-lists (PVE 9.2+; degrades gracefully on older clusters).
 - `viewer_codegen.py`: runtime endpoints to generate and return Proxmox OpenAPI, Pydantic, and live-route artifacts.
 
 ## How These Routes Work

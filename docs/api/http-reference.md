@@ -128,7 +128,12 @@ out of scope and may be added in a follow-up release.
 - `GET /proxmox/cluster/ha/resources/by-vm/{vmid}` - Convenience lookup for a single VM/CT id; tries `vm:{vmid}` then falls back to `ct:{vmid}`. Returns `null` (not 404) when the guest is not HA-managed so the NetBox tab can render an empty state.
 - `GET /proxmox/cluster/ha/groups` - List of HA groups with merged detail (nodes, restricted, nofailback).
 - `GET /proxmox/cluster/ha/groups/{group}` - Single group detail across clusters; returns `null` when no cluster has the group.
-- `GET /proxmox/cluster/ha/summary` - Single envelope (`{status, groups, resources}`) composed in parallel via `asyncio.gather`. Used by the NetBox cluster-wide HA page so a render only triggers one round-trip.
+- `GET /proxmox/cluster/ha/rules` - List configured HA rules across clusters (PVE 9.x+; empty list on older clusters).
+- `GET /proxmox/cluster/ha/summary` - Single envelope (`{status, groups, resources, rules}`) composed in parallel via `asyncio.gather`. `groups` is populated for PVE ≤ 8.x; `rules` for PVE 9.x+. Used by the NetBox cluster-wide HA page so a render only triggers one round-trip.
+- `POST /proxmox/cluster/ha/disarm` - Disarm the HA stack cluster-wide (PVE 9.2+). Gated by `ProxmoxEndpoint.allow_writes`. While disarmed, HA guests are not fenced or auto-migrated.
+- `POST /proxmox/cluster/ha/arm` - Re-arm the HA stack cluster-wide after maintenance (PVE 9.2+). Gated by `ProxmoxEndpoint.allow_writes`.
+- `GET /proxmox/cluster/ha/manager-status` - CRM manager status (queue depths, CRS scheduling state, quorum health) across clusters (PVE 9.2+).
+- `GET /proxmox/cluster/ha/crs` - CRS (Cluster Resource Scheduler) configuration from `/cluster/options`. Controls the dynamic load-balancer scheduling mode (`static` / `basic` / `dynamic`) (PVE 9.2+).
 
 ### VM Operational Verbs
 
@@ -187,6 +192,90 @@ Other 403 shapes use `reason: "endpoint_id_required"` or `reason: "endpoint_not_
 ```
 
 `result` is one of `ok`, `already_running`, `already_stopped`, `accepted` (migrate dispatch), `cancel_requested`, `cancel_failed`, `rejected`, or `failed`. Error paths add `reason` and `detail`. The migrate 202 response also carries `sse_url`, `target`, `online`, and `source_node`.
+
+### Firewall (read and write)
+
+Implemented in `proxbox_api/routes/proxmox/firewall.py`. All read endpoints are safe regardless of `allow_writes`. Write endpoints (POST/PUT/DELETE) are gated by `ProxmoxEndpoint.allow_writes` and require the `X-Proxbox-Actor` header. When `allow_writes` is `false`, write endpoints return HTTP 403:
+
+```json
+{"detail": {"reason": "writes_disabled_for_endpoint"}}
+```
+
+**Datacenter-level (read-only):**
+
+- `GET /proxmox/firewall/datacenter/rules` — List datacenter firewall rules. Returns `list[FirewallRuleSchema]`.
+- `GET /proxmox/firewall/datacenter/security-groups` — List security groups with their inline rules. Returns `list[FirewallSecurityGroupSchema]`.
+- `GET /proxmox/firewall/datacenter/ipsets` — List IP sets with their entries. Returns `list[FirewallIPSetSchema]`.
+- `GET /proxmox/firewall/datacenter/aliases` — List datacenter aliases. Returns `list[FirewallAliasSchema]`.
+- `GET /proxmox/firewall/datacenter/options` — Datacenter firewall options (enable, policy_in, policy_out). Returns `FirewallOptionsSchema`.
+- `GET /proxmox/firewall/summary` — Aggregated datacenter-level firewall data across all configured Proxmox endpoints. Returns `FirewallSummarySchema`.
+
+**Datacenter-level write endpoints (gated by `allow_writes`):**
+
+- `POST /proxmox/firewall/datacenter/rules` — Create datacenter firewall rule. Body: `FirewallRuleWrite`.
+- `PUT /proxmox/firewall/datacenter/rules/{pos}` — Update datacenter rule at position.
+- `DELETE /proxmox/firewall/datacenter/rules/{pos}` — Delete datacenter rule at position.
+- `POST /proxmox/firewall/datacenter/security-groups` — Create security group. Body: `FirewallSecurityGroupWrite`.
+- `POST /proxmox/firewall/datacenter/security-groups/{group}/rules` — Add rule to security group.
+- `PUT /proxmox/firewall/datacenter/security-groups/{group}/rules/{pos}` — Update rule in security group.
+- `DELETE /proxmox/firewall/datacenter/security-groups/{group}/rules/{pos}` — Delete rule from security group.
+- `DELETE /proxmox/firewall/datacenter/security-groups/{group}` — Delete security group.
+- `POST /proxmox/firewall/datacenter/ipsets` — Create IP set. Body: `FirewallIPSetWrite`.
+- `POST /proxmox/firewall/datacenter/ipsets/{name}` — Add entry to IP set. Body: `FirewallIPSetEntryWrite`.
+- `PUT /proxmox/firewall/datacenter/ipsets/{name}/{cidr}` — Update IP set entry.
+- `DELETE /proxmox/firewall/datacenter/ipsets/{name}/{cidr}` — Delete IP set entry.
+- `DELETE /proxmox/firewall/datacenter/ipsets/{name}` — Delete IP set.
+- `POST /proxmox/firewall/datacenter/aliases` — Create datacenter alias. Body: `FirewallAliasWrite`.
+- `PUT /proxmox/firewall/datacenter/aliases/{name}` — Update alias.
+- `DELETE /proxmox/firewall/datacenter/aliases/{name}` — Delete alias.
+- `PUT /proxmox/firewall/datacenter/options` — Update datacenter firewall options. Body: `FirewallOptionsWrite`.
+
+**Per-node (read-only):**
+
+- `GET /proxmox/firewall/nodes/{node}/rules?cluster_name=` — List firewall rules for a node.
+- `GET /proxmox/firewall/nodes/{node}/options?cluster_name=` — Firewall options for a node.
+
+**Per-VM (read-only, QEMU and LXC):**
+
+- `GET /proxmox/firewall/vms/{vmid}/rules?node=&vm_type=qemu|lxc` — List VM firewall rules.
+- `GET /proxmox/firewall/vms/{vmid}/ipsets?node=&vm_type=` — List VM IP sets with entries.
+- `GET /proxmox/firewall/vms/{vmid}/aliases?node=&vm_type=` — List VM aliases.
+- `GET /proxmox/firewall/vms/{vmid}/options?node=&vm_type=` — VM firewall options.
+
+### SDN (read-only, PVE 9.2+)
+
+Implemented in `proxbox_api/routes/proxmox/sdn.py`. All endpoints are read-only. Returns 501 (caught and skipped) on PVE < 9.2 clusters; healthy clusters still contribute their rows.
+
+- `GET /proxmox/sdn/fabrics` — List SDN fabrics (WireGuard/BGP/VXLAN/OSPF) across all clusters. Returns `list[SdnFabricSchema]`.
+- `GET /proxmox/sdn/fabrics/all` — List all SDN fabrics including inherited ones across all clusters. Returns `list[SdnFabricSchema]`.
+- `GET /proxmox/sdn/route-maps` — List SDN route-map objects (BGP/EVPN route filtering) across all clusters. Returns `list[SdnRouteMapSchema]`.
+- `GET /proxmox/sdn/prefix-lists` — List SDN prefix-list objects (CIDR ranges for BGP/EVPN filtering) across all clusters. Returns `list[SdnPrefixListSchema]`.
+
+### Datacenter (PVE 9.2+)
+
+Implemented in `proxbox_api/routes/proxmox/datacenter.py`. Write routes (POST, PUT, DELETE) require a `cluster_name` query parameter when multiple clusters are configured.
+
+- `GET /proxmox/datacenter/cpu-models` — List all custom CPU models across all clusters. Returns `list[CustomCpuModelSchema]`. Returns 501 on PVE < 9.2.
+- `GET /proxmox/datacenter/cpu-models/{cputype}?cluster_name=` — Get a specific custom CPU model. Returns `CustomCpuModelSchema | null`.
+- `POST /proxmox/datacenter/cpu-models?cluster_name=` — Create a custom CPU model.
+- `PUT /proxmox/datacenter/cpu-models/{cputype}?cluster_name=` — Update a custom CPU model.
+- `DELETE /proxmox/datacenter/cpu-models/{cputype}?cluster_name=` — Delete a custom CPU model.
+- `GET /proxmox/datacenter/options` — Get datacenter options (includes CRS sub-object on PVE 9.2). Returns a merged dict of options across clusters.
+- `PUT /proxmox/datacenter/options?cluster_name=` — Update datacenter options.
+
+### Access tokens (PVE 9.2+)
+
+Implemented in `proxbox_api/routes/proxmox/access.py`.
+
+- `GET /proxmox/access/tokens/{userid}/{tokenid}?cluster_name=` — Retrieve info for a Proxmox API token. Returns `AccessTokenInfoSchema | null`. `value` is only set on regenerate responses.
+- `PUT /proxmox/access/tokens/{userid}/{tokenid}/regenerate?cluster_name=` — Regenerate the secret of an existing API token in-place (PVE 9.2+). All ACL entries are preserved. Returns `TokenRegenerateResponseSchema`. **Store the returned `value` immediately** — it cannot be retrieved again.
+
+### SSH Terminal
+
+Implemented in `proxbox_api/routes/ssh_terminal.py`. Provides a browser-based SSH terminal backed by `asyncssh`.
+
+- `POST /ssh/sessions` — Create a one-time ticket for a browser SSH session. Request body: `TerminalSessionCreate` (`target_type`, `endpoint_id`, optional `node_id`, optional `host`, optional `actor`, `cols`, `rows`). Returns HTTP 201 with `TerminalSessionPublic` (`session_id`, `ticket`, `websocket_path`, `expires_at`, `target_type`).
+- `WebSocket /ssh/sessions/{session_id}/ws` — Authenticate the ticket and bridge a PTY to the target SSH host. The first WebSocket frame must be `{"type": "auth", "ticket": "<ticket>"}`. On success, raw terminal I/O is relayed. On error, `{"type": "error", "message": "..."}` is sent before close.
 
 ### Viewer and generated contract helpers
 

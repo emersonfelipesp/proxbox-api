@@ -190,7 +190,13 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync) / `4` (task-history, snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
-| `PROXBOX_RATE_LIMIT` | `60` | Maximum API requests per minute per IP address. |
+| `PROXBOX_RATE_LIMIT` | `300` | Maximum API requests per minute per IP address. |
+| `PROXBOX_TRUSTED_PROXIES` | (empty) | Comma-separated list of CIDRs or IP addresses for trusted reverse proxies. When a request arrives from a trusted proxy, `X-Forwarded-For` is trusted to resolve the originating client IP for rate-limiting and brute-force lockout. Without this, the peer IP is always used (prevents spoofed-header bypass). |
+| `PROXBOX_FEATURES` | (empty) | Comma-separated list of optional sidecar-only feature flags: `pbs`, `ceph`, `pdm`. When set, only the listed sidecar route groups are mounted and all core Proxmox/NetBox/sync routes are skipped. Leave unset (or empty) to mount all route groups. |
+| `PROXBOX_ENSURE_NETBOX_OBJECTS` | `true` | When `false`, the NetBox bootstrap pass (custom fields, tags, etc.) is skipped at startup. Useful for read-only deployments or when NetBox is unavailable at boot. |
+| `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` | unset | When set to `1`, `true`, or `yes`, remote SSH command execution is permitted inside the Cloud Image Build Pipeline (`routes/cloud/pipeline_scripts.py`). Off by default for security. |
+| `PROXBOX_INTERFACE_BATCH_SIZE` | `5` | Number of VM interfaces synced per NetBox write batch. Reduce to lower write pressure. Mapped to `ProxboxPluginSettings.interface_batch_size`. |
+| `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `100` | Milliseconds to wait between interface write batches. Mapped to `ProxboxPluginSettings.interface_batch_delay_ms`. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Backup sync batch size. Reduce to lower NetBox write pressure during backup sync. |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay in milliseconds between backup batches. |
 | `PROXBOX_BULK_BATCH_SIZE` | `50` | Per-batch size for bulk VM-related sync requests (volumes, backups). |

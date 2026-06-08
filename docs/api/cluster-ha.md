@@ -4,7 +4,7 @@ Read-only Proxmox High-Availability endpoints aggregated across every configured
 
 - **Available since:** proxbox-api `v0.0.11`. The matching consumer floor is `netbox-proxbox >= 0.0.16` — older plugin builds do not call these paths.
 - **Mutations are intentionally out of scope.** Adding/removing a resource, migrating, relocating, or any HA group CRUD is not exposed here and may land in a follow-up release.
-- **Source paths on Proxmox:** `/cluster/ha/status/current`, `/cluster/ha/resources`, `/cluster/ha/groups`. The router merges results across every `ProxmoxSession` configured in the backend, so a single request fans out one call per cluster.
+- **Source paths on Proxmox:** `/cluster/ha/status/current`, `/cluster/ha/resources`, `/cluster/ha/groups` (PVE ≤ 8.x), `/cluster/ha/rules` (PVE 9.x+). The router merges results across every `ProxmoxSession` configured in the backend, so a single request fans out one call per cluster.
 
 ## Endpoint Summary
 
@@ -15,7 +15,12 @@ Read-only Proxmox High-Availability endpoints aggregated across every configured
 | `GET`  | `/proxmox/cluster/ha/resources/by-vm/{vmid}` | `HaResourceSchema \| null` | Convenience lookup for a single VM/CT id. Tries `vm:{vmid}` first, falls back to `ct:{vmid}`. Returns `null` (not 404) when the guest is not HA-managed so the NetBox tab can render an empty state. |
 | `GET`  | `/proxmox/cluster/ha/groups` | `list[HaGroupSchema]` | List of HA groups across clusters with merged detail (nodes, restricted, nofailback). |
 | `GET`  | `/proxmox/cluster/ha/groups/{group}` | `HaGroupSchema \| null` | Single HA group detail across clusters; returns `null` when no cluster has the group. |
-| `GET`  | `/proxmox/cluster/ha/summary` | `HaSummarySchema` | Composed `{status, groups, resources}` envelope. Calls the three handlers concurrently via `asyncio.gather` so the cluster-wide page only triggers one round-trip per render. |
+| `GET`  | `/proxmox/cluster/ha/rules` | `list[HaRuleSchema]` | List configured HA rules (PVE 9.x+). Returns empty list on pre-9.x clusters where the endpoint does not exist. |
+| `GET`  | `/proxmox/cluster/ha/summary` | `HaSummarySchema` | Composed `{status, groups, resources, rules}` envelope. Calls all four handlers concurrently via `asyncio.gather` so the cluster-wide page only triggers one round-trip per render. |
+| `POST` | `/proxmox/cluster/ha/disarm` | `list[HaDisarmResultSchema]` | Disarm the HA stack cluster-wide (PVE 9.2+). While disarmed, HA guests are not automatically restarted, migrated, or fenced. Gated by `ProxmoxEndpoint.allow_writes`. |
+| `POST` | `/proxmox/cluster/ha/arm` | `list[HaDisarmResultSchema]` | Re-arm the HA stack cluster-wide after a maintenance window (PVE 9.2+). Gated by `ProxmoxEndpoint.allow_writes`. |
+| `GET`  | `/proxmox/cluster/ha/manager-status` | `list[HaManagerStatusSchema]` | CRM manager status: queue depths, CRS scheduling state, quorum health (PVE 9.2+). |
+| `GET`  | `/proxmox/cluster/ha/crs` | `list[HaCrsConfigSchema]` | CRS (Cluster Resource Scheduler) configuration extracted from `/cluster/options`. Controls whether the dynamic load balancer migrates HA-managed guests to reduce node imbalance (PVE 9.2+). |
 
 All endpoints require the `X-Proxbox-API-Key` header like the rest of `proxbox-api`. They reuse `ProxmoxSessionsDep` and inherit the global rate limit.
 
@@ -81,13 +86,65 @@ Defined in `proxbox_api/routes/proxmox/ha.py` and exported as Pydantic v2 models
 }
 ```
 
+### `HaRuleSchema`
+
+```jsonc
+{
+  "cluster_name": "lab",
+  "rule": "rule-01",
+  "type": "node-affinity",        // "node-affinity" | "resource-affinity"
+  "affinity": "positive",         // "positive" | "negative"
+  "nodes": "pve01,pve02",
+  "resources": "vm:100,vm:101",
+  "strict": false,
+  "disable": false,
+  "comment": null
+}
+```
+
 ### `HaSummarySchema`
 
 ```jsonc
 {
   "status":    [/* HaStatusItemSchema, ... */],
-  "groups":    [/* HaGroupSchema, ... */],
-  "resources": [/* HaResourceSchema, ... */]
+  "groups":    [/* HaGroupSchema, ... */],     // PVE ≤ 8.x; empty [] on PVE 9.x
+  "resources": [/* HaResourceSchema, ... */],
+  "rules":     [/* HaRuleSchema, ... */]       // PVE 9.x+; empty [] on PVE ≤ 8.x
+}
+```
+
+### `HaManagerStatusSchema` (PVE 9.2+)
+
+```jsonc
+{
+  "cluster_name": "lab",
+  "manager_status": "active",
+  "timestamp": 1730000000,
+  "quorum_ok": true,
+  "mode": "active"
+}
+```
+
+### `HaDisarmResultSchema` (PVE 9.2+)
+
+```jsonc
+{
+  "cluster_name": "lab",
+  "status": "ok",
+  "error": null
+}
+```
+
+On failure: `"status": "error"` and `"error": "<message>"`.
+
+### `HaCrsConfigSchema` (PVE 9.2+)
+
+```jsonc
+{
+  "cluster_name": "lab",
+  "ha": "dynamic",    // "static" (pre-9.2 default) | "basic" | "dynamic"
+  "status": "ok",
+  "error": null
 }
 ```
 

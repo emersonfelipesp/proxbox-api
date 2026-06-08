@@ -19,16 +19,31 @@ MkDocs Material documentation for `proxbox-api`, published in English and Brazil
 docs/
 ├── index.md                    # Main landing page (English)
 ├── getting-started/            # Installation and configuration guides
+│   ├── installation.md
+│   ├── configuration.md
+│   └── authentication.md
 ├── development/                # Contributing, deployment, troubleshooting, testing
 ├── architecture/               # System overview and design patterns
 ├── api/                        # HTTP and WebSocket API reference
+│   ├── http-reference.md
+│   ├── websocket-reference.md
+│   ├── cache.md
+│   └── cluster-ha.md
 ├── sync/                       # Sync workflow documentation
-│   └── reconciliation-architecture.md
+│   ├── workflows.md
+│   ├── reconciliation-architecture.md
+│   ├── name-collision-resolver.md
+│   ├── overwrite-flags.md
+│   └── scheduler-container.md
+├── operations/                 # Operational guides
+│   ├── firecracker.md          # Firecracker host-agent provisioning
+│   └── hardware-discovery.md   # Hardware discovery and DCIM sync
 └── pt-BR/                      # Brazilian Portuguese translations
     ├── api/
     ├── architecture/
     ├── development/
     ├── getting-started/
+    ├── operations/
     └── sync/
         └── reconciliation-architecture.md
 ```

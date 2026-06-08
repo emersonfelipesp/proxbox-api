@@ -37,16 +37,7 @@ PROXBOX_RECONCILIATION_ENGINE=compare \
   uv run pytest tests/reconciliation -q
 ```
 
-If you edit `proxmox-sdk/`, also run:
-
-```bash
-cd proxmox-sdk
-uv run ruff check .
-uv run ruff format --check .
-uv run python -m compileall proxmox_sdk tests
-uv run python -c "import proxmox_sdk.mock_main"
-uv run pytest tests
-```
+If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.11.post2`); there is no local `proxmox-sdk/` subdirectory in this repo.
 
 If you edit `nextjs-ui/`, also run:
 
@@ -240,7 +231,7 @@ contract only; NetBox inventory remains in `netbox-proxbox`.
 - `proxbox_api/CLAUDE.md`
 - `proxbox-reconcile-rs/CLAUDE.md`
 - `proxbox-reconcile-rs/AGENTS.md`
-- `proxmox-sdk/CLAUDE.md`
+- `proxmox-mock/CLAUDE.md` (local dev mock; `proxmox-sdk` is an external PyPI package)
 - `nextjs-ui/CLAUDE.md`
 - `nextjs-ui/AGENTS.md`
 
