@@ -92,6 +92,9 @@ jobs:
       - name: Install build tools
         run: |
           set -euo pipefail
+          # The Gitea act runner does not always export HOME; guard it so
+          # `set -u` does not abort on an unbound variable.
+          export HOME="${HOME:-/root}"
           if ! command -v uv >/dev/null 2>&1; then
             apt-get update -qq
             apt-get install -y curl python3 2>/dev/null || true
@@ -103,6 +106,7 @@ jobs:
 
       - name: Build distributions
         run: |
+          export HOME="${HOME:-/root}"
           export PATH="${HOME}/.local/bin:${PATH}"
           uv build
           ls dist/
@@ -113,6 +117,7 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PKG_TOKEN }}
           TWINE_REPOSITORY_URL: https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi
         run: |
+          export HOME="${HOME:-/root}"
           export PATH="${HOME}/.local/bin:${PATH}"
           uv run --with twine twine upload --non-interactive dist/*
 

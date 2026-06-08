@@ -35,12 +35,12 @@ ci.yml (push/PR — dev mode E2E only)
 ├── test-free-threaded (continue-on-error)
 ├── docker-bind-smoke  (raw + granian bind-host startup checks)
 ├── setup             (generates E2E matrix)
-├── build-netbox-image (only uploads an artifact when the public NetBox image cannot be pulled)
-└── e2e-docker        (needs: test + setup + build-netbox-image; transport × NetBox version matrix)
+├── build-netbox-image (logs in to Docker Hub, then only uploads an artifact when the public NetBox image cannot be pulled)
+└── e2e-docker        (logs in to Docker Hub; needs: test + setup + build-netbox-image; transport × NetBox version matrix)
     - dev mode:  netbox-proxbox from the `develop` branch tarball (always-latest plugin; avoids stale-pin drift and chicken-and-egg with unreleased plugin tags)
                  proxbox-api built from local checkout with DEV_OVERRIDES (netbox-sdk + proxmox-sdk from GitHub)
     - pypi mode: netbox-proxbox from PyPI; proxbox-api built from local checkout without overrides
-    - NetBox image handling: each E2E job pulls the public image first and only downloads the source-built artifact when the registry pull fails.
+    - NetBox image handling: each E2E job pulls the public image first and only downloads the source-built artifact when the registry pull fails. Both `build-netbox-image` and `e2e-docker` authenticate to Docker Hub (`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, `continue-on-error`) so the existence check does not flap on the anonymous rate limit and fall back to the source build.
     - NetBox readiness waits up to 20 minutes for migrations/search indexing, then checks `/api/status/` before creating tokens.
     - Docker-backed Proxmox E2E uses pytest marker `mock_http`; the separate in-process MockBackend pass uses `mock_backend`.
 
