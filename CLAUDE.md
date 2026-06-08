@@ -17,7 +17,7 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 - **`netbox-proxbox` v0.0.20.post1** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.20.post1` ↔ `proxbox-api 0.0.17.post1` ↔ `proxmox-sdk 0.0.11.post2`
+  pairing is `netbox-proxbox 0.0.20.post1` ↔ `proxbox-api 0.0.17.post2` ↔ `proxmox-sdk 0.0.11.post2`
   ↔ `netbox-sdk 0.0.9.post2`. Operational-verb routes (start/stop/snapshot/migrate)
   require `proxbox-api >= 0.0.17`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
@@ -680,6 +680,13 @@ Note: `PKG_TOKEN` is the secret name for Gitea package uploads. The `GITEA_` pre
 - GitHub draft release `v0.0.16` was created in a prior session but left as Draft. One-time cleanup: `gh release edit v0.0.16 --repo emersonfelipesp/proxbox-api --draft=false`.
 - `release: published` re-triggered the workflow; the new PyPI idempotency check (added in this PR) skips the upload cleanly.
 - Paired plugin: `netbox-proxbox 0.0.19`.
+
+### What was done for v0.0.17.post2
+
+- Root cause: the published `0.0.17.post1` (PyPI, tag `ac0514a`) shipped `proxmox-sdk==0.0.11.post1` / `netbox-sdk==0.0.9.post1`. Four commits then landed on `main` re-pinning the SDKs to `proxmox-sdk==0.0.11.post2` / `netbox-sdk==0.0.9.post2` and adding independent IP/MAC gating to the inline + standalone VM-interface sync streams, but the `version` field stayed at `0.0.17.post1` — already immutable on PyPI.
+- Fix-forward to `0.0.17.post2` (PEP 440; never republish `post1`) carrying the validated `.post2` SDK pins and the IP/MAC gating fix. Bumped `pyproject.toml` + `uv.lock`, updated the pairing line.
+- Released via the standard Gitea-first flow: tag `v0.0.17.post2` pushed to Gitea → `publish-gitea.yml` publishes to the Gitea registry, pushes the tag to GitHub, and creates the GitHub release → GitHub Actions publishes to PyPI (idempotency check absorbs the `release: published` re-trigger).
+- Paired plugin: `netbox-proxbox 0.0.20.post1`.
 
 ### Don't
 
