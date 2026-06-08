@@ -144,6 +144,9 @@ jobs:
     if: ${{ needs.validate-version.outputs.version != '' }}
     runs-on: mirror-host
     env:
+      # The Gitea act runner does not export HOME; git and `gh auth setup-git`
+      # abort with "fatal: $HOME not set" without this. mirror-host runs as root.
+      HOME: /root
       VERSION: ${{ needs.validate-version.outputs.version }}
       TAG: ${{ needs.validate-version.outputs.tag }}
       IS_RC: ${{ needs.validate-version.outputs.is_rc }}
