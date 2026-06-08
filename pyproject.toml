@@ -17,7 +17,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]==0.136.1",
     "proxmox-sdk==0.0.11.post2",
-    "netbox-sdk==0.0.9.post1",
+    "netbox-sdk==0.0.9.post2",
     "sqlmodel==0.0.38",
     "pydantic==2.13.3",
     "httpx>=0.28.1",

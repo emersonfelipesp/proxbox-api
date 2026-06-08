@@ -311,7 +311,9 @@ async def test_create_only_vm_interfaces_skips_mac_when_sync_mac_false(monkeypat
     async def _fake_bulk_reconcile(nb, payloads, *, overwrite_flags=None):
         # Return one interface per payload keyed by (name, vm_id)
         created = [{"name": p.get("name", "eth0")} for p in payloads]
-        name_vm_to_id = {(p.get("name", "eth0"), p.get("virtual_machine", 1)): 101 for p in payloads}
+        name_vm_to_id = {
+            (p.get("name", "eth0"), p.get("virtual_machine", 1)): 101 for p in payloads
+        }
         return created, name_vm_to_id
 
     # Stub the per-VM interface-payload builder to return a single interface with a MAC
@@ -352,7 +354,7 @@ async def test_create_only_vm_interfaces_skips_mac_when_sync_mac_false(monkeypat
         return (
             [{"name": "eth0", "virtual_machine": vm.get("id", 1)}],
             {
-                f"eth0|{vm.get('id',1)}": {
+                f"eth0|{vm.get('id', 1)}": {
                     "mac_address": "aa:bb:cc:dd:ee:ff",
                     "vm_id": vm.get("id", 1),
                     "resolved_name": "eth0",
@@ -376,6 +378,7 @@ async def test_create_only_vm_interfaces_skips_mac_when_sync_mac_false(monkeypat
     # We exercise the function via the imports already used in the module rather
     # than monkey-patching the internal structure — patch at service level.
     import proxbox_api.services.sync.mac_address as _mac_mod
+
     monkeypatch.setattr(_mac_mod, "reconcile_mac_for_vm_interface", _fake_reconcile_mac)
 
     # Build a minimal cluster_resources list with one QEMU VM
@@ -458,7 +461,9 @@ async def test_create_only_vm_interfaces_calls_mac_when_sync_mac_true(monkeypatc
 
     async def _fake_bulk_reconcile(nb, payloads, *, overwrite_flags=None):
         created = [{"name": p.get("name", "eth0")} for p in payloads]
-        name_vm_to_id = {(p.get("name", "eth0"), p.get("virtual_machine", 101)): 501 for p in payloads}
+        name_vm_to_id = {
+            (p.get("name", "eth0"), p.get("virtual_machine", 101)): 501 for p in payloads
+        }
         return created, name_vm_to_id
 
     async def _fake_get_all_vm_interface_payloads(
@@ -474,11 +479,17 @@ async def test_create_only_vm_interfaces_calls_mac_when_sync_mac_true(monkeypatc
         }
         return all_payloads, all_info
 
-    monkeypatch.setattr(f"{_target}.bulk_reconcile_vm_interfaces", _fake_bulk_reconcile, raising=False)
     monkeypatch.setattr(
-        f"{_target}.get_all_vm_interface_payloads", _fake_get_all_vm_interface_payloads, raising=False
+        f"{_target}.bulk_reconcile_vm_interfaces", _fake_bulk_reconcile, raising=False
     )
-    monkeypatch.setattr(f"{_target}.reconcile_mac_for_vm_interface", _fake_reconcile_mac, raising=False)
+    monkeypatch.setattr(
+        f"{_target}.get_all_vm_interface_payloads",
+        _fake_get_all_vm_interface_payloads,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        f"{_target}.reconcile_mac_for_vm_interface", _fake_reconcile_mac, raising=False
+    )
 
     from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
         create_only_vm_interfaces,
