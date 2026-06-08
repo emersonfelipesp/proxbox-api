@@ -171,6 +171,16 @@ class CloudImageTemplateBuildRequest(BaseModel):
     cpu: str | None = Field("host")
     verify_image_certificates: bool = True
     description: str | None = Field(None, max_length=8192)
+    user_data_yaml: str | None = Field(
+        None,
+        max_length=65536,
+        description=(
+            "Verbatim cloud-init #cloud-config user-data to bake into the template via a "
+            "Proxmox cicustom snippet. When set, the build runs through the SSH pipeline "
+            "(which can write snippets) instead of the catalog/product flow, so the cloud-config "
+            "actually executes on first boot of cloned VMs."
+        ),
+    )
     product_type: ProxmoxProductType = ProxmoxProductType.pve
     product_version: str | None = Field(
         None, description="Proxmox product version; None = latest in catalog"

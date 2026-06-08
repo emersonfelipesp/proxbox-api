@@ -116,6 +116,7 @@ async def build_cloud_image_template(
     if (
         req.execute is not None
         or req.provider is not None
+        or req.user_data_yaml is not None
         or req.product_type in {ProxmoxProductType.pfsense, ProxmoxProductType.opnsense}
     ):
         return build_pipeline_response(req)
