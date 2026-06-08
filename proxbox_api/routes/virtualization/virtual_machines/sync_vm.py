@@ -887,6 +887,8 @@ async def _create_vm_interface_parallel(
     device: dict | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
     dns_name: str | None = None,
+    create_ip: bool = True,
+    sync_mac: bool = True,
 ) -> dict:
     """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
 
@@ -1007,7 +1009,7 @@ async def _create_vm_interface_parallel(
     )
     result["interface"] = vm_interface
 
-    if interface_id is not None and mac_address:
+    if interface_id is not None and mac_address and sync_mac:
         from proxbox_api.services.sync.mac_address import (
             reconcile_mac_for_vm_interface,
         )
@@ -1037,7 +1039,7 @@ async def _create_vm_interface_parallel(
         interface_id=interface_id,
         interface_name=interface_name,
         now=now,
-        create_ip=True,
+        create_ip=create_ip,
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         dns_name=dns_name,
@@ -1366,6 +1368,24 @@ async def create_virtual_machines(  # noqa: C901
             "UUID stamped on each touched VM's proxbox_last_run_id custom field. "
             "When omitted, a fresh UUID is generated. Pass the full-update operation_id "
             "to make every VM touched in a single run share the same stamp."
+        ),
+    ),
+    assign_vm_interface_ips: bool = Query(
+        default=True,
+        title="Assign VM Interface IPs",
+        description=(
+            "When false, IP address reconciliation is skipped for VM interfaces in this pass. "
+            "The VMInterface and MAC address are still created or updated. "
+            "Use when a dedicated IP-assignment stage follows separately."
+        ),
+    ),
+    sync_vm_interface_macs: bool = Query(
+        default=True,
+        title="Sync VM Interface MACs",
+        description=(
+            "When false, MAC address reconciliation is skipped for VM interfaces in this pass. "
+            "The VMInterface and IP addresses are still created or updated. "
+            "Use when MAC sync is handled by a separate stage."
         ),
     ),
 ):
@@ -2301,6 +2321,8 @@ async def create_virtual_machines(  # noqa: C901
                                 device=device,
                                 overwrite_flags=overwrite_flags,
                                 dns_name=vm_dns_name,
+                                create_ip=assign_vm_interface_ips,
+                                sync_mac=sync_vm_interface_macs,
                             )
                         )
 
@@ -3756,6 +3778,22 @@ async def create_virtual_machines_stream(
             "When omitted, a fresh UUID is generated."
         ),
     ),
+    assign_vm_interface_ips: bool = Query(
+        default=True,
+        title="Assign VM Interface IPs",
+        description=(
+            "When false, IP address reconciliation is skipped for VM interfaces in this pass. "
+            "The VMInterface and MAC address are still created or updated."
+        ),
+    ),
+    sync_vm_interface_macs: bool = Query(
+        default=True,
+        title="Sync VM Interface MACs",
+        description=(
+            "When false, MAC address reconciliation is skipped for VM interfaces in this pass. "
+            "The VMInterface and IP addresses are still created or updated."
+        ),
+    ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     (
@@ -3810,6 +3848,8 @@ async def create_virtual_machines_stream(
                     sync_vm_network=sync_vm_network,
                     overwrite_flags=overwrite_flags,
                     run_id=run_id,
+                    assign_vm_interface_ips=assign_vm_interface_ips,
+                    sync_vm_interface_macs=sync_vm_interface_macs,
                 )
             finally:
                 await bridge.close()
