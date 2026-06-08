@@ -60,9 +60,11 @@ Persistence: `CephOperationRunRecord` (SQLModel, `ceph_operation_run` table in
   plan/apply/reconcile so branch-aware NetBox staging stays consistent.
 - v2 is additive; do not change v1 `/ceph` behavior.
 - The Proxmox adapter now executes PVE Ceph writes through `proxmox_writer` +
-  proxmox-sdk `CephWrite` (#12 part 1 / #224). Live execution requires the
-  proxbox-api `proxmox-sdk` pin to include `CephWrite`; until that pin bump the
-  adapter advertises `apply=False` and blocks writes with a clear reason.
+  proxmox-sdk `CephWrite` (#12 part 1 / #224). The current `proxmox-sdk`
+  pin (`0.0.11.post2`) ships the `CephWrite` domain, so the adapter advertises
+  `apply=True` and live execution is enabled; an older pin without `CephWrite`
+  degrades cleanly via `cephwrite_importable()` to `apply=False` and blocks
+  writes with a clear reason rather than silently no-op'ing.
   Dashboard/RGW/RBD/Prometheus/external adapters arrive with #98/#12/#94/#97.
 
 ## Tests
