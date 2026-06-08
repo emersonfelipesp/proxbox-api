@@ -84,6 +84,36 @@ def test_opnsense_source_tree_pipeline_uses_catalog_source_path():
     assert "make dvd" in response.build_script
 
 
+def test_user_data_yaml_bakes_cicustom_snippet_without_catalog_product():
+    """A verbatim user_data_yaml build skips the catalog and writes a cicustom user snippet."""
+    custom = "#cloud-config\nruncmd:\n  - echo zabbix-bootstrap\n"
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            name="zabbix-7.4-ubuntu-2604",
+            vmid=9010,
+            image_url=(
+                "https://cloud-images.ubuntu.com/releases/24.04/release/"
+                "ubuntu-24.04-server-cloudimg-amd64.img"
+            ),
+            image_storage="local",
+            vm_storage="local",
+            storage="local",
+            snippets_storage="local",
+            user_data_yaml=custom,
+        )
+    )
+
+    assert response.status == "planned"
+    assert response.generated_userdata == custom
+    # The cloud-config is materialised as a cicustom *user* snippet (so it runs at
+    # first boot) — not merely stuffed into the VM description.
+    assert "EOF_USER_DATA" in response.build_script
+    assert "echo zabbix-bootstrap" in response.build_script
+    assert "--cicustom" in response.build_script
+    assert "user=local:snippets/" in response.build_script
+    assert "qm template 9010" in response.build_script
+
+
 def test_execute_requires_environment_opt_in():
     with pytest.raises(HTTPException) as exc:
         build_pipeline_response(

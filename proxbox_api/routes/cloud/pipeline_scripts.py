@@ -264,9 +264,32 @@ def _source_tree_script(
     return "\n".join(commands) + "\n", commands
 
 
-def build_pipeline_response(
+def _custom_userdata_entry(
     request: CloudImageTemplateBuildRequest,
-) -> CloudImageTemplateBuildResponse:
+) -> CloudImageVersionEntry:
+    """Build a synthetic catalog entry for a verbatim ``user_data_yaml`` build.
+
+    Used when the caller supplies cloud-init user-data directly (for example a
+    netbox-packer ``cloud_config`` installer config) instead of selecting a
+    Proxmox product from the catalog. The entry only needs enough fields for the
+    release-image/source-tree script builders and the snippet label.
+    """
+    provider = request.provider or CloudImageBuildProvider.release_image
+    return CloudImageVersionEntry(
+        version=request.product_version or "custom",
+        label=request.name,
+        product_type=request.product_type,
+        default_provider=provider,
+        supported_providers=[provider],
+        os_family="linux",
+        image_url=request.image_url,
+    )
+
+
+def _catalog_pipeline_inputs(
+    request: CloudImageTemplateBuildRequest,
+) -> tuple[CloudImageVersionEntry, CloudImageBuildProvider, str | None, str | None]:
+    """Resolve (entry, provider, user_data, first_boot_script) from the product catalog."""
     try:
         entry = find_product_version(request.product_type, request.product_version)
     except KeyError as exc:
@@ -276,11 +299,13 @@ def build_pipeline_response(
     if provider not in entry.supported_providers:
         raise HTTPException(
             status_code=422,
-            detail=f"{provider.value} is not supported for {entry.product_type.value} {entry.version}.",
+            detail=(
+                f"{provider.value} is not supported for {entry.product_type.value} {entry.version}."
+            ),
         )
 
-    user_data = None
-    first_boot_script = None
+    user_data: str | None = None
+    first_boot_script: str | None = None
     if entry.product_type.value == "firecracker":
         from proxbox_api.routes.cloud.cloud_init_templates import generate_firecracker_userdata
 
@@ -292,6 +317,26 @@ def build_pipeline_response(
         user_data = generate_cloud_init_userdata(entry, request)
     else:
         first_boot_script = generate_appliance_first_boot_script(entry, request)
+    return entry, provider, user_data, first_boot_script
+
+
+def _resolve_pipeline_inputs(
+    request: CloudImageTemplateBuildRequest,
+) -> tuple[CloudImageVersionEntry, CloudImageBuildProvider, str | None, str | None]:
+    """Pick the build inputs from either a verbatim user_data_yaml or the catalog."""
+    if request.user_data_yaml is not None:
+        # Verbatim cloud-init user-data path: skip the product catalog entirely and
+        # bake the supplied #cloud-config as the cicustom user snippet over SSH.
+        entry = _custom_userdata_entry(request)
+        provider = request.provider or CloudImageBuildProvider.release_image
+        return entry, provider, request.user_data_yaml, None
+    return _catalog_pipeline_inputs(request)
+
+
+def build_pipeline_response(
+    request: CloudImageTemplateBuildRequest,
+) -> CloudImageTemplateBuildResponse:
+    entry, provider, user_data, first_boot_script = _resolve_pipeline_inputs(request)
 
     image_url = request.image_url or entry.image_url
     if provider == CloudImageBuildProvider.SOURCE_TREE:
