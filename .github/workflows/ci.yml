@@ -263,6 +263,16 @@ jobs:
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox-version }}
     steps:
+      - name: Log in to Docker Hub
+        # Authenticated pulls avoid the low anonymous Docker Hub rate limit that
+        # otherwise makes the existence check below fail under concurrent runs and
+        # fall back to an (often-broken) source build.
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Check if NetBox image exists on registry
         id: check
         run: |
@@ -317,6 +327,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Log in to Docker Hub
+        # Authenticated pulls avoid the low anonymous Docker Hub rate limit for
+        # the service/base images this e2e matrix pulls.
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
