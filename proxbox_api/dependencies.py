@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import Depends, Query, Request
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, ensure_tag_async
 from proxbox_api.schemas.sync import (
     SyncBehaviorFlags,
@@ -13,6 +14,7 @@ from proxbox_api.schemas.sync import (
     behavior_flags_from_query_params,
     overwrite_flags_from_query_params,
 )
+from proxbox_api.services.netbox_bootstrap import BootstrapStatus, run_netbox_bootstrap
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep  # noqa: F401
 
 
@@ -41,6 +43,35 @@ async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep) -> RestRecord:
 # It's used to tag the items created by the plugin
 # NetBox Tag Object.
 ProxboxTagDep = Annotated[RestRecord, Depends(proxbox_tag)]
+
+
+async def ensure_netbox_sync_dependencies(
+    netbox_session: NetBoxAsyncSessionDep,
+) -> BootstrapStatus:
+    """Reconcile NetBox-owned support objects before a sync route writes data."""
+    try:
+        status = await run_netbox_bootstrap(netbox_session, enabled=True)
+    except ProxboxException:
+        raise
+    except Exception as error:
+        raise ProxboxException(
+            message="Error ensuring NetBox sync dependencies",
+            python_exception=str(error),
+        ) from error
+
+    if status.warnings:
+        logger.warning(
+            "NetBox sync dependency bootstrap completed with %d warning(s): %s",
+            len(status.warnings),
+            status.warnings,
+        )
+    return status
+
+
+NetBoxSyncDependenciesDep = Annotated[
+    BootstrapStatus,
+    Depends(ensure_netbox_sync_dependencies),
+]
 
 
 def resolved_sync_overwrite_flags(

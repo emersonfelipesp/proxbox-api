@@ -10,10 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
 from netbox_sdk.client import ApiResponse
 
 from proxbox_api.database import NetBoxEndpoint
+from proxbox_api.dependencies import ensure_netbox_sync_dependencies
 from proxbox_api.exception import ProxboxException
 from proxbox_api.main import (
     app,
@@ -43,6 +45,7 @@ from proxbox_api.routes.proxmox.endpoints import (
 from proxbox_api.routes.virtualization.virtual_machines import (
     create_netbox_backups,
     create_virtual_machines,
+    sync_vm,
 )
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_virtual_machine_by_netbox_id,
@@ -60,6 +63,30 @@ def test_root_route_returns_service_metadata():
 def test_sync_entrypoints_share_proxbox_tag_dependency():
     for entrypoint in (create_proxmox_devices, create_virtual_machines, full_update_sync):
         assert "tag" in inspect.signature(entrypoint).parameters
+
+
+def test_vm_create_routes_run_netbox_dependency_bootstrap():
+    """All VM create routes must bootstrap owned NetBox objects before writes."""
+    target_paths = {
+        "/create",
+        "/{netbox_vm_id}/create",
+        "/create/stream",
+        "/{netbox_vm_id}/create/stream",
+    }
+    routes = {
+        route.path: route
+        for route in sync_vm.router.routes
+        if isinstance(route, APIRoute)
+        and route.path in target_paths
+        and "GET" in (route.methods or set())
+    }
+
+    assert set(routes) == target_paths
+    for path, route in routes.items():
+        assert any(
+            dependency.dependency is ensure_netbox_sync_dependencies
+            for dependency in route.dependencies
+        ), f"{path} does not bootstrap NetBox sync dependencies"
 
 
 def test_create_proxmox_devices_uses_request_scoped_rest_session():

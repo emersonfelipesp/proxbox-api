@@ -461,6 +461,30 @@ async def test_bootstrap_status_as_dict_round_trip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ensure_netbox_sync_dependencies_runs_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The request dependency must run the same bootstrap pass as lifespan."""
+    from proxbox_api import dependencies
+
+    netbox_session = object()
+    captured: dict[str, object] = {}
+    expected_status = BootstrapStatus(created=["tag:proxbox-discovered-node"])
+
+    async def _fake_run_bootstrap(nb: object, *, enabled: bool = True) -> BootstrapStatus:
+        captured["nb"] = nb
+        captured["enabled"] = enabled
+        return expected_status
+
+    monkeypatch.setattr(dependencies, "run_netbox_bootstrap", _fake_run_bootstrap)
+
+    status = await dependencies.ensure_netbox_sync_dependencies(netbox_session)
+
+    assert status is expected_status
+    assert captured == {"nb": netbox_session, "enabled": True}
+
+
+@pytest.mark.asyncio
 async def test_run_bootstrap_pass_skips_when_no_netbox_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
