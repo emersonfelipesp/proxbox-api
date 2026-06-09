@@ -48,12 +48,14 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tag
+        if: ${{ steps.resolve_tag.outputs.tag != '' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.resolve_tag.outputs.tag }}
 
       - id: extract
         name: Extract and validate version
+        if: ${{ steps.resolve_tag.outputs.tag != '' }}
         env:
           TAG: ${{ steps.resolve_tag.outputs.tag }}
         run: |
