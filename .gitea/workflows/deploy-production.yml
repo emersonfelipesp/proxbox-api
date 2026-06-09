@@ -1,34 +1,85 @@
-name: Deploy proxbox-api production
+name: Deploy proxbox-api (staging/production)
 
 on:
   push:
     branches:
+      - develop
       - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (branch or commit SHA)"
+        required: false
+      environment:
+        description: "Target environment (optional for main/develop refs)"
+        required: false
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   contents: read
 
 jobs:
   deploy:
-    name: Deploy to proxbox-api.nmulti.cloud
+    name: Deploy proxbox-api
     runs-on: prod-deploy
+    env:
+      REF: ${{ inputs.ref || github.sha }}
+      REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
     steps:
+      - name: Resolve deploy target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$REF" in
+            main | develop | [a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9]*) ;;
+            *) echo "ERROR: Invalid ref format: $REF"; exit 1 ;;
+          esac
+
+          target="${REQUESTED_ENVIRONMENT:-}"
+          if [[ -z "$target" ]]; then
+            case "${GITHUB_REF_NAME:-}" in
+              develop) target="staging" ;;
+              main) target="production" ;;
+              *) echo "ERROR: Cannot infer deploy target from ref '${GITHUB_REF_NAME:-}'"; exit 1 ;;
+            esac
+          fi
+
+          case "$target" in
+            staging)
+              echo "app=proxbox-api-staging" >> "$GITHUB_OUTPUT"
+              echo "url=https://staging.backend.proxbox.nmulti.cloud" >> "$GITHUB_OUTPUT"
+              ;;
+            production)
+              echo "app=proxbox-api" >> "$GITHUB_OUTPUT"
+              echo "url=https://backend.proxbox.nmulti.cloud" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "ERROR: Invalid deploy target: $target"
+              exit 1
+              ;;
+          esac
+
       - name: Check deploy target
         shell: bash
         run: |
           if [[ -x /opt/nmulticloud/deploy/bin/status-app ]]; then
-            /opt/nmulticloud/deploy/bin/status-app proxbox-api
+            /opt/nmulticloud/deploy/bin/status-app "${{ steps.target.outputs.app }}"
           else
-            ssh nmc-prod-207 -- status proxbox-api
+            ssh nmc-prod-207 -- status "${{ steps.target.outputs.app }}"
           fi
 
       - name: Deploy pushed commit
         shell: bash
         run: |
           if [[ -x /opt/nmulticloud/deploy/bin/deploy-app ]]; then
-            /opt/nmulticloud/deploy/bin/deploy-app proxbox-api "${{ github.sha }}"
+            /opt/nmulticloud/deploy/bin/deploy-app "${{ steps.target.outputs.app }}" "$REF"
           else
-            ssh nmc-prod-207 -- deploy proxbox-api "${{ github.sha }}"
+            ssh nmc-prod-207 -- deploy "${{ steps.target.outputs.app }}" "$REF"
           fi
 
       - name: Report deploy target status
@@ -36,7 +87,7 @@ jobs:
         shell: bash
         run: |
           if [[ -x /opt/nmulticloud/deploy/bin/status-app ]]; then
-            /opt/nmulticloud/deploy/bin/status-app proxbox-api
+            /opt/nmulticloud/deploy/bin/status-app "${{ steps.target.outputs.app }}"
           else
-            ssh nmc-prod-207 -- status proxbox-api
+            ssh nmc-prod-207 -- status "${{ steps.target.outputs.app }}"
           fi

@@ -110,16 +110,16 @@ Open the nearest scoped guide for the code you are changing.
 - `tasks/`: Development task tracking.
 - `Dockerfile` and `docker/`: runtime and reverse-proxy images for local and published deployments.
 - `.github/workflows/`: CI/CD pipelines for test, lint, publish, and docs.
-- `.gitea/workflows/mirror-github.yml`: Gitea Actions mirror from Gitea `main`
-  to `github.com/emersonfelipesp/proxbox-api` using `GH_MIRROR_TOKEN` for
-  GitHub, `SOURCE_MIRROR_TOKEN` for authenticated Gitea source fetches, the
-  dedicated `mirror-host` runner label, `gh` authentication, and a single-branch
-  `HEAD:refs/heads/main` push. Do not broaden it to tags, `--all`, or
-  `--mirror`.
-- `.gitea/workflows/deploy-production.yml`: Gitea Actions production deploy from
-  `main` to `10.0.30.207` through the `prod-deploy` runner on the Gitea server
-  (`10.0.30.96`). It uses the restricted SSH alias `nmc-prod-207` and the
-  allowlisted `deploy proxbox-api <sha>` / `status proxbox-api` commands.
+- `.gitea/workflows/mirror-github.yml`: Gitea Actions mirror from Gitea
+  `develop` and `main` to `github.com/emersonfelipesp/proxbox-api` using
+  `GH_MIRROR_TOKEN` for GitHub, `SOURCE_MIRROR_TOKEN` for authenticated Gitea
+  source fetches, the dedicated `mirror-host` runner label, `gh`
+  authentication, and a single triggering-branch push. Do not broaden it to
+  tags, `--all`, or `--mirror`.
+- `.gitea/workflows/deploy-production.yml`: Gitea Actions branch-tier deploy.
+  Pushes to `develop` deploy `proxbox-api-staging`; pushes to `main` deploy
+  `proxbox-api` through the `prod-deploy` runner on the Gitea server
+  (`10.0.30.96`).
 - `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
   committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
   events: builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes
@@ -172,13 +172,17 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.
 - **Optional sidecars** (conditionally mounted): `/pbs/*`, `/ceph/*`, `/pdm/*` when the corresponding `proxmox-sdk` extras are installed and `PROXBOX_FEATURES` includes them.
 
-## Production Docker CI/CD
+## Docker CI/CD
 
-Production deploys are Gitea-first. A push to Gitea `main` triggers
-`.gitea/workflows/deploy-production.yml`, which calls:
+Branch-tier deploys are Gitea-first. A push to Gitea `develop` deploys the
+staging backend at `https://staging.backend.proxbox.nmulti.cloud` via
+`proxbox-api-staging`. A push to Gitea `main` deploys production at
+`https://backend.proxbox.nmulti.cloud` via `proxbox-api`.
+
+The workflow resolves the app from the triggering branch and calls:
 
 ```bash
-ssh nmc-prod-207 -- deploy proxbox-api "$GITHUB_SHA"
+ssh nmc-prod-207 -- deploy <proxbox-api|proxbox-api-staging> "$GITHUB_SHA"
 ```
 
 The production host is `10.0.30.207`. Deploy host state is kept outside the
@@ -189,6 +193,11 @@ repository under `/opt/nmulticloud/deploy`:
 - Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
 - Runtime secrets: `/etc/nms/proxbox-api-production.env`
 - SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
+- Staging compose project: `nmc-proxbox-api-staging`
+- Staging repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api-staging`
+- Staging compose env: `/opt/nmulticloud/deploy/env/proxbox-api-staging.compose.env`
+- Staging runtime secrets: `/etc/nms/proxbox-api-staging.env`
+- Staging SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api-staging/database.db`
 
 The Docker runtime uses this repo's raw uvicorn image, host networking,
 `PROXBOX_BIND_HOST=127.0.0.1`, `PORT=18800`, and `UVICORN_WORKERS=4`, matching
@@ -201,9 +210,11 @@ Useful operations:
 
 ```bash
 ssh nmc-prod-207 -- status proxbox-api
+ssh nmc-prod-207 -- status proxbox-api-staging
 ssh nmc-prod-207 -- logs proxbox-api
 ssh nmc-prod-207 -- health proxbox-api
 curl -fsS http://127.0.0.1:18800/health
+curl -fsS http://127.0.0.1:18801/health
 ```
 
 `proxbox-api-production.service` remains the rollback fallback. Do not start it
