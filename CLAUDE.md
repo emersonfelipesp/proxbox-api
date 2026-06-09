@@ -58,6 +58,7 @@ Open the nearest scoped guide for the code you are changing.
 - `proxbox_api/app/CLAUDE.md` — Application factory and lifecycle
 - `proxbox_api/routes/CLAUDE.md` — Route package index
 - `proxbox_api/routes/admin/CLAUDE.md` — Admin dashboard routes
+- `proxbox_api/routes/cloud/CLAUDE.md` — Cloud runtime routes + the Cloud Image Build Pipeline (`/cloud/templates/images`, cicustom cloud-init bake)
 - `proxbox_api/routes/dcim/CLAUDE.md` — DCIM device routes
 - `proxbox_api/routes/extras/CLAUDE.md` — Extras (tags, custom fields) routes
 - `proxbox_api/routes/netbox/CLAUDE.md` — NetBox endpoint CRUD routes
@@ -165,7 +166,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **SDN** (`routes/proxmox/sdn.py`, `/proxmox/sdn/*`): fabrics, fabrics/all, route-maps, prefix-lists (PVE 9.2+; returns 501 on older).
 - **Datacenter** (`routes/proxmox/datacenter.py`, `/proxmox/datacenter/*`): custom CPU models CRUD + datacenter options (PVE 9.2+).
 - **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
-- **Cloud** (`routes/cloud/`, `/cloud/*`): QEMU templates, image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions.
+- **Cloud** (`routes/cloud/`, `/cloud/*`): QEMU templates, image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, and the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot). Gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; SSH identities restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer). See `routes/cloud/CLAUDE.md`.
 - **Intent** (`routes/intent/`, `/intent/*`): plan, apply, deletion-requests, tag/untag pending-deletion.
 - **SSH Terminal** (`routes/ssh_terminal.py`, `/ssh/*`): `POST /ssh/sessions` creates a one-time ticket; WebSocket `/ssh/sessions/{session_id}/ws` bridges the PTY.
 - **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.

@@ -16,7 +16,7 @@ Top-level namespace for FastAPI route packages.
 ## Current Subpackages and Modules
 
 - `admin/`: HTML admin dashboard and backend log buffer routes.
-- `cloud/`: Cloud runtime routes mounted at `/cloud/*`. Includes QEMU templates, image factory, PVE template listing, provision REST and SSE stream, Firecracker provision REST and SSE stream (`cloud/firecracker.py`), catalog, and versions endpoints.
+- `cloud/`: Cloud runtime routes mounted at `/cloud/*`. Includes QEMU templates, image factory, PVE template listing, provision REST and SSE stream, Firecracker provision REST and SSE stream (`cloud/firecracker.py`), catalog, versions, and the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`, `cloud/template_images.py` + `cloud/pipeline_scripts.py`) that bakes Proxmox VM templates with a `cicustom` cloud-init snippet. See `cloud/CLAUDE.md` for the pipeline details and the netbox-packer caller.
 - `dcim/`: device, interface, VLAN, and IP sync routes.
 - `extras/`: NetBox extras routes used by sync flows.
 - `intent/`: Intent plan/apply executor and deletion-request CRUD mounted at `/intent/*`. Includes `vm_tags.py` for best-effort Proxmox tag helpers (tag/untag pending-deletion).
