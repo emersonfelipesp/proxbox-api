@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.cache import global_cache
@@ -18,6 +18,7 @@ from proxbox_api.dependencies import (
     ProxboxTagDep,
     ResolvedSyncBehaviorFlagsDep,
     ResolvedSyncOverwriteFlagsDep,
+    ensure_netbox_sync_dependencies,
 )
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -1276,7 +1277,7 @@ async def create_test():
     return virtual_machine
 
 
-@router.get("/create")
+@router.get("/create", dependencies=[Depends(ensure_netbox_sync_dependencies)])
 async def create_virtual_machines(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
@@ -3629,7 +3630,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     return results
 
 
-@router.get("/{netbox_vm_id}/create")
+@router.get("/{netbox_vm_id}/create", dependencies=[Depends(ensure_netbox_sync_dependencies)])
 async def create_virtual_machine_by_netbox_id(
     netbox_vm_id: int,
     netbox_session: NetBoxSessionDep,
@@ -3685,7 +3686,11 @@ async def create_virtual_machine_by_netbox_id(
     )
 
 
-@router.get("/create/stream", response_model=None)
+@router.get(
+    "/create/stream",
+    response_model=None,
+    dependencies=[Depends(ensure_netbox_sync_dependencies)],
+)
 async def create_virtual_machines_stream(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
@@ -3955,7 +3960,11 @@ async def create_virtual_machines_stream(
     )
 
 
-@router.get("/{netbox_vm_id}/create/stream", response_model=None)
+@router.get(
+    "/{netbox_vm_id}/create/stream",
+    response_model=None,
+    dependencies=[Depends(ensure_netbox_sync_dependencies)],
+)
 async def create_virtual_machine_by_netbox_id_stream(
     netbox_vm_id: int,
     netbox_session: NetBoxSessionDep,

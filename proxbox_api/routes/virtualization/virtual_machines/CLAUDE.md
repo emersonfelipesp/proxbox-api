@@ -75,6 +75,14 @@ Main synchronization endpoints for virtual machines and related resources.
   prevents interfaces/IPs from attaching to a same-vmid VM on another cluster
   and is why the interface-collection loop also filters Proxmox resources by
   `cluster_name`. Regression coverage: `tests/test_vm_cross_cluster_vmid.py`.
+- **VM create routes bootstrap NetBox dependencies before writing.** The
+  `/create`, `/{netbox_vm_id}/create`, `/create/stream`, and
+  `/{netbox_vm_id}/create/stream` handlers attach the
+  `ensure_netbox_sync_dependencies` FastAPI dependency. It re-runs the
+  idempotent NetBox bootstrap for Proxbox-owned support objects on each sync
+  request, so missing discovery tags, VM roles/types, device roles/types,
+  cluster types, and custom fields are recreated before payloads reference
+  them by slug.
 
 ## Extension Guidance
 
