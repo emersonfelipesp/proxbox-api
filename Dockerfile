@@ -44,7 +44,11 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 COPY --from=builder /app/.venv /app/.venv
 
-RUN mkdir -p /app/scripts /data
+# openssh-client provides `ssh`, required by the Cloud Image Build Pipeline to
+# run remote `qm`/`pvesm` commands on Proxmox hosts (cicustom snippet bake).
+# Baked into the image so it survives container recreation and redeploys.
+RUN apk add --no-cache openssh-client && \
+    mkdir -p /app/scripts /data
 
 EXPOSE 8000
 VOLUME ["/data"]
@@ -61,7 +65,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 COPY --from=builder-pyo3-rust /app/.venv /app/.venv
 
-RUN apk add --no-cache libgcc && \
+# libgcc for the Rust extension; openssh-client for the Cloud Image Build
+# Pipeline's remote `qm`/`pvesm` execution (cicustom snippet bake).
+RUN apk add --no-cache libgcc openssh-client && \
     mkdir -p /app/scripts /data && \
     /app/.venv/bin/python -c "from proxbox_reconcile_rs._native import build_vm_operation_queue_json"
 

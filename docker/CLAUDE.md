@@ -28,7 +28,7 @@ Container runtime configuration for the `proxbox-api` service. This directory ho
 The `Dockerfile` at the repo root uses five stages:
 
 1. **builder** — installs deps with `uv` into a virtualenv at `/app/.venv` (Alpine base, `python:3.13-alpine`)
-2. **runtime-base** — minimal Alpine Python image with the virtualenv copied in
+2. **runtime-base** — minimal Alpine Python image with the virtualenv copied in. Installs `openssh-client` so `ssh` is available to the Cloud Image Build Pipeline (`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`), which runs remote `qm`/`pvesm` commands on Proxmox hosts to bake `cicustom` cloud-init snippets. The `runtime-base-pyo3-rust` variant installs it alongside `libgcc`. Baked into the image so it survives container recreation and redeploys (never rely on a runtime `apk add`).
 3. **raw** (default) — pure uvicorn, no proxy; `docker build .` produces this image
 4. **nginx** — extends raw; adds nginx + supervisor + mkcert, HTTPS-only
 5. **granian** — extends runtime-base; adds granian + mkcert, HTTPS-only via granian's native TLS
