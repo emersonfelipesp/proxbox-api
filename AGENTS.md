@@ -144,24 +144,27 @@ Violating these invariants breaks production cloud provisioning.
 
 ## Gitea-to-GitHub Mirror
 
-The Gitea workflow at `.gitea/workflows/mirror-github.yml` mirrors only `main`
-to `github.com/emersonfelipesp/proxbox-api`. It requires the Gitea Actions
-secrets `GH_MIRROR_TOKEN` for GitHub and `SOURCE_MIRROR_TOKEN` for
-authenticated Gitea source fetches, runs on the dedicated `mirror-host` runner
-label, authenticates with `gh`, configures GitHub git credentials through
-`gh auth setup-git`, and pushes only
+The Gitea workflow at `.gitea/workflows/mirror-github.yml` mirrors only
+`develop` and `main` to `github.com/emersonfelipesp/proxbox-api`. It requires
+the Gitea Actions secrets `GH_MIRROR_TOKEN` for GitHub and
+`SOURCE_MIRROR_TOKEN` for authenticated Gitea source fetches, runs on the
+dedicated `mirror-host` runner label, authenticates with `gh`, configures
+GitHub git credentials through `gh auth setup-git`, and pushes only
 `HEAD:refs/heads/${{ gitea.ref_name }}`. Do not replace it with `git push
 --all`, `git push --mirror`, or tag synchronization.
 
-## Production Docker CI/CD
+## Docker CI/CD
 
-Production deploys run from Gitea `main` through
+Branch-tier deploys run from Gitea through
 `.gitea/workflows/deploy-production.yml` on the `prod-deploy` runner hosted by
-the Gitea server (`10.0.30.96`). The workflow uses the restricted SSH alias
-`nmc-prod-207` and the allowlisted command:
+the Gitea server (`10.0.30.96`). Pushes to `develop` deploy
+`proxbox-api-staging` to `https://staging.backend.proxbox.nmulti.cloud`.
+Pushes to `main` deploy `proxbox-api` to
+`https://backend.proxbox.nmulti.cloud`. The workflow uses the restricted SSH
+alias `nmc-prod-207` and the allowlisted command:
 
 ```bash
-ssh nmc-prod-207 -- deploy proxbox-api "$GITHUB_SHA"
+ssh nmc-prod-207 -- deploy <proxbox-api|proxbox-api-staging> "$GITHUB_SHA"
 ```
 
 The deployment target is `10.0.30.207`. Docker Compose metadata lives outside
@@ -173,12 +176,19 @@ outside Git in `/etc/nms/proxbox-api-production.env`, and SQLite state is
 mounted from `/opt/nmulticloud/deploy/state/proxbox-api/database.db` through
 `PROXBOX_DATABASE_PATH=/var/lib/proxbox-api/database.db`.
 
+The staging container uses the sibling `proxbox-api-staging` deploy app,
+listens on `PORT=18801`, stores runtime secrets in
+`/etc/nms/proxbox-api-staging.env`, and mounts SQLite state from
+`/opt/nmulticloud/deploy/state/proxbox-api-staging/database.db`.
+
 Operational checks:
 
 ```bash
 ssh nmc-prod-207 -- status proxbox-api
+ssh nmc-prod-207 -- status proxbox-api-staging
 ssh nmc-prod-207 -- health proxbox-api
 curl -fsS http://127.0.0.1:18800/health
+curl -fsS http://127.0.0.1:18801/health
 ```
 
 `proxbox-api-production.service` is the fallback systemd unit only during
