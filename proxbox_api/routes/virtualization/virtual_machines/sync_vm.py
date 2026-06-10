@@ -806,6 +806,45 @@ async def _filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     return filtered
 
 
+_VALID_SYNC_MODES = frozenset({"always", "bootstrap_only", "disabled"})
+
+
+def _normalize_sync_mode(value: str, param_name: str) -> str:
+    """Normalize a sync mode string value.
+
+    Accepted values: "always", "bootstrap_only", "disabled".
+    Unknown values fall back to "always" with a warning so a bad query param
+    never silently blocks a sync.
+    """
+    if value in _VALID_SYNC_MODES:
+        return value
+    logger.warning(
+        "Unknown %s value %r — falling back to 'always'", param_name, value
+    )
+    return "always"
+
+
+def _vm_resource_allowed_by_sync_modes(
+    resource: dict,
+    sync_mode_vm: str,
+    sync_mode_vm_template: str,
+) -> bool:
+    """Return True when *resource* should be included in the current sync pass.
+
+    Template detection: truthy ``resource["template"]`` (handles ``1``, ``"1"``,
+    ``True``).  Non-template resources are allowed unless *sync_mode_vm* is
+    ``"disabled"``.  Template resources are allowed unless *sync_mode_vm_template*
+    is ``"disabled"``.  ``"bootstrap_only"`` is treated as enabled at the
+    backend — the plugin already tracks whether a VM was bootstrapped; the
+    backend simply passes all matching resources through.
+    """
+    raw_template = resource.get("template")
+    is_template = bool(raw_template) and str(raw_template) not in ("0", "false", "False")
+    if is_template:
+        return sync_mode_vm_template != "disabled"
+    return sync_mode_vm != "disabled"
+
+
 async def _resolve_netbox_virtual_machine_by_proxmox_id(
     netbox_session: NetBoxSessionDep,
     proxmox_vm_id: int | str | None,
@@ -1389,6 +1428,29 @@ async def create_virtual_machines(  # noqa: C901
             "Use when MAC sync is handled by a separate stage."
         ),
     ),
+    sync_mode_vm: str = Query(
+        default="always",
+        title="Sync Mode (VM)",
+        description=(
+            "Controls whether non-template VMs are included in this sync pass. "
+            "'always' (default): sync all non-template VMs. "
+            "'bootstrap_only': treated as enabled at the backend — the plugin manages bootstrap tracking. "
+            "'disabled': non-template VMs are skipped entirely in this pass. "
+            "Unknown values fall back to 'always' with a warning."
+        ),
+    ),
+    sync_mode_vm_template: str = Query(
+        default="always",
+        title="Sync Mode (VM Template)",
+        description=(
+            "Controls whether template VMs are included in this sync pass. "
+            "A Proxmox resource is identified as a template when its 'template' field is truthy (1, '1', True). "
+            "'always' (default): sync all templates. "
+            "'bootstrap_only': treated as enabled at the backend. "
+            "'disabled': template VMs are skipped entirely in this pass. "
+            "Unknown values fall back to 'always' with a warning."
+        ),
+    ),
 ):
     """Create and synchronize virtual machines from Proxmox to NetBox.
 
@@ -1409,6 +1471,8 @@ async def create_virtual_machines(  # noqa: C901
         use_guest_agent_interface_name: Use QEMU guest-agent interface names if available.
         netbox_vm_ids: Comma-separated NetBox VM IDs to filter sync.
         ignore_ipv6_link_local_addresses: Ignore IPv6 link-local addresses when selecting IPs.
+        sync_mode_vm: Controls sync behavior for non-template VMs. 'always' syncs all, 'disabled' skips all, 'bootstrap_only' treated as enabled.
+        sync_mode_vm_template: Controls sync behavior for template VMs (truthy ``template`` field). Same values as sync_mode_vm.
 
     Returns:
         HTTP response with creation status, or streaming SSE response if using WebSocket.
@@ -1437,6 +1501,8 @@ async def create_virtual_machines(  # noqa: C901
             "overwrite_vm_custom_fields": overwrite_vm_custom_fields,
         }
     )
+    sync_mode_vm = _normalize_sync_mode(sync_mode_vm, "sync_mode_vm")
+    sync_mode_vm_template = _normalize_sync_mode(sync_mode_vm_template, "sync_mode_vm_template")
     nb = netbox_session
     netbox_version = await detect_netbox_version(nb)
     supports_vm_type = supports_virtual_machine_type(netbox_version)
@@ -1844,7 +1910,26 @@ async def create_virtual_machines(  # noqa: C901
                     continue
                 for resource in resources:
                     if isinstance(resource, dict) and resource.get("type") in ("qemu", "lxc"):
-                        operation_inputs.append((str(cluster_name), resource))
+                        if _vm_resource_allowed_by_sync_modes(
+                            resource, sync_mode_vm, sync_mode_vm_template
+                        ):
+                            operation_inputs.append((str(cluster_name), resource))
+                        else:
+                            logger.debug(
+                                "VM sync: skipping resource %r (vmid=%s) — filtered by sync_mode",
+                                resource.get("name"),
+                                resource.get("vmid"),
+                            )
+
+        # Log summary of sync mode filtering
+        if sync_mode_vm == "disabled" or sync_mode_vm_template == "disabled":
+            logger.info(
+                "VM sync: %d resource(s) collected for sync after applying sync_mode_vm=%r "
+                "sync_mode_vm_template=%r",
+                len(operation_inputs),
+                sync_mode_vm,
+                sync_mode_vm_template,
+            )
 
         if not operation_inputs:
             return [], 0
@@ -2542,7 +2627,16 @@ async def create_virtual_machines(  # noqa: C901
         for cluster_name, resources in cluster.items():
             for resource in resources:
                 if resource.get("type") in ("qemu", "lxc"):
-                    tasks.append(_run_vm_task(cluster_name, resource))
+                    if _vm_resource_allowed_by_sync_modes(
+                        resource, sync_mode_vm, sync_mode_vm_template
+                    ):
+                        tasks.append(_run_vm_task(cluster_name, resource))
+                    else:
+                        logger.debug(
+                            "VM sync: skipping resource %r (vmid=%s) — filtered by sync_mode",
+                            resource.get("name"),
+                            resource.get("vmid"),
+                        )
 
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
@@ -3801,6 +3895,28 @@ async def create_virtual_machines_stream(
             "The VMInterface and IP addresses are still created or updated."
         ),
     ),
+    sync_mode_vm: str = Query(
+        default="always",
+        title="Sync Mode (VM)",
+        description=(
+            "Controls whether non-template VMs are included in this sync pass. "
+            "'always' (default): sync all non-template VMs. "
+            "'bootstrap_only': treated as enabled at the backend. "
+            "'disabled': non-template VMs are skipped entirely in this pass. "
+            "Unknown values fall back to 'always' with a warning."
+        ),
+    ),
+    sync_mode_vm_template: str = Query(
+        default="always",
+        title="Sync Mode (VM Template)",
+        description=(
+            "Controls whether template VMs are included in this sync pass. "
+            "'always' (default): sync all templates. "
+            "'bootstrap_only': treated as enabled at the backend. "
+            "'disabled': template VMs are skipped entirely in this pass. "
+            "Unknown values fall back to 'always' with a warning."
+        ),
+    ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     (
@@ -3857,6 +3973,8 @@ async def create_virtual_machines_stream(
                     run_id=run_id,
                     assign_vm_interface_ips=assign_vm_interface_ips,
                     sync_vm_interface_macs=sync_vm_interface_macs,
+                    sync_mode_vm=sync_mode_vm,
+                    sync_mode_vm_template=sync_mode_vm_template,
                 )
             finally:
                 await bridge.close()
