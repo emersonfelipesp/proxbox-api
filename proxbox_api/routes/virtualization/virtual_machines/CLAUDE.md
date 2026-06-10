@@ -84,6 +84,19 @@ Main synchronization endpoints for virtual machines and related resources.
   cluster types, and custom fields are recreated before payloads reference
   them by slug.
 
+- **VM and template sync modes (`sync_mode_vm`, `sync_mode_vm_template`).** The
+  `create_virtual_machines` route accepts two optional query parameters that
+  control whether non-template VMs and template VMs are included in a given
+  sync pass.  Accepted values: ``"always"`` (default), ``"bootstrap_only"``
+  (treated as enabled at the backend), ``"disabled"`` (all matching resources
+  are skipped for this pass without counting as failures).  A Proxmox resource
+  is identified as a template when its ``template`` field is truthy (``1``,
+  ``"1"``, ``True``).  Filtered resources are logged at DEBUG level per item and
+  a single INFO summary is emitted when any mode is not ``"always"``.  Filtered
+  records do NOT increment ``failed_vms``.  The stream wrapper
+  (`create_virtual_machines_stream`) forwards both params to the inner function.
+  Unknown values fall back to ``"always"`` with a WARNING.
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.
