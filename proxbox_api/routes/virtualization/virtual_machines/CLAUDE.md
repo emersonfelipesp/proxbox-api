@@ -59,6 +59,13 @@ Main synchronization endpoints for virtual machines and related resources.
   "completed". When changing the batch contract, keep the failure count flowing
   into the stage summary so multi-endpoint mis-scoping can never masquerade as
   an empty-but-successful run.
+- **Full-update VM config fetch is a separate phase.** `_run_full_update_vm_batch`
+  first fetches all Proxmox VM configs under the VM fetch semaphore, and that
+  semaphore covers only `get_vm_config`. After every config fetch has completed,
+  the batch processes successful configs into `_PreparedVMState` objects. Keep
+  CPU validation/payload building and NetBox dependency calls out of the fetch
+  semaphore so pending Proxmox HTTP responses are drained promptly and aiohttp
+  wall-clock timeouts do not fire while other slots are doing CPU or NetBox work.
 - **VM lookups are scoped by `(cluster_id, vmid)`, not vmid alone (issue #223).**
   Proxmox `vmid` is only unique within one cluster, so the same `vmid` can exist
   on several clusters. The VM snapshot index is keyed by the

@@ -5,8 +5,10 @@ import asyncio
 import inspect
 import time
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -134,6 +136,147 @@ from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
+
+
+@dataclass(slots=True)
+class _VMPreparationContext:
+    """Run-scoped dependencies for preparing a VM from a fetched Proxmox config."""
+
+    nb: object
+    tag: object
+    overwrite_flags: SyncOverwriteFlags
+    behavior_flags: SyncBehaviorFlags
+    effective_vm_overwrite_flags: SyncOverwriteFlags
+    cluster_dependency_cache: dict[str, dict[str, object]]
+    node_device_cache: dict[tuple[str, str], object]
+    vm_role_cache: dict[str, object]
+    vm_role_mapping: dict[str, dict[str, object]]
+    tag_refs: list[dict[str, object]]
+    proxmox_url_by_cluster: dict[str, str]
+    resolve_vm_type: Callable[[str], Awaitable[object | None]]
+    resolve_vm_proxmox_tag_ids: Callable[[str, dict[str, object]], Awaitable[list[int]]]
+
+
+async def _fetch_vm_config_only(*, pxs: object, resource: dict[str, object]) -> dict[str, object]:
+    """Fetch raw Proxmox VM config without doing CPU or NetBox work."""
+
+    vm_type = str(resource.get("type") or "unknown")
+    vm_config_result = get_vm_config(
+        pxs=pxs,
+        node=resource.get("node"),
+        type=vm_type,
+        vmid=resource.get("vmid"),
+    )
+    if inspect.isawaitable(vm_config_result):
+        vm_config_result = await vm_config_result
+    return cast("dict[str, object]", vm_config_result or {})
+
+
+async def _prepare_vm_from_config(  # noqa: C901
+    cluster_name: str,
+    resource: dict[str, object],
+    vm_config: dict[str, object],
+    context: _VMPreparationContext,
+) -> _PreparedVMState:
+    """Prepare desired NetBox VM state from an already fetched Proxmox config."""
+
+    vm_type = str(resource.get("type") or "unknown")
+    vm_type_key = vm_type.lower() if vm_type else "undefined"
+    if vm_type_key not in context.vm_role_mapping:
+        vm_type_key = "undefined"
+
+    vm_config_obj = await asyncio.to_thread(ProxmoxVmConfigInput.model_validate, vm_config)
+
+    cluster_dependencies = context.cluster_dependency_cache.get(str(cluster_name), {})
+    cluster = cluster_dependencies.get("cluster")
+    if cluster is None:
+        raise ProxboxException(
+            message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
+            python_exception=f"Missing precomputed cluster dependency for cluster={cluster_name}",
+        )
+
+    node_name = str(resource.get("node"))
+    device = context.node_device_cache.get((str(cluster_name), node_name))
+    if device is None:
+        device = await _ensure_device(
+            context.nb,
+            device_name=node_name,
+            cluster_id=getattr(cluster, "id", None),
+            device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
+            role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
+            site_id=getattr(cluster_dependencies.get("site"), "id", None),
+            tag_refs=context.tag_refs,
+            overwrite_device_role=context.overwrite_flags.overwrite_device_role,
+            overwrite_device_type=context.overwrite_flags.overwrite_device_type,
+            overwrite_device_tags=context.overwrite_flags.overwrite_device_tags,
+            overwrite_flags=context.overwrite_flags,
+        )
+        context.node_device_cache[(str(cluster_name), node_name)] = device
+
+    role = context.vm_role_cache.get(vm_type_key)
+    if role is None:
+        role_payload = context.vm_role_mapping.get(
+            vm_type_key, context.vm_role_mapping["undefined"]
+        )
+        role = await rest_reconcile_async(
+            context.nb,
+            "/api/dcim/device-roles/",
+            lookup={"slug": role_payload.get("slug")},
+            payload={
+                **role_payload,
+                "tags": context.tag_refs,
+            },
+            schema=NetBoxDeviceRoleSyncState,
+            current_normalizer=lambda record: {
+                "name": record.get("name"),
+                "slug": record.get("slug"),
+                "color": record.get("color"),
+                "description": record.get("description"),
+                "vm_role": record.get("vm_role"),
+                "tags": record.get("tags"),
+            },
+        )
+        context.vm_role_cache[vm_type_key] = role
+
+    vm_type_obj = await context.resolve_vm_type(vm_type_key)
+    vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
+
+    now = datetime.now(timezone.utc)
+    proxmox_tag_ids = await context.resolve_vm_proxmox_tag_ids(str(cluster_name), vm_config)
+    proxbox_tag_id = int(getattr(context.tag, "id", 0) or 0)
+    merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
+    desired_payload = await asyncio.to_thread(
+        build_netbox_virtual_machine_payload,
+        proxmox_resource=resource,
+        proxmox_config=vm_config,
+        cluster_id=int(getattr(cluster, "id", 0) or 0),
+        device_id=int(getattr(device, "id", 0) or 0),
+        role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
+        tag_ids=merged_tag_ids,
+        site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
+        tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
+        virtual_machine_type_id=vm_type_id,
+        last_updated=now,
+        cluster_name=str(cluster_name),
+        proxmox_url=context.proxmox_url_by_cluster.get(str(cluster_name)),
+        parse_description_metadata=context.behavior_flags.parse_description_metadata,
+        overwrite_flags=context.effective_vm_overwrite_flags,
+    )
+    lookup = {
+        "cf_proxmox_vm_id": int(resource.get("vmid")),
+        "cluster_id": int(getattr(cluster, "id", 0) or 0),
+    }
+
+    return _PreparedVMState(
+        cluster_name=str(cluster_name),
+        resource=resource,
+        vm_config=vm_config,
+        vm_config_obj=vm_config_obj,
+        desired_payload=desired_payload,
+        lookup=lookup,
+        now=now,
+        vm_type=vm_type,
+    )
 
 
 def _vm_dependency_error_detail(error: Exception) -> str:
@@ -1783,112 +1926,21 @@ async def create_virtual_machines(  # noqa: C901
                 vm_type_cache[vm_type_key] = result
         return vm_type_cache.get(vm_type_key)
 
-    async def _prepare_vm_state(cluster_name: str, resource: dict) -> _PreparedVMState:  # noqa: C901
-        vm_type = str(resource.get("type") or "unknown")
-        vm_type_key = vm_type.lower() if vm_type else "undefined"
-        if vm_type_key not in vm_role_mapping:
-            vm_type_key = "undefined"
-
-        vm_config_result = get_vm_config(
-            pxs=pxs,
-            node=resource.get("node"),
-            type=vm_type,
-            vmid=resource.get("vmid"),
-        )
-        if inspect.isawaitable(vm_config_result):
-            vm_config_result = await vm_config_result
-        vm_config = vm_config_result or {}
-        vm_config_obj = ProxmoxVmConfigInput.model_validate(vm_config)
-
-        cluster_dependencies = cluster_dependency_cache.get(str(cluster_name), {})
-        cluster = cluster_dependencies.get("cluster")
-        if cluster is None:
-            raise ProxboxException(
-                message="Error creating Virtual Machine dependent objects (cluster, device, tag and role)",
-                python_exception=(
-                    f"Missing precomputed cluster dependency for cluster={cluster_name}"
-                ),
-            )
-
-        node_name = str(resource.get("node"))
-        device = node_device_cache.get((str(cluster_name), node_name))
-        if device is None:
-            device = await _ensure_device(
-                nb,
-                device_name=node_name,
-                cluster_id=getattr(cluster, "id", None),
-                device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
-                role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
-                site_id=getattr(cluster_dependencies.get("site"), "id", None),
-                tag_refs=tag_refs,
-                overwrite_device_role=overwrite_flags.overwrite_device_role,
-                overwrite_device_type=overwrite_flags.overwrite_device_type,
-                overwrite_device_tags=overwrite_flags.overwrite_device_tags,
-                overwrite_flags=overwrite_flags,
-            )
-            node_device_cache[(str(cluster_name), node_name)] = device
-
-        role = vm_role_cache.get(vm_type_key)
-        if role is None:
-            role_payload = vm_role_mapping.get(vm_type_key, vm_role_mapping["undefined"])
-            role = await rest_reconcile_async(
-                nb,
-                "/api/dcim/device-roles/",
-                lookup={"slug": role_payload.get("slug")},
-                payload={
-                    **role_payload,
-                    "tags": tag_refs,
-                },
-                schema=NetBoxDeviceRoleSyncState,
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "slug": record.get("slug"),
-                    "color": record.get("color"),
-                    "description": record.get("description"),
-                    "vm_role": record.get("vm_role"),
-                    "tags": record.get("tags"),
-                },
-            )
-            vm_role_cache[vm_type_key] = role
-
-        vm_type_obj = await _get_vm_type(vm_type_key)
-        vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
-
-        now = datetime.now(timezone.utc)
-        proxmox_tag_ids = await _resolve_vm_proxmox_tag_ids(str(cluster_name), vm_config)
-        proxbox_tag_id = int(getattr(tag, "id", 0) or 0)
-        merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
-        desired_payload = build_netbox_virtual_machine_payload(
-            proxmox_resource=resource,
-            proxmox_config=vm_config,
-            cluster_id=int(getattr(cluster, "id", 0) or 0),
-            device_id=int(getattr(device, "id", 0) or 0),
-            role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
-            tag_ids=merged_tag_ids,
-            site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
-            tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
-            virtual_machine_type_id=vm_type_id,
-            last_updated=now,
-            cluster_name=str(cluster_name),
-            proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
-            parse_description_metadata=behavior_flags.parse_description_metadata,
-            overwrite_flags=effective_vm_overwrite_flags,
-        )
-        lookup = {
-            "cf_proxmox_vm_id": int(resource.get("vmid")),
-            "cluster_id": int(getattr(cluster, "id", 0) or 0),
-        }
-
-        return _PreparedVMState(
-            cluster_name=str(cluster_name),
-            resource=resource,
-            vm_config=vm_config,
-            vm_config_obj=vm_config_obj,
-            desired_payload=desired_payload,
-            lookup=lookup,
-            now=now,
-            vm_type=vm_type,
-        )
+    prepare_context = _VMPreparationContext(
+        nb=nb,
+        tag=tag,
+        overwrite_flags=overwrite_flags,
+        behavior_flags=behavior_flags,
+        effective_vm_overwrite_flags=effective_vm_overwrite_flags,
+        cluster_dependency_cache=cluster_dependency_cache,
+        node_device_cache=node_device_cache,
+        vm_role_cache=vm_role_cache,
+        vm_role_mapping=vm_role_mapping,
+        tag_refs=tag_refs,
+        proxmox_url_by_cluster=proxmox_url_by_cluster,
+        resolve_vm_type=_get_vm_type,
+        resolve_vm_proxmox_tag_ids=_resolve_vm_proxmox_tag_ids,
+    )
 
     async def _run_full_update_vm_batch() -> tuple[list[dict[str, object]], int]:  # noqa: C901
         """Run the batched full-update VM sync.
@@ -1936,26 +1988,63 @@ async def create_virtual_machines(  # noqa: C901
 
         fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
 
-        async def _prepare_with_limit(cluster_name: str, resource: dict):
+        async def _fetch_with_limit(resource: dict[str, object]) -> dict[str, object]:
             async with fetch_semaphore:
-                return await _prepare_vm_state(cluster_name, resource)
+                return await _fetch_vm_config_only(pxs=pxs, resource=resource)
 
-        prepared_results = await asyncio.gather(
-            *[
-                _prepare_with_limit(cluster_name, resource)
-                for cluster_name, resource in operation_inputs
-            ],
+        fetch_t0 = time.perf_counter()
+        fetch_results = await asyncio.gather(
+            *[_fetch_with_limit(resource) for _, resource in operation_inputs],
             return_exceptions=True,
         )
+        fetch_ms = (time.perf_counter() - fetch_t0) * 1000
 
+        fetched_vm_configs: list[tuple[str, dict[str, object], dict[str, object]]] = []
         prepared_vms: list[_PreparedVMState] = []
         failed_vms = 0
-        for prepared_result in prepared_results:
-            if isinstance(prepared_result, Exception):
-                logger.warning("VM preparation failed: %s", prepared_result)
+        fetch_failed = 0
+        for (cluster_name, resource), fetch_result in zip(operation_inputs, fetch_results):
+            if isinstance(fetch_result, Exception):
+                logger.warning(
+                    "VM config fetch failed: cluster=%s vmid=%s error=%s",
+                    cluster_name,
+                    resource.get("vmid"),
+                    fetch_result,
+                )
                 failed_vms += 1
+                fetch_failed += 1
                 continue
-            prepared_vms.append(prepared_result)
+            fetched_vm_configs.append((cluster_name, resource, fetch_result))
+
+        process_t0 = time.perf_counter()
+        for cluster_name, resource, vm_config in fetched_vm_configs:
+            try:
+                prepared_vms.append(
+                    await _prepare_vm_from_config(
+                        cluster_name,
+                        resource,
+                        vm_config,
+                        prepare_context,
+                    )
+                )
+            except Exception as prepared_result:
+                logger.warning(
+                    "VM preparation failed: cluster=%s vmid=%s error=%s",
+                    cluster_name,
+                    resource.get("vmid"),
+                    prepared_result,
+                )
+                failed_vms += 1
+        process_ms = (time.perf_counter() - process_t0) * 1000
+
+        logger.info(
+            "VM full-update phase timing: fetch_ms=%.2f process_ms=%.2f "
+            "fetched_ok=%d fetch_failed=%d",
+            fetch_ms,
+            process_ms,
+            len(fetched_vm_configs),
+            fetch_failed,
+        )
 
         if not prepared_vms:
             return [], failed_vms
@@ -2031,9 +2120,12 @@ async def create_virtual_machines(  # noqa: C901
         reconciliation_share_pct = (reconciliation_ms / batch_ms) * 100 if batch_ms > 0 else 0.0
         logger.info(
             "VM full-update batch timing: total_ms=%.2f reconciliation_ms=%.2f "
-            "reconciliation_share_pct=%.2f vm_count=%d snapshot_count=%d",
+            "fetch_ms=%.2f process_ms=%.2f reconciliation_share_pct=%.2f "
+            "vm_count=%d snapshot_count=%d",
             batch_ms,
             reconciliation_ms,
+            fetch_ms,
+            process_ms,
             reconciliation_share_pct,
             len(prepared_vms),
             len(netbox_snapshot),
