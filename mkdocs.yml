@@ -87,3 +87,10 @@ nav:
       - Contributing: development/contributing.md
       - Refactoring Summary: development/refactoring-summary.md
       - Sync Fix Summary: development/sync-fix-summary.md
+      - Performance & Concurrency:
+          - Async Architecture Overview: development/async-overview.md
+          - Semaphore-Bounded Concurrency: development/async-semaphores.md
+          - Parallel Gather Patterns: development/async-gather.md
+          - Two-Phase VM Batch: development/async-two-phase-batch.md
+          - Scoped Timeout Widening: development/async-timeout-scoping.md
+          - Runtime Concurrency Tunables: development/async-tunables.md
