@@ -305,6 +305,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_BULK_BATCH_DELAY_MS` | `bulk_batch_delay_ms` | 500 ms |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `interface_batch_size` | 5 |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `interface_batch_delay_ms` | 100 ms |
+| `PROXBOX_GUEST_AGENT_TIMEOUT` | `guest_agent_timeout` | 15 s (dedicated timeout for guest-agent `network-get-interfaces`; interface-dense guests are slow to enumerate. The plugin-settings field may not exist yet on older netbox-proxbox releases — the resolver falls back to env/default.) |
 | `PROXBOX_NETBOX_GET_CACHE_TTL` | `netbox_get_cache_ttl` | 60 s (0 = disabled) |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `netbox_get_cache_max_entries` | 4096 |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `netbox_get_cache_max_bytes` | 52_428_800 (50 MB) |

@@ -551,7 +551,10 @@ async def bulk_reconcile_vm_interfaces(
             if name and vm_id and iface_id:
                 interface_name_vm_to_id[(name, vm_id)] = iface_id
     except Exception as e:
+        # Re-raise so the calling stage reports the failure instead of treating
+        # an empty result as a successful sync with zero interfaces.
         logger.error("Error during bulk VM interface reconciliation: %s", e)
+        raise
     return result.records if result and hasattr(result, "records") else [], interface_name_vm_to_id
 
 

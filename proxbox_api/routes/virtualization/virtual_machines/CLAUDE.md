@@ -97,6 +97,19 @@ Main synchronization endpoints for virtual machines and related resources.
   (`create_virtual_machines_stream`) forwards both params to the inner function.
   Unknown values fall back to ``"always"`` with a WARNING.
 
+- **Interface-dense guests (guest-agent payloads).** Guest-agent
+  `network-get-interfaces` calls use a dedicated timeout
+  (`PROXBOX_GUEST_AGENT_TIMEOUT` / plugin key `guest_agent_timeout`, default
+  15 s) with one bounded retry on timeout, because enumerating 100+ interfaces
+  (VRRP routers) is slow in-guest and the global Proxmox session timeout
+  (5 s default) silently dropped guest data. Alias entries (`name:N`) sharing a
+  parent NIC's MAC are aggregated into the parent during normalization
+  (`_normalize_guest_agent_interfaces`): parent name wins, addresses merged and
+  deduped. A failed VM-interface **bulk** reconciliation now raises
+  (`ProxboxException`) and emits a failed/end frame on the stream instead of
+  returning a silent empty success. Regression coverage:
+  `tests/test_interface_dense_vm_sync.py`.
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.

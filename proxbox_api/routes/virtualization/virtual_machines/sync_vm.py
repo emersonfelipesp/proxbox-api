@@ -818,9 +818,7 @@ def _normalize_sync_mode(value: str, param_name: str) -> str:
     """
     if value in _VALID_SYNC_MODES:
         return value
-    logger.warning(
-        "Unknown %s value %r — falling back to 'always'", param_name, value
-    )
+    logger.warning("Unknown %s value %r — falling back to 'always'", param_name, value)
     return "always"
 
 
@@ -3067,6 +3065,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                 pass
 
     # Bulk reconcile interfaces
+    results = []
     if all_interface_payloads:
         try:
             from proxbox_api.services.sync.network import bulk_reconcile_vm_interfaces
@@ -3149,9 +3148,29 @@ async def create_only_vm_interfaces(  # noqa: C901
                 for i in created_interfaces
             ]
         except Exception as e:
-            logger.error("Error during interface bulk reconciliation: %s", e)
-    else:
-        results = []
+            # Surface bulk failures to the stream consumer instead of returning
+            # a silent empty success (interfaces simply "missing" in NetBox).
+            error_detail = f"{type(e).__name__}: {getattr(e, 'detail', str(e))}"
+            logger.error("Error during interface bulk reconciliation: %s", error_detail)
+            if use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "object": "vm_interface",
+                        "data": {
+                            "completed": False,
+                            "sync_status": "failed",
+                            "error": error_detail,
+                        },
+                    }
+                )
+                await websocket.send_json({"object": "vm_interface", "end": True})
+            raise ProxboxException(
+                message=(
+                    "VM interface bulk reconciliation failed; interface sync is "
+                    "incomplete for this pass."
+                ),
+                python_exception=error_detail,
+            ) from e
 
     # Create node-level dcim bridge interfaces for any NIC that references a
     # Proxmox bridge (e.g. vmbr0, vmbr1).  The bulk path skips bridge resolution
