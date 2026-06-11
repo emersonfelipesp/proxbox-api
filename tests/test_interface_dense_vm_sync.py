@@ -15,6 +15,7 @@ from proxbox_api.services import proxmox_helpers
 from proxbox_api.services.proxmox_helpers import (
     _GUEST_AGENT_TIMEOUT_HINT,
     _normalize_guest_agent_interfaces,
+    _scoped_proxmox_backend_timeout,
     fetch_qemu_guest_agent_network_interfaces,
 )
 
@@ -162,6 +163,62 @@ class TestAliasAggregation:
             }
         ]
 
+    def test_distinct_nonalias_interfaces_sharing_mac_are_preserved(self):
+        # Two genuine (non-alias) interfaces that share a MAC (e.g. real VRRP
+        # virtual MACs) must NOT be conflated: both are kept, neither inherits
+        # the other's addresses.
+        payload = {
+            "result": [
+                {
+                    "name": "ens18",
+                    "hardware-address": "00:00:5e:00:01:10",
+                    "ip-addresses": [_addr("10.0.0.1", 24)],
+                },
+                {
+                    "name": "ens19",
+                    "hardware-address": "00:00:5e:00:01:10",
+                    "ip-addresses": [_addr("10.0.1.1", 24)],
+                },
+            ]
+        }
+        normalized = _normalize_guest_agent_interfaces(payload)
+        by_name = _by_name(normalized)
+        assert set(by_name) == {"ens18", "ens19"}
+        assert [a["ip_address"] for a in by_name["ens18"]["ip_addresses"]] == ["10.0.0.1"]
+        assert [a["ip_address"] for a in by_name["ens19"]["ip_addresses"]] == ["10.0.1.1"]
+
+    def test_alias_merges_into_name_parent_not_unrelated_same_mac_iface(self):
+        # An alias is matched to its parent by NAME; an unrelated interface that
+        # merely shares the alias's MAC is left untouched.
+        payload = {
+            "result": [
+                {
+                    "name": "ens20",
+                    "hardware-address": "bc:24:11:aa:bb:cc",
+                    "ip-addresses": [_addr("10.0.0.10", 24)],
+                },
+                {
+                    "name": "ethX",
+                    "hardware-address": "bc:24:11:aa:bb:cc",
+                    "ip-addresses": [_addr("10.9.9.9", 24)],
+                },
+                {
+                    "name": "ens20:1",
+                    "hardware-address": "bc:24:11:aa:bb:cc",
+                    "ip-addresses": [_addr("10.0.0.20", 24)],
+                },
+            ]
+        }
+        normalized = _normalize_guest_agent_interfaces(payload)
+        by_name = _by_name(normalized)
+        assert set(by_name) == {"ens20", "ethX"}
+        assert [a["ip_address"] for a in by_name["ens20"]["ip_addresses"]] == [
+            "10.0.0.10",
+            "10.0.0.20",
+        ]
+        # The unrelated same-MAC interface keeps only its own address.
+        assert [a["ip_address"] for a in by_name["ethX"]["ip_addresses"]] == ["10.9.9.9"]
+
     def test_alias_only_group_without_parent_keeps_first_alias(self):
         payload = {
             "result": [
@@ -281,3 +338,90 @@ class TestBulkFailureSurfacing:
             await network_module.bulk_reconcile_vm_interfaces(
                 object(), [{"name": "net0", "virtual_machine": 1}]
             )
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_surfaces(self, monkeypatch):
+        # A reconcile that "succeeds" overall but reports failed > 0 must raise,
+        # not silently return a partial success.
+        from types import SimpleNamespace
+
+        from proxbox_api.exception import ProxboxException
+        from proxbox_api.services.sync import network as network_module
+
+        async def _partial(*args, **kwargs):
+            return SimpleNamespace(records=[], created=0, updated=0, unchanged=0, failed=2)
+
+        monkeypatch.setattr(network_module, "rest_bulk_reconcile_async", _partial)
+        with pytest.raises(ProxboxException, match="2 failed record"):
+            await network_module.bulk_reconcile_vm_interfaces(
+                object(), [{"name": "net0", "virtual_machine": 1}]
+            )
+
+
+class _TimeoutBackend:
+    def __init__(self, timeout):
+        self._timeout = timeout
+
+
+class _TimeoutSession:
+    """Session whose ``.session._backend`` carries a ``_timeout`` attribute."""
+
+    def __init__(self, backend):
+        self.session = type("_Sess", (), {"_backend": backend})()
+
+
+class TestScopedBackendTimeout:
+    def test_widens_short_total_and_restores(self):
+        import aiohttp
+
+        backend = _TimeoutBackend(aiohttp.ClientTimeout(total=5, connect=2))
+        session = _TimeoutSession(backend)
+        with _scoped_proxmox_backend_timeout(session, 15):
+            assert backend._timeout.total == 15
+            # Other fields preserved while widened.
+            assert backend._timeout.connect == 2
+        assert backend._timeout.total == 5
+        assert backend._timeout.connect == 2
+
+    def test_does_not_shorten_larger_total(self):
+        import aiohttp
+
+        backend = _TimeoutBackend(aiohttp.ClientTimeout(total=30))
+        session = _TimeoutSession(backend)
+        with _scoped_proxmox_backend_timeout(session, 15):
+            assert backend._timeout.total == 30
+        assert backend._timeout.total == 30
+
+    def test_leaves_unbounded_total_unbounded(self):
+        import aiohttp
+
+        backend = _TimeoutBackend(aiohttp.ClientTimeout(total=None))
+        session = _TimeoutSession(backend)
+        with _scoped_proxmox_backend_timeout(session, 15):
+            assert backend._timeout.total is None
+        assert backend._timeout.total is None
+
+    def test_noop_when_backend_has_no_timeout(self):
+        session = _TimeoutSession(_TimeoutBackend(None))
+        # Should not raise and should leave the (None) timeout untouched.
+        with _scoped_proxmox_backend_timeout(session, 15):
+            pass
+        assert session.session._backend._timeout is None
+
+    def test_overlapping_scopes_restore_original_only_on_last_exit(self):
+        import aiohttp
+
+        backend = _TimeoutBackend(aiohttp.ClientTimeout(total=5))
+        session = _TimeoutSession(backend)
+        outer = _scoped_proxmox_backend_timeout(session, 15)
+        inner = _scoped_proxmox_backend_timeout(session, 20)
+        outer.__enter__()
+        assert backend._timeout.total == 15
+        inner.__enter__()
+        assert backend._timeout.total == 20
+        # First (outer) exit must not restore the original while inner is active.
+        outer.__exit__(None, None, None)
+        assert backend._timeout.total == 20
+        # Last exit restores the true original.
+        inner.__exit__(None, None, None)
+        assert backend._timeout.total == 5

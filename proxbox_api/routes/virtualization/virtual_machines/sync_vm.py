@@ -720,14 +720,22 @@ async def _patch_vm_with_disk_aggregate_retry(
 async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
-) -> dict[tuple[str, int, str], dict[str, object]]:
-    """Dispatch queued VM operations sequentially in deterministic batches."""
+) -> tuple[dict[tuple[str, int, str], dict[str, object]], set[tuple[str, int, str]]]:
+    """Dispatch queued VM operations sequentially in deterministic batches.
 
+    Per-VM failures are isolated: an error on one operation is logged and that
+    VM's key is recorded in the returned ``failed_keys`` set instead of raising
+    and aborting the whole queue (which would silently drop every subsequent
+    VM). The caller increments its failed-VM count from ``failed_keys`` so the
+    failure accounting stays accurate.
+    """
+
+    resolved_records: dict[tuple[str, int, str], dict[str, object]] = {}
+    failed_keys: set[tuple[str, int, str]] = set()
     if not operation_queue:
-        return {}
+        return resolved_records, failed_keys
 
     batch_size = max(1, resolve_netbox_write_concurrency())
-    resolved_records: dict[tuple[str, int, str], dict[str, object]] = {}
 
     for start_index in range(0, len(operation_queue), batch_size):
         batch = operation_queue[start_index : start_index + batch_size]
@@ -735,60 +743,72 @@ async def _dispatch_vm_operation_queue(
             vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
             key = _prepared_vm_result_key(operation.prepared)
 
-            if operation.method == "GET":
-                if operation.existing_record is not None:
-                    resolved_records[key] = operation.existing_record
-                continue
+            try:
+                if operation.method == "GET":
+                    if operation.existing_record is not None:
+                        resolved_records[key] = operation.existing_record
+                    continue
 
-            if operation.method == "CREATE":
-                try:
-                    created = await rest_create_async(
-                        nb,
-                        "/api/virtualization/virtual-machines/",
-                        operation.prepared.desired_payload,
-                        lookup=operation.prepared.lookup,
+                if operation.method == "CREATE":
+                    try:
+                        created = await rest_create_async(
+                            nb,
+                            "/api/virtualization/virtual-machines/",
+                            operation.prepared.desired_payload,
+                            lookup=operation.prepared.lookup,
+                        )
+                        resolved_records[key] = _to_mapping(created)
+                    except ProxboxException:
+                        existing = await rest_first_async(
+                            nb,
+                            "/api/virtualization/virtual-machines/",
+                            query={**operation.prepared.lookup, "limit": 2},
+                        )
+                        if existing is None:
+                            raise
+                        resolved_records[key] = _to_mapping(existing)
+                    continue
+
+                if operation.existing_record is None:
+                    raise ProxboxException(
+                        message="Cannot update VM without existing NetBox record",
+                        python_exception=(f"cluster={operation.prepared.cluster_name} vmid={vmid}"),
                     )
-                    resolved_records[key] = _to_mapping(created)
-                except ProxboxException:
-                    existing = await rest_first_async(
-                        nb,
-                        "/api/virtualization/virtual-machines/",
-                        query={**operation.prepared.lookup, "limit": 2},
+
+                record_id = _relation_id(operation.existing_record.get("id"))
+                if record_id is None:
+                    raise ProxboxException(
+                        message="Cannot update VM without NetBox id",
+                        python_exception=f"cluster={operation.prepared.cluster_name} vmid={vmid}",
                     )
-                    if existing is None:
-                        raise
-                    resolved_records[key] = _to_mapping(existing)
-                continue
 
-            if operation.existing_record is None:
-                raise ProxboxException(
-                    message="Cannot update VM without existing NetBox record",
-                    python_exception=(f"cluster={operation.prepared.cluster_name} vmid={vmid}"),
+                patched = await _patch_vm_with_disk_aggregate_retry(
+                    nb,
+                    record_id=record_id,
+                    payload=operation.patch_payload,
+                    cluster_name=operation.prepared.cluster_name,
+                    vmid=vmid,
                 )
-
-            record_id = _relation_id(operation.existing_record.get("id"))
-            if record_id is None:
-                raise ProxboxException(
-                    message="Cannot update VM without NetBox id",
-                    python_exception=f"cluster={operation.prepared.cluster_name} vmid={vmid}",
+                if isinstance(patched, dict) and patched:
+                    resolved_records[key] = patched
+                else:
+                    merged = dict(operation.existing_record)
+                    merged.update(operation.patch_payload)
+                    merged["id"] = record_id
+                    resolved_records[key] = merged
+            except Exception as operation_error:
+                # Isolate the failure to this VM; the rest of the queue proceeds.
+                logger.warning(
+                    "VM operation failed: cluster=%s vmid=%s method=%s error=%s",
+                    operation.prepared.cluster_name,
+                    vmid,
+                    operation.method,
+                    operation_error,
                 )
+                failed_keys.add(key)
+                resolved_records.pop(key, None)
 
-            patched = await _patch_vm_with_disk_aggregate_retry(
-                nb,
-                record_id=record_id,
-                payload=operation.patch_payload,
-                cluster_name=operation.prepared.cluster_name,
-                vmid=vmid,
-            )
-            if isinstance(patched, dict) and patched:
-                resolved_records[key] = patched
-            else:
-                merged = dict(operation.existing_record)
-                merged.update(operation.patch_payload)
-                merged["id"] = record_id
-                resolved_records[key] = merged
-
-    return resolved_records
+    return resolved_records, failed_keys
 
 
 def _parse_network_config_entry(raw_value: object) -> dict[str, str]:
@@ -984,6 +1004,60 @@ def _vm_resource_allowed_by_sync_modes(
     if is_template:
         return sync_mode_vm_template != "disabled"
     return sync_mode_vm != "disabled"
+
+
+def _filter_cluster_resources_by_sync_modes(
+    cluster_resources: list,
+    sync_mode_vm: str,
+    sync_mode_vm_template: str,
+) -> list:
+    """Drop VM/template resources disabled by sync mode at the source.
+
+    Applying the filter before discovery and dependency precompute ensures a
+    ``disabled`` mode does not create or update dependent NetBox objects
+    (manufacturer, device type, cluster, site, node devices, VM roles) for VMs
+    that will never be synced. When neither mode is ``disabled`` the input is
+    returned unchanged. Non-VM entries and non-dict structures pass through
+    untouched so other resource kinds are never affected.
+    """
+    if sync_mode_vm != "disabled" and sync_mode_vm_template != "disabled":
+        return cluster_resources
+
+    filtered: list = []
+    skipped = 0
+    for cluster in cluster_resources:
+        if not isinstance(cluster, dict):
+            filtered.append(cluster)
+            continue
+        new_cluster: dict = {}
+        for cluster_name, resources in cluster.items():
+            if not isinstance(resources, list):
+                new_cluster[cluster_name] = resources
+                continue
+            kept = []
+            for resource in resources:
+                if (
+                    isinstance(resource, dict)
+                    and resource.get("type") in ("qemu", "lxc")
+                    and not _vm_resource_allowed_by_sync_modes(
+                        resource, sync_mode_vm, sync_mode_vm_template
+                    )
+                ):
+                    skipped += 1
+                    continue
+                kept.append(resource)
+            new_cluster[cluster_name] = kept
+        filtered.append(new_cluster)
+
+    if skipped:
+        logger.info(
+            "VM sync: filtered %d VM resource(s) at source by sync_mode_vm=%r "
+            "sync_mode_vm_template=%r",
+            skipped,
+            sync_mode_vm,
+            sync_mode_vm_template,
+        )
+    return filtered
 
 
 async def _resolve_netbox_virtual_machine_by_proxmox_id(
@@ -1669,6 +1743,13 @@ async def create_virtual_machines(  # noqa: C901
                 netbox_vm_ids=vm_ids,
             )
 
+    # Drop VM/template resources disabled by sync mode at the source so they
+    # never drive discovery or dependency precompute (see finding: disabled
+    # sync modes must not create dependent NetBox objects).
+    filtered_cluster_resources = _filter_cluster_resources_by_sync_modes(
+        filtered_cluster_resources, sync_mode_vm, sync_mode_vm_template
+    )
+
     # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link.
     proxmox_url_by_cluster: dict[str, str] = {}
     px_by_cluster: dict[str, object] = {}
@@ -1959,27 +2040,10 @@ async def create_virtual_machines(  # noqa: C901
                 if not isinstance(resources, list):
                     continue
                 for resource in resources:
+                    # Sync-mode filtering already applied at the source via
+                    # _filter_cluster_resources_by_sync_modes.
                     if isinstance(resource, dict) and resource.get("type") in ("qemu", "lxc"):
-                        if _vm_resource_allowed_by_sync_modes(
-                            resource, sync_mode_vm, sync_mode_vm_template
-                        ):
-                            operation_inputs.append((str(cluster_name), resource))
-                        else:
-                            logger.debug(
-                                "VM sync: skipping resource %r (vmid=%s) — filtered by sync_mode",
-                                resource.get("name"),
-                                resource.get("vmid"),
-                            )
-
-        # Log summary of sync mode filtering
-        if sync_mode_vm == "disabled" or sync_mode_vm_template == "disabled":
-            logger.info(
-                "VM sync: %d resource(s) collected for sync after applying sync_mode_vm=%r "
-                "sync_mode_vm_template=%r",
-                len(operation_inputs),
-                sync_mode_vm,
-                sync_mode_vm_template,
-            )
+                        operation_inputs.append((str(cluster_name), resource))
 
         if not operation_inputs:
             return [], 0
@@ -2069,12 +2133,19 @@ async def create_virtual_machines(  # noqa: C901
             supports_virtual_machine_type_field=supports_vm_type,
         )
 
-        resolved_records = await _dispatch_vm_operation_queue(nb, operation_queue)
+        resolved_records, failed_operation_keys = await _dispatch_vm_operation_queue(
+            nb, operation_queue
+        )
 
         results: list[dict[str, object]] = []
         for operation in operation_queue:
             vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
             key = _prepared_vm_result_key(operation.prepared)
+            # A dispatch failure for this VM is counted as failed even when a
+            # stale existing record is available, so it is never masked as success.
+            if key in failed_operation_keys:
+                failed_vms += 1
+                continue
             vm_record = resolved_records.get(key)
             if vm_record is None and operation.existing_record is not None:
                 vm_record = operation.existing_record
@@ -2716,17 +2787,10 @@ async def create_virtual_machines(  # noqa: C901
         tasks = []  # Collect coroutines
         for cluster_name, resources in cluster.items():
             for resource in resources:
+                # Sync-mode filtering already applied at the source via
+                # _filter_cluster_resources_by_sync_modes.
                 if resource.get("type") in ("qemu", "lxc"):
-                    if _vm_resource_allowed_by_sync_modes(
-                        resource, sync_mode_vm, sync_mode_vm_template
-                    ):
-                        tasks.append(_run_vm_task(cluster_name, resource))
-                    else:
-                        logger.debug(
-                            "VM sync: skipping resource %r (vmid=%s) — filtered by sync_mode",
-                            resource.get("name"),
-                            resource.get("vmid"),
-                        )
+                    tasks.append(_run_vm_task(cluster_name, resource))
 
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 

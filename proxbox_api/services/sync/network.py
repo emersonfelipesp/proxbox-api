@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from ipaddress import ip_interface as _ip_interface
 
 from proxbox_api.enum.status_mapping import NetBoxInterfaceType
+from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
     rest_bulk_delete_async,
@@ -550,9 +551,21 @@ async def bulk_reconcile_vm_interfaces(
             iface_id = record.get("id")
             if name and vm_id and iface_id:
                 interface_name_vm_to_id[(name, vm_id)] = iface_id
+        # Surface partial failures: rest_bulk_reconcile_async can succeed overall
+        # while individual records fail (result.failed > 0). Treating that as a
+        # clean success would silently leave interfaces missing in NetBox.
+        failed_count = int(getattr(result, "failed", 0) or 0)
+        if failed_count:
+            raise ProxboxException(
+                message=(
+                    f"Bulk VM interface reconciliation completed with {failed_count} "
+                    "failed record(s); interface sync is incomplete for this pass."
+                ),
+                python_exception=f"failed={failed_count}",
+            )
     except Exception as e:
         # Re-raise so the calling stage reports the failure instead of treating
-        # an empty result as a successful sync with zero interfaces.
+        # an empty (or partial) result as a successful sync with zero interfaces.
         logger.error("Error during bulk VM interface reconciliation: %s", e)
         raise
     return result.records if result and hasattr(result, "records") else [], interface_name_vm_to_id
