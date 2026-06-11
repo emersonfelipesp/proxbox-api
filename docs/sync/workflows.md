@@ -86,6 +86,44 @@ Not allowed in parallel:
 - Reconciling NetBox VM state before Proxmox VM data is fetched.
 - Creating a device before manufacturer/device type/site/cluster prerequisites exist.
 
+### Two-Phase Full-Update Fetch
+
+In full-update mode the VM batch runs in two distinct phases so that the
+concurrency semaphore never holds a Proxmox HTTP response hostage while
+unrelated CPU or NetBox work runs:
+
+1. **Fetch phase** — every VM's Proxmox config is fetched first in a tight async
+   batch. The fetch semaphore (`PROXBOX_VM_SYNC_MAX_CONCURRENCY`) guards *only*
+   the Proxmox `get_vm_config` call, so pending HTTP responses are drained
+   promptly.
+2. **Process phase** — fetched configs are turned into desired NetBox state.
+   The synchronous, CPU-bound work (Pydantic `model_validate`, NetBox payload
+   building) is offloaded with `asyncio.to_thread` and runs from in-memory data.
+
+Before this split, a single semaphore slot spanned fetch + validation + NetBox
+calls + payload building; while slots were busy with CPU or NetBox work the
+event loop could not drain in-flight Proxmox responses, so the session-level
+request timeout fired falsely and produced spurious `ProxmoxTimeoutError`
+failures on clusters with many VMs. Per-VM failures stay isolated in both
+phases (a failed fetch or prepare increments the failure count and the rest of
+the batch proceeds), and a phase-timing log line reports `fetch_ms`,
+`process_ms`, and the fetch-failure count.
+
+### Sync Modes (VM and VM template)
+
+The plugin forwards `sync_mode_vm` and `sync_mode_vm_template` query parameters
+(`always` / `bootstrap_only` / `disabled`, default `always`) on each VM stage
+request, and the backend enforces per-record filtering: a Proxmox resource with
+a truthy `template` field is governed by `sync_mode_vm_template`, every other
+QEMU/LXC resource by `sync_mode_vm`. A `disabled` mode skips matching resources
+for the pass without counting them as failures; an unknown value falls back to
+`always` with a warning so a malformed parameter never silently blocks a sync.
+
+Filtering is applied **at the source**, before discovery and dependency
+precompute, so a `disabled` mode does not create or update dependent NetBox
+objects (manufacturer, device type, cluster, site, node devices, VM roles) for
+VMs that will never be synced.
+
 ### Tag Preservation
 
 When `overwrite_vm_tags=False` (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The `Proxbox` tag is always retained so the plugin can identify objects it owns. Setting `overwrite_vm_tags=True` switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, and `overwrite_ip_tags`. See [Overwrite Flags](./overwrite-flags.md).
@@ -215,6 +253,35 @@ Custom exception types provide detailed context:
 - The retry behavior is configurable through `PROXBOX_NETBOX_MAX_RETRIES` and `PROXBOX_NETBOX_RETRY_DELAY`.
 - Failed attempts are logged with context before retry.
 - Final failures bubble up with full error context.
+
+### Interface-Dense Guest Handling
+
+VM interface sync reads guest interfaces from the QEMU guest agent
+(`network-get-interfaces`). Guests with many interfaces (VRRP routers, alias
+addresses) need extra care:
+
+- **Dedicated timeout with one retry** — the guest-agent call uses
+  `PROXBOX_GUEST_AGENT_TIMEOUT` (plugin key `guest_agent_timeout`, default 15s)
+  rather than the short session default, and retries once on timeout because a
+  single slow enumeration is often transient. proxmox-sdk has no per-call
+  timeout, so the backend temporarily widens the HTTPS backend timeout for the
+  duration of the agent call and restores it afterward.
+- **Alias-MAC aggregation** — guest-agent alias entries named `"<parent>:<N>"`
+  (e.g. `ens20:1`) share the parent NIC's MAC and carry extra addresses. They
+  are merged into the parent interface (addresses deduped by
+  `(ip_address, prefix)`) instead of letting the last MAC-keyed entry win, which
+  previously mis-resolved interface names and dropped the parent's addresses.
+  Genuinely distinct interfaces that share a MAC but are not alias-named (real
+  VRRP interfaces) are preserved untouched.
+- **Bulk-reconcile failures surface** — when the bulk VM-interface
+  reconciliation fails, or completes with any failed records (partial failure),
+  the stage now raises (and emits a failed stream frame) instead of returning an
+  empty/partial success, so interfaces are never silently left missing in
+  NetBox.
+
+Per-VM dispatch is also isolated: a single VM's create/update failure is logged
+and counted against the failure total for the run rather than aborting the whole
+queue, so one bad VM no longer drops every VM queued after it.
 
 ### Structured Logging
 

@@ -225,7 +225,8 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
         ),
     ]
 
-    resolved = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+    assert failed_keys == set()
 
     assert calls == ["create:201", "patch:4203"]
     assert create_lookups == [{"cf_proxmox_vm_id": 201, "cluster_id": 1}]
@@ -290,7 +291,8 @@ async def test_dispatch_vm_operation_queue_retries_disk_aggregate_validation(mon
         )
     ]
 
-    resolved = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+    assert failed_keys == set()
 
     assert patch_payloads == [
         {"memory": 4096, "disk": 2252},
@@ -321,7 +323,41 @@ async def test_dispatch_vm_operation_queue_keeps_same_vmid_types_separate(monkey
         ),
     ]
 
-    resolved = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+    assert failed_keys == set()
 
     assert resolved[("cluster-a", 300, "qemu")]["id"] == 5300
     assert resolved[("cluster-a", 300, "lxc")]["id"] == 6300
+
+
+@pytest.mark.asyncio
+async def test_dispatch_vm_operation_queue_isolates_failed_operation(monkeypatch):
+    # One operation failing must not abort the whole queue: its key is reported
+    # in failed_keys and the remaining operations still resolve.
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 4)
+
+    async def _fake_create(nb, path, payload, *, lookup=None):
+        vmid = payload["custom_fields"]["proxmox_vm_id"]
+        if vmid == 401:
+            raise RuntimeError("netbox create failed")
+        return {"id": 3000 + vmid, **payload}
+
+    async def _fake_first(nb, path, query):
+        return None
+
+    monkeypatch.setattr(sync_vm, "rest_create_async", _fake_create)
+    monkeypatch.setattr(sync_vm, "rest_first_async", _fake_first)
+
+    prepared_bad = _prepared_vm(cluster_name="cluster-a", vmid=401, memory=2048)
+    prepared_ok = _prepared_vm(cluster_name="cluster-a", vmid=402, memory=2048)
+
+    queue = [
+        sync_vm._NetBoxVMOperation(method="CREATE", prepared=prepared_bad),
+        sync_vm._NetBoxVMOperation(method="CREATE", prepared=prepared_ok),
+    ]
+
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert failed_keys == {("cluster-a", 401, "qemu")}
+    assert ("cluster-a", 401, "qemu") not in resolved
+    assert resolved[("cluster-a", 402, "qemu")]["id"] == 3402
