@@ -178,6 +178,8 @@ async def ensure_vm_type(
     netbox_session: object,
     vm_type: str,
     tag_refs: list[dict],
+    *,
+    netbox_version: tuple[int, ...] | None = None,
 ) -> object | None:
     """Ensure a NetBox VirtualMachineType object exists for the given Proxmox VM type (NetBox v4.6+).
 
@@ -185,6 +187,7 @@ async def ensure_vm_type(
         netbox_session: NetBox session
         vm_type: Proxmox VM type ("qemu" or "lxc")
         tag_refs: Tag references
+        netbox_version: Pre-resolved version tuple; detected once if omitted.
 
     Returns:
         NetBox VirtualMachineType object, or None if vm_type is not recognised.
@@ -193,7 +196,8 @@ async def ensure_vm_type(
     if not type_data:
         return None
 
-    netbox_version = await detect_netbox_version(netbox_session)
+    if netbox_version is None:
+        netbox_version = await detect_netbox_version(netbox_session)
     if not supports_virtual_machine_type(netbox_version):
         logger.debug(
             "Skipping NetBox VirtualMachineType sync for vm_type=%s on NetBox version %s",

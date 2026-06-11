@@ -235,3 +235,46 @@ async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
     assert payload["custom_fields"]["proxmox_vm_type"] == "lxc"
     assert "virtual_machine_type" in kwargs["patchable_fields"]
     assert nb.client.calls == [("GET", "/api/status/")]
+
+
+@pytest.mark.asyncio
+async def test_ensure_vm_type_uses_preresolved_version_without_network_call(monkeypatch) -> None:
+    # When a pre-resolved netbox_version is supplied, detect_netbox_version must not
+    # be called (the /api/status/ endpoint must never be reached).
+    nb = _netbox_api("4.6.0")
+
+    async def _fake_reconcile(*args: object, **kwargs: object) -> object:
+        return SimpleNamespace(id=19)
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.rest_reconcile_async",
+        _fake_reconcile,
+    )
+
+    result = await ensure_vm_type(nb, "qemu", [{"id": 7}], netbox_version=(4, 6, 0))
+
+    assert getattr(result, "id") == 19
+    # No network call — the version was pre-resolved.
+    assert nb.client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ensure_vm_type_preresolved_below_threshold_skips_without_network_call(
+    monkeypatch,
+) -> None:
+    # Pre-resolved version below NetBox 4.6 threshold: function returns None,
+    # the reconcile path is not reached, and no network call occurs.
+    nb = _netbox_api("4.5.9")
+
+    async def _unexpected_reconcile(*args: object, **kwargs: object) -> object:
+        raise AssertionError("VirtualMachineType should not be reconciled below NetBox 4.6")
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.rest_reconcile_async",
+        _unexpected_reconcile,
+    )
+
+    result = await ensure_vm_type(nb, "qemu", [{"id": 7}], netbox_version=(4, 5, 9))
+
+    assert result is None
+    assert nb.client.calls == []

@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
+from proxbox_api.exception import ProxboxException
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.utils.streaming import WebSocketSSEBridge
@@ -283,3 +286,72 @@ def test_full_update_finishes_all_config_fetches_before_processing(monkeypatch):
     ]
     assert len(fetch_end_indexes) == 3
     assert all(index < first_process_index for index in fetch_end_indexes)
+
+
+def test_full_update_precomputes_both_clusters_when_two_clusters_present(monkeypatch):
+    """Both clusters in a multi-cluster resource set must have their dependencies precomputed."""
+    ensure_device_calls: list[str] = []
+
+    _install_full_update_stubs(monkeypatch)
+
+    async def _tracking_ensure_device(*args, **kwargs):
+        node_name = kwargs.get("device_name", "unknown")
+        ensure_device_calls.append(str(node_name))
+        return SimpleNamespace(id=1)
+
+    monkeypatch.setattr(sync_vm, "_ensure_device", _tracking_ensure_device)
+
+    async def _fake_get_vm_config(**kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[
+                SimpleNamespace(name="cluster-a", mode="cluster"),
+                SimpleNamespace(name="cluster-b", mode="cluster"),
+            ],
+            cluster_resources=[
+                {"cluster-a": [_resource(101)]},
+                {"cluster-b": [_resource(201)]},
+            ],
+            custom_fields=[],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    assert sorted(r["id"] for r in result) == [101, 201]
+    # _ensure_device called for both clusters' node "pve01" (from PROXMOX_VM_RESOURCE).
+    assert len(ensure_device_calls) == 2
+
+
+def test_full_update_cluster_precompute_failure_propagates_as_proxbox_exception(monkeypatch):
+    """A failure in one cluster's precompute phase must surface as a ProxboxException."""
+    _install_full_update_stubs(monkeypatch)
+
+    async def _failing_ensure_cluster_type(*args, **kwargs):
+        raise RuntimeError("dependency resolution failed")
+
+    monkeypatch.setattr(sync_vm, "_ensure_cluster_type", _failing_ensure_cluster_type)
+
+    async def _fake_get_vm_config(**kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+
+    with pytest.raises(ProxboxException, match="cluster, device, tag and role"):
+        asyncio.run(
+            sync_vm.create_virtual_machines(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+                cluster_resources=[{"cluster-a": [_resource(101)]}],
+                custom_fields=[],
+                tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+                sync_vm_network=False,
+            )
+        )
