@@ -86,6 +86,42 @@ Nao permitido em paralelo:
 - Reconciliar estado da VM no NetBox antes de buscar os dados da VM no Proxmox.
 - Criar device antes de manufacturer/device type/site/cluster estarem prontos.
 
+### Busca em duas fases no full-update
+
+No modo full-update o lote de VMs roda em duas fases distintas para que o
+semaforo de concorrencia nunca segure uma resposta HTTP do Proxmox enquanto
+trabalho de CPU ou de NetBox nao relacionado executa:
+
+1. **Fase de busca** — a config de cada VM no Proxmox e buscada primeiro em um
+   lote assincrono enxuto. O semaforo (`PROXBOX_VM_SYNC_MAX_CONCURRENCY`)
+   protege *apenas* a chamada `get_vm_config`, entao as respostas HTTP pendentes
+   sao drenadas rapidamente.
+2. **Fase de processamento** — as configs buscadas viram o estado desejado no
+   NetBox. O trabalho sincrono e ligado a CPU (Pydantic `model_validate`,
+   construcao do payload NetBox) e descarregado com `asyncio.to_thread` e roda a
+   partir de dados em memoria.
+
+Antes dessa separacao, um unico slot do semaforo cobria busca + validacao +
+chamadas ao NetBox + construcao do payload; enquanto os slots estavam ocupados
+com CPU ou NetBox, o event loop nao conseguia drenar as respostas do Proxmox em
+voo, entao o timeout de requisicao a nivel de sessao disparava falsamente e
+produzia falhas espurias de `ProxmoxTimeoutError` em clusters com muitas VMs.
+Falhas por VM permanecem isoladas nas duas fases (uma busca ou preparacao que
+falha incrementa o contador de falhas e o restante do lote prossegue), e uma
+linha de log de tempo reporta `fetch_ms`, `process_ms` e a contagem de falhas de
+busca.
+
+### Modos de sync (VM e template de VM)
+
+O plugin encaminha os parametros de query `sync_mode_vm` e
+`sync_mode_vm_template` (`always` / `bootstrap_only` / `disabled`, padrao
+`always`) em cada requisicao de stage de VM, e o backend aplica a filtragem por
+registro: um recurso Proxmox com o campo `template` verdadeiro e regido por
+`sync_mode_vm_template`, e qualquer outro recurso QEMU/LXC por `sync_mode_vm`.
+Um modo `disabled` pula os recursos correspondentes na passagem sem conta-los
+como falha; um valor desconhecido cai para `always` com um aviso, para que um
+parametro malformado nunca bloqueie um sync silenciosamente.
+
 ### Reflexao das chaves do cloud-init
 
 Para VMs QEMU que bootam com cloud-init, o sync de VM reflete as chaves SSH
@@ -210,6 +246,31 @@ Tipos de excecao customizados fornecem contexto detalhado:
 - O comportamento e configuravel por `PROXBOX_NETBOX_MAX_RETRIES` e `PROXBOX_NETBOX_RETRY_DELAY`.
 - Tentativas falhas sao logadas com contexto antes de tentar novamente.
 - A falha final sobe com contexto completo.
+
+### Guests com muitas interfaces
+
+O sync de interfaces de VM le as interfaces do guest pelo guest agent do QEMU
+(`network-get-interfaces`). Guests com muitas interfaces (roteadores VRRP,
+enderecos alias) exigem cuidado extra:
+
+- **Timeout dedicado com um retry** — a chamada ao guest-agent usa
+  `PROXBOX_GUEST_AGENT_TIMEOUT` (campo de plugin `guest_agent_timeout`, padrao
+  15s) em vez do timeout curto de sessao, e tenta novamente uma vez em caso de
+  timeout, ja que uma unica enumeracao lenta costuma ser transiente. O
+  proxmox-sdk nao tem timeout por chamada, entao o backend amplia
+  temporariamente o timeout do backend HTTPS durante a chamada e o restaura
+  depois.
+- **Agregacao por MAC de alias** — entradas alias do guest-agent nomeadas
+  `"<pai>:<N>"` (ex.: `ens20:1`) compartilham o MAC da NIC pai e carregam
+  enderecos extras. Elas sao mescladas na interface pai (enderecos deduplicados
+  por `(ip_address, prefix)`) em vez de deixar a ultima entrada por MAC vencer,
+  o que antes resolvia nomes de interface errados e descartava os enderecos do
+  pai. Interfaces realmente distintas que compartilham um MAC mas nao tem nome
+  de alias (interfaces VRRP reais) sao preservadas intactas.
+- **Falhas do bulk-reconcile aparecem** — quando a reconciliacao em lote das
+  interfaces de VM falha, o stage agora levanta excecao (e emite um frame de
+  falha no stream) em vez de retornar um sucesso vazio, para que interfaces
+  nunca fiquem silenciosamente ausentes no NetBox.
 
 ### Structured logging
 
