@@ -109,6 +109,61 @@ phases (a failed fetch or prepare increments the failure count and the rest of
 the batch proceeds), and a phase-timing log line reports `fetch_ms`,
 `process_ms`, and the fetch-failure count.
 
+### Concurrent VM Operation Dispatch
+
+After the operation queue is classified (`CREATE / GET / UPDATE`), all operations
+are dispatched concurrently via `asyncio.gather`, bounded by an
+`asyncio.Semaphore` whose width comes from `PROXBOX_NETBOX_WRITE_CONCURRENCY`
+(plugin key `netbox_write_concurrency`, default 8).
+
+This replaces the previous serial batch-loop that processed one VM at a time in
+sequential batches. With the semaphore model:
+
+- Up to `netbox_write_concurrency` VM operations run concurrently in NetBox.
+- All remaining operations queue behind the semaphore and start as slots free up.
+- Per-VM failure isolation is unchanged: a failed VM's slot is released
+  immediately so the rest of the queue proceeds without blocking.
+
+**Sizing the write concurrency vs. the connection pool:**
+
+The write semaphore width multiplied by `PROXBOX_NETBOX_MAX_CONCURRENT` and the
+uvicorn worker count determines the peak NetBox write connections. A safe rule
+of thumb is to keep `netbox_write_concurrency` below the NetBox PostgreSQL
+connection limit divided by `uvicorn_workers`:
+
+```
+safe_write_concurrency ≤ (netbox_max_connections / uvicorn_workers) - 2
+```
+
+For a default NetBox install with 20 connections and 4 workers, `4` is a
+conservative write concurrency. With PgBouncer fronting PostgreSQL the ceiling
+is higher — see the
+[PostgreSQL connection pool guide](../getting-started/configuration.md#netbox-postgresql-connection-pool).
+
+### Parallel Cluster Dependency Precomputation
+
+Before any VM operations begin, proxbox-api resolves per-cluster NetBox
+dependencies (cluster type, site, tenant, cluster object, and node devices).
+These dependencies were historically processed one cluster at a time in a
+for-loop.
+
+They are now precomputed with `asyncio.gather` across all clusters so the
+dependency preflight for cluster B starts while cluster A is still resolving:
+
+1. **Within each cluster**, `_ensure_cluster_type`, `_ensure_site`, and
+   `_resolve_tenant` are mutually independent and are gathered in parallel,
+   followed sequentially by `_ensure_cluster` (which depends on all three).
+2. **Across clusters**, all cluster coroutines are gathered in one
+   `asyncio.gather` call with `return_exceptions=True`; the first
+   `BaseException` is re-raised so the outer handler can wrap it as a
+   `ProxboxException`.
+3. Node device ensures remain sequential **within** a cluster because each
+   device depends on the cluster id resolved in the step above.
+
+This reduces wall-clock preflight time roughly proportionally to the number of
+clusters — a 5-cluster environment that previously took 5× the single-cluster
+preflight time now takes approximately 1× the slowest cluster's preflight.
+
 ### Sync Modes (VM and VM template)
 
 The plugin forwards `sync_mode_vm` and `sync_mode_vm_template` query parameters

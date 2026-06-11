@@ -216,15 +216,87 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_ENCRYPTION_KEY_FILE` | unset | Path to a file containing the Fernet encryption key. Takes precedence over `PROXBOX_ENCRYPTION_KEY` when set; lets operators mount the key as a file/secret instead of an environment variable. |
 | `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | unset | When set to `1`, `true`, or `yes`, the backend boots even with no encryption key configured. Off by default — the backend refuses to start so credentials are never written plaintext in production. |
 
-### Handling NetBox Overwhelmed Errors
+### NetBox PostgreSQL Connection Pool
 
-When NetBox's PostgreSQL connection pool is saturated, proxbox-api returns `netbox_overwhelmed` errors. To mitigate:
+proxbox-api talks to NetBox over HTTP through the `netbox-sdk` async client.
+Every proxbox-api worker holds at most `PROXBOX_NETBOX_MAX_CONCURRENT`
+in-flight NetBox requests at a time.
 
-1. **Reduce concurrency**: Set `PROXBOX_NETBOX_MAX_CONCURRENT=1` to serialize requests
-2. **Increase retries**: More attempts with longer delays give NetBox time to recover
-3. **Extend cache TTL**: Use `PROXBOX_NETBOX_GET_CACHE_TTL=300` to reduce redundant fetches
+#### Concurrency tunables
 
-The retry logic applies aggressive backoff (up to 30 seconds) when overwhelmed errors are detected.
+| Env var | Plugin key | Default | What it controls |
+|---------|-----------|---------|-----------------|
+| `PROXBOX_NETBOX_MAX_CONCURRENT` | `netbox_max_concurrent` | 1 | Maximum simultaneous NetBox HTTP requests per worker (GET + POST + PATCH combined). This is the primary knob for PostgreSQL connection usage. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | Maximum simultaneous VM create/update operations per sync pass, bounded by a per-pass `asyncio.Semaphore`. |
+| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 | Maximum concurrent Proxmox VM config fetches (Proxmox-side, not NetBox-side). |
+| `PROXBOX_NETBOX_MAX_RETRIES` | `netbox_max_retries` | 5 | Maximum retry attempts on transient NetBox errors. |
+| `PROXBOX_NETBOX_RETRY_DELAY` | `netbox_retry_delay` | 2.0 s | Base delay between retries (exponential backoff). |
+| `PROXBOX_NETBOX_GET_CACHE_TTL` | `netbox_get_cache_ttl` | 60 s | GET response cache TTL. Raising this reduces NetBox requests on read-heavy paths. Set `0` to disable. |
+
+#### Peak connection formula
+
+```
+peak_connections ≈ PROXBOX_NETBOX_MAX_CONCURRENT × uvicorn_workers
+                 + concurrent_sync_requests
+```
+
+Example: 4 uvicorn workers × `PROXBOX_NETBOX_MAX_CONCURRENT=1` = 4 concurrent
+NetBox connections under a full-update. Keep the product well below NetBox's
+`DATABASE['CONN_MAX_AGE']` / PostgreSQL `max_connections` ceiling to leave
+headroom for the NetBox UI and other clients.
+
+**Sizing guidance by cluster size:**
+
+| Proxmox cluster size | Workers | `PROXBOX_NETBOX_MAX_CONCURRENT` | Notes |
+|---|---|---|---|
+| Small (< 100 VMs) | 1–2 | 1 (default) | Default settings work well |
+| Medium (100–500 VMs) | 4 | 1–2 | Raise to 2 only with PgBouncer |
+| Large (500+ VMs) | 4 | 1 (default) | Increase cache TTL instead; NetBox write concurrency is the bottleneck |
+
+#### Handling `netbox_overwhelmed` errors
+
+When NetBox's PostgreSQL connection pool is saturated, proxbox-api returns
+`netbox_overwhelmed` errors. The retry logic applies exponential backoff (up to
+30 seconds). To mitigate recurring errors:
+
+1. **Reduce write concurrency** — Lower `PROXBOX_NETBOX_WRITE_CONCURRENCY` (e.g., `4`) so fewer VM operations hit NetBox simultaneously during a sync pass.
+2. **Reduce max concurrent** — Keep `PROXBOX_NETBOX_MAX_CONCURRENT=1` (default) to serialize GET/POST/PATCH requests per worker.
+3. **Extend cache TTL** — Use `PROXBOX_NETBOX_GET_CACHE_TTL=300`; a cache hit costs zero PostgreSQL connections.
+4. **Add PgBouncer** — For installations with many concurrent clients, place PgBouncer in **transaction** pooling mode in front of PostgreSQL; set Django's `CONN_MAX_AGE=0` when PgBouncer transaction mode is active.
+
+#### PgBouncer configuration
+
+PgBouncer in **transaction** pooling mode is the recommended approach for
+high-throughput environments:
+
+```ini
+; pgbouncer.ini
+[databases]
+netbox = host=127.0.0.1 port=5432 dbname=netbox pool_size=20 max_db_connections=30
+
+[pgbouncer]
+pool_mode = transaction
+max_client_conn = 200
+default_pool_size = 20
+```
+
+Corresponding NetBox `configuration.py`:
+
+```python
+DATABASE = {
+    "HOST": "127.0.0.1",
+    "PORT": "6432",   # PgBouncer port
+    "NAME": "netbox",
+    "USER": "netbox",
+    "PASSWORD": "...",
+    "CONN_MAX_AGE": 0,  # required with PgBouncer transaction mode
+}
+```
+
+With PgBouncer fronting PostgreSQL you can safely raise
+`PROXBOX_NETBOX_MAX_CONCURRENT` to 2–4 without exhausting the raw PostgreSQL
+`max_connections`, because PgBouncer multiplexes many client connections onto a
+smaller server-side pool.
 
 ## CORS Behavior
 
