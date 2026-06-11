@@ -59,6 +59,13 @@ Main synchronization endpoints for virtual machines and related resources.
   "completed". When changing the batch contract, keep the failure count flowing
   into the stage summary so multi-endpoint mis-scoping can never masquerade as
   an empty-but-successful run.
+- **Full-update VM config fetch is a separate phase.** `_run_full_update_vm_batch`
+  first fetches all Proxmox VM configs under the VM fetch semaphore, and that
+  semaphore covers only `get_vm_config`. After every config fetch has completed,
+  the batch processes successful configs into `_PreparedVMState` objects. Keep
+  CPU validation/payload building and NetBox dependency calls out of the fetch
+  semaphore so pending Proxmox HTTP responses are drained promptly and aiohttp
+  wall-clock timeouts do not fire while other slots are doing CPU or NetBox work.
 - **VM lookups are scoped by `(cluster_id, vmid)`, not vmid alone (issue #223).**
   Proxmox `vmid` is only unique within one cluster, so the same `vmid` can exist
   on several clusters. The VM snapshot index is keyed by the
@@ -83,6 +90,32 @@ Main synchronization endpoints for virtual machines and related resources.
   request, so missing discovery tags, VM roles/types, device roles/types,
   cluster types, and custom fields are recreated before payloads reference
   them by slug.
+
+- **VM and template sync modes (`sync_mode_vm`, `sync_mode_vm_template`).** The
+  `create_virtual_machines` route accepts two optional query parameters that
+  control whether non-template VMs and template VMs are included in a given
+  sync pass.  Accepted values: ``"always"`` (default), ``"bootstrap_only"``
+  (treated as enabled at the backend), ``"disabled"`` (all matching resources
+  are skipped for this pass without counting as failures).  A Proxmox resource
+  is identified as a template when its ``template`` field is truthy (``1``,
+  ``"1"``, ``True``).  Filtered resources are logged at DEBUG level per item and
+  a single INFO summary is emitted when any mode is not ``"always"``.  Filtered
+  records do NOT increment ``failed_vms``.  The stream wrapper
+  (`create_virtual_machines_stream`) forwards both params to the inner function.
+  Unknown values fall back to ``"always"`` with a WARNING.
+
+- **Interface-dense guests (guest-agent payloads).** Guest-agent
+  `network-get-interfaces` calls use a dedicated timeout
+  (`PROXBOX_GUEST_AGENT_TIMEOUT` / plugin key `guest_agent_timeout`, default
+  15 s) with one bounded retry on timeout, because enumerating 100+ interfaces
+  (VRRP routers) is slow in-guest and the global Proxmox session timeout
+  (5 s default) silently dropped guest data. Alias entries (`name:N`) sharing a
+  parent NIC's MAC are aggregated into the parent during normalization
+  (`_normalize_guest_agent_interfaces`): parent name wins, addresses merged and
+  deduped. A failed VM-interface **bulk** reconciliation now raises
+  (`ProxboxException`) and emits a failed/end frame on the stream instead of
+  returning a silent empty success. Regression coverage:
+  `tests/test_interface_dense_vm_sync.py`.
 
 ## Extension Guidance
 
