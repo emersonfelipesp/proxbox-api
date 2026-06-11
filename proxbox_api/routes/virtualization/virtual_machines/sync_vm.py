@@ -721,13 +721,14 @@ async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
 ) -> tuple[dict[tuple[str, int, str], dict[str, object]], set[tuple[str, int, str]]]:
-    """Dispatch queued VM operations sequentially in deterministic batches.
+    """Dispatch queued VM operations concurrently, bounded by the write semaphore.
 
-    Per-VM failures are isolated: an error on one operation is logged and that
-    VM's key is recorded in the returned ``failed_keys`` set instead of raising
-    and aborting the whole queue (which would silently drop every subsequent
-    VM). The caller increments its failed-VM count from ``failed_keys`` so the
-    failure accounting stays accurate.
+    Operations run concurrently up to ``resolve_netbox_write_concurrency()``
+    (default 8, env ``PROXBOX_NETBOX_WRITE_CONCURRENCY``). Per-VM failures are
+    isolated: an error on one operation is logged and that VM's key is recorded
+    in the returned ``failed_keys`` set instead of raising and aborting the
+    whole queue. The caller increments its failed-VM count from ``failed_keys``
+    so the failure accounting stays accurate.
     """
 
     resolved_records: dict[tuple[str, int, str], dict[str, object]] = {}
@@ -735,19 +736,17 @@ async def _dispatch_vm_operation_queue(
     if not operation_queue:
         return resolved_records, failed_keys
 
-    batch_size = max(1, resolve_netbox_write_concurrency())
+    write_semaphore = asyncio.Semaphore(max(1, resolve_netbox_write_concurrency()))
 
-    for start_index in range(0, len(operation_queue), batch_size):
-        batch = operation_queue[start_index : start_index + batch_size]
-        for operation in batch:
-            vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
-            key = _prepared_vm_result_key(operation.prepared)
-
+    async def _run_single(operation: _NetBoxVMOperation) -> None:
+        vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
+        key = _prepared_vm_result_key(operation.prepared)
+        async with write_semaphore:
             try:
                 if operation.method == "GET":
                     if operation.existing_record is not None:
                         resolved_records[key] = operation.existing_record
-                    continue
+                    return
 
                 if operation.method == "CREATE":
                     try:
@@ -767,7 +766,7 @@ async def _dispatch_vm_operation_queue(
                         if existing is None:
                             raise
                         resolved_records[key] = _to_mapping(existing)
-                    continue
+                    return
 
                 if operation.existing_record is None:
                     raise ProxboxException(
@@ -808,6 +807,7 @@ async def _dispatch_vm_operation_queue(
                 failed_keys.add(key)
                 resolved_records.pop(key, None)
 
+    await asyncio.gather(*[_run_single(op) for op in operation_queue], return_exceptions=True)
     return resolved_records, failed_keys
 
 
@@ -1876,24 +1876,25 @@ async def create_virtual_machines(  # noqa: C901
 
         vm_types: set[str] = set()
 
-        for cluster_name, vm_resources in resources_by_cluster.items():
+        async def _precompute_single_cluster(
+            cluster_name: str, vm_resources: list[dict]
+        ) -> None:
             cluster_state = next(
                 (state for state in cluster_status if getattr(state, "name", None) == cluster_name),
                 None,
             )
             cluster_mode = getattr(cluster_state, "mode", None) or "cluster"
-            cluster_type = await _ensure_cluster_type(
-                nb,
-                mode=cluster_mode,
-                tag_refs=tag_refs,
+            # cluster_type, site, and tenant are mutually independent — run them in parallel.
+            cluster_type, site, tenant = await asyncio.gather(
+                _ensure_cluster_type(nb, mode=cluster_mode, tag_refs=tag_refs),
+                _ensure_site(
+                    nb,
+                    cluster_name=cluster_name,
+                    tag_refs=tag_refs,
+                    placement=cluster_state,
+                ),
+                _resolve_tenant(nb, placement=cluster_state),
             )
-            site = await _ensure_site(
-                nb,
-                cluster_name=cluster_name,
-                tag_refs=tag_refs,
-                placement=cluster_state,
-            )
-            tenant = await _resolve_tenant(nb, placement=cluster_state)
             cluster = await _ensure_cluster(
                 nb,
                 cluster_name=cluster_name,
@@ -1933,10 +1934,23 @@ async def create_virtual_machines(  # noqa: C901
                 )
 
             for resource in vm_resources:
-                vm_type = str(resource.get("type") or "undefined").lower()
-                if vm_type not in vm_role_mapping:
-                    vm_type = "undefined"
-                vm_types.add(vm_type)
+                vt = str(resource.get("type") or "undefined").lower()
+                if vt not in vm_role_mapping:
+                    vt = "undefined"
+                vm_types.add(vt)
+
+        # All clusters are independent — precompute them in parallel.
+        cluster_precompute_results = await asyncio.gather(
+            *[
+                _precompute_single_cluster(cn, vrs)
+                for cn, vrs in resources_by_cluster.items()
+            ],
+            return_exceptions=True,
+        )
+        # Re-raise the first cluster-level failure so the outer try/except can surface it.
+        for _cluster_result in cluster_precompute_results:
+            if isinstance(_cluster_result, BaseException):
+                raise _cluster_result
 
         sorted_vm_types = sorted(vm_types)
         role_results = await asyncio.gather(
@@ -1971,7 +1985,10 @@ async def create_virtual_machines(  # noqa: C901
 
         if supports_vm_type:
             type_results = await asyncio.gather(
-                *[ensure_vm_type(nb, vt, tag_refs) for vt in sorted_vm_types],
+                *[
+                    ensure_vm_type(nb, vt, tag_refs, netbox_version=netbox_version)
+                    for vt in sorted_vm_types
+                ],
                 return_exceptions=True,
             )
             for vt, result in zip(sorted_vm_types, type_results):
@@ -2000,7 +2017,7 @@ async def create_virtual_machines(  # noqa: C901
         if not supports_vm_type:
             return None
         if vm_type_key not in vm_type_cache and vm_type_key in VM_TYPE_MAPPINGS:
-            result = await ensure_vm_type(nb, vm_type_key, tag_refs)
+            result = await ensure_vm_type(nb, vm_type_key, tag_refs, netbox_version=netbox_version)
             if result is not None:
                 vm_type_cache[vm_type_key] = result
         return vm_type_cache.get(vm_type_key)

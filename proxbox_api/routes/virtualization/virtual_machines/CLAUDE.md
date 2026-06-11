@@ -117,6 +117,32 @@ Main synchronization endpoints for virtual machines and related resources.
   as success even when a stale existing record is present. Coverage:
   `tests/test_vm_sync_reconciliation_queue.py`.
 
+- **Concurrent VM operation dispatch.** `_dispatch_vm_operation_queue` runs all
+  queued CREATE/UPDATE/GET operations concurrently via `asyncio.gather`, bounded
+  by an `asyncio.Semaphore` whose width comes from `resolve_netbox_write_concurrency()`
+  (default 8, env `PROXBOX_NETBOX_WRITE_CONCURRENCY`). The previous serial
+  batch-per-batch loop is replaced — all operations are dispatched at once and
+  the semaphore serialises them to the configured concurrency cap. Per-VM failure
+  isolation is unchanged; the semaphore context is entirely inside the per-VM
+  error handler so one VM's failure releases the semaphore slot immediately.
+
+- **Single `netbox_version` per sync pass.** `detect_netbox_version` is called
+  once at the start of `create_virtual_machines` and the result is threaded
+  through to every `ensure_vm_type` invocation via the `netbox_version=` keyword
+  argument (added in `proxbox_api/services/sync/vm_create.py`). Previously
+  `ensure_vm_type` called `detect_netbox_version` independently on every
+  invocation, adding one NetBox round-trip per VM type per sync.
+
+- **Parallel cluster dependency precomputation.** `_precompute_vm_dependencies`
+  processes all clusters concurrently via `asyncio.gather` instead of
+  sequentially. Within each cluster, `_ensure_cluster_type`, `_ensure_site`, and
+  `_resolve_tenant` are mutually independent and are gathered in parallel before
+  `_ensure_cluster` (which depends on all three). Node device ensures remain
+  sequential within a cluster (they depend on the resolved cluster id). Any
+  cluster-level failure is still surfaced — the first `BaseException` in the
+  gather results is re-raised so the outer `try/except` in `create_virtual_machines`
+  can wrap it as a `ProxboxException`.
+
 - **Interface-dense guests (guest-agent payloads).** Guest-agent
   `network-get-interfaces` calls use a dedicated timeout
   (`PROXBOX_GUEST_AGENT_TIMEOUT` / plugin key `guest_agent_timeout`, default

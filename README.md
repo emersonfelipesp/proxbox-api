@@ -372,6 +372,47 @@ uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
 - HTTP 502 "Response ended prematurely" → decrease batch size, increase delay
 - Slow sync performance on powerful hardware → increase batch size, decrease delay
 
+### NetBox PostgreSQL Connection Pool
+
+proxbox-api holds at most `PROXBOX_NETBOX_MAX_CONCURRENT` in-flight NetBox
+requests per worker at a time. Peak PostgreSQL connections across the whole
+deployment equal roughly:
+
+```
+peak_connections ≈ PROXBOX_NETBOX_MAX_CONCURRENT × uvicorn_workers
+```
+
+**Key concurrency tunables:**
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `PROXBOX_NETBOX_MAX_CONCURRENT` | 1 | Caps concurrent NetBox HTTP requests per worker. This is the primary lever for PostgreSQL connection usage. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | 8 | Caps simultaneous VM create/update operations per sync pass (semaphore-bounded). |
+| `PROXBOX_NETBOX_GET_CACHE_TTL` | 60 s | GET cache TTL. Raising this reduces total NetBox requests — a cache hit costs zero connections. |
+
+**When `netbox_overwhelmed` errors appear:**
+
+```bash
+# Primary fix: reduce write concurrency (VM sync)
+export PROXBOX_NETBOX_WRITE_CONCURRENCY=4
+
+# Extend GET cache to reduce read traffic
+export PROXBOX_NETBOX_GET_CACHE_TTL=300
+
+# Already the default — keep max concurrent at 1
+export PROXBOX_NETBOX_MAX_CONCURRENT=1
+```
+
+For deployments with many concurrent clients, placing **PgBouncer in
+transaction mode** in front of PostgreSQL significantly raises the effective
+connection headroom. With PgBouncer active, set `CONN_MAX_AGE=0` in NetBox's
+`configuration.py` and you can safely raise `PROXBOX_NETBOX_MAX_CONCURRENT` to
+2–4.
+
+See [docs/getting-started/configuration.md](docs/getting-started/configuration.md#netbox-postgresql-connection-pool)
+for the full tunables table, peak connection formula, sizing guidance by cluster
+size, and PgBouncer sample configuration.
+
 ### Alternative: pip editable install
 
 ```
