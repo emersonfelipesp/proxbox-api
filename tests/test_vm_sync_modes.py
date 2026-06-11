@@ -113,21 +113,15 @@ def test_vm_disabled_allows_template():
 
 
 def test_template_disabled_excludes_template_int():
-    assert (
-        _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_INT, "always", "disabled") is False
-    )
+    assert _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_INT, "always", "disabled") is False
 
 
 def test_template_disabled_excludes_template_str():
-    assert (
-        _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_STR, "always", "disabled") is False
-    )
+    assert _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_STR, "always", "disabled") is False
 
 
 def test_template_disabled_excludes_template_bool():
-    assert (
-        _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_BOOL, "always", "disabled") is False
-    )
+    assert _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_BOOL, "always", "disabled") is False
 
 
 def test_template_disabled_allows_regular_vm():
@@ -145,15 +139,12 @@ def test_template_disabled_allows_no_template_key():
 
 def test_template_zero_not_treated_as_template_when_tpl_disabled():
     """A resource with template=0 is a regular VM; should pass when only VM mode is 'always'."""
-    assert (
-        _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_ZERO, "always", "disabled") is True
-    )
+    assert _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_ZERO, "always", "disabled") is True
 
 
 def test_template_str_zero_not_treated_as_template():
     assert (
-        _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_STR_ZERO, "always", "disabled")
-        is True
+        _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_STR_ZERO, "always", "disabled") is True
     )
 
 
@@ -163,26 +154,19 @@ def test_template_str_zero_not_treated_as_template():
 
 
 def test_bootstrap_only_allows_regular_vm():
-    assert (
-        _vm_resource_allowed_by_sync_modes(VM_RESOURCE, "bootstrap_only", "always") is True
-    )
+    assert _vm_resource_allowed_by_sync_modes(VM_RESOURCE, "bootstrap_only", "always") is True
 
 
 def test_bootstrap_only_template_mode_allows_template():
     assert (
-        _vm_resource_allowed_by_sync_modes(
-            TEMPLATE_RESOURCE_INT, "always", "bootstrap_only"
-        )
+        _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_INT, "always", "bootstrap_only")
         is True
     )
 
 
 def test_both_bootstrap_only():
     assert (
-        _vm_resource_allowed_by_sync_modes(
-            VM_RESOURCE, "bootstrap_only", "bootstrap_only"
-        )
-        is True
+        _vm_resource_allowed_by_sync_modes(VM_RESOURCE, "bootstrap_only", "bootstrap_only") is True
     )
     assert (
         _vm_resource_allowed_by_sync_modes(

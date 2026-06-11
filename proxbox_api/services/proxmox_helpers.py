@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import re
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -310,6 +312,72 @@ async def get_vm_config(
         )
 
 
+# Guest-agent alias entries are named "<parent>:<N>" (e.g. "ens20:1") and share
+# the parent interface's MAC while carrying additional service addresses.
+_GUEST_AGENT_ALIAS_RE = re.compile(r"^.+:\d+$")
+
+
+def _aggregate_guest_agent_interfaces(
+    interfaces: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Merge guest-agent alias entries into their parent interface.
+
+    Entries that share a MAC address are aggregated: the canonical entry is the
+    first one whose name is not an alias ("name:N"); alias entries' addresses
+    are merged into it (deduped by (ip_address, prefix), order preserved) and
+    the alias entries are dropped. Without this, dict lookups keyed by MAC let
+    the last alias entry win, mis-resolving interface names and losing the
+    parent's addresses on interface-dense guests (e.g. VRRP routers).
+    Entries without a MAC, or with a unique MAC, are returned unchanged.
+    """
+    by_mac: dict[str, list[int]] = {}
+    for idx, iface in enumerate(interfaces):
+        mac = iface.get("mac_address")
+        if mac:
+            by_mac.setdefault(str(mac).lower(), []).append(idx)
+
+    drop: set[int] = set()
+    for indexes in by_mac.values():
+        if len(indexes) < 2:
+            continue
+        alias_indexes = [
+            i for i in indexes if _GUEST_AGENT_ALIAS_RE.match(str(interfaces[i].get("name", "")))
+        ]
+        if alias_indexes:
+            drop |= _merge_mac_interface_group(interfaces, indexes, alias_indexes)
+
+    if not drop:
+        return interfaces
+    return [iface for idx, iface in enumerate(interfaces) if idx not in drop]
+
+
+def _merge_mac_interface_group(
+    interfaces: list[dict[str, object]],
+    indexes: list[int],
+    alias_indexes: list[int],
+) -> set[int]:
+    """Merge one MAC-sharing group into its canonical entry; return drops."""
+    parent_indexes = [i for i in indexes if i not in alias_indexes]
+    canonical = parent_indexes[0] if parent_indexes else alias_indexes[0]
+    canonical_addresses = interfaces[canonical].setdefault("ip_addresses", [])
+    seen = {
+        (addr.get("ip_address"), addr.get("prefix"))
+        for addr in canonical_addresses
+        if isinstance(addr, dict)
+    }
+    for idx in indexes:
+        if idx == canonical:
+            continue
+        for addr in interfaces[idx].get("ip_addresses") or []:
+            if not isinstance(addr, dict):
+                continue
+            key = (addr.get("ip_address"), addr.get("prefix"))
+            if key not in seen:
+                seen.add(key)
+                canonical_addresses.append(addr)
+    return {i for i in alias_indexes if i != canonical}
+
+
 def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]]:
     if isinstance(payload, dict):
         raw_interfaces = payload.get("result") or payload.get("interfaces") or []
@@ -346,7 +414,7 @@ def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]
                 "ip_addresses": addresses,
             }
         )
-    return normalized
+    return _aggregate_guest_agent_interfaces(normalized)
 
 
 @dataclass(frozen=True)
@@ -368,6 +436,69 @@ _GUEST_AGENT_PERMISSION_HINT = (
     "to VM.Monitor; on PVE 8 VM.Monitor alone is sufficient."
 )
 
+_GUEST_AGENT_TIMEOUT_HINT = (
+    "Guest-agent network-get-interfaces timed out. Interface-dense guests "
+    "(many VRRP/alias interfaces) can take long to enumerate; raise "
+    "PROXBOX_GUEST_AGENT_TIMEOUT (plugin key guest_agent_timeout) if this persists."
+)
+
+
+def _resolve_guest_agent_timeout() -> int:
+    """Dedicated timeout (seconds) for guest-agent network-get-interfaces calls.
+
+    Resolution: env PROXBOX_GUEST_AGENT_TIMEOUT > ProxboxPluginSettings
+    guest_agent_timeout > default 15. Falls back gracefully when the plugin
+    settings key does not exist yet.
+    """
+    from proxbox_api import runtime_settings
+
+    return runtime_settings.get_int(
+        settings_key="guest_agent_timeout",
+        env="PROXBOX_GUEST_AGENT_TIMEOUT",
+        default=15,
+        minimum=1,
+        maximum=600,
+    )
+
+
+@contextmanager
+def _scoped_proxmox_backend_timeout(session: ProxmoxSession, timeout_s: float):
+    """Temporarily raise the HTTPS backend's request timeout.
+
+    proxmox-sdk has no per-call timeout; the HTTPS backend applies one
+    session-level ``aiohttp.ClientTimeout``. Guest-agent enumeration on
+    interface-dense guests can legitimately exceed the default 5 s, so the
+    timeout is raised for the duration of the agent call and restored after.
+    Only extends (never shortens) the window for concurrent requests sharing
+    the backend; degrades to a no-op for mock/pvesh/SSH backends without a
+    ``_timeout`` attribute.
+    """
+    backend = getattr(getattr(session, "session", None), "_backend", None)
+    old_timeout = getattr(backend, "_timeout", None)
+    if backend is None or old_timeout is None:
+        yield
+        return
+    try:
+        import aiohttp
+
+        backend._timeout = aiohttp.ClientTimeout(
+            total=timeout_s, connect=getattr(old_timeout, "connect", None)
+        )
+    except Exception:  # noqa: BLE001 - never let the override break the fetch
+        backend._timeout = old_timeout
+        yield
+        return
+    try:
+        yield
+    finally:
+        backend._timeout = old_timeout
+
+
+def _is_timeout_error(error: Exception) -> bool:
+    if isinstance(error, asyncio.TimeoutError | TimeoutError | ProxmoxTimeoutError):
+        return True
+    return "timed out" in str(error).lower() or "timeout" in str(error).lower()
+
 
 def _classify_guest_agent_error(error: Exception) -> tuple[str, str]:
     """Map a guest-agent fetch error to (log_level, operator_hint).
@@ -380,6 +511,8 @@ def _classify_guest_agent_error(error: Exception) -> tuple[str, str]:
         token in text for token in ("forbidden", "permission denied", "not authorized")
     ):
         return "error", _GUEST_AGENT_PERMISSION_HINT
+    if _is_timeout_error(error):
+        return "warning", _GUEST_AGENT_TIMEOUT_HINT
     if "guest agent is not running" in text or "guest-agent is not running" in text:
         return "info", "QEMU guest agent is not running in the VM."
     if "agent" in text and "not enabled" in text:
@@ -400,21 +533,52 @@ async def fetch_qemu_guest_agent_network_interfaces(
     failure. The diagnostic is suitable for surfacing to the SSE/WebSocket
     progress stream so operators see *why* IPs were not synced for a VM.
     """
+    timeout_s = _resolve_guest_agent_timeout()
+
+    async def _primary_call() -> object:
+        with _scoped_proxmox_backend_timeout(session, timeout_s):
+            return await asyncio.wait_for(
+                resolve_async(
+                    session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+                ),
+                timeout=timeout_s,
+            )
+
     try:
         try:
-            payload = await resolve_async(
-                session.session.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
-            )
+            try:
+                payload = await _primary_call()
+            except Exception as primary_error:
+                if not _is_timeout_error(primary_error):
+                    raise
+                # One bounded retry: interface-dense guests can be slow to
+                # enumerate and a single timeout is often transient.
+                logger.warning(
+                    "Guest-agent interfaces call timed out after %ss for node=%s vmid=%s "
+                    "-- retrying once",
+                    timeout_s,
+                    node,
+                    vmid,
+                )
+                payload = await _primary_call()
         except Exception as error:
+            if _is_timeout_error(error):
+                raise
             logger.debug(
                 "Primary guest-agent interfaces call failed for node=%s vmid=%s: %s",
                 node,
                 vmid,
                 error,
             )
-            payload = await resolve_async(
-                session.session.nodes(node).qemu(vmid).agent.get(command="network-get-interfaces")
-            )
+            with _scoped_proxmox_backend_timeout(session, timeout_s):
+                payload = await asyncio.wait_for(
+                    resolve_async(
+                        session.session.nodes(node)
+                        .qemu(vmid)
+                        .agent.get(command="network-get-interfaces")
+                    ),
+                    timeout=timeout_s,
+                )
         return GuestAgentFetchResult(
             interfaces=_normalize_guest_agent_interfaces(payload),
             diagnostic=None,
