@@ -122,6 +122,11 @@ Um modo `disabled` pula os recursos correspondentes na passagem sem conta-los
 como falha; um valor desconhecido cai para `always` com um aviso, para que um
 parametro malformado nunca bloqueie um sync silenciosamente.
 
+A filtragem e aplicada **na origem**, antes da descoberta e do precompute de
+dependencias, entao um modo `disabled` nao cria nem atualiza objetos
+dependentes no NetBox (manufacturer, device type, cluster, site, devices de
+node, roles de VM) para VMs que nunca serao sincronizadas.
+
 ### Reflexao das chaves do cloud-init
 
 Para VMs QEMU que bootam com cloud-init, o sync de VM reflete as chaves SSH
@@ -268,9 +273,15 @@ enderecos alias) exigem cuidado extra:
   pai. Interfaces realmente distintas que compartilham um MAC mas nao tem nome
   de alias (interfaces VRRP reais) sao preservadas intactas.
 - **Falhas do bulk-reconcile aparecem** — quando a reconciliacao em lote das
-  interfaces de VM falha, o stage agora levanta excecao (e emite um frame de
-  falha no stream) em vez de retornar um sucesso vazio, para que interfaces
-  nunca fiquem silenciosamente ausentes no NetBox.
+  interfaces de VM falha, ou termina com registros com falha (falha parcial), o
+  stage agora levanta excecao (e emite um frame de falha no stream) em vez de
+  retornar um sucesso vazio/parcial, para que interfaces nunca fiquem
+  silenciosamente ausentes no NetBox.
+
+O dispatch por VM tambem e isolado: a falha de criacao/atualizacao de uma VM e
+logada e contada no total de falhas da execucao, em vez de abortar a fila
+inteira, entao uma VM ruim nao derruba mais todas as VMs enfileiradas depois
+dela.
 
 ### Structured logging
 

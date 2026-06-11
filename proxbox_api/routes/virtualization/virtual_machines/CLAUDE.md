@@ -98,24 +98,42 @@ Main synchronization endpoints for virtual machines and related resources.
   (treated as enabled at the backend), ``"disabled"`` (all matching resources
   are skipped for this pass without counting as failures).  A Proxmox resource
   is identified as a template when its ``template`` field is truthy (``1``,
-  ``"1"``, ``True``).  Filtered resources are logged at DEBUG level per item and
-  a single INFO summary is emitted when any mode is not ``"always"``.  Filtered
-  records do NOT increment ``failed_vms``.  The stream wrapper
+  ``"1"``, ``True``).  Filtering is applied **at the source** by
+  `_filter_cluster_resources_by_sync_modes` immediately after the
+  `netbox_vm_ids` filter, *before* discovery and dependency precompute — so a
+  ``"disabled"`` mode does not create/update dependent NetBox objects
+  (manufacturer, device type, cluster, site, node devices, VM roles) for VMs
+  that will never sync. A single INFO summary logs how many resources were
+  dropped. Filtered records do NOT increment ``failed_vms``. The stream wrapper
   (`create_virtual_machines_stream`) forwards both params to the inner function.
-  Unknown values fall back to ``"always"`` with a WARNING.
+  Unknown values fall back to ``"always"`` with a WARNING. Coverage:
+  `tests/test_vm_sync_modes.py`.
+
+- **Per-VM dispatch isolation.** `_dispatch_vm_operation_queue` returns
+  ``(resolved_records, failed_keys)``: a single VM's create/update failure is
+  logged and its key added to ``failed_keys`` (the caller counts it against
+  ``failed_vms``) instead of raising and aborting the whole queue, so one bad VM
+  no longer drops every VM queued after it. A dispatch-failed VM is never masked
+  as success even when a stale existing record is present. Coverage:
+  `tests/test_vm_sync_reconciliation_queue.py`.
 
 - **Interface-dense guests (guest-agent payloads).** Guest-agent
   `network-get-interfaces` calls use a dedicated timeout
   (`PROXBOX_GUEST_AGENT_TIMEOUT` / plugin key `guest_agent_timeout`, default
   15 s) with one bounded retry on timeout, because enumerating 100+ interfaces
   (VRRP routers) is slow in-guest and the global Proxmox session timeout
-  (5 s default) silently dropped guest data. Alias entries (`name:N`) sharing a
-  parent NIC's MAC are aggregated into the parent during normalization
-  (`_normalize_guest_agent_interfaces`): parent name wins, addresses merged and
-  deduped. A failed VM-interface **bulk** reconciliation now raises
-  (`ProxboxException`) and emits a failed/end frame on the stream instead of
-  returning a silent empty success. Regression coverage:
-  `tests/test_interface_dense_vm_sync.py`.
+  (5 s default) silently dropped guest data. The timeout override
+  (`_scoped_proxmox_backend_timeout`) only ever **widens** the shared backend's
+  `total` (depth-counted so overlapping calls restore the true original on the
+  last exit) and preserves the other `ClientTimeout` fields. Alias entries
+  (`name:N`) are matched to their parent **by name** (not by MAC) during
+  normalization (`_normalize_guest_agent_interfaces`) so genuine distinct
+  interfaces that share a MAC (real VRRP virtual MACs) are never conflated;
+  alias addresses are merged into the parent and deduped. A VM-interface
+  **bulk** reconciliation that fails *or* returns partial failures
+  (`result.failed > 0`) now raises (`ProxboxException`) and emits a failed/end
+  frame on the stream instead of returning a silent empty/partial success.
+  Regression coverage: `tests/test_interface_dense_vm_sync.py`.
 
 ## Extension Guidance
 

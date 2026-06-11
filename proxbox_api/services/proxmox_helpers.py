@@ -312,70 +312,79 @@ async def get_vm_config(
         )
 
 
-# Guest-agent alias entries are named "<parent>:<N>" (e.g. "ens20:1") and share
-# the parent interface's MAC while carrying additional service addresses.
-_GUEST_AGENT_ALIAS_RE = re.compile(r"^.+:\d+$")
+# Guest-agent alias entries are named "<parent>:<N>" (e.g. "ens20:1").
+_GUEST_AGENT_ALIAS_RE = re.compile(r"^(?P<base>.+):\d+$")
+
+
+def _alias_base_name(name: str) -> str | None:
+    """Return the parent interface name for an alias "<base>:<N>", else None."""
+    match = _GUEST_AGENT_ALIAS_RE.match(name)
+    return match.group("base") if match else None
 
 
 def _aggregate_guest_agent_interfaces(
     interfaces: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Merge guest-agent alias entries into their parent interface.
+    """Merge guest-agent alias entries into their parent interface, by name.
 
-    Entries that share a MAC address are aggregated: the canonical entry is the
-    first one whose name is not an alias ("name:N"); alias entries' addresses
-    are merged into it (deduped by (ip_address, prefix), order preserved) and
-    the alias entries are dropped. Without this, dict lookups keyed by MAC let
-    the last alias entry win, mis-resolving interface names and losing the
-    parent's addresses on interface-dense guests (e.g. VRRP routers).
-    Entries without a MAC, or with a unique MAC, are returned unchanged.
+    Linux alias interfaces are named ``"<parent>:<N>"`` (e.g. ``ens20:1``) and
+    belong to the interface named ``<parent>``. Aliases are matched to their
+    parent by *name* — not by MAC — so genuine distinct interfaces that happen
+    to share a MAC (e.g. real VRRP virtual interfaces) are never conflated.
+    Each alias's addresses are merged into the canonical entry (deduped by
+    ``(ip_address, prefix)``, order preserved) and the alias entry is dropped.
+    The canonical entry is the non-alias interface named ``<parent>`` if present;
+    otherwise (an alias-only group) the first alias of that parent name is kept
+    and the rest merge into it. Non-alias interfaces are returned unchanged.
     """
-    by_mac: dict[str, list[int]] = {}
+    # First non-alias interface index per name (the parent candidate).
+    parent_by_name: dict[str, int] = {}
     for idx, iface in enumerate(interfaces):
-        mac = iface.get("mac_address")
-        if mac:
-            by_mac.setdefault(str(mac).lower(), []).append(idx)
+        name = str(iface.get("name", ""))
+        if _alias_base_name(name) is None:
+            parent_by_name.setdefault(name, idx)
 
+    # Canonical target index per parent name for alias-only groups.
+    alias_canonical_by_base: dict[str, int] = {}
     drop: set[int] = set()
-    for indexes in by_mac.values():
-        if len(indexes) < 2:
+    for idx, iface in enumerate(interfaces):
+        base = _alias_base_name(str(iface.get("name", "")))
+        if base is None:
             continue
-        alias_indexes = [
-            i for i in indexes if _GUEST_AGENT_ALIAS_RE.match(str(interfaces[i].get("name", "")))
-        ]
-        if alias_indexes:
-            drop |= _merge_mac_interface_group(interfaces, indexes, alias_indexes)
+        canonical = parent_by_name.get(base)
+        if canonical is None:
+            # No real parent: keep the first alias of this base as canonical.
+            canonical = alias_canonical_by_base.setdefault(base, idx)
+        if canonical == idx:
+            continue
+        _merge_interface_addresses(interfaces[canonical], interfaces[idx])
+        drop.add(idx)
 
     if not drop:
         return interfaces
     return [iface for idx, iface in enumerate(interfaces) if idx not in drop]
 
 
-def _merge_mac_interface_group(
-    interfaces: list[dict[str, object]],
-    indexes: list[int],
-    alias_indexes: list[int],
-) -> set[int]:
-    """Merge one MAC-sharing group into its canonical entry; return drops."""
-    parent_indexes = [i for i in indexes if i not in alias_indexes]
-    canonical = parent_indexes[0] if parent_indexes else alias_indexes[0]
-    canonical_addresses = interfaces[canonical].setdefault("ip_addresses", [])
+def _merge_interface_addresses(
+    canonical: dict[str, object],
+    source: dict[str, object],
+) -> None:
+    """Merge ``source``'s ip_addresses into ``canonical`` (deduped, order kept)."""
+    canonical_addresses = canonical.setdefault("ip_addresses", [])
+    if not isinstance(canonical_addresses, list):
+        return
     seen = {
         (addr.get("ip_address"), addr.get("prefix"))
         for addr in canonical_addresses
         if isinstance(addr, dict)
     }
-    for idx in indexes:
-        if idx == canonical:
+    for addr in source.get("ip_addresses") or []:
+        if not isinstance(addr, dict):
             continue
-        for addr in interfaces[idx].get("ip_addresses") or []:
-            if not isinstance(addr, dict):
-                continue
-            key = (addr.get("ip_address"), addr.get("prefix"))
-            if key not in seen:
-                seen.add(key)
-                canonical_addresses.append(addr)
-    return {i for i in alias_indexes if i != canonical}
+        key = (addr.get("ip_address"), addr.get("prefix"))
+        if key not in seen:
+            seen.add(key)
+            canonical_addresses.append(addr)
 
 
 def _normalize_guest_agent_interfaces(payload: object) -> list[dict[str, object]]:
@@ -463,35 +472,58 @@ def _resolve_guest_agent_timeout() -> int:
 
 @contextmanager
 def _scoped_proxmox_backend_timeout(session: ProxmoxSession, timeout_s: float):
-    """Temporarily raise the HTTPS backend's request timeout.
+    """Temporarily widen the HTTPS backend's request timeout.
 
     proxmox-sdk has no per-call timeout; the HTTPS backend applies one
     session-level ``aiohttp.ClientTimeout``. Guest-agent enumeration on
     interface-dense guests can legitimately exceed the default 5 s, so the
-    timeout is raised for the duration of the agent call and restored after.
-    Only extends (never shortens) the window for concurrent requests sharing
-    the backend; degrades to a no-op for mock/pvesh/SSH backends without a
-    ``_timeout`` attribute.
+    timeout's ``total`` is widened to ``max(original_total, timeout_s)`` for the
+    duration of the agent call and the other timeout fields (``connect``,
+    ``sock_connect``, ``sock_read``) are preserved. It only ever widens, never
+    shortens: an existing larger ``total`` and an unbounded (``None``) ``total``
+    are left untouched.
+
+    Because the backend session is shared, overlapping guest-agent calls are
+    tracked with a depth counter on the backend (asyncio is single-threaded, so
+    the counter is consistent between awaits): the first entrant records the
+    true original timeout and the last exitant restores it, so a concurrent call
+    can never restore a stale value or shorten the window mid-flight. Degrades
+    to a no-op for mock/pvesh/SSH backends without a ``_timeout`` attribute.
     """
     backend = getattr(getattr(session, "session", None), "_backend", None)
-    old_timeout = getattr(backend, "_timeout", None)
-    if backend is None or old_timeout is None:
+    if backend is None or getattr(backend, "_timeout", None) is None:
         yield
         return
+
     try:
         import aiohttp
 
-        backend._timeout = aiohttp.ClientTimeout(
-            total=timeout_s, connect=getattr(old_timeout, "connect", None)
-        )
+        depth = getattr(backend, "_proxbox_timeout_depth", 0)
+        if depth == 0:
+            backend._proxbox_timeout_original = backend._timeout
+        original = backend._proxbox_timeout_original
+        old_total = getattr(original, "total", None)
+        # Only widen: keep an unbounded total, and never lower an existing one.
+        if old_total is not None and old_total < timeout_s:
+            backend._timeout = aiohttp.ClientTimeout(
+                total=timeout_s,
+                connect=getattr(original, "connect", None),
+                sock_connect=getattr(original, "sock_connect", None),
+                sock_read=getattr(original, "sock_read", None),
+            )
+        backend._proxbox_timeout_depth = depth + 1
     except Exception:  # noqa: BLE001 - never let the override break the fetch
-        backend._timeout = old_timeout
         yield
         return
+
     try:
         yield
     finally:
-        backend._timeout = old_timeout
+        new_depth = getattr(backend, "_proxbox_timeout_depth", 1) - 1
+        backend._proxbox_timeout_depth = new_depth
+        if new_depth <= 0:
+            backend._timeout = getattr(backend, "_proxbox_timeout_original", backend._timeout)
+            backend._proxbox_timeout_depth = 0
 
 
 def _is_timeout_error(error: Exception) -> bool:

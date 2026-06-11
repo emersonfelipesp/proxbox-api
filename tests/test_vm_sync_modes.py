@@ -8,6 +8,7 @@ normalizer ``_normalize_sync_mode`` exported from
 from __future__ import annotations
 
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
+    _filter_cluster_resources_by_sync_modes,
     _normalize_sync_mode,
     _vm_resource_allowed_by_sync_modes,
 )
@@ -186,3 +187,55 @@ def test_both_disabled_excludes_everything():
     assert (
         _vm_resource_allowed_by_sync_modes(TEMPLATE_RESOURCE_INT, "disabled", "disabled") is False
     )
+
+
+# ---------------------------------------------------------------------------
+# _filter_cluster_resources_by_sync_modes — source-level filtering
+# ---------------------------------------------------------------------------
+
+
+def _cluster_payload():
+    return [
+        {
+            "cluster-a": [
+                dict(VM_RESOURCE),
+                dict(TEMPLATE_RESOURCE_INT),
+                {"type": "lxc", "vmid": 200, "name": "ct", "template": 0},
+                {"type": "storage", "vmid": None, "name": "local"},
+            ]
+        }
+    ]
+
+
+def test_filter_identity_when_no_mode_disabled():
+    payload = _cluster_payload()
+    # Returned unchanged (same object) when neither mode is disabled.
+    assert _filter_cluster_resources_by_sync_modes(payload, "always", "always") is payload
+    assert _filter_cluster_resources_by_sync_modes(payload, "bootstrap_only", "always") is payload
+
+
+def test_filter_drops_non_templates_when_vm_disabled():
+    kept = _filter_cluster_resources_by_sync_modes(_cluster_payload(), "disabled", "always")
+    names = {r.get("name") for r in kept[0]["cluster-a"]}
+    # Non-template VM and LXC dropped; template and non-VM resource kept.
+    assert names == {"tpl-vm", "local"}
+
+
+def test_filter_drops_templates_when_template_disabled():
+    kept = _filter_cluster_resources_by_sync_modes(_cluster_payload(), "always", "disabled")
+    names = {r.get("name") for r in kept[0]["cluster-a"]}
+    # Template dropped; non-template VM, LXC, and non-VM resource kept.
+    assert names == {"my-vm", "ct", "local"}
+
+
+def test_filter_both_disabled_drops_all_vm_resources():
+    kept = _filter_cluster_resources_by_sync_modes(_cluster_payload(), "disabled", "disabled")
+    names = {r.get("name") for r in kept[0]["cluster-a"]}
+    # Only the non-VM resource survives.
+    assert names == {"local"}
+
+
+def test_filter_preserves_non_dict_and_non_list_structures():
+    payload = ["not-a-dict", {"cluster-a": "not-a-list"}]
+    kept = _filter_cluster_resources_by_sync_modes(payload, "disabled", "disabled")
+    assert kept == ["not-a-dict", {"cluster-a": "not-a-list"}]

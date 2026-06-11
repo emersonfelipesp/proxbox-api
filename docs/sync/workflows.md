@@ -119,6 +119,11 @@ QEMU/LXC resource by `sync_mode_vm`. A `disabled` mode skips matching resources
 for the pass without counting them as failures; an unknown value falls back to
 `always` with a warning so a malformed parameter never silently blocks a sync.
 
+Filtering is applied **at the source**, before discovery and dependency
+precompute, so a `disabled` mode does not create or update dependent NetBox
+objects (manufacturer, device type, cluster, site, node devices, VM roles) for
+VMs that will never be synced.
+
 ### Tag Preservation
 
 When `overwrite_vm_tags=False` (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The `Proxbox` tag is always retained so the plugin can identify objects it owns. Setting `overwrite_vm_tags=True` switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, and `overwrite_ip_tags`. See [Overwrite Flags](./overwrite-flags.md).
@@ -269,9 +274,14 @@ addresses) need extra care:
   Genuinely distinct interfaces that share a MAC but are not alias-named (real
   VRRP interfaces) are preserved untouched.
 - **Bulk-reconcile failures surface** — when the bulk VM-interface
-  reconciliation fails, the stage now raises (and emits a failed stream frame)
-  instead of returning an empty success, so interfaces are never silently left
-  missing in NetBox.
+  reconciliation fails, or completes with any failed records (partial failure),
+  the stage now raises (and emits a failed stream frame) instead of returning an
+  empty/partial success, so interfaces are never silently left missing in
+  NetBox.
+
+Per-VM dispatch is also isolated: a single VM's create/update failure is logged
+and counted against the failure total for the run rather than aborting the whole
+queue, so one bad VM no longer drops every VM queued after it.
 
 ### Structured Logging
 
