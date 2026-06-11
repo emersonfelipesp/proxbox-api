@@ -22,7 +22,7 @@ docs/
 │   ├── installation.md
 │   ├── configuration.md
 │   └── authentication.md
-├── development/                # Contributing, deployment, troubleshooting, testing
+├── development/                # Contributing, deployment, troubleshooting, testing, async internals
 ├── architecture/               # System overview and design patterns
 ├── api/                        # HTTP and WebSocket API reference
 │   ├── http-reference.md
@@ -70,3 +70,20 @@ uv run mkdocs build
   and `docs/pt-BR/sync/reconciliation-architecture.md`; keep them aligned
   with `proxbox_api/services/sync/reconciliation/` and `proxbox-reconcile-rs/`.
 - Do not store generated artifacts or runtime data in `docs/`.
+
+## Async / Performance Developer Guide
+
+Six pages under `docs/development/` document how proxbox-api manages async I/O,
+concurrency, and event-loop safety in the VM sync pipeline:
+
+| File | Topic |
+|---|---|
+| `async-overview.md` | Single-threaded event loop model, `asyncio.to_thread`, building blocks |
+| `async-semaphores.md` | `asyncio.Semaphore` patterns, three semaphores in the sync pipeline, failure isolation |
+| `async-gather.md` | `asyncio.gather` with and without `return_exceptions`, three gather patterns |
+| `async-two-phase-batch.md` | Two-phase VM batch design, `_PreparedVMState` hand-off, failure counting |
+| `async-timeout-scoping.md` | `_scoped_proxmox_backend_timeout`, widen-only invariant, depth counter, guest-agent timeout |
+| `async-tunables.md` | All async env vars + plugin settings keys, diagnostics, tuning examples |
+
+Each page has a corresponding `docs/pt-BR/development/` translation. Both sets
+must stay in sync when the underlying async behavior changes.
