@@ -275,7 +275,9 @@ def test_full_update_finishes_all_config_fetches_before_processing(monkeypatch):
 
     assert [record["id"] for record in result] == [101, 102, 103]
     assert sorted(fetch_calls) == [101, 102, 103]
-    first_process_index = next(index for index, event in enumerate(events) if event.startswith("process-"))
+    first_process_index = next(
+        index for index, event in enumerate(events) if event.startswith("process-")
+    )
     fetch_end_indexes = [
         index for index, event in enumerate(events) if event.startswith("fetch-end-")
     ]
