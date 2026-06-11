@@ -67,8 +67,10 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_virtual_disks_sync.py` | Virtual disk sync workflow |
 | `test_vm_backup_volids.py` | VM backup volume ID parsing and normalization |
 | `test_vm_network.py` | VM network interface mapping and IP address handling |
+| `test_netbox_version.py` | `detect_netbox_version` caching, `parse_netbox_version` parsing, `ensure_vm_type` version-gate and pre-resolved `netbox_version` short-circuit |
 | `test_vm_sync.py` | Full VM sync workflow including coordinator and dry-run |
-| `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining and retry semantics |
+| `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, retry semantics, failure isolation, and empty-queue short-circuit |
+| `test_vm_sync_two_phase.py` | Two-phase full-update VM batch (fetch phase vs. process phase ordering), multi-cluster parallel precompute, and cluster precompute failure propagation |
 | `test_auth_lockout.py` | bcrypt API-key check, failed-attempt counting, lockout duration, and async path |
 | `test_schema_cli.py` | `proxbox-schema` CLI subcommands (`list`, `status`, `generate`) via argparse |
 | `test_ensure_tag_duplicate_recovery.py` | `ensure_tag_async` concurrent-creation race recovery: slug/name fallback lookups, re-raise on miss, non-duplicate passthrough |

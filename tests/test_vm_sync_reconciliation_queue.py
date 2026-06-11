@@ -361,3 +361,12 @@ async def test_dispatch_vm_operation_queue_isolates_failed_operation(monkeypatch
     assert failed_keys == {("cluster-a", 401, "qemu")}
     assert ("cluster-a", 401, "qemu") not in resolved
     assert resolved[("cluster-a", 402, "qemu")]["id"] == 3402
+
+
+@pytest.mark.asyncio
+async def test_dispatch_vm_operation_queue_empty_queue_returns_empty_results():
+    # Empty queue must return immediately with empty resolved_records and failed_keys.
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), [])
+
+    assert resolved == {}
+    assert failed_keys == set()
