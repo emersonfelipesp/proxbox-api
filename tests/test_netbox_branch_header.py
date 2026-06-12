@@ -20,6 +20,8 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 from unittest.mock import AsyncMock
 
+from proxbox_api.services.netbox_bootstrap import BootstrapStatus
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -134,6 +136,7 @@ def test_full_update_sync_does_not_call_activate_branch_without_schema_id(monkey
     asyncio.run(
         full_update_sync(
             netbox_session=session,
+            _sync_deps=BootstrapStatus(),
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
@@ -161,6 +164,7 @@ def test_full_update_sync_invokes_activate_branch_with_schema_id(monkeypatch):
     asyncio.run(
         full_update_sync(
             netbox_session=session,
+            _sync_deps=BootstrapStatus(),
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
