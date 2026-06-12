@@ -21,6 +21,8 @@ from types import SimpleNamespace
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 
+from proxbox_api.services.netbox_bootstrap import BootstrapStatus
+
 
 def _stub_dependencies(monkeypatch):
     """Patch all stage helpers so the stream completes quickly."""
@@ -64,11 +66,6 @@ def _stub_dependencies(monkeypatch):
         monkeypatch.setattr(f"proxbox_api.app.full_update.{name}", fn)
 
 
-def _fake_request() -> SimpleNamespace:
-    """Mimic just enough of starlette.Request for the stream route."""
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(bootstrap_status=None)))
-
-
 async def _drain_stream(response) -> None:
     """Consume the StreamingResponse body so the inner context manager exits."""
     async for _ in response.body_iterator:
@@ -84,7 +81,7 @@ def test_stream_does_not_activate_branch_when_schema_id_missing(monkeypatch):
 
     response = asyncio.run(
         full_update_sync_stream(
-            request=_fake_request(),
+            _sync_deps=BootstrapStatus(),
             netbox_session=session,
             pxs=[],
             cluster_status=[],
@@ -121,7 +118,7 @@ def test_stream_activates_branch_with_schema_id(monkeypatch):
 
     response = asyncio.run(
         full_update_sync_stream(
-            request=_fake_request(),
+            _sync_deps=BootstrapStatus(),
             netbox_session=session,
             pxs=[],
             cluster_status=[],
@@ -148,7 +145,7 @@ def test_stream_does_not_activate_branch_when_schema_id_empty(monkeypatch):
 
     response = asyncio.run(
         full_update_sync_stream(
-            request=_fake_request(),
+            _sync_deps=BootstrapStatus(),
             netbox_session=session,
             pxs=[],
             cluster_status=[],
