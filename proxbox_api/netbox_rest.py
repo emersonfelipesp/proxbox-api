@@ -1129,9 +1129,24 @@ async def _rest_reconcile_async_impl(  # noqa: C901
                 }
             else:
                 query_candidate = candidate
-            existing_record = await rest_first_async(
-                nb, path, query={**query_candidate, "limit": 2}
-            )
+            try:
+                existing_record = await rest_first_async(
+                    nb, path, query={**query_candidate, "limit": 2}
+                )
+            except ProxboxException as exc:
+                # NetBox 4.5.x returns HTTP 400 when filtering by a FK value that
+                # does not exist in the database (e.g. virtual_machine=<id> when
+                # that VM was removed). NetBox 4.6.x returns an empty queryset.
+                # Treat this as "not found" to match 4.6.x behaviour.
+                detail = getattr(exc, "detail", str(exc))
+                if "Select a valid choice" in str(detail):
+                    logger.debug(
+                        "_find_existing: treating 400 filterset error as not-found for %s: %s",
+                        path,
+                        exc,
+                    )
+                    return None
+                raise
             if existing_record:
                 return existing_record
         return None
