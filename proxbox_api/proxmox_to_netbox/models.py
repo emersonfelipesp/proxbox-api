@@ -198,12 +198,6 @@ class NetBoxTagRef(BaseModel):
         text = str(value).strip()
         return text or None
 
-    @model_validator(mode="after")
-    def default_name_from_slug(self):
-        if not self.name and self.slug:
-            self.name = self.slug
-        return self
-
 
 class NetBoxNamedSlugTaggedState(BaseModel):
     """Shared normalized schema for named NetBox objects with slug and tags."""
