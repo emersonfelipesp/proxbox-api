@@ -6,8 +6,6 @@ detailed, real-time feedback about sync progress, discoveries, sub-operations,
 phase summaries, and error details.
 """
 
-from __future__ import annotations
-
 from enum import Enum
 from typing import Any
 

@@ -1,7 +1,5 @@
 """Pydantic schemas for Proxmox sessions and resource payloads."""
 
-from __future__ import annotations
-
 from pydantic import BaseModel, Field, RootModel, field_validator
 
 from proxbox_api.enum.proxmox import CgroupMode, NodeStatus, ProxmoxVMStatus, ResourceType
