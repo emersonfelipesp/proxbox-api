@@ -1,7 +1,5 @@
 """Shared Pydantic V2 base model configuration for proxbox-api schemas."""
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 
 from pydantic import BaseModel, ConfigDict
