@@ -22,6 +22,7 @@ from proxbox_api.constants import (
     DISCOVERY_TAG_VM_LXC,
     DISCOVERY_TAG_VM_QEMU,
 )
+from proxbox_api.proxmox_to_netbox.models import NetBoxTagRef
 from proxbox_api.services.sync.discovery_tags import (
     discovery_tag_ref,
     merge_tag_refs,
@@ -67,6 +68,21 @@ class _FakeRecord:
 def test_discovery_tag_ref_returns_slug_only_ref() -> None:
     """``discovery_tag_ref`` builds the canonical slug-only ref form."""
     assert discovery_tag_ref(DISCOVERY_TAG_CLUSTER) == {"slug": "proxbox-discovered-cluster"}
+
+
+def test_netbox_tag_ref_slug_only_does_not_inject_name() -> None:
+    """Regression for issue #362 / 0.0.18.post1.
+
+    A slug-only discovery tag ref must NOT have its name defaulted to the
+    slug value. NetBox's related-object lookup matches ALL provided fields;
+    sending name='proxbox-discovered-node' fails because the tag's actual name
+    is 'Proxbox: Discovered Node'. Only the slug should be serialised.
+    """
+    ref = NetBoxTagRef(slug=DISCOVERY_TAG_NODE)
+    assert ref.name is None
+    serialised = ref.model_dump(exclude_none=True)
+    assert serialised == {"slug": DISCOVERY_TAG_NODE}
+    assert "name" not in serialised
 
 
 def test_vm_discovery_slug_routes_qemu_and_lxc() -> None:
