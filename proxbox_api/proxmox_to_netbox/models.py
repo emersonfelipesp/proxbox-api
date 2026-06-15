@@ -176,7 +176,7 @@ def _normalized_tag_list(value: object) -> list[dict[str, object]]:
         else:
             text = str(item or "").strip()
             if text:
-                normalized.append({"slug": text, "name": text})
+                normalized.append({"slug": text})
     normalized.sort(key=lambda tag: str(tag.get("slug") or tag.get("name") or ""))
     return normalized
 
