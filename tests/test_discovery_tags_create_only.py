@@ -22,7 +22,7 @@ from proxbox_api.constants import (
     DISCOVERY_TAG_VM_LXC,
     DISCOVERY_TAG_VM_QEMU,
 )
-from proxbox_api.proxmox_to_netbox.models import NetBoxTagRef
+from proxbox_api.proxmox_to_netbox.models import NetBoxTagRef, _normalized_tag_list
 from proxbox_api.services.sync.discovery_tags import (
     discovery_tag_ref,
     merge_tag_refs,
@@ -83,6 +83,26 @@ def test_netbox_tag_ref_slug_only_does_not_inject_name() -> None:
     serialised = ref.model_dump(exclude_none=True)
     assert serialised == {"slug": DISCOVERY_TAG_NODE}
     assert "name" not in serialised
+
+
+def test_normalized_tag_list_string_produces_slug_only() -> None:
+    """Regression for issue #362 / 0.0.18.post2.
+
+    When a plain string slug is provided to _normalized_tag_list (e.g. from
+    desired-state payloads like ``"tags": ["proxbox"]``), it must produce
+    ``{"slug": text}`` without injecting ``name``.  Injecting
+    ``name = slug`` breaks schema-detected-change comparison: existing
+    NetBox tag records often carry only ``slug`` (no ``name``), so the
+    desired ``{"name": "proxbox", "slug": "proxbox"}`` would never equal
+    existing ``{"slug": "proxbox"}``, causing spurious PATCH re-syncs.
+    """
+    result = _normalized_tag_list(["proxbox", DISCOVERY_TAG_NODE])
+    assert result == [
+        {"slug": "proxbox"},
+        {"slug": DISCOVERY_TAG_NODE},
+    ]
+    for entry in result:
+        assert "name" not in entry
 
 
 def test_vm_discovery_slug_routes_qemu_and_lxc() -> None:
