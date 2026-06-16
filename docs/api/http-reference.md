@@ -60,6 +60,53 @@ Successful responses return `FirecrackerProvisionResponse` with `ok`,
 `microvm_id`, `instance_ref`, `host_id`, `host_pool_id`, `image_id`, `status`,
 optional `guest_ip`, and optional `detail`.
 
+## Cloud Azure VHD Import (`/cloud/azure`)
+
+Operator-facing Azure managed-disk V2V planning and optional remote execution.
+This endpoint is consumed by the NMS page
+`/cloud/azure-to-nmulticloud-migration`.
+
+- `POST /cloud/azure/vhd-imports` - Validate an Azure-exported VHD import
+  request and return the generated operator script. When `execute=true`, run the
+  script remotely over SSH and return execution status plus stdout/stderr.
+
+Request highlights:
+
+- Required: `target_node`, `vmid`, `name`, `azure_vhd_url`
+- Optional: `source_vhd_filename`, `vm_storage`, `bridge`, `vlan_tag`,
+  `memory_mb`, `cores`, `cpu`, `description`
+- `vm_generation`: `gen1` or `gen2`
+- `guest_profile`: `linux_standard` or `windows_first_boot_safe`
+- Execution fields: `execute`, `endpoint_id`, `ssh_host`, `ssh_user`,
+  `ssh_port`, `ssh_identity_file`
+
+Execution rules:
+
+- `azure_vhd_url` is protected by the normal SSRF validator.
+- `execute=true` requires `endpoint_id` so the route can enforce
+  `ProxmoxEndpoint.allow_writes`.
+- `execute=true` also requires `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`.
+- `ssh_identity_file` must resolve under `PROXBOX_SSH_KEY_DIR`.
+
+Generated pipeline behavior:
+
+- downloads the Azure VHD to `/var/lib/vz/template/cache/`
+- converts it with `qemu-img convert -f vpc -O qcow2`
+- creates the VM shell with Gen1/Gen2-aware BIOS defaults
+- imports the disk with `qm importdisk`
+- attaches the imported volume as:
+  - `scsi0` + `virtio-scsi-single` for `linux_standard`
+  - `sata0` + `e1000` for `windows_first_boot_safe`
+
+The response includes:
+
+- `build_script`
+- `commands`
+- `follow_up_steps`
+- `bios`, `machine`, `disk_interface`, `network_model`, `boot_order`
+- `source_vhd_filename`, `source_vhd_path`, `qcow2_filename`, `qcow2_path`
+- when executed remotely: `status`, `returncode`, `stdout`, `stderr`
+
 ## NetBox Routes (`/netbox`)
 
 - `POST /netbox/endpoint` - Create the singleton NetBox endpoint.

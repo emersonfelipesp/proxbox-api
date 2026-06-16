@@ -1,5 +1,6 @@
 """Cloud Portal provisioning routes."""
 
+from proxbox_api.routes.cloud.azure_vhd_imports import router as azure_vhd_imports_router
 from proxbox_api.routes.cloud.catalog import versions_router
 from proxbox_api.routes.cloud.firecracker import router as firecracker_router
 from proxbox_api.routes.cloud.image_factory import router as image_factory_router
@@ -12,6 +13,7 @@ from proxbox_api.routes.cloud.template_images import router as template_images_r
 from proxbox_api.routes.cloud.templates import router as templates_router
 
 __all__ = (
+    "azure_vhd_imports_router",
     "lxc_router",
     "provision_router",
     "provision_stream_router",
