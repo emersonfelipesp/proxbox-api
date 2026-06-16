@@ -13,8 +13,10 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 Cloud runtime routes mounted at `/cloud/*`: live QEMU Cloud-Init template
 discovery, QEMU/Firecracker provisioning, the image catalog/factory, PVE
-template listing, and the **Cloud Image Build Pipeline** that bakes bootable
-Proxmox VM templates from a cloud image plus a cloud-init `#cloud-config`.
+template listing, the **Cloud Image Build Pipeline** that bakes bootable
+Proxmox VM templates from a cloud image plus a cloud-init `#cloud-config`, and
+the **Azure VHD Import Pipeline** that downloads an Azure-exported VHD,
+converts it to QCOW2, and attaches it to a generated Proxmox VM shell.
 
 ## Modules
 
@@ -31,6 +33,10 @@ Proxmox VM templates from a cloud image plus a cloud-init `#cloud-config`.
   helpers.
 - `template_images.py` — `POST /cloud/templates/images` (the build entrypoint).
 - `pipeline_scripts.py` — builds the remote bake script and runs it over SSH.
+- `azure_vhd_imports.py` — `POST /cloud/azure/vhd-imports`, the Azure disk
+  import entrypoint.
+- `azure_vhd_pipeline.py` — renders the `curl` + `qemu-img convert` + `qm`
+  import script and optionally runs it over SSH.
 - `provision.py`, `provision_stream.py` — QEMU provision (REST + SSE).
 - `firecracker.py` — `/cloud/firecracker/provision` (+ stream).
 
@@ -85,10 +91,36 @@ Host bootstrap (bake key, storage content types `snippets,import,images`,
 `/root/personal-context/nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
 Compose wiring: `nmulticloud-context/deploy/compose/proxbox-api.compose.yaml`.
 
+## Azure VHD Import Pipeline (`POST /cloud/azure/vhd-imports`)
+
+`create_azure_vhd_import()` in `azure_vhd_imports.py` validates an
+`AzureVhdImportRequest`, calls `_gate()` when `execute=true`, and delegates to
+`build_azure_vhd_import_response()` in `azure_vhd_pipeline.py`.
+
+The response always returns the generated operator script, which:
+
+1. downloads the Azure-exported VHD to `/var/lib/vz/template/cache/`,
+2. converts it with `qemu-img convert -f vpc -O qcow2`,
+3. creates the Proxmox VM shell with Gen1/Gen2-aware BIOS defaults,
+4. imports the QCOW2 with `qm importdisk`, and
+5. attaches the imported volume as either `scsi0` (Linux) or `sata0`
+   (Windows-safe first boot).
+
+Execution details:
+
+- `execute=true` is gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`.
+- `endpoint_id` is required for execute mode so `_gate()` can enforce
+  `ProxmoxEndpoint.allow_writes`.
+- `ssh_host`, `ssh_user`, and optional `ssh_identity_file` reuse the same SSH
+  validation boundary as the cloud-image build pipeline.
+- The Windows-safe profile intentionally uses `sata0` + `e1000` for first boot;
+  Linux defaults to `virtio-scsi-single` + `scsi0` with `discard=on` and
+  `iothread=1`.
+
 ## Extension Guidance
 
 - Keep request validation/normalization in `schemas/cloud_provision.py`, not in
-  the route or `pipeline_scripts.py`.
+  the route or pipeline helper modules.
 - Preserve the `cicustom` snippet path — it is the contract that makes a full
   `#cloud-config` actually execute on cloned VMs.
 - Keep SSH identity restricted to `PROXBOX_SSH_KEY_DIR`; never accept an

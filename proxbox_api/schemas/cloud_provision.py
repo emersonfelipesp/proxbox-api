@@ -61,6 +61,20 @@ class CloudImageBuildProvider(str, Enum):
 CloudImageProductType = ProxmoxProductType
 
 
+class AzureVmGeneration(str, Enum):
+    gen1 = "gen1"
+    gen2 = "gen2"
+    GEN1 = "gen1"
+    GEN2 = "gen2"
+
+
+class AzureVhdGuestProfile(str, Enum):
+    linux_standard = "linux_standard"
+    windows_first_boot_safe = "windows_first_boot_safe"
+    LINUX_STANDARD = "linux_standard"
+    WINDOWS_FIRST_BOOT_SAFE = "windows_first_boot_safe"
+
+
 class CloudImageVersionEntry(BaseModel):
     version: str
     label: str
@@ -315,6 +329,120 @@ class CloudImageTemplateBuildResponse(BaseModel):
     returncode: Optional[int] = None
     stdout: Optional[str] = None
     stderr: Optional[str] = None
+
+
+class AzureVhdImportRequest(BaseModel):
+    """Plan or execute an Azure-exported VHD import into a Proxmox VM shell."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_id: int | None = Field(
+        None,
+        description="Configured ProxmoxEndpoint primary key; required when execute=true.",
+    )
+    target_node: str = Field(..., min_length=1, description="Proxmox node that will own the VM.")
+    vmid: int = Field(..., ge=100, description="Destination VMID to create.")
+    name: str = Field(..., min_length=1, max_length=128, description="Destination VM name.")
+    azure_vhd_url: str = Field(..., min_length=1, description="Azure SAS URL for the exported VHD.")
+    source_vhd_filename: str | None = Field(
+        None,
+        description="Optional filename override for the downloaded Azure VHD artifact.",
+    )
+    vm_storage: str = Field("local-zfs", min_length=1, description="Target Proxmox VM storage.")
+    bridge: str = Field("vmbr0", min_length=1)
+    vlan_tag: int | None = Field(None, ge=1, le=4094)
+    memory_mb: int = Field(8192, ge=64)
+    cores: int = Field(4, ge=1)
+    cpu: str = Field("host", min_length=1)
+    vm_generation: AzureVmGeneration = AzureVmGeneration.gen2
+    guest_profile: AzureVhdGuestProfile = AzureVhdGuestProfile.linux_standard
+    enable_agent: bool = True
+    description: str | None = Field(None, max_length=8192)
+    execute: bool = False
+    ssh_host: str | None = None
+    ssh_user: str = "root"
+    ssh_port: int = Field(22, ge=1, le=65535)
+    ssh_identity_file: str | None = None
+
+    @field_validator("azure_vhd_url")
+    @classmethod
+    def validate_azure_vhd_url_ssrf(cls, value: str) -> str:
+        safe, reason = validate_endpoint_url(value, get_settings())
+        if not safe:
+            raise ValueError(f"azure_vhd_url rejected by SSRF protection: {reason}")
+        return value
+
+    @field_validator("ssh_host")
+    @classmethod
+    def validate_ssh_host(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        host = value.strip()
+        if not host:
+            raise ValueError("ssh_host must be a non-empty hostname or IP address.")
+        if host.startswith("-"):
+            raise ValueError("ssh_host must not start with '-' or resemble an ssh option.")
+        if "%" in host:
+            raise ValueError("ssh_host must not include an IPv6 zone identifier.")
+        try:
+            ipaddress.ip_address(host)
+            return host
+        except ValueError:
+            pass
+        if not _is_valid_hostname(host):
+            raise ValueError("ssh_host must be a valid hostname, IPv4 address, or IPv6 address.")
+        return host
+
+    @field_validator("ssh_user")
+    @classmethod
+    def validate_ssh_user(cls, value: str) -> str:
+        if not _SSH_USER_RE.fullmatch(value):
+            raise ValueError("ssh_user must match ^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$.")
+        return value
+
+    @field_validator("ssh_identity_file")
+    @classmethod
+    def validate_ssh_identity_file(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        resolved = Path(value).resolve()
+        allowed_dir = _ssh_key_dir()
+        try:
+            resolved.relative_to(allowed_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"ssh_identity_file must resolve under PROXBOX_SSH_KEY_DIR ({allowed_dir})."
+            ) from exc
+        return str(resolved)
+
+
+class AzureVhdImportResponse(BaseModel):
+    pipeline_name: str = "Azure VHD Import Pipeline"
+    status: str
+    endpoint_id: int | None = None
+    target_node: str
+    vmid: int
+    name: str
+    vm_generation: AzureVmGeneration
+    guest_profile: AzureVhdGuestProfile
+    bios: str
+    machine: str | None = None
+    disk_interface: str
+    network_model: str
+    boot_order: str
+    azure_vhd_url: str
+    source_vhd_filename: str
+    source_vhd_path: str
+    qcow2_filename: str
+    qcow2_path: str
+    build_script: str = ""
+    commands: list[str] = Field(default_factory=list)
+    follow_up_steps: list[str] = Field(default_factory=list)
+    operator_instructions: str = ""
+    execution_enabled: bool = False
+    returncode: int | None = None
+    stdout: str | None = None
+    stderr: str | None = None
 
 
 class PVETemplateBuildRequest(BaseModel):
