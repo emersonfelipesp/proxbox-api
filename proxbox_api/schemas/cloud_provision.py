@@ -116,6 +116,37 @@ class CloudVMProvisionResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class CloudQemuTemplate(BaseModel):
+    """Live QEMU VM template discovered from Proxmox cluster state."""
+
+    id: int = Field(..., description="Alias for source_vmid so frontend selectors have a stable key")
+    endpoint_id: int
+    endpoint_name: str
+    cluster_name: str | None = None
+    source_vmid: int = Field(..., ge=100)
+    vmid: int = Field(..., ge=100)
+    name: str
+    node: str
+    target_node: str
+    status: str | None = None
+    template: bool = True
+    cloud_init: bool = True
+    cloud_init_drives: list[str] = Field(default_factory=list)
+    cicustom: str | None = None
+    tags: str | None = None
+    memory_mb: int | None = None
+    maxdisk_bytes: int | None = None
+    description: str | None = None
+    live_source: bool = True
+
+
+class CloudQemuTemplateListResponse(BaseModel):
+    """`/cloud/vm/templates` response for live Proxmox QEMU Cloud-Init templates."""
+
+    count: int
+    results: list[CloudQemuTemplate] = Field(default_factory=list)
+
+
 class CloudTemplateSummary(BaseModel):
     id: int
     name: str
