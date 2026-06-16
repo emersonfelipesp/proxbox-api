@@ -185,10 +185,10 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_NETBOX_MAX_RETRIES` | `5` | Retry attempts for transient NetBox connection failures. |
 | `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Initial retry delay in seconds for NetBox retries. |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximum concurrent NetBox API requests. Keep low (1-2) to avoid exhausting NetBox's PostgreSQL connection pool. |
-| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent VM sync write tasks. |
+| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent Proxmox VM config fetches during VM and virtual-disk sync. |
 | `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Per-call timeout (seconds, range 1-600) for the QEMU guest-agent `network-get-interfaces` request. Interface-dense guests (many VRRP/alias interfaces) can be slow to enumerate; raise this if guest-agent interface fetches time out. Maps to the `ProxboxPluginSettings.guest_agent_timeout` plugin field. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Optional env override for `ProxboxPluginSettings.reconciliation_engine`. Valid values are `python`, `compare`, and `rust`. |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync) / `4` (task-history, snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync, virtual disks) / `4` (task-history, snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
 | `PROXBOX_RATE_LIMIT` | `300` | Maximum API requests per minute per IP address. |
@@ -227,8 +227,8 @@ in-flight NetBox requests at a time.
 | Env var | Plugin key | Default | What it controls |
 |---------|-----------|---------|-----------------|
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `netbox_max_concurrent` | 1 | Maximum simultaneous NetBox HTTP requests per worker (GET + POST + PATCH combined). This is the primary knob for PostgreSQL connection usage. |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | Maximum simultaneous VM create/update operations per sync pass, bounded by a per-pass `asyncio.Semaphore`. |
-| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 | Maximum concurrent Proxmox VM config fetches (Proxmox-side, not NetBox-side). |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | Maximum simultaneous write-heavy per-VM sync operations per pass, bounded by a per-pass `asyncio.Semaphore`. |
+| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 | Maximum concurrent Proxmox VM config fetches for the VM and virtual-disk stages (Proxmox-side, not NetBox-side). |
 | `PROXBOX_NETBOX_MAX_RETRIES` | `netbox_max_retries` | 5 | Maximum retry attempts on transient NetBox errors. |
 | `PROXBOX_NETBOX_RETRY_DELAY` | `netbox_retry_delay` | 2.0 s | Base delay between retries (exponential backoff). |
 | `PROXBOX_NETBOX_GET_CACHE_TTL` | `netbox_get_cache_ttl` | 60 s | GET response cache TTL. Raising this reduces NetBox requests on read-heavy paths. Set `0` to disable. |

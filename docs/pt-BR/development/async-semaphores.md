@@ -19,7 +19,7 @@ Ao contrário do `threading.Semaphore`, o `asyncio.Semaphore` nunca usa threads
 ou locks do OS; é totalmente cooperativo e seguro de usar a partir de
 corrotinas.
 
-## Os Três Semáforos no Pipeline de Sincronização de VMs
+## Os Três Semáforos no Pipeline de Sincronização de VMs e Discos
 
 ```mermaid
 graph TD
@@ -65,7 +65,9 @@ fetch_results = await asyncio.gather(
 todas as requisições de configuração simultaneamente sobrecarregaria o rate
 limiter da API Proxmox e esgotaria o pool de conexões do aiohttp. O semáforo
 serializa os bursts para no máximo `PROXBOX_VM_SYNC_MAX_CONCURRENCY` requisições
-concorrentes em voo.
+concorrentes em voo. O mesmo limite agora vale para a etapa `virtual-disks`,
+que resolve as configs das VMs em uma fase de fetch separada antes de iniciar
+as escritas no NetBox.
 
 ### 2. Semáforo de Escrita
 
@@ -90,7 +92,8 @@ async def _run_single(operation):
 conexões limitado. Enviar 500 requisições de escrita concorrentes causaria
 esgotamento do pool, resultando em timeouts em cascata. O padrão de 8 escritas
 mantém a pressão sobre o PostgreSQL gerenciável enquanto ainda alcança
-paralelismo significativo.
+paralelismo significativo. A etapa `virtual-disks` também usa este semáforo
+para limitar o trabalho por VM de reconcile/delete/patch.
 
 ### 3. Semáforo de Fetch de Interfaces
 
