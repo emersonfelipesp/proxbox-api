@@ -1,4 +1,4 @@
-"""Regression test for the `fetch_concurrency` kwarg name on `create_storages`.
+"""Regression tests for full-update fetch-concurrency plumbing.
 
 History: an earlier rev of `create_storages` used `fetch_max_concurrency`. The
 parameter was renamed to `fetch_concurrency`, but `app/full_update.py` continued
@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from proxbox_api.services.sync.storages import create_storages
+from proxbox_api.services.sync.virtual_disks import create_virtual_disks
 
 
 def test_create_storages_signature_uses_fetch_concurrency() -> None:
@@ -65,3 +66,25 @@ async def test_create_storages_accepts_fetch_concurrency_without_typeerror() -> 
         fetch_concurrency=4,
     )
     assert result == []
+
+
+def test_create_virtual_disks_signature_uses_fetch_max_concurrency() -> None:
+    sig = inspect.signature(create_virtual_disks)
+    assert "fetch_max_concurrency" in sig.parameters
+
+
+def test_full_update_calls_create_virtual_disks_with_fetch_max_concurrency() -> None:
+    full_update_path = (
+        Path(__file__).resolve().parent.parent / "proxbox_api" / "app" / "full_update.py"
+    )
+    source = full_update_path.read_text(encoding="utf-8")
+
+    matches = list(re.finditer(r"create_virtual_disks\s*\(", source))
+    assert matches, "expected at least one create_virtual_disks(...) call in full_update.py"
+
+    for match in matches:
+        window = source[match.start() : match.start() + 500]
+        assert "fetch_max_concurrency=fetch_max_concurrency" in window, (
+            f"create_virtual_disks call near offset {match.start()} is missing the "
+            "fetch_max_concurrency kwarg"
+        )

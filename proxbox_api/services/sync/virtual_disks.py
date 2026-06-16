@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from proxbox_api.logger import logger
@@ -13,6 +14,7 @@ from proxbox_api.netbox_rest import (
     rest_patch_async,
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
+from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -37,6 +39,26 @@ class VmConfigTarget:
     source: str
     netbox_device_name: str | None
     custom_field_node: str | None
+
+
+@dataclass(frozen=True)
+class VmDiskFetchResult:
+    vm: dict[str, object]
+    vmid: str
+    vm_name: str
+    cluster_name: str | None
+    target: VmConfigTarget | None
+    vm_config: dict[str, object] | None
+    failure_message: str | None = None
+
+
+@dataclass(frozen=True)
+class VmDiskSyncOutcome:
+    state: str
+    disks_created: int = 0
+    disks_updated: int = 0
+    disks_deleted: int = 0
+    parent_vm_disk_updated: bool = False
 
 
 def _text_or_none(value: object) -> str | None:
@@ -269,6 +291,334 @@ async def _sync_parent_vm_disk_total(
     return True
 
 
+def _resolve_fetch_concurrency(fetch_max_concurrency: int | None) -> int:
+    if fetch_max_concurrency is not None:
+        return max(1, int(fetch_max_concurrency))
+    return get_int(
+        settings_key="vm_sync_max_concurrency",
+        env="PROXBOX_VM_SYNC_MAX_CONCURRENCY",
+        default=4,
+        minimum=1,
+    )
+
+
+def _resolve_write_concurrency() -> int:
+    return get_int(
+        settings_key="netbox_write_concurrency",
+        env="PROXBOX_NETBOX_WRITE_CONCURRENCY",
+        default=8,
+        minimum=1,
+    )
+
+
+def _resolve_cluster_name(
+    vm: dict[str, object],
+    cluster_status: list[object] | None,
+) -> str | None:
+    cluster = vm.get("cluster")
+    if isinstance(cluster, dict):
+        cluster_name = _text_or_none(cluster.get("name"))
+        if cluster_name:
+            return cluster_name
+
+    for cs in cluster_status or []:
+        cs_name = _text_or_none(getattr(cs, "name", None))
+        if cs_name:
+            return cs_name
+    return None
+
+
+async def _send_virtual_disk_payload(
+    *,
+    websocket: object | None,
+    websocket_lock: asyncio.Lock | None,
+    use_websocket: bool,
+    payload: dict[str, object],
+) -> None:
+    if not use_websocket or websocket is None:
+        return
+    if websocket_lock is None:
+        await websocket.send_json(payload)
+        return
+    async with websocket_lock:
+        await websocket.send_json(payload)
+
+
+def _virtual_disk_rowid(vm_name: str) -> str:
+    return f"{vm_name}-disks"
+
+
+async def _fetch_virtual_disk_vm_config(
+    *,
+    vm: dict[str, object],
+    pxs: ProxmoxSessionsDep,
+    cluster_status: list[object] | None,
+    cluster_resources: list[dict[str, object]] | None,
+) -> VmDiskFetchResult:
+    vmid = extract_proxmox_vmid(vm)
+    vm_name = str(vm.get("name", "unknown") or "unknown")
+    if not vmid:
+        return VmDiskFetchResult(
+            vm=vm,
+            vmid="",
+            vm_name=vm_name,
+            cluster_name=_resolve_cluster_name(vm, cluster_status),
+            target=None,
+            vm_config=None,
+            failure_message="Missing proxmox VM id",
+        )
+
+    cluster_name = _resolve_cluster_name(vm, cluster_status)
+    extracted_vm_type = extract_proxmox_vm_type(vm)
+    vm_type = extracted_vm_type or "qemu"
+    target = _resolve_vm_config_target(
+        vm=vm,
+        vmid=vmid,
+        vm_type=vm_type,
+        vm_type_was_explicit=extracted_vm_type is not None,
+        cluster_name=cluster_name,
+        cluster_resources=cluster_resources,
+    )
+    node_name = target.node
+    vm_type = target.vm_type
+    cluster_name = target.cluster_name
+
+    if not node_name:
+        logger.warning(
+            "No node found for VM %s (vmid=%s type=%s cluster=%s, device=%s custom_field_node=%s), skipping disk sync",
+            vm_name,
+            vmid,
+            vm_type,
+            cluster_name,
+            target.netbox_device_name,
+            target.custom_field_node,
+        )
+        return VmDiskFetchResult(
+            vm=vm,
+            vmid=vmid,
+            vm_name=vm_name,
+            cluster_name=cluster_name,
+            target=target,
+            vm_config=None,
+            failure_message="No node associated",
+        )
+
+    logger.debug(
+        "Resolved virtual disk VM config target for %s (vmid=%s type=%s cluster=%s node=%s source=%s)",
+        vm_name,
+        vmid,
+        vm_type,
+        cluster_name,
+        node_name,
+        target.source,
+    )
+
+    try:
+        vm_config = await resolve_vm_config(
+            pxs=pxs,
+            node=node_name,
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+    except Exception as error:
+        logger.error(
+            "Error getting VM config for %s (vmid=%s type=%s cluster=%s node=%s source=%s): %s",
+            vm_name,
+            vmid,
+            vm_type,
+            cluster_name,
+            node_name,
+            target.source,
+            error,
+        )
+        return VmDiskFetchResult(
+            vm=vm,
+            vmid=vmid,
+            vm_name=vm_name,
+            cluster_name=cluster_name,
+            target=target,
+            vm_config=None,
+            failure_message="Config not available",
+        )
+
+    if not vm_config:
+        logger.warning("Could not get VM config for VM %s (vmid: %s)", vm_name, vmid)
+        return VmDiskFetchResult(
+            vm=vm,
+            vmid=vmid,
+            vm_name=vm_name,
+            cluster_name=cluster_name,
+            target=target,
+            vm_config=None,
+            failure_message="Config not available",
+        )
+
+    return VmDiskFetchResult(
+        vm=vm,
+        vmid=vmid,
+        vm_name=vm_name,
+        cluster_name=cluster_name,
+        target=target,
+        vm_config=vm_config,
+    )
+
+
+async def _sync_virtual_disks_for_vm(
+    *,
+    nb: object,
+    fetched_vm: VmDiskFetchResult,
+    storage_index: dict[tuple[str, str], dict],
+    tag_refs: list[dict[str, object]],
+    websocket: object | None,
+    websocket_lock: asyncio.Lock | None,
+    use_websocket: bool,
+    completed_html: str,
+    failed_html: str,
+) -> VmDiskSyncOutcome:
+    vm = fetched_vm.vm
+    vm_name = fetched_vm.vm_name
+    vm_id = vm.get("id")
+
+    try:
+        vm_config_obj = await asyncio.to_thread(
+            ProxmoxVmConfigInput.model_validate,
+            fetched_vm.vm_config,
+        )
+        disk_entries = vm_config_obj.disks
+
+        disks_created = 0
+        disks_updated = 0
+        disks_deleted = 0
+        parent_vm_disk_updated = False
+
+        disk_payloads: list[dict[str, object]] = []
+        for disk_entry in disk_entries:
+            storage_name = disk_entry.storage_name or storage_name_from_volume_id(
+                disk_entry.storage
+            )
+            storage_record = find_storage_record(
+                storage_index,
+                cluster_name=fetched_vm.cluster_name,
+                storage_name=storage_name,
+            )
+            storage_id = storage_record.get("id") if storage_record else None
+            custom_fields: dict[str, object] = {}
+            if storage_id is not None:
+                custom_fields["proxbox_storage_id"] = storage_id
+            disk_payload: dict[str, object] = {
+                "virtual_machine": vm_id,
+                "name": disk_entry.name,
+                "size": disk_entry.size_mb,
+                "storage": storage_id,
+                "description": disk_entry.description,
+                "tags": tag_refs,
+            }
+            if custom_fields:
+                disk_payload["custom_fields"] = custom_fields
+            disk_payloads.append(disk_payload)
+
+        desired_disk_sizes = {
+            str(payload.get("name")): int(payload.get("size") or 0) for payload in disk_payloads
+        }
+        desired_disk_total = sum(int(payload.get("size") or 0) for payload in disk_payloads)
+
+        if disk_payloads:
+            bulk_result = await rest_bulk_reconcile_async(
+                nb,
+                "/api/virtualization/virtual-disks/",
+                payloads=disk_payloads,
+                lookup_fields=["virtual_machine", "name"],
+                schema=NetBoxVirtualDiskSyncState,
+                current_normalizer=lambda record: {
+                    "virtual_machine": record.get("virtual_machine"),
+                    "name": record.get("name"),
+                    "size": record.get("size") if record.get("size") is not None else 0,
+                    "storage": record.get("storage"),
+                    "description": record.get("description"),
+                    "tags": record.get("tags"),
+                    "custom_fields": record.get("custom_fields"),
+                },
+                base_query={"virtual_machine_id": vm_id},
+                lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
+                strict_lookup=True,
+                nullable_fields={"storage"},
+            )
+            disks_created = bulk_result.created
+            disks_updated = bulk_result.updated
+
+        vm_id_int = relation_id(vm_id)
+        if vm_id_int is not None:
+            disks_deleted = await _delete_stale_virtual_disks(
+                nb,
+                vm_id=vm_id_int,
+                desired_disks=desired_disk_sizes,
+            )
+            parent_vm_disk_updated = await _sync_parent_vm_disk_total(
+                nb,
+                vm=vm,
+                desired_disk_total=desired_disk_total,
+            )
+
+        disk_summary = (
+            f"{len(disk_entries)} disks ({disks_created} created, "
+            f"{disks_updated} updated, {disks_deleted} deleted)"
+        )
+        await _send_virtual_disk_payload(
+            websocket=websocket,
+            websocket_lock=websocket_lock,
+            use_websocket=use_websocket,
+            payload={
+                "object": "virtual_disk",
+                "type": "sync",
+                "data": {
+                    "completed": True,
+                    "increment_count": "yes" if disks_created > 0 else "no",
+                    "rowid": _virtual_disk_rowid(vm_name),
+                    "name": vm_name,
+                    "sync_status": completed_html,
+                    "disks": disk_summary,
+                },
+            },
+        )
+
+        if disks_created > 0:
+            return VmDiskSyncOutcome(
+                state="created",
+                disks_created=disks_created,
+                disks_updated=disks_updated,
+                disks_deleted=disks_deleted,
+                parent_vm_disk_updated=parent_vm_disk_updated,
+            )
+        if disks_updated > 0 or disks_deleted > 0 or parent_vm_disk_updated:
+            return VmDiskSyncOutcome(
+                state="updated",
+                disks_created=disks_created,
+                disks_updated=disks_updated,
+                disks_deleted=disks_deleted,
+                parent_vm_disk_updated=parent_vm_disk_updated,
+            )
+        return VmDiskSyncOutcome(state="skipped")
+    except Exception as error:
+        logger.error("Error syncing disks for VM %s: %s", vm_name, error)
+        await _send_virtual_disk_payload(
+            websocket=websocket,
+            websocket_lock=websocket_lock,
+            use_websocket=use_websocket,
+            payload={
+                "object": "virtual_disk",
+                "type": "sync",
+                "data": {
+                    "completed": True,
+                    "rowid": _virtual_disk_rowid(vm_name),
+                    "name": vm_name,
+                    "sync_status": failed_html,
+                    "disks": str(error),
+                },
+            },
+        )
+        return VmDiskSyncOutcome(state="skipped")
+
+
 async def create_virtual_disks(  # noqa: C901
     netbox_session: object,
     pxs: ProxmoxSessionsDep,
@@ -280,6 +630,7 @@ async def create_virtual_disks(  # noqa: C901
     use_css: bool = False,
     netbox_vm_id: int | None = None,
     netbox_vm_ids: list[int] | None = None,
+    fetch_max_concurrency: int | None = None,
 ) -> dict[str, object]:
     """
     Sync virtual disks for existing Virtual Machines in NetBox.
@@ -370,259 +721,89 @@ async def create_virtual_disks(  # noqa: C901
     created = 0
     updated = 0
     skipped = 0
+    websocket_lock = asyncio.Lock() if use_websocket and websocket else None
 
     logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
 
     for vm in vms:
-        vmid = extract_proxmox_vmid(vm)
-        vm_name = vm.get("name", "unknown")
-        vm_id = vm.get("id")
+        vm_name = str(vm.get("name", "unknown") or "unknown")
+        await _send_virtual_disk_payload(
+            websocket=websocket,
+            websocket_lock=websocket_lock,
+            use_websocket=use_websocket,
+            payload={
+                "object": "virtual_disk",
+                "type": "sync",
+                "data": {
+                    "completed": False,
+                    "rowid": _virtual_disk_rowid(vm_name),
+                    "name": vm_name,
+                    "sync_status": syncing_html,
+                    "disks": undefined_html,
+                },
+            },
+        )
 
-        if not vmid:
-            skipped += 1
-            continue
+    fetch_semaphore = asyncio.Semaphore(_resolve_fetch_concurrency(fetch_max_concurrency))
 
-        initial_disk_json = {
-            "completed": False,
-            "rowid": f"{vm_name}-disks",
-            "name": vm_name,
-            "sync_status": syncing_html,
-            "disks": undefined_html,
-        }
-
-        if use_websocket and websocket:
-            await websocket.send_json(
-                {"object": "virtual_disk", "type": "sync", "data": initial_disk_json}
-            )
-
-        try:
-            cluster_name = None
-            if vm.get("cluster"):
-                cluster_name = (
-                    vm.get("cluster").get("name") if isinstance(vm.get("cluster"), dict) else None
-                )
-
-            if not cluster_name:
-                for cs in cluster_status or []:
-                    cs_name = getattr(cs, "name", None)
-                    if cs_name:
-                        cluster_name = cs_name
-                        break
-
-            extracted_vm_type = extract_proxmox_vm_type(vm)
-            vm_type = extracted_vm_type or "qemu"
-            target = _resolve_vm_config_target(
+    async def _fetch_with_limit(vm: dict[str, object]) -> VmDiskFetchResult:
+        async with fetch_semaphore:
+            return await _fetch_virtual_disk_vm_config(
                 vm=vm,
-                vmid=vmid,
-                vm_type=vm_type,
-                vm_type_was_explicit=extracted_vm_type is not None,
-                cluster_name=cluster_name,
+                pxs=pxs,
+                cluster_status=cluster_status,
                 cluster_resources=cluster_resources,
             )
-            node_name = target.node
-            vm_type = target.vm_type
-            cluster_name = target.cluster_name
 
-            if not node_name:
-                logger.warning(
-                    "No node found for VM %s (vmid=%s type=%s cluster=%s, "
-                    "device=%s custom_field_node=%s), skipping disk sync",
-                    vm_name,
-                    vmid,
-                    vm_type,
-                    cluster_name,
-                    target.netbox_device_name,
-                    target.custom_field_node,
-                )
-                skipped += 1
-                if use_websocket and websocket:
-                    await websocket.send_json(
-                        {
-                            "object": "virtual_disk",
-                            "type": "sync",
-                            "data": {
-                                "completed": True,
-                                "rowid": f"{vm_name}-disks",
-                                "name": vm_name,
-                                "sync_status": failed_html,
-                                "disks": "No node associated",
-                            },
-                        }
-                    )
-                continue
+    fetch_results = await asyncio.gather(*[_fetch_with_limit(vm) for vm in vms])
 
-            logger.debug(
-                "Resolved virtual disk VM config target for %s "
-                "(vmid=%s type=%s cluster=%s node=%s source=%s)",
-                vm_name,
-                vmid,
-                vm_type,
-                cluster_name,
-                node_name,
-                target.source,
-            )
-
-            vm_config = None
-            try:
-                vm_config = await resolve_vm_config(
-                    pxs=pxs,
-                    node=node_name,
-                    vm_type=vm_type,
-                    vmid=vmid,
-                )
-            except Exception as e:
-                logger.error(
-                    "Error getting VM config for %s (vmid=%s type=%s cluster=%s "
-                    "node=%s source=%s): %s",
-                    vm_name,
-                    vmid,
-                    vm_type,
-                    cluster_name,
-                    node_name,
-                    target.source,
-                    e,
-                )
-
-            if not vm_config:
-                logger.warning(f"Could not get VM config for VM {vm_name} (vmid: {vmid})")
-                skipped += 1
-                if use_websocket and websocket:
-                    await websocket.send_json(
-                        {
-                            "object": "virtual_disk",
-                            "type": "sync",
-                            "data": {
-                                "completed": True,
-                                "rowid": f"{vm_name}-disks",
-                                "name": vm_name,
-                                "sync_status": failed_html,
-                                "disks": "Config not available",
-                            },
-                        }
-                    )
-                continue
-
-            vm_config_obj = ProxmoxVmConfigInput.model_validate(vm_config)
-            disk_entries = vm_config_obj.disks
-
-            disks_created = 0
-            disks_updated = 0
-            disks_deleted = 0
-            parent_vm_disk_updated = False
-
-            disk_payloads: list[dict[str, object]] = []
-            for disk_entry in disk_entries:
-                storage_name = disk_entry.storage_name or storage_name_from_volume_id(
-                    disk_entry.storage
-                )
-                storage_record = find_storage_record(
-                    storage_index,
-                    cluster_name=cluster_name,
-                    storage_name=storage_name,
-                )
-                storage_id = storage_record.get("id") if storage_record else None
-                custom_fields: dict[str, object] = {}
-                if storage_id is not None:
-                    custom_fields["proxbox_storage_id"] = storage_id
-                disk_payload: dict[str, object] = {
-                    "virtual_machine": vm_id,
-                    "name": disk_entry.name,
-                    "size": disk_entry.size_mb,
-                    "storage": storage_id,
-                    "description": disk_entry.description,
-                    "tags": tag_refs,
-                }
-                if custom_fields:
-                    disk_payload["custom_fields"] = custom_fields
-                disk_payloads.append(disk_payload)
-
-            desired_disk_sizes = {
-                str(payload.get("name")): int(payload.get("size") or 0) for payload in disk_payloads
-            }
-            desired_disk_total = sum(int(payload.get("size") or 0) for payload in disk_payloads)
-
-            if disk_payloads:
-                bulk_result = await rest_bulk_reconcile_async(
-                    nb,
-                    "/api/virtualization/virtual-disks/",
-                    payloads=disk_payloads,
-                    lookup_fields=["virtual_machine", "name"],
-                    schema=NetBoxVirtualDiskSyncState,
-                    current_normalizer=lambda record: {
-                        "virtual_machine": record.get("virtual_machine"),
-                        "name": record.get("name"),
-                        "size": record.get("size") if record.get("size") is not None else 0,
-                        "storage": record.get("storage"),
-                        "description": record.get("description"),
-                        "tags": record.get("tags"),
-                        "custom_fields": record.get("custom_fields"),
-                    },
-                    base_query={"virtual_machine_id": vm_id},
-                    lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
-                    strict_lookup=True,
-                    nullable_fields={"storage"},
-                )
-                disks_created = bulk_result.created
-                disks_updated = bulk_result.updated
-
-            vm_id_int = relation_id(vm_id)
-            if vm_id_int is not None:
-                disks_deleted = await _delete_stale_virtual_disks(
-                    nb,
-                    vm_id=vm_id_int,
-                    desired_disks=desired_disk_sizes,
-                )
-                parent_vm_disk_updated = await _sync_parent_vm_disk_total(
-                    nb,
-                    vm=vm,
-                    desired_disk_total=desired_disk_total,
-                )
-
-            if disks_created > 0:
-                created += 1
-            elif disks_updated > 0 or disks_deleted > 0 or parent_vm_disk_updated:
-                updated += 1
-            else:
-                skipped += 1
-
-            disk_summary = (
-                f"{len(disk_entries)} disks ({disks_created} created, "
-                f"{disks_updated} updated, {disks_deleted} deleted)"
-            )
-
-            if use_websocket and websocket:
-                await websocket.send_json(
-                    {
-                        "object": "virtual_disk",
-                        "type": "sync",
-                        "data": {
-                            "completed": True,
-                            "increment_count": "yes" if disks_created > 0 else "no",
-                            "rowid": f"{vm_name}-disks",
-                            "name": vm_name,
-                            "sync_status": completed_html,
-                            "disks": disk_summary,
-                        },
-                    }
-                )
-
-        except Exception as e:
-            logger.error(f"Error syncing disks for VM {vm_name}: {e}")
+    ready_to_sync: list[VmDiskFetchResult] = []
+    for fetch_result in fetch_results:
+        if fetch_result.failure_message:
             skipped += 1
-            if use_websocket and websocket:
-                await websocket.send_json(
-                    {
-                        "object": "virtual_disk",
-                        "type": "sync",
-                        "data": {
-                            "completed": True,
-                            "rowid": f"{vm_name}-disks",
-                            "name": vm_name,
-                            "sync_status": failed_html,
-                            "disks": str(e),
-                        },
-                    }
-                )
+            await _send_virtual_disk_payload(
+                websocket=websocket,
+                websocket_lock=websocket_lock,
+                use_websocket=use_websocket,
+                payload={
+                    "object": "virtual_disk",
+                    "type": "sync",
+                    "data": {
+                        "completed": True,
+                        "rowid": _virtual_disk_rowid(fetch_result.vm_name),
+                        "name": fetch_result.vm_name,
+                        "sync_status": failed_html,
+                        "disks": fetch_result.failure_message,
+                    },
+                },
+            )
+            continue
+        ready_to_sync.append(fetch_result)
+
+    write_semaphore = asyncio.Semaphore(_resolve_write_concurrency())
+
+    async def _sync_with_limit(fetch_result: VmDiskFetchResult) -> VmDiskSyncOutcome:
+        async with write_semaphore:
+            return await _sync_virtual_disks_for_vm(
+                nb=nb,
+                fetched_vm=fetch_result,
+                storage_index=storage_index,
+                tag_refs=tag_refs,
+                websocket=websocket,
+                websocket_lock=websocket_lock,
+                use_websocket=use_websocket,
+                completed_html=completed_html,
+                failed_html=failed_html,
+            )
+
+    sync_outcomes = await asyncio.gather(*[_sync_with_limit(result) for result in ready_to_sync])
+    for outcome in sync_outcomes:
+        if outcome.state == "created":
+            created += 1
+        elif outcome.state == "updated":
+            updated += 1
+        else:
+            skipped += 1
 
     result = {
         "count": total_vms,
@@ -633,7 +814,11 @@ async def create_virtual_disks(  # noqa: C901
 
     logger.info(f"Virtual disks sync complete: {result}")
 
-    if use_websocket and websocket:
-        await websocket.send_json({"object": "virtual_disk", "end": True})
+    await _send_virtual_disk_payload(
+        websocket=websocket,
+        websocket_lock=websocket_lock,
+        use_websocket=use_websocket,
+        payload={"object": "virtual_disk", "end": True},
+    )
 
     return result

@@ -417,6 +417,9 @@ Every VM stream endpoint listed above (`/virtualization/virtual-machines/...crea
 
 See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaults.
 
+The three virtual-disk endpoints also accept an optional `fetch_max_concurrency`
+query parameter to override the Proxmox VM-config fetch width for that request.
+
 ## Full Update
 
 - `GET /full-update` - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.

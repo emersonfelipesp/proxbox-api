@@ -41,6 +41,11 @@ async def create_virtual_disks(
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
+    fetch_max_concurrency: int | None = Query(
+        default=None,
+        title="Fetch max concurrency",
+        description="Optional override for the number of concurrent Proxmox VM config fetches.",
+    ),
 ):
     """
     Syncs virtual disks for existing Virtual Machines in NetBox.
@@ -63,6 +68,7 @@ async def create_virtual_disks(
         use_websocket=use_websocket,
         use_css=use_css,
         netbox_vm_ids=netbox_vm_id_list,
+        fetch_max_concurrency=fetch_max_concurrency,
     )
     return result
 
@@ -78,6 +84,11 @@ async def create_virtual_disks_stream(
         default=None,
         title="NetBox VM IDs",
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
+    ),
+    fetch_max_concurrency: int | None = Query(
+        default=None,
+        title="Fetch max concurrency",
+        description="Optional override for the number of concurrent Proxmox VM config fetches.",
     ),
 ):
     netbox_vm_id_list = None
@@ -100,6 +111,7 @@ async def create_virtual_disks_stream(
                     use_websocket=True,
                     use_css=False,
                     netbox_vm_ids=netbox_vm_id_list,
+                    fetch_max_concurrency=fetch_max_concurrency,
                 )
             finally:
                 await bridge.close()
@@ -133,6 +145,11 @@ async def create_virtual_disks_for_vm_stream(
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
     tag: ProxboxTagDep,
+    fetch_max_concurrency: int | None = Query(
+        default=None,
+        title="Fetch max concurrency",
+        description="Optional override for the number of concurrent Proxmox VM config fetches.",
+    ),
 ):
     """Sync virtual disks for a single NetBox VM identified by its primary key."""
     vm_record = await asyncio.to_thread(
@@ -159,6 +176,7 @@ async def create_virtual_disks_for_vm_stream(
                     use_websocket=True,
                     use_css=False,
                     netbox_vm_id=netbox_vm_id,
+                    fetch_max_concurrency=fetch_max_concurrency,
                 )
             finally:
                 await bridge.close()

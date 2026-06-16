@@ -268,6 +268,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 tag=tag,
                 use_websocket=False,
                 use_css=False,
+                fetch_max_concurrency=fetch_max_concurrency,
             )
         except ProxboxException:
             raise
@@ -735,6 +736,7 @@ async def full_update_sync_stream(  # noqa: C901
                             websocket=disks_bridge,
                             use_websocket=True,
                             use_css=False,
+                            fetch_max_concurrency=fetch_max_concurrency,
                         )
                     finally:
                         await disks_bridge.close()

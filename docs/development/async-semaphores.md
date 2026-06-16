@@ -18,7 +18,7 @@ async def task(i):
 Unlike `threading.Semaphore`, `asyncio.Semaphore` never uses OS threads or
 locks; it is entirely cooperative and safe to use from coroutines.
 
-## The Three Semaphores in the VM Sync Pipeline
+## The Three Semaphores in the VM and Virtual-Disk Sync Pipeline
 
 ```mermaid
 graph TD
@@ -63,7 +63,9 @@ fetch_results = await asyncio.gather(
 **Why it is needed:** Proxmox clusters can have thousands of VMs. Firing all
 config requests simultaneously would overwhelm the Proxmox API's rate limiter
 and exhaust the aiohttp connection pool. The semaphore serializes bursts to at
-most `PROXBOX_VM_SYNC_MAX_CONCURRENCY` concurrent in-flight requests.
+most `PROXBOX_VM_SYNC_MAX_CONCURRENCY` concurrent in-flight requests. The same
+limit now applies to the `virtual-disks` stage, which resolves VM configs in a
+separate fetch phase before any NetBox writes begin.
 
 ### 2. Write Semaphore
 
@@ -87,7 +89,8 @@ async def _run_single(operation):
 **Why it is needed:** NetBox's PostgreSQL backend has a limited connection pool.
 Sending 500 concurrent write requests would hit pool exhaustion, causing
 cascading timeouts. The default of 8 writes keeps PostgreSQL pressure
-manageable while still achieving significant parallelism.
+manageable while still achieving significant parallelism. The `virtual-disks`
+stage also uses this semaphore to bound per-VM reconcile/delete/patch work.
 
 ### 3. Interface Fetch Semaphore
 
