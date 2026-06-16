@@ -170,7 +170,11 @@ async def test_vm_interface_normalizer_extracts_fk_ids(
     # Simulate a record as returned by NetBox (FK as nested dict)
     netbox_existing = {
         "name": "net0",
-        "virtual_machine": {"id": 8, "url": "http://netbox/api/virtualization/virtual-machines/8/", "display": "vm-8"},
+        "virtual_machine": {
+            "id": 8,
+            "url": "http://netbox/api/virtualization/virtual-machines/8/",
+            "display": "vm-8",
+        },
         "enabled": True,
         "type": None,
         "description": "",
