@@ -1,7 +1,5 @@
 """Virtualization schema models and VM configuration validator."""
 
-from __future__ import annotations
-
 import re
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator

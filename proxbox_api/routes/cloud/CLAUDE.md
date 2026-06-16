@@ -11,14 +11,18 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Purpose
 
-Cloud runtime routes mounted at `/cloud/*`: QEMU/Firecracker provisioning, the
-image catalog/factory, PVE template listing, and the **Cloud Image Build
-Pipeline** that bakes bootable Proxmox VM templates from a cloud image plus a
-cloud-init `#cloud-config`.
+Cloud runtime routes mounted at `/cloud/*`: live QEMU Cloud-Init template
+discovery, QEMU/Firecracker provisioning, the image catalog/factory, PVE
+template listing, and the **Cloud Image Build Pipeline** that bakes bootable
+Proxmox VM templates from a cloud image plus a cloud-init `#cloud-config`.
 
 ## Modules
 
 - `templates.py` — QEMU template listing/catalog helpers.
+- `qemu_templates.py` — `GET /cloud/vm/templates`, live Proxmox QEMU template
+  discovery for an endpoint. It filters cluster resources to QEMU templates and,
+  by default, only returns templates whose config contains a Cloud-Init drive or
+  `cicustom` metadata.
 - `catalog.py` — `/cloud/catalog` tenant-visible catalog.
 - `image_factory.py` — `/cloud/template-images` image factory.
 - `pve_templates`/`pve_template.py` — PVE template listing + the operator-facing

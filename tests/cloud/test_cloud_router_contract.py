@@ -21,6 +21,7 @@ def test_cloud_package_exposes_both_routers():
     assert cloud.template_images_router is not None
     assert cloud.templates_router is not None
     assert cloud.pve_template_router is not None
+    assert cloud.qemu_templates_router is not None
     assert cloud.versions_router is not None
     assert cloud.__all__ == (
         "provision_router",
@@ -28,6 +29,7 @@ def test_cloud_package_exposes_both_routers():
         "firecracker_router",
         "image_factory_router",
         "pve_template_router",
+        "qemu_templates_router",
         "template_images_router",
         "templates_router",
         "versions_router",
@@ -49,6 +51,10 @@ def test_cloud_routes_are_registered_on_app(monkeypatch):
     )
     assert any(
         route.path == "/cloud/templates/images" and "POST" in (route.methods or set())
+        for route in test_app.routes
+    )
+    assert any(
+        route.path == "/cloud/vm/templates" and "GET" in (route.methods or set())
         for route in test_app.routes
     )
 

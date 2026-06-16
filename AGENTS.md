@@ -231,6 +231,16 @@ Firecracker provisioning lives in `proxbox_api/routes/cloud/firecracker.py`,
 `POST /cloud/firecracker/provision/stream`. This repo owns the host-agent HTTP
 contract only; NetBox inventory remains in `netbox-proxbox`.
 
+## QEMU Cloud-Init Templates
+
+Live QEMU Cloud-Init template discovery lives in
+`proxbox_api/routes/cloud/qemu_templates.py` and is mounted as
+`GET /cloud/vm/templates?endpoint_id=<ProxmoxEndpoint id>`. It enumerates
+Proxmox cluster resources for the selected endpoint, filters QEMU VM templates,
+reads each template config, and returns only templates with a Cloud-Init drive
+or `cicustom` metadata by default. The route is read-only and is consumed by
+`nms-backend /cloud/vm/templates` for the NMS VM creation UI.
+
 ## Primary Guide
 
 - `CLAUDE.md`
@@ -258,6 +268,7 @@ contract only; NetBox inventory remains in `netbox-proxbox`.
 ### proxbox_api subpackages
 - `proxbox_api/app/CLAUDE.md`
 - `proxbox_api/routes/CLAUDE.md`
+- `proxbox_api/routes/cloud/CLAUDE.md`
 - `proxbox_api/routes/cloud/firecracker.py`
 - `proxbox_api/routes/admin/CLAUDE.md`
 - `proxbox_api/routes/dcim/CLAUDE.md`

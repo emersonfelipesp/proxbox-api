@@ -90,6 +90,98 @@ def _make_virtual_disk_record(
     return record
 
 
+def test_create_virtual_disks_fetches_vm_configs_with_bounded_concurrency(monkeypatch):
+    active_fetches = 0
+    max_active_fetches = 0
+    two_fetches_started = asyncio.Event()
+    release_fetches = asyncio.Event()
+
+    async def _fake_rest_list(_nb, _path, query=None):
+        if _path == "/api/virtualization/virtual-machines/":
+            return [
+                {
+                    "id": 7,
+                    "name": "vm-101",
+                    "cluster": {"name": "cluster-a"},
+                    "custom_fields": {"proxmox_vm_id": 101},
+                },
+                {
+                    "id": 8,
+                    "name": "vm-102",
+                    "cluster": {"name": "cluster-a"},
+                    "custom_fields": {"proxmox_vm_id": 102},
+                },
+                {
+                    "id": 9,
+                    "name": "vm-103",
+                    "cluster": {"name": "cluster-a"},
+                    "custom_fields": {"proxmox_vm_id": 103},
+                },
+            ]
+        if _path == "/api/plugins/proxbox/storage/":
+            return []
+        if _path == "/api/virtualization/virtual-disks/":
+            return []
+        return []
+
+    async def _fake_resolve_vm_config(**kwargs):
+        nonlocal active_fetches, max_active_fetches
+        active_fetches += 1
+        max_active_fetches = max(max_active_fetches, active_fetches)
+        if active_fetches >= 2:
+            two_fetches_started.set()
+        await release_fetches.wait()
+        active_fetches -= 1
+        return {"scsi0": f"local-lvm:vm-{kwargs['vmid']}-disk-0,size=1G"}
+
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        return SimpleNamespace(records=[], created=len(payloads), updated=0, unchanged=0, failed=0)
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.resolve_vm_config",
+        _fake_resolve_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
+    )
+
+    async def _run():
+        sync_task = asyncio.create_task(
+            create_virtual_disks(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[
+                    {
+                        "cluster-a": [
+                            {"type": "qemu", "name": "vm-101", "vmid": "101", "node": "pve01"},
+                            {"type": "qemu", "name": "vm-102", "vmid": "102", "node": "pve01"},
+                            {"type": "qemu", "name": "vm-103", "vmid": "103", "node": "pve01"},
+                        ]
+                    }
+                ],
+                tag=None,
+                use_websocket=False,
+                use_css=False,
+                fetch_max_concurrency=2,
+            )
+        )
+        await asyncio.wait_for(two_fetches_started.wait(), timeout=1)
+        release_fetches.set()
+        result = await sync_task
+        return result
+
+    result = asyncio.run(_run())
+
+    assert max_active_fetches == 2
+    assert result == {"count": 3, "created": 3, "updated": 0, "skipped": 0}
+
+
 def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     calls = {"resolve_vm_config": []}
     reconciled_payloads: list[dict] = []

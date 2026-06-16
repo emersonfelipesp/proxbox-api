@@ -285,6 +285,10 @@ Cobertura de testes:
 - `GET /full-update` - Executa sync de devices, storages, VMs, task history, discos, backups, snapshots, interfaces de node, interfaces de VM, IPs de VM, replications e backup routines.
 - `GET /full-update/stream` - Variacao SSE.
 
+Os tres endpoints de `virtual-disks` tambem aceitam o parametro opcional
+`fetch_max_concurrency` para sobrescrever a largura do fetch de config de VM
+Proxmox naquela requisicao.
+
 ## WebSocket
 
 - `GET /` - WebSocket basico de contagem para testes de conectividade.

@@ -39,6 +39,7 @@ from proxbox_api.routes.cloud import lxc_router as cloud_lxc_router
 from proxbox_api.routes.cloud import provision_router as cloud_provision_router
 from proxbox_api.routes.cloud import provision_stream_router as cloud_provision_stream_router
 from proxbox_api.routes.cloud import pve_template_router as cloud_pve_template_router
+from proxbox_api.routes.cloud import qemu_templates_router as cloud_qemu_templates_router
 from proxbox_api.routes.cloud import template_images_router as cloud_template_images_router
 from proxbox_api.routes.cloud import templates_router as cloud_templates_router
 from proxbox_api.routes.cloud import versions_router as cloud_versions_router
@@ -466,6 +467,7 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(cloud_image_factory_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_template_images_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_pve_template_router, prefix="/cloud", tags=["cloud"])
+        app.include_router(cloud_qemu_templates_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_templates_router, prefix="/cloud", tags=["cloud"])
         app.include_router(cloud_versions_router, prefix="/cloud", tags=["cloud"])
         app.include_router(ssh_terminal_router, prefix="/ssh", tags=["ssh terminal"])

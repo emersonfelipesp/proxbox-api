@@ -39,8 +39,8 @@ the plugin settings page in NetBox and the new value will take effect within
 
 | Env Var | Plugin Settings Key | Default | Min | Description |
 |---|---|---|---|---|
-| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 | 1 | Max concurrent Proxmox VM config fetches in phase 1 |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | 1 | Max concurrent NetBox API writes in the dispatch queue |
+| `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 | 1 | Max concurrent Proxmox VM config fetches in the VM and virtual-disk sync phases |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | 1 | Max concurrent NetBox API write-heavy per-VM sync tasks (VMs and virtual disks) |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 | 1 | Max concurrent Proxmox API reads for interfaces |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `interface_batch_size` | 5 | 1 | VMs per interface-sync batch (prevents NetBox overload) |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `interface_batch_delay_ms` | 100 | 0 | Milliseconds between interface-sync batches |
