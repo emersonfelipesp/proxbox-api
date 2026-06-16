@@ -241,6 +241,26 @@ reads each template config, and returns only templates with a Cloud-Init drive
 or `cicustom` metadata by default. The route is read-only and is consumed by
 `nms-backend /cloud/vm/templates` for the NMS VM creation UI.
 
+## Azure VHD Import Pipeline
+
+Azure managed-disk V2V planning/execution lives in
+`proxbox_api/routes/cloud/azure_vhd_imports.py` and
+`proxbox_api/routes/cloud/azure_vhd_pipeline.py`, mounted as
+`POST /cloud/azure/vhd-imports`. The route validates an
+`AzureVhdImportRequest`, renders the exact `curl` + `qemu-img convert` +
+`qm create` + `qm importdisk` script, and optionally runs it over SSH when
+`execute=true`.
+
+Execution rules:
+
+- `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` is mandatory for remote execution.
+- `endpoint_id` is required in execute mode so `_gate()` can enforce
+  `ProxmoxEndpoint.allow_writes`.
+- Linux uses `virtio-scsi-single` + `scsi0`; the Windows-safe profile uses
+  `sata0` + `e1000` for first boot before VirtIO drivers are installed.
+- The route is consumed by the NMS admin page
+  `/cloud/azure-to-nmulticloud-migration`.
+
 ## Primary Guide
 
 - `CLAUDE.md`
