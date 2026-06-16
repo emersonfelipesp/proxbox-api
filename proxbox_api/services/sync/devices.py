@@ -14,6 +14,7 @@ from proxbox_api.netbox_rest import nested_tag_payload
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.device_ensure import (
+    _effective_cluster_site_id,
     _ensure_cluster,
     _ensure_cluster_type,
     _ensure_device,
@@ -30,6 +31,7 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge
 from proxbox_api.utils.structured_logging import SyncPhaseLogger
 
 __all__ = [
+    "_effective_cluster_site_id",
     "_ensure_cluster",
     "_ensure_cluster_type",
     "_ensure_device",

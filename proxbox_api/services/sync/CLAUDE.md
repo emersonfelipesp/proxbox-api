@@ -71,6 +71,14 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   IPs onto a VM and returns `assigned_to_other_object` instead of stealing an
   address owned elsewhere. This prevents the "VM interface wrongly matched to
   another server's IP" defect; both paths stay idempotent across re-syncs.
+- **Cluster/site placement invariant.** After cluster reconciliation, dependent
+  device and VM writes use `device_ensure._effective_cluster_site_id()` so a
+  cluster's actual `dcim.site` scope wins over a stale endpoint/default site.
+  This applies to bulk device sync, full VM sync dependency precompute,
+  extracted VM dependency helpers, and individual node/VM sync. Keep new
+  cluster-dependent write paths on the same helper to avoid NetBox validation
+  errors where the assigned cluster belongs to a different site than the
+  dependent object payload.
 
 ## Extension Guidance
 
