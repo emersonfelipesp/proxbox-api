@@ -26,6 +26,7 @@ def build_netbox_virtual_machine_payload(
     last_updated: datetime | None = None,
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
+    endpoint_id: int | None = None,
     parse_description_metadata: bool = False,
     overwrite_flags: object | None = None,
 ) -> VMPayloadDict:
@@ -44,6 +45,7 @@ def build_netbox_virtual_machine_payload(
         last_updated: Optional timestamp for last update.
         cluster_name: Proxmox cluster name for custom field population.
         proxmox_url: Proxmox base URL for link custom field population.
+        endpoint_id: proxbox-api ProxmoxEndpoint DB ID for console access custom field.
 
     Returns:
         VMPayloadDict with structure for NetBox VM creation/update.
@@ -62,6 +64,7 @@ def build_netbox_virtual_machine_payload(
         last_updated=last_updated,
         cluster_name=cluster_name,
         proxmox_url=proxmox_url,
+        endpoint_id=endpoint_id,
         parse_description_metadata=parse_description_metadata,
         overwrite_flags=overwrite_flags,
     )

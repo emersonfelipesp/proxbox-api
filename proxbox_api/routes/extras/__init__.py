@@ -734,6 +734,19 @@ async def create_custom_fields(  # noqa: C901
                 "search_weight": 1000,
                 "group_name": "Proxmox",
             },
+            {
+                "object_types": ["virtualization.virtualmachine"],
+                "type": "integer",
+                "name": "proxmox_endpoint_id",
+                "label": "Proxmox Endpoint ID",
+                "description": "proxbox-api ProxmoxEndpoint database ID for console access",
+                "ui_visible": "if-set",
+                "ui_editable": "hidden",
+                "weight": 100,
+                "filter_logic": "loose",
+                "search_weight": 1000,
+                "group_name": "Proxmox",
+            },
         ]
         fields = []
         had_failures = False

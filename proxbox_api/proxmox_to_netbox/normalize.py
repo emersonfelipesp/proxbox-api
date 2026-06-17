@@ -42,6 +42,7 @@ def build_virtual_machine_transform(
     last_updated: datetime | None = None,
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
+    endpoint_id: int | None = None,
     parse_description_metadata: bool = False,
     overwrite_flags: object | None = None,
 ) -> NetBoxVirtualMachineCreateBody:
@@ -69,6 +70,7 @@ def build_virtual_machine_transform(
         last_updated=last_updated,
         cluster_name=cluster_name,
         proxmox_url=proxmox_url,
+        endpoint_id=endpoint_id,
     )
 
     body = transform.as_netbox_create_body(

@@ -1750,8 +1750,10 @@ async def create_virtual_machines(  # noqa: C901
         filtered_cluster_resources, sync_mode_vm, sync_mode_vm_template
     )
 
-    # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link.
+    # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link,
+    # and a parallel mapping to the ProxmoxEndpoint DB ID for the console access custom field.
     proxmox_url_by_cluster: dict[str, str] = {}
+    endpoint_id_by_cluster: dict[str, int] = {}
     px_by_cluster: dict[str, object] = {}
     for px, cs in zip(pxs, cluster_status):
         cluster_n = getattr(cs, "name", None) or getattr(px, "cluster_name", None)
@@ -1761,6 +1763,9 @@ async def create_virtual_machines(  # noqa: C901
             proxmox_url_by_cluster[str(cluster_n)] = f"https://{px_domain}:{px_port}"
         if cluster_n:
             px_by_cluster[str(cluster_n)] = px
+            px_db_endpoint_id = getattr(px, "db_endpoint_id", None)
+            if px_db_endpoint_id is not None:
+                endpoint_id_by_cluster[str(cluster_n)] = int(px_db_endpoint_id)
 
     # Per-cluster color-map cache: fetched once on first VM that needs it.
     tag_color_map_by_cluster: dict[str, dict[str, str]] = {}
@@ -2429,6 +2434,7 @@ async def create_virtual_machines(  # noqa: C901
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
+            endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
             parse_description_metadata=behavior_flags.parse_description_metadata,
             overwrite_flags=effective_vm_overwrite_flags,
         )
