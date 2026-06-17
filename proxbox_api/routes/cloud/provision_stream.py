@@ -13,11 +13,12 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.logger import logger
 from proxbox_api.routes.cloud.provision import (
     _clone_template_vm,
+    _cloud_provision_gate,
     _configure_cloud_init_vm,
     _journal_provision_best_effort,
     _start_vm_after_provision,
 )
-from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
+from proxbox_api.routes.proxmox_actions import _open_proxmox_session
 from proxbox_api.schemas.cloud_provision import (
     CloudVMProvisionRequest,
     CloudVMProvisionResponse,
@@ -259,7 +260,7 @@ async def provision_vm_stream(
     session: SessionDep,
     actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
 ) -> StreamingResponse | JSONResponse:
-    gated = await _gate(session, req.endpoint_id)
+    gated = await _cloud_provision_gate(session, req.endpoint_id)
     if isinstance(gated, JSONResponse):
         return gated
 

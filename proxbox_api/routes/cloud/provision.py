@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 from collections.abc import Mapping
 from typing import Annotated
 
@@ -11,8 +13,10 @@ from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
+from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
+from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.routes.intent.cloud_init import build_proxmox_ci_args
 from proxbox_api.routes.intent.dispatchers.common import mapping_from_response
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
@@ -38,6 +42,7 @@ _TASK_TIMEOUT_SECONDS = 300.0
 _TASK_POLL_INTERVAL_SECONDS = 1.0
 _JOURNAL_TIMEOUT_SECONDS = 5.0
 _DRIVE_PREFIXES = ("ide", "sata", "scsi", "virtio")
+_NETBOX_ENDPOINT_PATH = "/api/plugins/proxbox/endpoints/proxmox/"
 
 
 def _extract_task_id(response: object) -> str | None:
@@ -51,6 +56,101 @@ def _extract_task_id(response: object) -> str | None:
             task_id = data.get("upid") or data.get("UPID")
             return str(task_id) if task_id is not None else None
     return None
+
+
+def _json_response_reason(response: JSONResponse) -> str:
+    try:
+        payload = json.loads(response.body.decode("utf-8"))
+    except (AttributeError, TypeError, ValueError, UnicodeDecodeError):
+        return ""
+    return str(payload.get("reason") or "") if isinstance(payload, dict) else ""
+
+
+def _row_field(row: object, key: str) -> object:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _row_ip_address(row: object) -> str:
+    value = _row_field(row, "ip_address")
+    if isinstance(value, Mapping):
+        value = value.get("address")
+    elif value is not None and not isinstance(value, str):
+        value = getattr(value, "address", value)
+    return str(value or "").split("/", 1)[0].strip()
+
+
+def _endpoint_base_name(value: object) -> str:
+    return re.sub(r"\s*\(nb:\d+\)\s*$", "", str(value or "").strip())
+
+
+def _netbox_row_matches_endpoint(row: object, endpoint: ProxmoxEndpoint) -> bool:
+    row_name = _endpoint_base_name(_row_field(row, "name"))
+    endpoint_name = _endpoint_base_name(endpoint.name)
+    if row_name and endpoint_name and row_name == endpoint_name:
+        return True
+
+    row_domain = str(_row_field(row, "domain") or "").strip()
+    if row_domain and endpoint.domain and row_domain == endpoint.domain:
+        return True
+
+    return bool(_row_ip_address(row) and _row_ip_address(row) == endpoint.ip_address.split("/", 1)[0])
+
+
+async def _netbox_allows_endpoint_writes(session: object, endpoint: ProxmoxEndpoint) -> bool:
+    """Return whether the matching NetBox Proxbox endpoint currently allows writes."""
+    try:
+        nb = await get_netbox_async_session(database_session=session)
+        rows = await rest_list_async(nb, _NETBOX_ENDPOINT_PATH, query={"limit": 0})
+    except Exception as error:  # noqa: BLE001
+        logger.info(
+            "cloud provision: unable to confirm NetBox allow_writes for endpoint id=%s: %s",
+            endpoint.id,
+            error,
+        )
+        return False
+
+    matched_rows = [row for row in rows if _netbox_row_matches_endpoint(row, endpoint)]
+    return any(bool(_row_field(row, "allow_writes")) for row in matched_rows)
+
+
+async def _cloud_provision_gate(
+    session: object,
+    endpoint_id: int | None,
+) -> JSONResponse | ProxmoxEndpoint:
+    """Gate cloud VM provisioning while honoring current NetBox allow_writes state.
+
+    Local proxbox-api endpoint rows can lag behind the NetBox plugin endpoint
+    toggle used by NMS. When the only gate failure is local stale
+    ``allow_writes=False``, a current matching NetBox endpoint with
+    ``allow_writes=True`` is authoritative for Cloud VM provisioning.
+    """
+    gated = await _gate(session, endpoint_id)
+    if not isinstance(gated, JSONResponse):
+        return gated
+    if gated.status_code != status.HTTP_403_FORBIDDEN:
+        return gated
+    if _json_response_reason(gated) not in {"endpoint_writes_disabled", "writes_disabled_for_endpoint"}:
+        return gated
+    if endpoint_id is None:
+        return gated
+
+    endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
+    if endpoint is None:
+        return gated
+    if not await _netbox_allows_endpoint_writes(session, endpoint):
+        return gated
+
+    endpoint.allow_writes = True
+    session.add(endpoint)
+    await _maybe_await(session.commit())
+    await _maybe_await(session.refresh(endpoint))
+    logger.info(
+        "cloud provision: refreshed allow_writes from NetBox for ProxmoxEndpoint id=%s",
+        endpoint_id,
+    )
+    return endpoint
 
 
 def _is_upid(value: str | None) -> bool:
@@ -333,7 +433,7 @@ async def provision_vm(
     session: SessionDep,
     actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
 ) -> CloudVMProvisionResponse | JSONResponse:
-    gated = await _gate(session, req.endpoint_id)
+    gated = await _cloud_provision_gate(session, req.endpoint_id)
     if isinstance(gated, JSONResponse):
         return gated
 
