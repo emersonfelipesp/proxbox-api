@@ -90,10 +90,15 @@ Execution rules:
 
 Generated pipeline behavior:
 
-- downloads the Azure VHD to `/var/lib/vz/template/cache/`
+- preflights host tooling, destination node name, VMID availability, storage,
+  and bridge presence
+- downloads the Azure VHD to `/var/lib/vz/template/cache/` with resumable
+  `curl -C -`
+- validates source and converted images with `qemu-img info`
 - converts it with `qemu-img convert -f vpc -O qcow2`
 - creates the VM shell with Gen1/Gen2-aware BIOS defaults
-- imports the disk with `qm importdisk`
+- imports the disk with `qm importdisk` and attaches the volid parsed from the
+  import command output
 - attaches the imported volume as:
   - `scsi0` + `virtio-scsi-single` for `linux_standard`
   - `sata0` + `e1000` for `windows_first_boot_safe`

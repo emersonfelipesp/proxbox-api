@@ -24,7 +24,15 @@ def test_azure_vhd_import_route_returns_linux_plan(auth_test_client) -> None:
     assert body["network_model"] == "virtio"
     assert body["bios"] == "ovmf"
     assert body["qcow2_filename"] == "exported-osdisk.qcow2"
+    assert 'test "$(hostname -s)" = pve-node-01' in body["build_script"]
+    assert "! qm status 9401 >/dev/null 2>&1" in body["build_script"]
+    assert "pvesm status --storage local-zfs >/dev/null" in body["build_script"]
+    assert "curl -fL --retry 3 -C -" in body["build_script"]
+    assert "qemu-img info /var/lib/vz/template/cache/exported-osdisk.vhd >/dev/null" in body["build_script"]
     assert "qemu-img convert -f vpc -O qcow2" in body["build_script"]
+    assert "IMPORT_OUTPUT=$(qm importdisk 9401" in body["build_script"]
+    assert "Successfully imported disk as" in body["build_script"]
+    assert "pvesm list" not in body["build_script"]
     assert "--scsihw virtio-scsi-single" in body["build_script"]
     assert "--boot order=scsi0" in body["build_script"]
 
