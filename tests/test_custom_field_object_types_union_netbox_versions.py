@@ -6,9 +6,9 @@ the `_union_object_types_with_current` helper landed in PR #56 (commit
 REST API serialization shape for ``extras.CustomField.object_types``, which
 is currently identical across all three certified NetBox releases:
 
-- NetBox 4.5.8
-- NetBox 4.5.9
-- NetBox 4.6.0
+- NetBox 4.6.1
+- NetBox 4.6.2
+- NetBox 4.6.3
 
 `netbox/extras/api/serializers_/customfields.py` declares ``object_types`` as
 a ``ContentTypeField`` whose ``to_representation`` (``netbox/api/fields.py``)
@@ -54,7 +54,7 @@ def proxbox_caplog(caplog):
 
 @pytest.mark.parametrize(
     "netbox_version",
-    ["4.5.8", "4.5.9", "4.6.0"],
+    ["4.6.1", "4.6.2", "4.6.3"],
 )
 def test_union_preserves_operator_additions_across_supported_netbox_versions(
     monkeypatch, proxbox_caplog, netbox_version
@@ -86,7 +86,7 @@ def test_union_preserves_operator_additions_across_supported_netbox_versions(
 
 @pytest.mark.parametrize(
     "netbox_version",
-    ["4.5.8", "4.5.9", "4.6.0"],
+    ["4.6.1", "4.6.2", "4.6.3"],
 )
 def test_union_handles_dict_shape_defensively_across_versions(monkeypatch, netbox_version):
     """Defensive: if a future NetBox release switches to a dict shape
