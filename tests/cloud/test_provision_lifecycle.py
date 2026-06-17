@@ -154,6 +154,69 @@ async def test_cloud_provision_writes_disabled_returns_gate_reason(
 
 
 @pytest.mark.asyncio
+async def test_cloud_provision_gate_refreshes_allow_writes_from_netbox(
+    db_session,
+    monkeypatch,
+):
+    """Cloud provisioning should honor current NetBox allow_writes for a stale local row."""
+    endpoint_id = _make_endpoint(db_session, allow_writes=False)
+
+    async def fake_get_netbox_async_session(*, database_session):
+        assert database_session is db_session
+        return object()
+
+    async def fake_rest_list_async(_nb, path, query=None):
+        assert path == "/api/plugins/proxbox/endpoints/proxmox/"
+        assert query == {"limit": 0}
+        return [
+            {
+                "name": "pve-cloud-False",
+                "ip_address": {"address": "10.0.0.10/32"},
+                "allow_writes": True,
+            }
+        ]
+
+    monkeypatch.setattr(provision_route, "get_netbox_async_session", fake_get_netbox_async_session)
+    monkeypatch.setattr(provision_route, "rest_list_async", fake_rest_list_async)
+
+    gated = await provision_route._cloud_provision_gate(db_session, endpoint_id)
+
+    assert not hasattr(gated, "status_code")
+    db_session.refresh(gated)
+    assert gated.allow_writes is True
+
+
+@pytest.mark.asyncio
+async def test_cloud_provision_gate_preserves_refusal_when_netbox_writes_disabled(
+    db_session,
+    monkeypatch,
+):
+    """The NetBox confirmation path must preserve deny-by-default behavior."""
+    endpoint_id = _make_endpoint(db_session, allow_writes=False)
+
+    async def fake_get_netbox_async_session(*, database_session):
+        assert database_session is db_session
+        return object()
+
+    async def fake_rest_list_async(_nb, path, query=None):
+        assert path == "/api/plugins/proxbox/endpoints/proxmox/"
+        return [
+            {
+                "name": "pve-cloud-False",
+                "ip_address": {"address": "10.0.0.10/32"},
+                "allow_writes": False,
+            }
+        ]
+
+    monkeypatch.setattr(provision_route, "get_netbox_async_session", fake_get_netbox_async_session)
+    monkeypatch.setattr(provision_route, "rest_list_async", fake_rest_list_async)
+
+    gated = await provision_route._cloud_provision_gate(db_session, endpoint_id)
+
+    assert getattr(gated, "status_code", None) == 403
+
+
+@pytest.mark.asyncio
 async def test_cloud_provision_waits_for_config_upid_before_start(monkeypatch) -> None:
     events: list[str] = []
 
