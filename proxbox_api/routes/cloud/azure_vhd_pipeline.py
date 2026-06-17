@@ -100,9 +100,19 @@ def build_azure_vhd_import_response(
 
     commands = [
         "set -euo pipefail",
+        "command -v curl >/dev/null",
+        "command -v qemu-img >/dev/null",
+        "command -v qm >/dev/null",
+        "command -v pvesm >/dev/null",
+        f'test "$(hostname -s)" = {_q(request.target_node)}',
+        f"! qm status {_q(request.vmid)} >/dev/null 2>&1",
+        f"pvesm status --storage {_q(request.vm_storage)} >/dev/null",
+        f"test -d /sys/class/net/{_q(request.bridge)}",
         "install -d /var/lib/vz/template/cache",
-        f"curl -fL --retry 3 -o {_q(source_vhd_path)} {_q(request.azure_vhd_url)}",
+        f"curl -fL --retry 3 -C - -o {_q(source_vhd_path)} {_q(request.azure_vhd_url)}",
+        f"qemu-img info {_q(source_vhd_path)} >/dev/null",
         f"qemu-img convert -f vpc -O qcow2 {_q(source_vhd_path)} {_q(qcow2_path)}",
+        f"qemu-img info {_q(qcow2_path)} >/dev/null",
     ]
 
     qm_create = [
@@ -136,10 +146,14 @@ def build_azure_vhd_import_response(
 
     commands.extend(
         [
-            f"qm importdisk {_q(request.vmid)} {_q(qcow2_path)} {_q(request.vm_storage)} --format qcow2",
+            "IMPORT_OUTPUT=$("
+            f"qm importdisk {_q(request.vmid)} {_q(qcow2_path)} {_q(request.vm_storage)} "
+            "--format qcow2 2>&1)",
+            'printf "%s\\n" "${IMPORT_OUTPUT}"',
             (
-                f"IMPORTED_VOLID=$(pvesm list {_q(request.vm_storage)} --vmid {_q(request.vmid)} "
-                "| awk 'NR == 2 {print $1}')"
+                "IMPORTED_VOLID=$(printf '%s\\n' \"${IMPORT_OUTPUT}\" "
+                '| sed -n "s/.*Successfully imported disk as '
+                "'\\([^']*\\)'.*/\\1/p\" | tail -1)"
             ),
             'test -n "${IMPORTED_VOLID}"',
         ]

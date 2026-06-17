@@ -99,11 +99,16 @@ Compose wiring: `nmulticloud-context/deploy/compose/proxbox-api.compose.yaml`.
 
 The response always returns the generated operator script, which:
 
-1. downloads the Azure-exported VHD to `/var/lib/vz/template/cache/`,
-2. converts it with `qemu-img convert -f vpc -O qcow2`,
-3. creates the Proxmox VM shell with Gen1/Gen2-aware BIOS defaults,
-4. imports the QCOW2 with `qm importdisk`, and
-5. attaches the imported volume as either `scsi0` (Linux) or `sata0`
+1. preflights required host tools, destination node name, VMID availability,
+   target storage, and bridge presence,
+2. downloads the Azure-exported VHD to `/var/lib/vz/template/cache/` with
+   `curl -C -` so interrupted downloads can resume,
+3. validates source and converted images with `qemu-img info`,
+4. converts the VHD with `qemu-img convert -f vpc -O qcow2`,
+5. creates the Proxmox VM shell with Gen1/Gen2-aware BIOS defaults,
+6. imports the QCOW2 with `qm importdisk`, parses the returned volid from
+   command output, and
+7. attaches the imported volume as either `scsi0` (Linux) or `sata0`
    (Windows-safe first boot).
 
 Execution details:
