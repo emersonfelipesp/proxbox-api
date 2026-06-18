@@ -22,6 +22,7 @@ def map_proxmox_vm_to_netbox_vm_body(
     last_updated: datetime | None = None,
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
+    endpoint_id: int | None = None,
     parse_description_metadata: bool = False,
     overwrite_flags: object | None = None,
 ) -> dict[str, object]:
@@ -40,6 +41,7 @@ def map_proxmox_vm_to_netbox_vm_body(
         last_updated=last_updated,
         cluster_name=cluster_name,
         proxmox_url=proxmox_url,
+        endpoint_id=endpoint_id,
         parse_description_metadata=parse_description_metadata,
         overwrite_flags=overwrite_flags,
     )

@@ -237,6 +237,7 @@ def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
         timeout=endpoint.timeout,
         max_retries=endpoint.max_retries,
         retry_backoff=float(endpoint.retry_backoff) if endpoint.retry_backoff is not None else None,
+        db_endpoint_id=endpoint.id,
         site_id=endpoint.site_id,
         site_slug=endpoint.site_slug,
         site_name=endpoint.site_name,
