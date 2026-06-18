@@ -919,6 +919,12 @@ async def _ensure_device(
         desired_site_id=site_id,
         cluster_id=cluster_id,
     )
+    # Save the cluster-authoritative site BEFORE the pin.  When the cluster is
+    # being reassigned, the device's site must be updated to match the cluster's
+    # scope_site — NetBox enforces device.site == cluster.scope_site on every
+    # write.  Keeping the pinned (old) site in the payload while changing the
+    # cluster produces "The assigned cluster belongs to a different site".
+    _desired_site_id = site_id
     site_id = _existing_device_site_pin(existing_device, site_id)
 
     # First-discovery audit tag (issue #362). Stamp the node-discovery slug
@@ -978,6 +984,13 @@ async def _ensure_device(
             for key, value in desired_payload.items()
             if current_payload.get(key) != value and key in allowed
         }
+        # NetBox requires device.site == cluster.scope_site.  When the cluster
+        # assignment is changing, inject the corresponding site into the patch so
+        # the single write satisfies both constraints.  The site is intentionally
+        # not in `allowed` for the general case (preserves user-assigned sites when
+        # the cluster is not moving), so it must be injected here explicitly.
+        if "cluster" in patch_payload and _desired_site_id is not None:
+            patch_payload["site"] = _desired_site_id
         if patch_payload:
             for field, value in patch_payload.items():
                 setattr(existing_device, field, value)
