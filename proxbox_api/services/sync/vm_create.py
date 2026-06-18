@@ -238,6 +238,7 @@ async def create_or_update_virtual_machine(
     site_id: int | None = None,
     tenant_id: int | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
+    endpoint_id: int | None = None,
 ) -> dict:
     """Create or update a virtual machine in NetBox.
 
@@ -296,6 +297,7 @@ async def create_or_update_virtual_machine(
         virtual_machine_type_id=resolved_virtual_machine_type_id,
         last_updated=now,
         cluster_name=cluster_name,
+        endpoint_id=endpoint_id,
     )
 
     virtual_machine = await rest_reconcile_async(

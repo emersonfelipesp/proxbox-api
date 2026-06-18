@@ -256,6 +256,12 @@ Execution rules:
 - `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` is mandatory for remote execution.
 - `endpoint_id` is required in execute mode so `_gate()` can enforce
   `ProxmoxEndpoint.allow_writes`.
+- The generated script preflights the SSH destination node name, VMID
+  availability, target storage, bridge presence, and required host tooling
+  before downloading the VHD.
+- The download is resumable (`curl -C -`), both source and converted images are
+  checked with `qemu-img info`, and the imported disk volid is parsed from
+  `qm importdisk` output instead of guessed from `pvesm list`.
 - Linux uses `virtio-scsi-single` + `scsi0`; the Windows-safe profile uses
   `sata0` + `e1000` for first boot before VirtIO drivers are installed.
 - The route is consumed by the NMS admin page

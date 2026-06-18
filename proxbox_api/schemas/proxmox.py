@@ -35,6 +35,7 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
     connect_timeout: int | None = Field(default=None, ge=1, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
+    db_endpoint_id: int | None = None
     site_id: int | None = None
     site_slug: str | None = None
     site_name: str | None = None

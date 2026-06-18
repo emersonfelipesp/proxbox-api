@@ -26,11 +26,13 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep, close_proxmox_sessio
 
 router = APIRouter()
 
+from proxbox_api.routes.proxmox.console import console_router
 from proxbox_api.routes.proxmox.endpoints import router as endpoints_router
 from proxbox_api.routes.proxmox.viewer_codegen import router as viewer_codegen_router
 
 router.include_router(viewer_codegen_router, prefix="/viewer", tags=["proxmox / viewer"])
 router.include_router(endpoints_router, tags=["proxmox / endpoints"])
+router.include_router(console_router, prefix="/console", tags=["proxmox / console"])
 
 #
 # /proxmox/* API Endpoints

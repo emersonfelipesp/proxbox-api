@@ -1204,6 +1204,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     last_updated: datetime | None = None
     cluster_name: str | None = None
     proxmox_url: str | None = None
+    endpoint_id: int | None = None
 
     @computed_field(return_type=dict)
     @property
@@ -1225,6 +1226,8 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             fields["proxmox_link"] = f"{self.proxmox_url}/#v1:0:={vm_type}/{self.resource.vmid}"
         if self.last_updated:
             fields["proxmox_last_updated"] = self.last_updated.isoformat()
+        if self.endpoint_id is not None:
+            fields["proxmox_endpoint_id"] = self.endpoint_id
         return fields
 
     @computed_field(return_type=int)
