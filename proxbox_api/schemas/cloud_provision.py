@@ -133,7 +133,9 @@ class CloudVMProvisionResponse(BaseModel):
 class CloudQemuTemplate(BaseModel):
     """Live QEMU VM template discovered from Proxmox cluster state."""
 
-    id: int = Field(..., description="Alias for source_vmid so frontend selectors have a stable key")
+    id: int = Field(
+        ..., description="Alias for source_vmid so frontend selectors have a stable key"
+    )
     endpoint_id: int
     endpoint_name: str
     cluster_name: str | None = None

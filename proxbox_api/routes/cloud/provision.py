@@ -95,7 +95,9 @@ def _netbox_row_matches_endpoint(row: object, endpoint: ProxmoxEndpoint) -> bool
     if row_domain and endpoint.domain and row_domain == endpoint.domain:
         return True
 
-    return bool(_row_ip_address(row) and _row_ip_address(row) == endpoint.ip_address.split("/", 1)[0])
+    return bool(
+        _row_ip_address(row) and _row_ip_address(row) == endpoint.ip_address.split("/", 1)[0]
+    )
 
 
 async def _netbox_allows_endpoint_writes(session: object, endpoint: ProxmoxEndpoint) -> bool:
@@ -131,7 +133,10 @@ async def _cloud_provision_gate(
         return gated
     if gated.status_code != status.HTTP_403_FORBIDDEN:
         return gated
-    if _json_response_reason(gated) not in {"endpoint_writes_disabled", "writes_disabled_for_endpoint"}:
+    if _json_response_reason(gated) not in {
+        "endpoint_writes_disabled",
+        "writes_disabled_for_endpoint",
+    }:
         return gated
     if endpoint_id is None:
         return gated
