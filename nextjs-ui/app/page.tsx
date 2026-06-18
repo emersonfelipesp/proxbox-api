@@ -252,14 +252,23 @@ export default function Home() {
                     {proxmoxCountLabel}
                   </span>
                 </div>
-                <ProxmoxEndpointForm
-                  key={editingProxmox?.id ?? "proxmox-new"}
-                  mode={editingProxmox ? "edit" : "create"}
-                  initial={editingProxmox}
-                  submitting={savingProxmox}
-                  onSubmit={editingProxmox ? handleProxmoxUpdate : handleProxmoxCreate}
-                  onCancel={editingProxmox ? () => setEditingProxmox(null) : undefined}
-                />
+                {editingProxmox ? (
+                  <ProxmoxEndpointForm
+                    key={editingProxmox.id ?? "proxmox-edit"}
+                    mode="edit"
+                    initial={editingProxmox}
+                    submitting={savingProxmox}
+                    onSubmit={handleProxmoxUpdate}
+                    onCancel={() => setEditingProxmox(null)}
+                  />
+                ) : (
+                  <ProxmoxEndpointForm
+                    key="proxmox-new"
+                    mode="create"
+                    submitting={savingProxmox}
+                    onSubmit={handleProxmoxCreate}
+                  />
+                )}
               </div>
             </section>
 

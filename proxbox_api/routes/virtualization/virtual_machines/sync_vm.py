@@ -1881,9 +1881,7 @@ async def create_virtual_machines(  # noqa: C901
 
         vm_types: set[str] = set()
 
-        async def _precompute_single_cluster(
-            cluster_name: str, vm_resources: list[dict]
-        ) -> None:
+        async def _precompute_single_cluster(cluster_name: str, vm_resources: list[dict]) -> None:
             cluster_state = next(
                 (state for state in cluster_status if getattr(state, "name", None) == cluster_name),
                 None,
@@ -1946,10 +1944,7 @@ async def create_virtual_machines(  # noqa: C901
 
         # All clusters are independent — precompute them in parallel.
         cluster_precompute_results = await asyncio.gather(
-            *[
-                _precompute_single_cluster(cn, vrs)
-                for cn, vrs in resources_by_cluster.items()
-            ],
+            *[_precompute_single_cluster(cn, vrs) for cn, vrs in resources_by_cluster.items()],
             return_exceptions=True,
         )
         # Re-raise the first cluster-level failure so the outer try/except can surface it.
