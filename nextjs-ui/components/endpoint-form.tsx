@@ -14,13 +14,23 @@ type NetBoxFormProps = {
   onCancel?: () => void
 }
 
-type ProxmoxFormProps = {
-  mode: FormMode
-  initial?: ProxmoxEndpoint | null
+type ProxmoxCreateFormProps = {
+  mode: "create"
+  initial?: null
   submitting?: boolean
-  onSubmit: (payload: ProxmoxEndpointPayload | Partial<ProxmoxEndpointPayload>) => Promise<void>
+  onSubmit: (payload: ProxmoxEndpointPayload) => Promise<void>
   onCancel?: () => void
 }
+
+type ProxmoxEditFormProps = {
+  mode: "edit"
+  initial?: ProxmoxEndpoint | null
+  submitting?: boolean
+  onSubmit: (payload: Partial<ProxmoxEndpointPayload>) => Promise<void>
+  onCancel?: () => void
+}
+
+type ProxmoxFormProps = ProxmoxCreateFormProps | ProxmoxEditFormProps
 
 const labelClass = "text-sm font-semibold text-[var(--panel-foreground)]"
 const inputClass =
@@ -181,7 +191,8 @@ export function NetBoxEndpointForm({ mode, initial, submitting = false, onSubmit
   )
 }
 
-export function ProxmoxEndpointForm({ mode, initial, submitting = false, onSubmit, onCancel }: ProxmoxFormProps) {
+export function ProxmoxEndpointForm(props: ProxmoxFormProps) {
+  const { mode, initial, submitting = false, onCancel } = props
   const [name, setName] = useState(initial?.name ?? "")
   const [ipAddress, setIpAddress] = useState(initial?.ip_address ?? "")
   const [domain, setDomain] = useState(initial?.domain ?? "")
@@ -220,7 +231,7 @@ export function ProxmoxEndpointForm({ mode, initial, submitting = false, onSubmi
       return
     }
 
-    const payload: Partial<ProxmoxEndpointPayload> = {
+    const basePayload = {
       name: name.trim(),
       ip_address: ipAddress.trim(),
       domain: domain.trim() || null,
@@ -230,20 +241,25 @@ export function ProxmoxEndpointForm({ mode, initial, submitting = false, onSubmi
     }
 
     if (mode === "create") {
-      payload.password = password.trim() || null
-      payload.token_name = tokenName.trim() || null
-      payload.token_value = tokenValue.trim() || null
-    } else {
-      if (hasPassword) {
-        payload.password = password.trim()
-      }
-      if (hasTokenPair) {
-        payload.token_name = tokenName.trim()
-        payload.token_value = tokenValue.trim()
-      }
+      await props.onSubmit({
+        ...basePayload,
+        password: password.trim() || null,
+        token_name: tokenName.trim() || null,
+        token_value: tokenValue.trim() || null,
+      })
+      return
     }
 
-    await onSubmit(payload)
+    const payload: Partial<ProxmoxEndpointPayload> = { ...basePayload }
+    if (hasPassword) {
+      payload.password = password.trim()
+    }
+    if (hasTokenPair) {
+      payload.token_name = tokenName.trim()
+      payload.token_value = tokenValue.trim()
+    }
+
+    await props.onSubmit(payload)
   }
 
   return (

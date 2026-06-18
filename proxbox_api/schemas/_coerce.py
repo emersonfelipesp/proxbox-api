@@ -1,5 +1,6 @@
 """Shared coercion helpers for Pydantic schema validators."""
 
+
 def normalize_text(value: object) -> str | None:
     if value is None:
         return None

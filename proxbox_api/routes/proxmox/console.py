@@ -37,7 +37,9 @@ class ConsoleSessionRequest(BaseModel):
     endpoint_id: int = Field(ge=1, description="proxbox-api ProxmoxEndpoint database ID")
     vmid: int = Field(ge=1, description="Proxmox VM or CT ID")
     node: str = Field(min_length=1, description="Proxmox node name")
-    vm_type: Literal["qemu", "lxc"] = Field(description="VM type: qemu (QEMU/KVM) or lxc (container)")
+    vm_type: Literal["qemu", "lxc"] = Field(
+        description="VM type: qemu (QEMU/KVM) or lxc (container)"
+    )
     console_type: Literal["novnc", "term"] = Field(
         default="novnc",
         description=(
@@ -108,8 +110,12 @@ async def create_console_session(
     try:
         px = await _open_session(endpoint)
     except Exception as exc:
-        logger.warning("console: failed to open Proxmox session for endpoint %s: %s", req.endpoint_id, exc)
-        raise HTTPException(status_code=502, detail="Unable to connect to Proxmox endpoint.") from exc
+        logger.warning(
+            "console: failed to open Proxmox session for endpoint %s: %s", req.endpoint_id, exc
+        )
+        raise HTTPException(
+            status_code=502, detail="Unable to connect to Proxmox endpoint."
+        ) from exc
 
     node = req.node
     vmid = req.vmid
@@ -129,13 +135,9 @@ async def create_console_session(
         else:
             # xterm.js terminal (works for both qemu and lxc)
             if vm_type == "qemu":
-                raw = await resolve_async(
-                    px.session.nodes(node).qemu(vmid).termproxy.post()
-                )
+                raw = await resolve_async(px.session.nodes(node).qemu(vmid).termproxy.post())
             else:
-                raw = await resolve_async(
-                    px.session.nodes(node).lxc(vmid).termproxy.post()
-                )
+                raw = await resolve_async(px.session.nodes(node).lxc(vmid).termproxy.post())
     except ProxmoxAPIError as exc:
         logger.warning(
             "console: Proxmox %s/%s/%s/%s failed: %s",
@@ -175,7 +177,9 @@ async def create_console_session(
     vnc_port: int | None = data.get("port")
 
     if not ticket or vnc_port is None:
-        logger.error("console: unexpected Proxmox response for %s/%s/%s: %s", node, vm_type, vmid, data)
+        logger.error(
+            "console: unexpected Proxmox response for %s/%s/%s: %s", node, vm_type, vmid, data
+        )
         raise HTTPException(status_code=502, detail="Proxmox did not return a ticket/port.")
 
     host = endpoint.host
