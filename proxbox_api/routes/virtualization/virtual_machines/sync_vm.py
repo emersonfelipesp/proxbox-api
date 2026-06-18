@@ -153,6 +153,7 @@ class _VMPreparationContext:
     vm_role_mapping: dict[str, dict[str, object]]
     tag_refs: list[dict[str, object]]
     proxmox_url_by_cluster: dict[str, str]
+    endpoint_id_by_cluster: dict[str, int]
     resolve_vm_type: Callable[[str], Awaitable[object | None]]
     resolve_vm_proxmox_tag_ids: Callable[[str, dict[str, object]], Awaitable[list[int]]]
 
@@ -259,6 +260,7 @@ async def _prepare_vm_from_config(  # noqa: C901
         last_updated=now,
         cluster_name=str(cluster_name),
         proxmox_url=context.proxmox_url_by_cluster.get(str(cluster_name)),
+        endpoint_id=context.endpoint_id_by_cluster.get(str(cluster_name)),
         parse_description_metadata=context.behavior_flags.parse_description_metadata,
         overwrite_flags=context.effective_vm_overwrite_flags,
     )
@@ -2034,6 +2036,7 @@ async def create_virtual_machines(  # noqa: C901
         vm_role_mapping=vm_role_mapping,
         tag_refs=tag_refs,
         proxmox_url_by_cluster=proxmox_url_by_cluster,
+        endpoint_id_by_cluster=endpoint_id_by_cluster,
         resolve_vm_type=_get_vm_type,
         resolve_vm_proxmox_tag_ids=_resolve_vm_proxmox_tag_ids,
     )
