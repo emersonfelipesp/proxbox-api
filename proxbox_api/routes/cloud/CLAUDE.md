@@ -53,7 +53,14 @@ converts it to QCOW2, and attaches it to a generated Proxmox VM shell.
    `build_pipeline_response(req)` in `pipeline_scripts.py`, which renders a bash
    bake script (download image, `qm` create, write the `cicustom` user-data
    snippet, `qm template`) and, when `execute=true`, runs it on the Proxmox host
-   over SSH.
+   over SSH. This path sets `qm ... --agent enabled=1` before templating so
+   clones inherit the Proxmox-side QEMU guest agent setting.
+
+QEMU VM provisioning (`POST /cloud/vm/provision` and
+`POST /cloud/vm/provision/stream`) accepts optional `sockets`, `bridge`,
+`vlan_tag`, and `disk_gb` overrides. They are applied through the Proxmox API
+after clone and before start, preserving the existing `net0` model/MAC when
+overriding bridge or VLAN tag.
 
 ### `cicustom` cloud-init snippet (why this exists)
 
@@ -64,6 +71,15 @@ API cannot. When `user_data_yaml` is set, the pipeline writes it verbatim to
 `cicustom=user=...` on the template. The schema field is on
 `CloudImageTemplateBuildRequest` in `schemas/cloud_provision.py`
 (`user_data_yaml: str | None`, max 65536, `extra="forbid"`).
+
+For Proxmox product snippets, install `curl`/`gnupg`/`ca-certificates` from the
+base Debian repositories, fetch `proxmox-release-<codename>.gpg`, and only then
+write the Proxmox no-subscription repo. Do not create the Proxmox repo in
+`write_files` before `package_update`; cloud-init's first `apt-get update` will
+reject the unsigned repo before the key exists and abort the bootstrap.
+Remove both legacy `.list` and deb822 `.sources` enterprise repo files before
+each apt update, and preseed `grub-pc/install_devices` before installing
+Proxmox packages so cloud-init never blocks on an interactive grub prompt.
 
 ### Remote SSH execution (gating + identity)
 

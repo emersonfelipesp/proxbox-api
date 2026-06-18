@@ -76,22 +76,24 @@ def generate_cloud_init_userdata(
       Pin: version {request.pve_version_pin}*
       Pin-Priority: 1001
 """
+    write_files = f"write_files:\n{preferences}" if preferences else ""
     ssh_keys = "\n".join(f"    - {key}" for key in request.ssh_authorized_keys)
     ssh_block = f"\nssh_authorized_keys:\n{ssh_keys}" if ssh_keys else ""
     return f"""#cloud-config
 hostname: {request.hostname}
 fqdn: {request.hostname}.{request.domain}
-package_update: true
-package_upgrade: true
-write_files:
-  - path: /etc/apt/sources.list.d/{entry.product_type.value}-install-repo.list
-    content: |
-      deb [arch=amd64] http://download.proxmox.com/debian/{repo_suite} {codename} {repo_component}
-{preferences}\
+package_update: false
+package_upgrade: false
+{write_files}\
 runcmd:
+  - rm -f /etc/apt/sources.list.d/{entry.product_type.value}-install-repo.list /etc/apt/sources.list.d/{entry.product_type.value}-install-repo.sources /etc/apt/sources.list.d/pve-no-subscription.list /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pve-enterprise.sources /etc/apt/sources.list.d/pbs-enterprise.list /etc/apt/sources.list.d/pbs-enterprise.sources /etc/apt/sources.list.d/pdm-enterprise.list /etc/apt/sources.list.d/pdm-enterprise.sources
+  - DEBIAN_FRONTEND=noninteractive apt-get update -y
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg ca-certificates
   - curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-{codename}.gpg https://enterprise.proxmox.com/debian/proxmox-release-{codename}.gpg
-  - rm -f /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pbs-enterprise.list
+  - printf '%s\\n' 'deb [arch=amd64] http://download.proxmox.com/debian/{repo_suite} {codename} {repo_component}' > /etc/apt/sources.list.d/{entry.product_type.value}-install-repo.list
   - DEBIAN_FRONTEND=noninteractive apt-get update
+  - printf 'grub-pc grub-pc/install_devices multiselect /dev/sda\\n' | debconf-set-selections
+  - printf 'grub-pc grub-pc/install_devices_empty boolean false\\n' | debconf-set-selections
   - DEBIAN_FRONTEND=noninteractive apt-get install -y {package_name}
   - systemctl enable {service_name}
 power_state:
@@ -163,6 +165,7 @@ def _append_template_import_commands(
             f"qm set {_q(request.vmid)} --ide2 {_q(request.image_storage + ':cloudinit')}",
             f"qm set {_q(request.vmid)} --serial0 socket --vga serial0",
             f"qm set {_q(request.vmid)} --boot order=scsi0",
+            f"qm set {_q(request.vmid)} --agent enabled=1",
         ]
     )
     if request.disk_size_gb:

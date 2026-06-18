@@ -192,15 +192,17 @@ def generate_cloud_init_userdata(
 
     yaml_body = textwrap.dedent(f"""\
         #cloud-config
-        package_update: true
-        package_upgrade: true
-        write_files:
-          - path: /etc/apt/sources.list.d/{suite}-install-repo.list
-            content: |
-              deb [arch=amd64] http://download.proxmox.com/debian/{suite} {codename} {component}
+        package_update: false
+        package_upgrade: false
         runcmd:
+          - rm -f /etc/apt/sources.list.d/{suite}-install-repo.list /etc/apt/sources.list.d/{suite}-install-repo.sources /etc/apt/sources.list.d/pve-no-subscription.list /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pve-enterprise.sources /etc/apt/sources.list.d/pbs-enterprise.list /etc/apt/sources.list.d/pbs-enterprise.sources /etc/apt/sources.list.d/pdm-enterprise.list /etc/apt/sources.list.d/pdm-enterprise.sources
+          - DEBIAN_FRONTEND=noninteractive apt-get update -y
+          - DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg ca-certificates
           - curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-{codename}.gpg {gpg_url}
+          - printf '%s\\n' 'deb [arch=amd64] http://download.proxmox.com/debian/{suite} {codename} {component}' > /etc/apt/sources.list.d/{suite}-install-repo.list
           - apt-get update
+          - printf 'grub-pc grub-pc/install_devices multiselect /dev/sda\\n' | debconf-set-selections
+          - printf 'grub-pc grub-pc/install_devices_empty boolean false\\n' | debconf-set-selections
           - DEBIAN_FRONTEND=noninteractive apt-get install -y {package}
         {enable_cmds}
         power_state:

@@ -47,6 +47,7 @@ def test_pfsense_release_pipeline_returns_first_boot_script_and_qm_commands():
     assert response.first_boot_script is not None
     assert 'PRODUCT="pfsense"' in response.first_boot_script
     assert "qm create 9100" in response.build_script
+    assert "qm set 9100 --agent enabled=1" in response.build_script
     assert "qm template 9100" in response.build_script
 
 
@@ -64,7 +65,18 @@ def test_pve_version_pin_keeps_cloud_init_top_level_keys_unindented():
 
     assert response.generated_userdata is not None
     assert "\nwrite_files:\n  - path:" in response.generated_userdata
-    assert "\nruncmd:\n  - curl" in response.generated_userdata
+    assert "\nruncmd:\n  - rm -f /etc/apt/sources.list.d/" in response.generated_userdata
+    assert "pve-enterprise.sources" in response.generated_userdata
+    assert response.generated_userdata.index("rm -f /etc/apt/sources.list.d/") < (
+        response.generated_userdata.index("proxmox-release-bookworm.gpg")
+    )
+    assert response.generated_userdata.index("proxmox-release-bookworm.gpg") < (
+        response.generated_userdata.index("download.proxmox.com/debian/pve")
+    )
+    assert "grub-pc/install_devices multiselect /dev/sda" in response.generated_userdata
+    assert response.generated_userdata.index("grub-pc/install_devices") < (
+        response.generated_userdata.index("apt-get install -y proxmox-ve")
+    )
     assert "\n      Pin-Priority: 1001\n" in response.generated_userdata
 
 
@@ -111,6 +123,7 @@ def test_user_data_yaml_bakes_cicustom_snippet_without_catalog_product():
     assert "echo zabbix-bootstrap" in response.build_script
     assert "--cicustom" in response.build_script
     assert "user=local:snippets/" in response.build_script
+    assert "qm set 9010 --agent enabled=1" in response.build_script
     assert "qm template 9010" in response.build_script
 
 

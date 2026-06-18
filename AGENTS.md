@@ -241,6 +241,15 @@ reads each template config, and returns only templates with a Cloud-Init drive
 or `cicustom` metadata by default. The route is read-only and is consumed by
 `nms-backend /cloud/vm/templates` for the NMS VM creation UI.
 
+QEMU provisioning (`POST /cloud/vm/provision` and the SSE variant) accepts
+optional `sockets`, `bridge`, `vlan_tag`, and `disk_gb` fields. These are
+applied through the Proxmox API during the clone configuration flow; no direct
+`qm` shell path is used for VM provisioning.
+
+The Cloud Image Build Pipeline's SSH execution path sets `qm ... --agent
+enabled=1` before converting the VM to a template, so clones inherit the
+Proxmox-side QEMU guest agent setting.
+
 ## Azure VHD Import Pipeline
 
 Azure managed-disk V2V planning/execution lives in
