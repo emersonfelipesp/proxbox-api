@@ -175,6 +175,7 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
         vm_role_mapping=sync_vm.VM_ROLE_MAPPINGS,
         tag_refs=[{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
         proxmox_url_by_cluster={"cluster-a": "https://pve.example:8006"},
+        endpoint_id_by_cluster={"cluster-a": 1},
         resolve_vm_type=_resolve_vm_type,
         resolve_vm_proxmox_tag_ids=_resolve_tags,
     )
@@ -198,6 +199,7 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     assert captured_payload_kwargs["tenant_id"] == 55
     assert captured_payload_kwargs["tag_ids"] == [5, 7]
     assert captured_payload_kwargs["proxmox_url"] == "https://pve.example:8006"
+    assert captured_payload_kwargs["endpoint_id"] == 1
     assert ensure_device_calls
     assert role_reconcile_calls
     assert context.node_device_cache[("cluster-a", "pve01")].id == 22
