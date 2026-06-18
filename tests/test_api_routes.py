@@ -51,6 +51,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_virtual_machine_by_netbox_id,
     create_virtual_machine_by_netbox_id_stream,
 )
+from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.devices import create_proxmox_devices
 
 
@@ -651,6 +652,7 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
     body = asyncio.run(
         full_update_sync(
             netbox_session=object(),
+            _sync_deps=BootstrapStatus(),
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
@@ -749,6 +751,7 @@ def test_full_update_sync_handles_empty_device_result(monkeypatch):
     body = asyncio.run(
         full_update_sync(
             netbox_session=object(),
+            _sync_deps=BootstrapStatus(),
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
@@ -779,6 +782,7 @@ def test_full_update_sync_reraises_device_phase_proxbox_exception(monkeypatch):
         asyncio.run(
             full_update_sync(
                 netbox_session=object(),
+                _sync_deps=BootstrapStatus(),
                 pxs=[],
                 cluster_status=[],
                 cluster_resources=[],
@@ -807,6 +811,7 @@ def test_full_update_sync_wraps_vm_phase_unexpected_errors(monkeypatch):
         asyncio.run(
             full_update_sync(
                 netbox_session=object(),
+                _sync_deps=BootstrapStatus(),
                 pxs=[],
                 cluster_status=[],
                 cluster_resources=[],
@@ -1236,10 +1241,9 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
         _fake_snapshots,
     )
 
-    fake_request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     response = asyncio.run(
         full_update_sync_stream(
-            fake_request,
+            _sync_deps=BootstrapStatus(),
             netbox_session=object(),
             pxs=[],
             cluster_status=[],

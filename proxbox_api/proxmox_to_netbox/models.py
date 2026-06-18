@@ -176,7 +176,7 @@ def _normalized_tag_list(value: object) -> list[dict[str, object]]:
         else:
             text = str(item or "").strip()
             if text:
-                normalized.append({"slug": text, "name": text})
+                normalized.append({"slug": text})
     normalized.sort(key=lambda tag: str(tag.get("slug") or tag.get("name") or ""))
     return normalized
 
@@ -197,12 +197,6 @@ class NetBoxTagRef(BaseModel):
             return value
         text = str(value).strip()
         return text or None
-
-    @model_validator(mode="after")
-    def default_name_from_slug(self):
-        if not self.name and self.slug:
-            self.name = self.slug
-        return self
 
 
 class NetBoxNamedSlugTaggedState(BaseModel):
@@ -1232,8 +1226,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             fields["proxmox_link"] = f"{self.proxmox_url}/#v1:0:={vm_type}/{self.resource.vmid}"
         if self.last_updated:
             fields["proxmox_last_updated"] = self.last_updated.isoformat()
-        if self.endpoint_id is not None:
-            fields["proxmox_endpoint_id"] = self.endpoint_id
+        fields["proxmox_endpoint_id"] = self.endpoint_id
         return fields
 
     @computed_field(return_type=int)

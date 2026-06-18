@@ -8,7 +8,7 @@ import uuid
 from contextlib import nullcontext
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.app.sync_state import (
@@ -18,6 +18,7 @@ from proxbox_api.app.sync_state import (
 )
 from proxbox_api.dependencies import (
     NetBoxSessionDep,
+    NetBoxSyncDependenciesDep,
     ProxboxTagDep,
     ResolvedSyncOverwriteFlagsDep,
 )
@@ -79,6 +80,7 @@ def _result_count(value) -> int:
 @full_update_router.get("/full-update")
 async def full_update_sync(
     netbox_session: NetBoxSessionDep,
+    _sync_deps: NetBoxSyncDependenciesDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
@@ -461,8 +463,8 @@ async def _full_update_sync_impl(  # noqa: C901
 
 @full_update_router.get("/full-update/stream", response_model=None)
 async def full_update_sync_stream(  # noqa: C901
-    request: Request,
     netbox_session: NetBoxSessionDep,
+    _sync_deps: NetBoxSyncDependenciesDep,
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
@@ -488,20 +490,7 @@ async def full_update_sync_stream(  # noqa: C901
         ),
     ] = None,
 ) -> StreamingResponse:
-    bootstrap_status_obj = getattr(request.app.state, "bootstrap_status", None)
-    bootstrap_payload: dict[str, object]
-    if bootstrap_status_obj is not None and hasattr(bootstrap_status_obj, "as_dict"):
-        bootstrap_payload = bootstrap_status_obj.as_dict()
-    else:
-        bootstrap_payload = {
-            "ok": True,
-            "skipped": True,
-            "reason": "bootstrap_not_run",
-            "warnings": [],
-            "created": [],
-            "patched": [],
-            "unchanged": [],
-        }
+    bootstrap_payload: dict[str, object] = _sync_deps.as_dict()
 
     async def event_stream():  # noqa: C901
         sync_nodes: list = []
