@@ -195,3 +195,114 @@ def test_proxmox_api_error_returns_502(auth_test_client, db_engine):
 
     assert resp.status_code == 502
     assert "Proxmox console error" in resp.json()["detail"]
+
+
+def test_lxc_novnc_returns_422(auth_test_client, db_engine):
+    """LXC + novnc is rejected at the Pydantic validation layer with HTTP 422."""
+    endpoint_id = _make_endpoint(db_engine)
+
+    resp = auth_test_client.post(
+        "/proxmox/console/sessions",
+        json={
+            "endpoint_id": endpoint_id,
+            "vmid": 200,
+            "node": "pve01",
+            "vm_type": "lxc",
+            "console_type": "novnc",
+        },
+    )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    detail_text = str(body)
+    assert "novnc" in detail_text or "lxc" in detail_text
+
+
+def test_vmid_zero_returns_422(auth_test_client, db_engine):
+    """vmid=0 violates Field(ge=1) and must return HTTP 422."""
+    endpoint_id = _make_endpoint(db_engine)
+
+    resp = auth_test_client.post(
+        "/proxmox/console/sessions",
+        json={
+            "endpoint_id": endpoint_id,
+            "vmid": 0,
+            "node": "pve01",
+            "vm_type": "qemu",
+            "console_type": "novnc",
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_empty_node_returns_422(auth_test_client, db_engine):
+    """node="" violates Field(min_length=1) and must return HTTP 422."""
+    endpoint_id = _make_endpoint(db_engine)
+
+    resp = auth_test_client.post(
+        "/proxmox/console/sessions",
+        json={
+            "endpoint_id": endpoint_id,
+            "vmid": 100,
+            "node": "",
+            "vm_type": "qemu",
+            "console_type": "novnc",
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_term_qemu_returns_200(auth_test_client, db_engine):
+    """Terminal + QEMU: term console_type is valid for QEMU VMs."""
+    endpoint_id = _make_endpoint(db_engine)
+    fake_px = _FakePx({"ticket": "TERMQEMU789", "port": 5902})
+
+    with patch(
+        "proxbox_api.routes.proxmox.console._open_session",
+        new=AsyncMock(return_value=fake_px),
+    ):
+        resp = auth_test_client.post(
+            "/proxmox/console/sessions",
+            json={
+                "endpoint_id": endpoint_id,
+                "vmid": 300,
+                "node": "pve03",
+                "vm_type": "qemu",
+                "console_type": "term",
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["console_type"] == "term"
+    assert data["ticket"] == "TERMQEMU789"
+    assert data["ws_url"].startswith("wss://")
+
+
+def test_proxmox_data_envelope_unwrapped(auth_test_client, db_engine):
+    """When Proxmox returns {"data": {...}}, the route unwraps the envelope."""
+    endpoint_id = _make_endpoint(db_engine)
+    # Proxmox-style envelope — the route must unwrap it
+    fake_px = _FakePx({"data": {"ticket": "ENVELOPETICKET", "port": 5903}})
+
+    with patch(
+        "proxbox_api.routes.proxmox.console._open_session",
+        new=AsyncMock(return_value=fake_px),
+    ):
+        resp = auth_test_client.post(
+            "/proxmox/console/sessions",
+            json={
+                "endpoint_id": endpoint_id,
+                "vmid": 400,
+                "node": "pve04",
+                "vm_type": "qemu",
+                "console_type": "novnc",
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ticket"] == "ENVELOPETICKET"
+    assert data["port"] == 5903

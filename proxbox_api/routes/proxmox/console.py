@@ -15,7 +15,7 @@ from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
@@ -47,6 +47,12 @@ class ConsoleSessionRequest(BaseModel):
             "term: xterm.js terminal console (QEMU and LXC)"
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_lxc_no_novnc(self) -> "ConsoleSessionRequest":
+        if self.vm_type == "lxc" and self.console_type == "novnc":
+            raise ValueError("LXC containers do not support novnc; use console_type='term'")
+        return self
 
 
 class ConsoleSessionResponse(BaseModel):
