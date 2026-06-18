@@ -6,11 +6,13 @@ TestPyPI -> PyPI release process without running a publishing workflow.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "publish-testpypi.yml"
+NETBOX_VERSIONS_PATH = REPO_ROOT / ".github" / "netbox-versions.json"
 
 
 def _read(path: Path) -> str:
@@ -78,6 +80,12 @@ def test_publish_workflow_never_reuses_consumed_package_versions():
     workflow = _read(PUBLISH_WORKFLOW_PATH)
 
     assert "--skip-existing" not in workflow
+
+
+def test_netbox_e2e_version_set_matches_supported_plugin_range():
+    versions = json.loads(NETBOX_VERSIONS_PATH.read_text(encoding="utf-8"))
+
+    assert versions == ["v4.5.8", "v4.5.9", "v4.6.0", "v4.6.1", "v4.6.2", "v4.6.3"]
 
 
 def test_pypi_package_validation_happens_before_docker_publish_and_e2e():

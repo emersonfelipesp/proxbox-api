@@ -4,8 +4,11 @@ Issue [proxbox-api#51](https://github.com/emersonfelipesp/proxbox-api/issues/51)
 the `_union_object_types_with_current` helper landed in PR #56 (commit
 ``273112c``) and is *version-agnostic* by design — it relies on the NetBox
 REST API serialization shape for ``extras.CustomField.object_types``, which
-is currently identical across all three certified NetBox releases:
+is currently identical across all certified NetBox releases:
 
+- NetBox 4.5.8
+- NetBox 4.5.9
+- NetBox 4.6.0
 - NetBox 4.6.1
 - NetBox 4.6.2
 - NetBox 4.6.3
@@ -31,6 +34,8 @@ import pytest
 
 from proxbox_api.routes.extras import _union_object_types_with_current
 
+SUPPORTED_NETBOX_VERSIONS = ["4.5.8", "4.5.9", "4.6.0", "4.6.1", "4.6.2", "4.6.3"]
+
 
 def _run(coro):
     return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(coro)
@@ -54,14 +59,14 @@ def proxbox_caplog(caplog):
 
 @pytest.mark.parametrize(
     "netbox_version",
-    ["4.6.1", "4.6.2", "4.6.3"],
+    SUPPORTED_NETBOX_VERSIONS,
 )
 def test_union_preserves_operator_additions_across_supported_netbox_versions(
     monkeypatch, proxbox_caplog, netbox_version
 ):
     """Pin the union helper against the documented NetBox 4.5/4.6 API shape.
 
-    All three certified NetBox versions return ``object_types`` as a list of
+    All certified NetBox versions return ``object_types`` as a list of
     ``"app.model"`` strings. The operator-added ``extras.tag`` entry must
     survive the reconcile pre-merge on every version.
     """
@@ -86,7 +91,7 @@ def test_union_preserves_operator_additions_across_supported_netbox_versions(
 
 @pytest.mark.parametrize(
     "netbox_version",
-    ["4.6.1", "4.6.2", "4.6.3"],
+    SUPPORTED_NETBOX_VERSIONS,
 )
 def test_union_handles_dict_shape_defensively_across_versions(monkeypatch, netbox_version):
     """Defensive: if a future NetBox release switches to a dict shape
