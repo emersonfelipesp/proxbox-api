@@ -409,6 +409,11 @@ returned when this flag is unset, even with a valid API key and actor header.
 **Never autonomously set `allow_writes=True` on any endpoint.** This flag is
 an operator trust assertion, not a transient configuration parameter.
 
+**Enforcement locations:**
+- `proxbox_api/database.py::ProxmoxEndpoint.allow_writes` — field default `False`; the database gate that blocks all writes until explicitly enabled by a human operator
+- `proxbox_api/routes/proxmox_actions.py::_gate` — 403 gate executed at the top of every destructive verb handler
+- `tests/test_static_guardrails.py` — static contract tests that pin all of the above invariants
+
 ### Destructive Routes — Explicit Human Confirmation Required
 
 | Route | Operation | Reversible? |
