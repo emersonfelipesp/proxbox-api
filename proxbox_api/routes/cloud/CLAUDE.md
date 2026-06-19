@@ -55,6 +55,14 @@ converts it to QCOW2, and attaches it to a generated Proxmox VM shell.
    snippet, `qm template`) and, when `execute=true`, runs it on the Proxmox host
    over SSH.
 
+For Proxmox Backup Server images, prefer the pipeline path by setting
+`provider="debian_cloud_image"` so the generated PBS `#cloud-config` is written
+as a `cicustom` user-data snippet. The catalog default is PBS `4.2` on Debian
+Trixie (`debian-13-genericcloud-amd64.qcow2`), with product defaults that
+install `proxmox-backup-server`, `qemu-guest-agent`, and `zabbix-agent2`.
+Operators can override DNS search domain, nameservers, QGA, Zabbix Agent 2, and
+Zabbix server through `CloudImageTemplateBuildRequest`.
+
 ### `cicustom` cloud-init snippet (why this exists)
 
 A Proxmox `cicustom` user-data snippet is the **only** mechanism that runs a full

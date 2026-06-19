@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 from fastapi import HTTPException
 
 from proxbox_api.routes.cloud.catalog import catalog_payload, find_product_version
@@ -28,6 +29,73 @@ def test_find_product_version_defaults_to_first_entry():
 
     assert entry.product_type == CloudImageProductType.PFSENSE
     assert entry.version == "2.8.1"
+
+
+def test_pbs_catalog_defaults_to_current_trixie_entry():
+    entry = find_product_version(CloudImageProductType.PBS)
+
+    assert entry.product_type == CloudImageProductType.PBS
+    assert entry.version == "4.2"
+    assert entry.debian_codename == "trixie"
+    assert entry.image_url is not None
+    assert "debian-13-genericcloud-amd64.qcow2" in entry.image_url
+
+
+def test_pbs_cloud_image_pipeline_bakes_dns_qga_and_zabbix_userdata():
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            product_type=CloudImageProductType.PBS,
+            product_version="4.2",
+            provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
+            vmid=9400,
+            name="pbs42-template",
+            hostname="pbs42-template",
+            domain="nmulti.cloud",
+            search_domain="nmulti.cloud",
+            nameservers=["168.0.96.26", "168.0.96.27", "8.8.8.8"],
+        )
+    )
+
+    assert response.status == "planned"
+    assert response.generated_userdata is not None
+    userdata = response.generated_userdata
+    parsed = yaml.safe_load(userdata)
+    assert parsed["resolv_conf"]["nameservers"] == [
+        "168.0.96.26",
+        "168.0.96.27",
+        "8.8.8.8",
+    ]
+    assert parsed["resolv_conf"]["searchdomains"] == ["nmulti.cloud"]
+    assert "debian/pbs trixie pbs-no-subscription" in userdata
+    assert "zabbix-release_latest_7.4+debian13_all.deb" in userdata
+    assert (
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+        "proxmox-backup-server qemu-guest-agent zabbix-agent2"
+    ) in userdata
+    assert "Server=zabbix.nmulti.cloud" in userdata
+    assert "systemctl enable qemu-guest-agent" in userdata
+    assert "systemctl enable zabbix-agent2" in userdata
+    assert "user=local:snippets/pbs42-template-pbs-4.2-user-data.yml" in response.build_script
+    assert "--cicustom" in response.build_script
+
+
+def test_pbs_cloud_image_pipeline_can_disable_default_agents():
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            product_type=CloudImageProductType.PBS,
+            product_version="4.2",
+            provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
+            vmid=9401,
+            name="pbs42-minimal",
+            install_qemu_guest_agent=False,
+            install_zabbix_agent2=False,
+        )
+    )
+
+    assert response.generated_userdata is not None
+    assert "qemu-guest-agent" not in response.generated_userdata
+    assert "zabbix-agent2" not in response.generated_userdata
+    assert "zabbix-release_latest_7.4" not in response.generated_userdata
 
 
 def test_pfsense_release_pipeline_returns_first_boot_script_and_qm_commands():

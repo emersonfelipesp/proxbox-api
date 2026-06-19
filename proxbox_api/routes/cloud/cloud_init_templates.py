@@ -81,6 +81,14 @@ PRODUCT_CATALOG: dict[ProxmoxProductType, list[ProxmoxProductVersion]] = {
     ],
     ProxmoxProductType.pbs: [
         ProxmoxProductVersion(
+            version="4.2",
+            debian_codename="trixie",
+            package_name="proxmox-backup-server",
+            repo_component="pbs-no-subscription",
+            repo_suite="pbs",
+            extra_services=["proxmox-backup", "proxmox-backup-proxy"],
+        ),
+        ProxmoxProductVersion(
             version="3.3",
             debian_codename="bookworm",
             package_name="proxmox-backup-server",
@@ -118,6 +126,9 @@ PRODUCT_CATALOG: dict[ProxmoxProductType, list[ProxmoxProductVersion]] = {
 }
 
 _DEBIAN_CLOUD_IMAGES: dict[str, str] = {
+    "trixie": (
+        "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+    ),
     "bookworm": (
         "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
     ),
@@ -160,9 +171,104 @@ def default_image_url_for(product_version: ProxmoxProductVersion) -> str:
     )
 
 
+def _product_label(product_type: ProxmoxProductType) -> str:
+    return {
+        ProxmoxProductType.pve: "Proxmox VE",
+        ProxmoxProductType.pbs: "Proxmox Backup Server",
+        ProxmoxProductType.pdm: "Proxmox Datacenter Manager",
+    }.get(product_type, str(product_type))
+
+
+def _resolve_agent_flags(
+    product_type: ProxmoxProductType,
+    *,
+    install_qemu_guest_agent: bool | None,
+    install_zabbix_agent2: bool | None,
+) -> tuple[bool, bool]:
+    return (
+        product_type == ProxmoxProductType.pbs
+        if install_qemu_guest_agent is None
+        else install_qemu_guest_agent,
+        product_type == ProxmoxProductType.pbs
+        if install_zabbix_agent2 is None
+        else install_zabbix_agent2,
+    )
+
+
+def _install_packages_and_services(
+    pv: ProxmoxProductVersion,
+    *,
+    qga_enabled: bool,
+    zabbix_enabled: bool,
+) -> tuple[list[str], list[str]]:
+    packages = [pv.package_name]
+    services = list(pv.extra_services)
+    if qga_enabled:
+        packages.append("qemu-guest-agent")
+        services.append("qemu-guest-agent")
+    if zabbix_enabled:
+        packages.append("zabbix-agent2")
+        services.append("zabbix-agent2")
+    return packages, list(dict.fromkeys(services))
+
+
+def _zabbix_release_url(codename: str) -> str:
+    debian_major = {"bullseye": "11", "bookworm": "12", "trixie": "13"}.get(codename, "13")
+    return (
+        "https://repo.zabbix.com/zabbix/7.4/release/debian/pool/main/z/"
+        f"zabbix-release/zabbix-release_latest_7.4+debian{debian_major}_all.deb"
+    )
+
+
+def _append_dns_config(
+    lines: list[str],
+    *,
+    search_domain: str | None,
+    nameservers: list[str] | None,
+) -> None:
+    if not search_domain and not nameservers:
+        return
+    lines.extend(["manage_resolv_conf: true", "resolv_conf:"])
+    if nameservers:
+        lines.append("  nameservers:")
+        lines.extend(f"    - {server}" for server in nameservers)
+    if search_domain:
+        lines.extend(["  searchdomains:", f"    - {search_domain}"])
+
+
+def _append_zabbix_config(lines: list[str], zabbix_server: str) -> None:
+    lines.extend(
+        [
+            "  - |",
+            "    set -eu",
+            "    install -d /etc/zabbix",
+            "    touch /etc/zabbix/zabbix_agent2.conf",
+            "    if grep -q '^Server=' /etc/zabbix/zabbix_agent2.conf; then",
+            f"      sed -i 's|^Server=.*|Server={zabbix_server}|' /etc/zabbix/zabbix_agent2.conf",
+            "    else",
+            f"      printf 'Server={zabbix_server}\\n' >> /etc/zabbix/zabbix_agent2.conf",
+            "    fi",
+            "    if grep -q '^ServerActive=' /etc/zabbix/zabbix_agent2.conf; then",
+            (
+                f"      sed -i 's|^ServerActive=.*|ServerActive={zabbix_server}|' "
+                "/etc/zabbix/zabbix_agent2.conf"
+            ),
+            "    else",
+            f"      printf 'ServerActive={zabbix_server}\\n' >> /etc/zabbix/zabbix_agent2.conf",
+            "    fi",
+        ]
+    )
+
+
 def generate_cloud_init_userdata(
     product_type: ProxmoxProductType,
     pv: ProxmoxProductVersion,
+    *,
+    install_qemu_guest_agent: bool | None = None,
+    install_zabbix_agent2: bool | None = None,
+    zabbix_server: str = "zabbix.nmulti.cloud",
+    search_domain: str | None = None,
+    nameservers: list[str] | None = None,
 ) -> str:
     """Generate a ``#cloud-config`` YAML that installs *product_type* at first boot.
 
@@ -172,43 +278,57 @@ def generate_cloud_init_userdata(
     codename = pv.debian_codename
     suite = pv.repo_suite
     component = pv.repo_component
-    package = pv.package_name
-    services = pv.extra_services
+    qga_enabled, zabbix_enabled = _resolve_agent_flags(
+        product_type,
+        install_qemu_guest_agent=install_qemu_guest_agent,
+        install_zabbix_agent2=install_zabbix_agent2,
+    )
+    install_packages, services = _install_packages_and_services(
+        pv,
+        qga_enabled=qga_enabled,
+        zabbix_enabled=zabbix_enabled,
+    )
 
-    enable_cmds = "\n".join(f"  - systemctl enable {svc}" for svc in services)
     gpg_url = f"https://enterprise.proxmox.com/debian/proxmox-release-{codename}.gpg"
-
-    product_label = {
-        ProxmoxProductType.pve: "Proxmox VE",
-        ProxmoxProductType.pbs: "Proxmox Backup Server",
-        ProxmoxProductType.pdm: "Proxmox Datacenter Manager",
-    }.get(product_type, str(product_type))
-
     header = (
-        f"# cloud-init user-data for {product_label} {pv.version} "
+        f"# cloud-init user-data for {_product_label(product_type)} {pv.version} "
         f"on Debian {codename.capitalize()}\n"
         "# Generated by proxbox-api. Use as cicustom snippet or provisioning user-data.\n"
     )
 
-    yaml_body = textwrap.dedent(f"""\
-        #cloud-config
-        package_update: true
-        package_upgrade: true
-        write_files:
-          - path: /etc/apt/sources.list.d/{suite}-install-repo.list
-            content: |
-              deb [arch=amd64] http://download.proxmox.com/debian/{suite} {codename} {component}
-        runcmd:
-          - curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-{codename}.gpg {gpg_url}
-          - apt-get update
-          - DEBIAN_FRONTEND=noninteractive apt-get install -y {package}
-        {enable_cmds}
-        power_state:
-          mode: poweroff
-          condition: True
-        """)
+    lines = ["#cloud-config"]
+    _append_dns_config(lines, search_domain=search_domain, nameservers=nameservers)
+    lines.extend(
+        [
+            "package_update: true",
+            "package_upgrade: true",
+            "write_files:",
+            f"  - path: /etc/apt/sources.list.d/{suite}-install-repo.list",
+            "    content: |",
+            f"      deb [arch=amd64] http://download.proxmox.com/debian/{suite} {codename} {component}",
+            "runcmd:",
+            f"  - curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-{codename}.gpg {gpg_url}",
+        ]
+    )
+    if zabbix_enabled:
+        lines.extend(
+            [
+                f"  - curl -fsSL -o /tmp/zabbix-release.deb {_zabbix_release_url(codename)}",
+                "  - dpkg -i /tmp/zabbix-release.deb",
+            ]
+        )
+    lines.extend(
+        [
+            "  - apt-get update",
+            f"  - DEBIAN_FRONTEND=noninteractive apt-get install -y {' '.join(install_packages)}",
+        ]
+    )
+    if zabbix_enabled:
+        _append_zabbix_config(lines, zabbix_server)
+    lines.extend(f"  - systemctl enable {svc}" for svc in services)
+    lines.extend(["power_state:", "  mode: poweroff", "  condition: True"])
 
-    return header + yaml_body
+    return header + "\n".join(lines) + "\n"
 
 
 def generate_firecracker_userdata(os_family: str, os_codename: str) -> str:
