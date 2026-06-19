@@ -1,10 +1,17 @@
 """Cloud-init intent payload normalization."""
 
+import re
+from ipaddress import ip_address
 from typing import Optional, Union
 from urllib.parse import quote
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+_DNS_SEARCH_DOMAIN_RE = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?"
+)
 
 
 class CloudInitPayload(BaseModel):
@@ -12,6 +19,36 @@ class CloudInitPayload(BaseModel):
     ssh_keys: Optional[list[str]] = None
     user_data: Optional[Union[str, dict]] = None
     network: Optional[dict] = None
+    search_domain: Optional[str] = None
+    dns_servers: Optional[list[str]] = None
+
+    @field_validator("search_domain")
+    @classmethod
+    def validate_search_domain(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().rstrip(".")
+        if not cleaned:
+            return None
+        if not _DNS_SEARCH_DOMAIN_RE.fullmatch(cleaned):
+            raise ValueError("search_domain must be a valid DNS search domain")
+        return cleaned
+
+    @field_validator("dns_servers")
+    @classmethod
+    def validate_dns_servers(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for item in value:
+            server = str(item).strip()
+            ip_address(server)
+            if server in seen:
+                raise ValueError("dns_servers must not contain duplicates")
+            seen.add(server)
+            normalized.append(server)
+        return normalized
 
 
 def _build_cicustom(user_data: Union[str, dict]) -> str:
@@ -62,4 +99,8 @@ def build_proxmox_ci_args(payload: CloudInitPayload) -> dict:
         ipconfig0 = _build_ipconfig0(payload.network)
         if ipconfig0 is not None:
             args["ipconfig0"] = ipconfig0
+    if payload.search_domain is not None:
+        args["searchdomain"] = payload.search_domain
+    if payload.dns_servers:
+        args["nameserver"] = " ".join(payload.dns_servers)
     return args

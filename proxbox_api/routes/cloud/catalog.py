@@ -54,6 +54,25 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
     ],
     CloudImageProductType.PBS: [
         CloudImageVersionEntry(
+            version="4.2",
+            label="Proxmox Backup Server 4.2 on Debian Trixie",
+            product_type=CloudImageProductType.PBS,
+            default_provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
+            supported_providers=[CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE],
+            os_family="proxmox-pbs",
+            os_release="trixie",
+            image_url=(
+                "https://cloud.debian.org/images/cloud/trixie/latest/"
+                "debian-13-genericcloud-amd64.qcow2"
+            ),
+            debian_codename="trixie",
+            package_name="proxmox-backup-server",
+            repo_component="pbs-no-subscription",
+            repo_suite="pbs",
+            service_name="proxmox-backup-proxy",
+            notes="Latest PBS ISO on the Proxmox download page is 4.2-1.",
+        ),
+        CloudImageVersionEntry(
             version="3.3",
             label="Proxmox Backup Server 3.3 on Debian Bookworm",
             product_type=CloudImageProductType.PBS,

@@ -59,6 +59,118 @@ def _decompress_command(path: str, compression: str | None) -> str | None:
     return None
 
 
+def _debian_major(codename: str) -> str | None:
+    return {
+        "bullseye": "11",
+        "bookworm": "12",
+        "trixie": "13",
+    }.get(codename)
+
+
+def _service_names(
+    entry: CloudImageVersionEntry,
+    *,
+    package_name: str,
+    install_qemu_guest_agent: bool,
+    install_zabbix_agent2: bool,
+) -> list[str]:
+    services = [entry.service_name or package_name]
+    if entry.product_type.value == "pbs":
+        services.append("proxmox-backup")
+    if install_qemu_guest_agent:
+        services.append("qemu-guest-agent")
+    if install_zabbix_agent2:
+        services.append("zabbix-agent2")
+    deduped: list[str] = []
+    for service in services:
+        if service and service not in deduped:
+            deduped.append(service)
+    return deduped
+
+
+def _agent_flags(
+    entry: CloudImageVersionEntry,
+    request: CloudImageTemplateBuildRequest,
+) -> tuple[bool, bool]:
+    qga = request.install_qemu_guest_agent
+    zabbix = request.install_zabbix_agent2
+    return (
+        entry.product_type.value == "pbs" if qga is None else qga,
+        entry.product_type.value == "pbs" if zabbix is None else zabbix,
+    )
+
+
+def _install_packages(
+    *,
+    package_name: str,
+    install_qemu_guest_agent: bool,
+    install_zabbix_agent2: bool,
+) -> list[str]:
+    packages = [package_name]
+    if install_qemu_guest_agent:
+        packages.append("qemu-guest-agent")
+    if install_zabbix_agent2:
+        packages.append("zabbix-agent2")
+    return packages
+
+
+def _append_dns_config(
+    lines: list[str],
+    request: CloudImageTemplateBuildRequest,
+) -> None:
+    if not request.search_domain and not request.nameservers:
+        return
+    lines.extend(["manage_resolv_conf: true", "resolv_conf:"])
+    if request.nameservers:
+        lines.append("  nameservers:")
+        lines.extend(f"    - {server}" for server in request.nameservers)
+    if request.search_domain:
+        lines.extend(["  searchdomains:", f"    - {request.search_domain}"])
+
+
+def _preferences_lines(
+    entry: CloudImageVersionEntry,
+    request: CloudImageTemplateBuildRequest,
+    package_name: str,
+) -> list[str]:
+    if not request.pve_version_pin:
+        return []
+    return [
+        f"  - path: /etc/apt/preferences.d/nmulticloud-{entry.product_type.value}-pin",
+        "    content: |",
+        f"      Package: {package_name}",
+        f"      Pin: version {request.pve_version_pin}*",
+        "      Pin-Priority: 1001",
+    ]
+
+
+def _append_zabbix_config(lines: list[str], zabbix_server: str) -> None:
+    lines.extend(
+        [
+            "  - |",
+            "    set -eu",
+            "    install -d /etc/zabbix",
+            "    touch /etc/zabbix/zabbix_agent2.conf",
+            "    if grep -q '^Server=' /etc/zabbix/zabbix_agent2.conf; then",
+            f"      sed -i 's|^Server=.*|Server={zabbix_server}|' /etc/zabbix/zabbix_agent2.conf",
+            "    else",
+            f"      printf 'Server={zabbix_server}\\n' >> /etc/zabbix/zabbix_agent2.conf",
+            "    fi",
+            "    if grep -q '^ServerActive=' /etc/zabbix/zabbix_agent2.conf; then",
+            (
+                f"      sed -i 's|^ServerActive=.*|ServerActive={zabbix_server}|' "
+                "/etc/zabbix/zabbix_agent2.conf"
+            ),
+            "    else",
+            (
+                f"      printf 'ServerActive={zabbix_server}\\n' "
+                ">> /etc/zabbix/zabbix_agent2.conf"
+            ),
+            "    fi",
+        ]
+    )
+
+
 def generate_cloud_init_userdata(
     entry: CloudImageVersionEntry,
     request: CloudImageTemplateBuildRequest,
@@ -67,38 +179,77 @@ def generate_cloud_init_userdata(
     repo_suite = entry.repo_suite or entry.product_type.value
     repo_component = entry.repo_component or f"{repo_suite}-no-subscription"
     package_name = entry.package_name or "proxmox-ve"
-    service_name = entry.service_name or package_name
-    preferences = ""
-    if request.pve_version_pin:
-        preferences = f"""  - path: /etc/apt/preferences.d/nmulticloud-{entry.product_type.value}-pin
-    content: |
-      Package: {package_name}
-      Pin: version {request.pve_version_pin}*
-      Pin-Priority: 1001
-"""
+    install_qemu_guest_agent, install_zabbix_agent2 = _agent_flags(entry, request)
+    install_packages = _install_packages(
+        package_name=package_name,
+        install_qemu_guest_agent=install_qemu_guest_agent,
+        install_zabbix_agent2=install_zabbix_agent2,
+    )
+    services = _service_names(
+        entry,
+        package_name=package_name,
+        install_qemu_guest_agent=install_qemu_guest_agent,
+        install_zabbix_agent2=install_zabbix_agent2,
+    )
     ssh_keys = "\n".join(f"    - {key}" for key in request.ssh_authorized_keys)
     ssh_block = f"\nssh_authorized_keys:\n{ssh_keys}" if ssh_keys else ""
-    return f"""#cloud-config
-hostname: {request.hostname}
-fqdn: {request.hostname}.{request.domain}
-package_update: true
-package_upgrade: true
-write_files:
-  - path: /etc/apt/sources.list.d/{entry.product_type.value}-install-repo.list
-    content: |
-      deb [arch=amd64] http://download.proxmox.com/debian/{repo_suite} {codename} {repo_component}
-{preferences}\
-runcmd:
-  - curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-{codename}.gpg https://enterprise.proxmox.com/debian/proxmox-release-{codename}.gpg
-  - rm -f /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pbs-enterprise.list
-  - DEBIAN_FRONTEND=noninteractive apt-get update
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y {package_name}
-  - systemctl enable {service_name}
-power_state:
-  mode: poweroff
-  condition: true
-{ssh_block}
-"""
+    zabbix_release_url = None
+    if install_zabbix_agent2 and (debian_major := _debian_major(codename)):
+        zabbix_release_url = (
+            "https://repo.zabbix.com/zabbix/7.4/release/debian/pool/main/z/"
+            f"zabbix-release/zabbix-release_latest_7.4+debian{debian_major}_all.deb"
+        )
+    lines = [
+        "#cloud-config",
+        f"hostname: {request.hostname}",
+        f"fqdn: {request.hostname}.{request.domain}",
+    ]
+    _append_dns_config(lines, request)
+    lines.extend(
+        [
+            "package_update: true",
+            "package_upgrade: true",
+            "write_files:",
+            f"  - path: /etc/apt/sources.list.d/{entry.product_type.value}-install-repo.list",
+            "    content: |",
+            (
+                "      deb [arch=amd64] "
+                f"http://download.proxmox.com/debian/{repo_suite} {codename} {repo_component}"
+            ),
+        ]
+    )
+    lines.extend(_preferences_lines(entry, request, package_name))
+    lines.extend(
+        [
+            "runcmd:",
+            (
+                "  - curl -fsSL -o "
+                f"/etc/apt/trusted.gpg.d/proxmox-release-{codename}.gpg "
+                f"https://enterprise.proxmox.com/debian/proxmox-release-{codename}.gpg"
+            ),
+            "  - rm -f /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pbs-enterprise.list",
+        ]
+    )
+    if zabbix_release_url:
+        lines.extend(
+            [
+                f"  - curl -fsSL -o /tmp/zabbix-release.deb {zabbix_release_url}",
+                "  - dpkg -i /tmp/zabbix-release.deb",
+            ]
+        )
+    lines.extend(
+        [
+            "  - DEBIAN_FRONTEND=noninteractive apt-get update",
+            f"  - DEBIAN_FRONTEND=noninteractive apt-get install -y {' '.join(install_packages)}",
+        ]
+    )
+    if install_zabbix_agent2:
+        _append_zabbix_config(lines, request.zabbix_server)
+    lines.extend(f"  - systemctl enable {service}" for service in services)
+    lines.extend(["power_state:", "  mode: poweroff", "  condition: true"])
+    if ssh_block:
+        lines.extend(ssh_block.strip("\n").splitlines())
+    return "\n".join(lines) + "\n"
 
 
 def generate_appliance_first_boot_script(
