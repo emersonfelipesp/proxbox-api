@@ -210,6 +210,14 @@ def _build_netbox_vm_payload(
     maxmem = resource.get("maxmem")
     maxdisk = resource.get("maxdisk")
 
+    # Right after a clone the new VM is not yet in Proxmox /cluster/resources, so
+    # ``maxcpu`` is 0. NetBox rejects vcpus=0 (DecimalField MinValueValidator 0.01;
+    # null is allowed). Fall back to the VM config's cores*sockets, which is
+    # reliably present post-clone, and send null only when neither is known.
+    config_cores = int(config.get("cores") or 0) if config else 0
+    config_sockets = int(config.get("sockets") or 1) if config else 1
+    vcpus_value = maxcpu or (config_cores * config_sockets) or None
+
     memory_mb = _mb_from_bytes(maxmem)
     disk_mb = _mb_from_bytes(maxdisk)
 
@@ -241,7 +249,7 @@ def _build_netbox_vm_payload(
         "device": device_id,
         "site": site_id,
         "role": role_id,
-        "vcpus": maxcpu,
+        "vcpus": vcpus_value,
         "memory": memory_mb,
         "disk": disk_mb,
         "tags": tag_ids,
