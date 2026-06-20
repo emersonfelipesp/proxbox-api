@@ -195,7 +195,6 @@ def _build_netbox_vm_payload(
     proxmox_url: str | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
-    tenant_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -241,7 +240,6 @@ def _build_netbox_vm_payload(
         "cluster": cluster_id,
         "device": device_id,
         "site": site_id,
-        "tenant": tenant_id,
         "role": role_id,
         "vcpus": maxcpu,
         "memory": memory_mb,
@@ -378,8 +376,6 @@ async def sync_vm_individual(
             cluster,
             fallback_site_id=getattr(_site, "id", None),
         )
-        tenant = await service._get_or_create_tenant()
-        tenant_id = int(getattr(tenant, "id", 0) or 0) if tenant else None
 
         px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
         px_port = getattr(px, "http_port", 8006)
@@ -433,7 +429,6 @@ async def sync_vm_individual(
             proxmox_url=px_url,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
-            tenant_id=tenant_id,
         )
         netbox_version = await detect_netbox_version(nb)
         supports_vm_type = supports_virtual_machine_type(netbox_version)
