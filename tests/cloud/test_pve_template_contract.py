@@ -41,7 +41,12 @@ def test_pve_cloudinit_payload_renders_required_fields() -> None:
     assert "#cloud-config" in payloads.user_data
     assert "pve-node-42.nmulti.local" in payloads.user_data
     assert "Pin: version 9.1.11*" in payloads.user_data
+    assert "pve-enterprise.sources" in payloads.user_data
+    assert "grub-pc/install_devices multiselect %s" in payloads.user_data
     assert "proxmox-ve postfix open-iscsi chrony" in payloads.user_data
+    assert payloads.user_data.index("grub-pc/install_devices") < (
+        payloads.user_data.index("proxmox-ve postfix open-iscsi chrony")
+    )
     assert "ssh-ed25519 AAAA testkey op@host" in payloads.user_data
     assert "vmbr0:" in payloads.network_config
     assert "10.0.30.42/24" in payloads.network_config

@@ -216,6 +216,48 @@ def _infer_default_storage(config_payload: object | None) -> str:
     return "local-lvm"
 
 
+def _build_net0_override(
+    existing_config: object | None,
+    *,
+    bridge: str | None,
+    vlan_tag: int | None,
+) -> str | None:
+    """Return a net0 config that preserves model/MAC while overriding bridge/tag."""
+    if bridge is None and vlan_tag is None:
+        return None
+
+    config = mapping_from_response(existing_config)
+    existing_net0 = str(config.get("net0") or "virtio")
+    parts = [part.strip() for part in existing_net0.split(",") if part.strip()]
+    if not parts:
+        parts = ["virtio"]
+
+    rewritten: list[str] = []
+    saw_bridge = False
+    saw_tag = False
+    for part in parts:
+        if part.startswith("bridge="):
+            saw_bridge = True
+            if bridge is not None:
+                rewritten.append(f"bridge={bridge}")
+            else:
+                rewritten.append(part)
+            continue
+        if part.startswith("tag="):
+            saw_tag = True
+            if vlan_tag is not None:
+                rewritten.append(f"tag={vlan_tag}")
+            continue
+        rewritten.append(part)
+
+    if bridge is not None and not saw_bridge:
+        rewritten.append(f"bridge={bridge}")
+    if vlan_tag is not None and not saw_tag:
+        rewritten.append(f"tag={vlan_tag}")
+
+    return ",".join(rewritten)
+
+
 def _proxmox_step_failed(step: str, error: Exception) -> HTTPException:
     safe_error = scrub_cloud_init({"error": str(error)}).get("error", str(error))
     logger.warning("cloud provision failed at step=%s: %s", step, safe_error)
@@ -401,6 +443,11 @@ async def _configure_cloud_init_vm(
         ci_args["memory"] = req.memory_mb
     if req.cores is not None:
         ci_args["cores"] = req.cores
+    if req.sockets is not None:
+        ci_args["sockets"] = req.sockets
+    net0 = _build_net0_override(existing_config, bridge=req.bridge, vlan_tag=req.vlan_tag)
+    if net0 is not None:
+        ci_args["net0"] = net0
     if existing_config is None or not _has_cloudinit_drive(existing_config):
         slot = _pick_unused_ide_slot(existing_config)
         if slot is None:
@@ -418,6 +465,20 @@ async def _configure_cloud_init_vm(
         proxmox.session.nodes(req.target_node).qemu(req.new_vmid).config.put(**ci_args)
     )
     return _extract_task_id(config_result)
+
+
+async def _resize_vm_disk(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+) -> str | None:
+    if req.disk_gb is None:
+        return None
+    resize_result = await _maybe_await(
+        proxmox.session.nodes(req.target_node)
+        .qemu(req.new_vmid)
+        .resize.put(disk="scsi0", size=f"{req.disk_gb}G")
+    )
+    return _extract_task_id(resize_result)
 
 
 async def _start_vm_after_provision(
@@ -462,6 +523,13 @@ async def provision_vm(
             await _wait_for_upid(proxmox, req.target_node, config_upid)
 
         try:
+            resize_upid = await _resize_vm_disk(proxmox, req)
+        except Exception as error:  # noqa: BLE001
+            raise _proxmox_step_failed("resize_disk", error) from error
+        if _is_upid(resize_upid) and _should_wait_for_upid():
+            await _wait_for_upid(proxmox, req.target_node, resize_upid)
+
+        try:
             start_upid = await _start_vm_after_provision(proxmox, req)
         except Exception as error:  # noqa: BLE001
             raise _proxmox_step_failed("start", error) from error
@@ -470,6 +538,7 @@ async def provision_vm(
             new_vmid=req.new_vmid,
             clone_upid=clone_upid,
             config_upid=config_upid,
+            resize_upid=resize_upid,
             start_upid=start_upid,
             status="started" if req.start_after_provision else "stopped",
         )

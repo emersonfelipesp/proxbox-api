@@ -89,20 +89,10 @@ def render_user_data(
               echo "${{NODE_IP}}  {fqdn}  {hostname}" >> /etc/hosts
             fi
 
-        package_update: true
+        package_update: false
         package_upgrade: false
 
-        packages:
-          - curl
-          - gnupg
-          - ca-certificates
-
         write_files:
-          - path: /etc/apt/sources.list.d/pve-no-subscription.list
-            permissions: '0644'
-            content: |
-              deb http://download.proxmox.com/debian/pve {debian_release} pve-no-subscription
-
           - path: /etc/apt/preferences.d/pve-pin
             permissions: '0644'
             content: |
@@ -124,9 +114,14 @@ def render_user_data(
 {ssh_block}
 
         runcmd:
-          - curl -fsSL https://enterprise.proxmox.com/debian/proxmox-release-{debian_release}.gpg -o /etc/apt/trusted.gpg.d/proxmox-release-{debian_release}.gpg
-          - rm -f /etc/apt/sources.list.d/pve-enterprise.list
+          - rm -f /etc/apt/sources.list.d/pve-no-subscription.list /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pve-enterprise.sources /etc/apt/sources.list.d/ceph.list /etc/apt/sources.list.d/ceph.sources
           - DEBIAN_FRONTEND=noninteractive apt-get update -y
+          - DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg ca-certificates
+          - curl -fsSL https://enterprise.proxmox.com/debian/proxmox-release-{debian_release}.gpg -o /etc/apt/trusted.gpg.d/proxmox-release-{debian_release}.gpg
+          - printf '%s\\n' 'deb http://download.proxmox.com/debian/pve {debian_release} pve-no-subscription' > /etc/apt/sources.list.d/pve-no-subscription.list
+          - DEBIAN_FRONTEND=noninteractive apt-get update -y
+          - printf 'grub-pc grub-pc/install_devices multiselect %s\\n' "$root_disk" | debconf-set-selections
+          - printf 'grub-pc grub-pc/install_devices_empty boolean false\\n' | debconf-set-selections
           - DEBIAN_FRONTEND=noninteractive apt-get install -y proxmox-ve postfix open-iscsi chrony
           - DEBIAN_FRONTEND=noninteractive apt-get remove -y linux-image-amd64 os-prober
           - update-grub

@@ -115,6 +115,7 @@ def test_pfsense_release_pipeline_returns_first_boot_script_and_qm_commands():
     assert response.first_boot_script is not None
     assert 'PRODUCT="pfsense"' in response.first_boot_script
     assert "qm create 9100" in response.build_script
+    assert "qm set 9100 --agent enabled=1" in response.build_script
     assert "qm template 9100" in response.build_script
 
 
@@ -131,9 +132,47 @@ def test_pve_version_pin_keeps_cloud_init_top_level_keys_unindented():
     )
 
     assert response.generated_userdata is not None
-    assert "\nwrite_files:\n  - path:" in response.generated_userdata
-    assert "\nruncmd:\n  - curl" in response.generated_userdata
-    assert "\n      Pin-Priority: 1001\n" in response.generated_userdata
+    userdata = response.generated_userdata
+    parsed = yaml.safe_load(userdata)
+
+    assert "\nwrite_files:\n  - path:" in userdata
+    assert "\nruncmd:\n  - curl -fsSL -o /etc/apt/trusted.gpg.d/" in userdata
+    assert parsed["resolv_conf"]["nameservers"] == ["1.1.1.1", "8.8.8.8"]
+    assert parsed["write_files"] == [
+        {
+            "path": "/etc/apt/sources.list.d/pve-install-repo.list",
+            "content": (
+                "deb [arch=amd64] http://download.proxmox.com/debian/pve "
+                "bookworm pve-no-subscription\n"
+            ),
+        },
+        {
+            "path": "/etc/apt/preferences.d/nmulticloud-pve-pin",
+            "content": (
+                "Package: proxmox-ve\n"
+                "Pin: version 9.1.11*\n"
+                "Pin-Priority: 1001\n"
+            ),
+        },
+    ]
+    assert parsed["runcmd"] == [
+        (
+            "curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg "
+            "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg"
+        ),
+        (
+            "rm -f /etc/apt/sources.list.d/pve-enterprise.list "
+            "/etc/apt/sources.list.d/pbs-enterprise.list"
+        ),
+        "DEBIAN_FRONTEND=noninteractive apt-get update",
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y proxmox-ve",
+        "systemctl enable pveproxy",
+    ]
+    assert userdata.index("proxmox-release-bookworm.gpg") < userdata.index(
+        "rm -f /etc/apt/sources.list.d/"
+    )
+    assert "grub-pc/install_devices multiselect /dev/sda" not in userdata
+    assert "pve-enterprise.sources" not in userdata
 
 
 def test_opnsense_source_tree_pipeline_uses_catalog_source_path():
@@ -179,6 +218,7 @@ def test_user_data_yaml_bakes_cicustom_snippet_without_catalog_product():
     assert "echo zabbix-bootstrap" in response.build_script
     assert "--cicustom" in response.build_script
     assert "user=local:snippets/" in response.build_script
+    assert "qm set 9010 --agent enabled=1" in response.build_script
     assert "qm template 9010" in response.build_script
 
 

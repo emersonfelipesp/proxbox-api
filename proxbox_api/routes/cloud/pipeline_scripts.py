@@ -314,6 +314,7 @@ def _append_template_import_commands(
             f"qm set {_q(request.vmid)} --ide2 {_q(request.image_storage + ':cloudinit')}",
             f"qm set {_q(request.vmid)} --serial0 socket --vga serial0",
             f"qm set {_q(request.vmid)} --boot order=scsi0",
+            f"qm set {_q(request.vmid)} --agent enabled=1",
         ]
     )
     if request.disk_size_gb:
