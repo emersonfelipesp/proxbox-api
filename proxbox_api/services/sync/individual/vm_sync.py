@@ -313,7 +313,7 @@ async def sync_vm_individual(
             python_exception=str(exc),
         )
 
-    proxmox_resource = get_vm_resource_individual(px, node, vm_type, vmid) or {}
+    proxmox_resource = await get_vm_resource_individual(px, node, vm_type, vmid) or {}
     proxmox_resource = {
         "vmid": vmid,
         "name": proxmox_resource.get("name") or f"vm-{vmid}",
