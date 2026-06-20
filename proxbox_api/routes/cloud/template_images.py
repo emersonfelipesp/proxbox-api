@@ -157,7 +157,15 @@ async def build_cloud_image_template(
                     f" version={req.product_version!r}."
                 ),
             )
-        generated_userdata = generate_cloud_init_userdata(req.product_type, pv)
+        generated_userdata = generate_cloud_init_userdata(
+            req.product_type,
+            pv,
+            install_qemu_guest_agent=req.install_qemu_guest_agent,
+            install_zabbix_agent2=req.install_zabbix_agent2,
+            zabbix_server=req.zabbix_server,
+            search_domain=req.search_domain,
+            nameservers=req.nameservers,
+        )
 
     proxmox: ProxmoxSession | None = None
     try:

@@ -10,12 +10,12 @@ proxbox_api = ["static/*", "static/**/*", "generated/**/*.json", "generated/**/*
 
 [project]
 name = "proxbox_api"
-version = "0.0.18.post2"
+version = "0.0.18.post5"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi[standard]>=0.136.1",
+    "fastapi[standard]==0.137.2",
     "proxmox-sdk==0.0.11.post2",
     "netbox-sdk==0.0.9.post2",
     "sqlmodel==0.0.38",

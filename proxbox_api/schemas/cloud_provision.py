@@ -227,6 +227,11 @@ class CloudImageTemplateBuildRequest(BaseModel):
     node_cidr: str | None = None
     gateway: str | None = None
     nameservers: list[str] = Field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])
+    search_domain: str | None = Field(
+        None,
+        max_length=253,
+        description="DNS search domain to render into generated cloud-init user-data.",
+    )
     os_type: str = Field("l26", min_length=1)
     cpu: str | None = Field("host")
     verify_image_certificates: bool = True
@@ -244,6 +249,26 @@ class CloudImageTemplateBuildRequest(BaseModel):
     product_type: ProxmoxProductType = ProxmoxProductType.pve
     product_version: str | None = Field(
         None, description="Proxmox product version; None = latest in catalog"
+    )
+    install_qemu_guest_agent: bool | None = Field(
+        None,
+        description=(
+            "Install and enable qemu-guest-agent in generated product cloud-init. "
+            "None uses the product default."
+        ),
+    )
+    install_zabbix_agent2: bool | None = Field(
+        None,
+        description=(
+            "Install and enable Zabbix Agent 2 in generated product cloud-init. "
+            "None uses the product default."
+        ),
+    )
+    zabbix_server: str = Field(
+        "zabbix.nmulti.cloud",
+        min_length=1,
+        max_length=253,
+        description="Zabbix server endpoint for generated zabbix_agent2.conf.",
     )
     pve_version_pin: str | None = None
     debian_release: str = "bookworm"
@@ -269,6 +294,45 @@ class CloudImageTemplateBuildRequest(BaseModel):
         if not safe:
             raise ValueError(f"image_url rejected by SSRF protection: {reason}")
         return value
+
+    @field_validator("nameservers")
+    @classmethod
+    def validate_nameservers(cls, value: list[str]) -> list[str]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for raw in value:
+            server = str(raw).strip()
+            ipaddress.ip_address(server)
+            if server in seen:
+                raise ValueError("nameservers must not contain duplicates")
+            seen.add(server)
+            normalized.append(server)
+        return normalized
+
+    @field_validator("search_domain")
+    @classmethod
+    def validate_search_domain(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().rstrip(".")
+        if not cleaned:
+            return None
+        if not _is_valid_hostname(cleaned):
+            raise ValueError("search_domain must be a valid DNS search domain")
+        return cleaned
+
+    @field_validator("zabbix_server")
+    @classmethod
+    def validate_zabbix_server(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("zabbix_server is required")
+        try:
+            ipaddress.ip_address(cleaned)
+        except ValueError:
+            if not _is_valid_hostname(cleaned):
+                raise ValueError("zabbix_server must be a valid DNS name or IP address")
+        return cleaned
 
     @field_validator("ssh_host")
     @classmethod

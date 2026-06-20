@@ -52,6 +52,65 @@ def _relation_text_or_none(value: object) -> str | None:
     return text or None
 
 
+def _record_value(source: object | None, key: str) -> object:
+    if source is None:
+        return None
+    if isinstance(source, dict):
+        return source.get(key)
+    getter = getattr(source, "get", None)
+    if callable(getter):
+        try:
+            return getter(key)
+        except TypeError:
+            pass
+    return getattr(source, key, None)
+
+
+def _scope_type_is_site(value: object) -> bool:
+    if isinstance(value, dict):
+        object_type = str(value.get("object_type") or value.get("value") or "").strip().lower()
+        app_label = str(value.get("app_label") or "").strip().lower()
+        model = str(value.get("model") or "").strip().lower()
+        if object_type == "dcim.site" or object_type.endswith(".site"):
+            return True
+        return app_label == "dcim" and model == "site"
+
+    text = str(value or "").strip().lower()
+    return text in {"dcim.site", "site"} or text.endswith(".site")
+
+
+def _scope_value_is_site(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if _scope_type_is_site(
+        value.get("object_type") or value.get("type") or value.get("content_type")
+    ):
+        return True
+    url = str(value.get("url") or "").strip().lower()
+    return "/api/dcim/sites/" in url
+
+
+def _effective_cluster_site_id(
+    cluster_record: object | None,
+    *,
+    fallback_site_id: object | None = None,
+) -> int | None:
+    """Return the site NetBox will enforce for devices/VMs assigned to a cluster."""
+
+    fallback = _relation_id_or_none(fallback_site_id)
+    scope_value = _record_value(cluster_record, "scope")
+    scope_id = _relation_id_or_none(_record_value(cluster_record, "scope_id"))
+    if scope_id is None:
+        scope_id = _relation_id_or_none(scope_value)
+    if scope_id is None:
+        return fallback
+
+    scope_type = _record_value(cluster_record, "scope_type")
+    if _scope_type_is_site(scope_type) or _scope_value_is_site(scope_value):
+        return scope_id
+    return fallback
+
+
 def _placement_raw_value(source: object | None, key: str) -> object:
     if source is None:
         return None
@@ -610,7 +669,10 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
         cluster_record = cluster_by_name.get(cluster_name)
         site_record = site_by_cluster_name.get(cluster_name)
-        desired_site_id = _relation_id_or_none(getattr(site_record, "id", None))
+        desired_site_id = _effective_cluster_site_id(
+            cluster_record,
+            fallback_site_id=getattr(site_record, "id", None),
+        )
         cluster_id = _relation_id_or_none(getattr(cluster_record, "id", None))
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()
@@ -624,7 +686,10 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
         cluster_record = cluster_by_name.get(cluster_name)
         site_record = site_by_cluster_name.get(cluster_name)
-        desired_site_id = _relation_id_or_none(getattr(site_record, "id", None))
+        desired_site_id = _effective_cluster_site_id(
+            cluster_record,
+            fallback_site_id=getattr(site_record, "id", None),
+        )
         cluster_id = _relation_id_or_none(getattr(cluster_record, "id", None))
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()

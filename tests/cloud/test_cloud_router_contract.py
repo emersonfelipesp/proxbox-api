@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,42 @@ from proxbox_api.routes import cloud
 from proxbox_api.routes.cloud import provision as provision_route
 from proxbox_api.routes.intent.cloud_init import CloudInitPayload
 from proxbox_api.schemas.cloud_provision import CloudVMProvisionRequest
+
+
+def _join_route_path(prefix: str, path: str | None) -> str:
+    if not path or path == "/":
+        return prefix or "/"
+    if not prefix:
+        return path
+    return f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _iter_registered_routes(
+    routes: Iterable[object],
+    prefix: str = "",
+) -> Iterator[tuple[str, set[str]]]:
+    for route in routes:
+        include_context = getattr(route, "include_context", None)
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            include_prefix = getattr(include_context, "prefix", "") if include_context else ""
+            yield from _iter_registered_routes(
+                getattr(original_router, "routes", ()),
+                _join_route_path(prefix, include_prefix),
+            )
+            continue
+
+        nested_routes = getattr(route, "routes", None)
+        if nested_routes:
+            yield from _iter_registered_routes(
+                nested_routes,
+                _join_route_path(prefix, getattr(route, "path", None)),
+            )
+            continue
+
+        path = getattr(route, "path", None)
+        if path is not None:
+            yield _join_route_path(prefix, path), set(getattr(route, "methods", None) or ())
 
 
 def test_cloud_package_exposes_both_routers():
@@ -45,22 +82,19 @@ def test_cloud_routes_are_registered_on_app(monkeypatch):
     monkeypatch.delenv("PROXBOX_FEATURES", raising=False)
 
     test_app = factory.create_app()
+    routes = list(_iter_registered_routes(test_app.routes))
 
     assert any(
-        route.path == "/cloud/vm/provision" and "POST" in (route.methods or set())
-        for route in test_app.routes
+        path == "/cloud/vm/provision" and "POST" in methods for path, methods in routes
     )
     assert any(
-        route.path == "/cloud/templates" and "GET" in (route.methods or set())
-        for route in test_app.routes
+        path == "/cloud/templates" and "GET" in methods for path, methods in routes
     )
     assert any(
-        route.path == "/cloud/templates/images" and "POST" in (route.methods or set())
-        for route in test_app.routes
+        path == "/cloud/templates/images" and "POST" in methods for path, methods in routes
     )
     assert any(
-        route.path == "/cloud/vm/templates" and "GET" in (route.methods or set())
-        for route in test_app.routes
+        path == "/cloud/vm/templates" and "GET" in methods for path, methods in routes
     )
 
 

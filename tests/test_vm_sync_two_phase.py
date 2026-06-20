@@ -175,6 +175,7 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
         vm_role_mapping=sync_vm.VM_ROLE_MAPPINGS,
         tag_refs=[{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
         proxmox_url_by_cluster={"cluster-a": "https://pve.example:8006"},
+        endpoint_id_by_cluster={"cluster-a": 1},
         resolve_vm_type=_resolve_vm_type,
         resolve_vm_proxmox_tag_ids=_resolve_tags,
     )
@@ -198,6 +199,7 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     assert captured_payload_kwargs["tenant_id"] == 55
     assert captured_payload_kwargs["tag_ids"] == [5, 7]
     assert captured_payload_kwargs["proxmox_url"] == "https://pve.example:8006"
+    assert captured_payload_kwargs["endpoint_id"] == 1
     assert ensure_device_calls
     assert role_reconcile_calls
     assert context.node_device_cache[("cluster-a", "pve01")].id == 22
@@ -327,6 +329,52 @@ def test_full_update_precomputes_both_clusters_when_two_clusters_present(monkeyp
     assert sorted(r["id"] for r in result) == [101, 201]
     # _ensure_device called for both clusters' node "pve01" (from PROXMOX_VM_RESOURCE).
     assert len(ensure_device_calls) == 2
+
+
+def test_full_update_uses_reconciled_cluster_site_scope(monkeypatch):
+    """VM-stage node devices and VM payloads must use the cluster's actual site scope."""
+    ensure_device_calls: list[dict[str, object]] = []
+    payload_site_ids: list[int | None] = []
+
+    def _record_payload_site(kwargs: dict[str, object]) -> None:
+        site_id = kwargs.get("site_id")
+        payload_site_ids.append(site_id if isinstance(site_id, int) else None)
+
+    _install_full_update_stubs(monkeypatch, payload_side_effect=_record_payload_site)
+
+    async def _fake_ensure_site(*_args, **_kwargs):
+        return SimpleNamespace(id=44)
+
+    async def _fake_ensure_cluster(*_args, **_kwargs):
+        return SimpleNamespace(id=11, scope_type="dcim.site", scope_id=88)
+
+    async def _tracking_ensure_device(*_args, **kwargs):
+        ensure_device_calls.append(kwargs)
+        return SimpleNamespace(id=22)
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    monkeypatch.setattr(sync_vm, "_ensure_site", _fake_ensure_site)
+    monkeypatch.setattr(sync_vm, "_ensure_cluster", _fake_ensure_cluster)
+    monkeypatch.setattr(sync_vm, "_ensure_device", _tracking_ensure_device)
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[{"cluster-a": [_resource(101)]}],
+            custom_fields=[],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    assert [record["id"] for record in result] == [101]
+    assert ensure_device_calls[0]["site_id"] == 88
+    assert payload_site_ids == [88]
 
 
 def test_full_update_cluster_precompute_failure_propagates_as_proxbox_exception(monkeypatch):

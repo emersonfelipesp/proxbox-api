@@ -64,6 +64,7 @@ from proxbox_api.services.proxmox_helpers import (
     sanitize_dns_hostname,
 )
 from proxbox_api.services.sync.devices import (
+    _effective_cluster_site_id,
     _ensure_cluster,
     _ensure_cluster_type,
     _ensure_device,
@@ -153,8 +154,22 @@ class _VMPreparationContext:
     vm_role_mapping: dict[str, dict[str, object]]
     tag_refs: list[dict[str, object]]
     proxmox_url_by_cluster: dict[str, str]
+    endpoint_id_by_cluster: dict[str, int]
     resolve_vm_type: Callable[[str], Awaitable[object | None]]
     resolve_vm_proxmox_tag_ids: Callable[[str, dict[str, object]], Awaitable[list[int]]]
+
+
+def _cluster_dependency_site_id(cluster_dependencies: dict[str, object]) -> int | None:
+    cached_site_id = cluster_dependencies.get("site_id")
+    try:
+        if cached_site_id is not None and int(cached_site_id) > 0:
+            return int(cached_site_id)
+    except (TypeError, ValueError):
+        pass
+    return _effective_cluster_site_id(
+        cluster_dependencies.get("cluster"),
+        fallback_site_id=getattr(cluster_dependencies.get("site"), "id", None),
+    )
 
 
 async def _fetch_vm_config_only(*, pxs: object, resource: dict[str, object]) -> dict[str, object]:
@@ -196,6 +211,7 @@ async def _prepare_vm_from_config(  # noqa: C901
         )
 
     node_name = str(resource.get("node"))
+    site_id = _cluster_dependency_site_id(cluster_dependencies)
     device = context.node_device_cache.get((str(cluster_name), node_name))
     if device is None:
         device = await _ensure_device(
@@ -204,7 +220,7 @@ async def _prepare_vm_from_config(  # noqa: C901
             cluster_id=getattr(cluster, "id", None),
             device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
             role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
-            site_id=getattr(cluster_dependencies.get("site"), "id", None),
+            site_id=site_id,
             tag_refs=context.tag_refs,
             overwrite_device_role=context.overwrite_flags.overwrite_device_role,
             overwrite_device_type=context.overwrite_flags.overwrite_device_type,
@@ -253,12 +269,13 @@ async def _prepare_vm_from_config(  # noqa: C901
         device_id=int(getattr(device, "id", 0) or 0),
         role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
         tag_ids=merged_tag_ids,
-        site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
+        site_id=site_id,
         tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
         virtual_machine_type_id=vm_type_id,
         last_updated=now,
         cluster_name=str(cluster_name),
         proxmox_url=context.proxmox_url_by_cluster.get(str(cluster_name)),
+        endpoint_id=context.endpoint_id_by_cluster.get(str(cluster_name)),
         parse_description_metadata=context.behavior_flags.parse_description_metadata,
         overwrite_flags=context.effective_vm_overwrite_flags,
     )
@@ -1907,10 +1924,15 @@ async def create_virtual_machines(  # noqa: C901
                 site_id=getattr(site, "id", None),
                 tenant_id=getattr(tenant, "id", None),
             )
+            site_id = _effective_cluster_site_id(
+                cluster,
+                fallback_site_id=getattr(site, "id", None),
+            )
 
             cluster_dependency_cache[cluster_name] = {
                 "cluster": cluster,
                 "site": site,
+                "site_id": site_id,
                 "tenant": tenant,
                 "device_type": device_type,
                 "device_role": device_role,
@@ -1928,7 +1950,7 @@ async def create_virtual_machines(  # noqa: C901
                     cluster_id=getattr(cluster, "id", None),
                     device_type_id=getattr(device_type, "id", None),
                     role_id=getattr(device_role, "id", None),
-                    site_id=getattr(site, "id", None),
+                    site_id=site_id,
                     tag_refs=tag_refs,
                     overwrite_device_role=overwrite_flags.overwrite_device_role,
                     overwrite_device_type=overwrite_flags.overwrite_device_type,
@@ -2034,6 +2056,7 @@ async def create_virtual_machines(  # noqa: C901
         vm_role_mapping=vm_role_mapping,
         tag_refs=tag_refs,
         proxmox_url_by_cluster=proxmox_url_by_cluster,
+        endpoint_id_by_cluster=endpoint_id_by_cluster,
         resolve_vm_type=_get_vm_type,
         resolve_vm_proxmox_tag_ids=_resolve_vm_proxmox_tag_ids,
     )
@@ -2340,6 +2363,7 @@ async def create_virtual_machines(  # noqa: C901
                 )
 
             node_name = str(resource.get("node"))
+            site_id = _cluster_dependency_site_id(cluster_dependencies)
             device = node_device_cache.get((str(cluster_name), node_name))
             if device is None:
                 # Fallback for edge cases where a node appears after preflight filtering.
@@ -2349,7 +2373,7 @@ async def create_virtual_machines(  # noqa: C901
                     cluster_id=getattr(cluster, "id", None),
                     device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
                     role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
-                    site_id=getattr(cluster_dependencies.get("site"), "id", None),
+                    site_id=site_id,
                     tag_refs=tag_refs,
                     overwrite_device_role=overwrite_flags.overwrite_device_role,
                     overwrite_device_type=overwrite_flags.overwrite_device_type,
@@ -2423,7 +2447,7 @@ async def create_virtual_machines(  # noqa: C901
             device_id=int(getattr(device, "id", 0) or 0),
             role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
             tag_ids=merged_tag_ids,
-            site_id=int(getattr(cluster_dependencies.get("site"), "id", 0) or 0) or None,
+            site_id=site_id,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
             virtual_machine_type_id=vm_type_id,
             last_updated=now,

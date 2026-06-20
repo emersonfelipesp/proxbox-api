@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from proxbox_api.constants import VM_ROLE_MAPPINGS
 from proxbox_api.netbox_rest import nested_tag_payload
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.sync.device_ensure import _effective_cluster_site_id
 
 if TYPE_CHECKING:
     pass
@@ -289,12 +290,16 @@ class BaseIndividualSyncService:
         device_type = await self._get_or_create_device_type(getattr(manufacturer, "id", None))
         node_role = await self._get_or_create_device_role_node()
         site = await self._get_or_create_site(cluster_name)
+        site_id = _effective_cluster_site_id(
+            cluster,
+            fallback_site_id=getattr(site, "id", None),
+        )
         device = await self._get_or_create_device(
             device_name=node_name,
             cluster_id=getattr(cluster, "id", None),
             device_type_id=getattr(device_type, "id", None),
             role_id=getattr(node_role, "id", None),
-            site_id=getattr(site, "id", None),
+            site_id=site_id,
         )
         vm_role = await self._get_or_create_vm_role(vm_type)
         vm_type_obj = await self._get_or_create_vm_type(vm_type)

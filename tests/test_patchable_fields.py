@@ -135,6 +135,69 @@ async def test_vm_interfaces_legacy_none_keeps_all_patchable(
     assert "custom_fields" in capture.patchable_fields
 
 
+@pytest.mark.asyncio
+async def test_vm_interface_normalizer_extracts_fk_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """current_normalizer must convert nested FK dicts to integer IDs.
+
+    NetBox serializes FK fields as nested dicts (e.g. ``{"id": 8, "url": "..."}``)
+    while desired payloads carry plain integer IDs.  Without normalization the
+    lookup keys never match and every interface create attempt fails with a
+    unique-constraint violation.
+    """
+    from proxbox_api.services.sync import network as network_module
+
+    captured: dict[str, Any] = {}
+
+    async def _capture(*_args: Any, **kwargs: Any) -> _FakeBulkResult:
+        captured.update(kwargs)
+        return _FakeBulkResult(records=[])
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.rest_bulk_reconcile_async",
+        _capture,
+    )
+
+    await network_module.bulk_reconcile_vm_interfaces(
+        nb=object(),
+        interface_payloads=[{"name": "net0", "virtual_machine": 8}],
+    )
+
+    assert "current_normalizer" in captured
+    normalizer = captured["current_normalizer"]
+
+    # Simulate a record as returned by NetBox (FK as nested dict)
+    netbox_existing = {
+        "name": "net0",
+        "virtual_machine": {
+            "id": 8,
+            "url": "http://netbox/api/virtualization/virtual-machines/8/",
+            "display": "vm-8",
+        },
+        "enabled": True,
+        "type": None,
+        "description": "",
+        "untagged_vlan": {"id": 3, "url": "http://netbox/api/ipam/vlans/3/", "display": "vlan-3"},
+        "mode": None,
+        "tags": [],
+        "custom_fields": {},
+    }
+
+    normalized = normalizer(netbox_existing)
+
+    # FK fields must be integer IDs so lookup keys match the desired-payload keys
+    assert normalized["virtual_machine"] == 8, (
+        "virtual_machine must be extracted from nested dict to an int"
+    )
+    assert normalized["untagged_vlan"] == 3, (
+        "untagged_vlan must be extracted from nested dict to an int"
+    )
+    # Non-FK fields must pass through unchanged
+    assert normalized["name"] == "net0"
+    assert normalized["enabled"] is True
+
+
 # ---------------------------------------------------------------------------
 # bulk_reconcile_vm_interface_ips
 # ---------------------------------------------------------------------------

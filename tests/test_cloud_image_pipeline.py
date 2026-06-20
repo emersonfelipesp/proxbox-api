@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 from fastapi import HTTPException
 
 from proxbox_api.routes.cloud.catalog import catalog_payload, find_product_version
@@ -28,6 +29,73 @@ def test_find_product_version_defaults_to_first_entry():
 
     assert entry.product_type == CloudImageProductType.PFSENSE
     assert entry.version == "2.8.1"
+
+
+def test_pbs_catalog_defaults_to_current_trixie_entry():
+    entry = find_product_version(CloudImageProductType.PBS)
+
+    assert entry.product_type == CloudImageProductType.PBS
+    assert entry.version == "4.2"
+    assert entry.debian_codename == "trixie"
+    assert entry.image_url is not None
+    assert "debian-13-genericcloud-amd64.qcow2" in entry.image_url
+
+
+def test_pbs_cloud_image_pipeline_bakes_dns_qga_and_zabbix_userdata():
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            product_type=CloudImageProductType.PBS,
+            product_version="4.2",
+            provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
+            vmid=9400,
+            name="pbs42-template",
+            hostname="pbs42-template",
+            domain="nmulti.cloud",
+            search_domain="nmulti.cloud",
+            nameservers=["168.0.96.26", "168.0.96.27", "8.8.8.8"],
+        )
+    )
+
+    assert response.status == "planned"
+    assert response.generated_userdata is not None
+    userdata = response.generated_userdata
+    parsed = yaml.safe_load(userdata)
+    assert parsed["resolv_conf"]["nameservers"] == [
+        "168.0.96.26",
+        "168.0.96.27",
+        "8.8.8.8",
+    ]
+    assert parsed["resolv_conf"]["searchdomains"] == ["nmulti.cloud"]
+    assert "debian/pbs trixie pbs-no-subscription" in userdata
+    assert "zabbix-release_latest_7.4+debian13_all.deb" in userdata
+    assert (
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+        "proxmox-backup-server qemu-guest-agent zabbix-agent2"
+    ) in userdata
+    assert "Server=zabbix.nmulti.cloud" in userdata
+    assert "systemctl enable qemu-guest-agent" in userdata
+    assert "systemctl enable zabbix-agent2" in userdata
+    assert "user=local:snippets/pbs42-template-pbs-4.2-user-data.yml" in response.build_script
+    assert "--cicustom" in response.build_script
+
+
+def test_pbs_cloud_image_pipeline_can_disable_default_agents():
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            product_type=CloudImageProductType.PBS,
+            product_version="4.2",
+            provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
+            vmid=9401,
+            name="pbs42-minimal",
+            install_qemu_guest_agent=False,
+            install_zabbix_agent2=False,
+        )
+    )
+
+    assert response.generated_userdata is not None
+    assert "qemu-guest-agent" not in response.generated_userdata
+    assert "zabbix-agent2" not in response.generated_userdata
+    assert "zabbix-release_latest_7.4" not in response.generated_userdata
 
 
 def test_pfsense_release_pipeline_returns_first_boot_script_and_qm_commands():
@@ -64,20 +132,47 @@ def test_pve_version_pin_keeps_cloud_init_top_level_keys_unindented():
     )
 
     assert response.generated_userdata is not None
-    assert "\nwrite_files:\n  - path:" in response.generated_userdata
-    assert "\nruncmd:\n  - rm -f /etc/apt/sources.list.d/" in response.generated_userdata
-    assert "pve-enterprise.sources" in response.generated_userdata
-    assert response.generated_userdata.index("rm -f /etc/apt/sources.list.d/") < (
-        response.generated_userdata.index("proxmox-release-bookworm.gpg")
+    userdata = response.generated_userdata
+    parsed = yaml.safe_load(userdata)
+
+    assert "\nwrite_files:\n  - path:" in userdata
+    assert "\nruncmd:\n  - curl -fsSL -o /etc/apt/trusted.gpg.d/" in userdata
+    assert parsed["resolv_conf"]["nameservers"] == ["1.1.1.1", "8.8.8.8"]
+    assert parsed["write_files"] == [
+        {
+            "path": "/etc/apt/sources.list.d/pve-install-repo.list",
+            "content": (
+                "deb [arch=amd64] http://download.proxmox.com/debian/pve "
+                "bookworm pve-no-subscription\n"
+            ),
+        },
+        {
+            "path": "/etc/apt/preferences.d/nmulticloud-pve-pin",
+            "content": (
+                "Package: proxmox-ve\n"
+                "Pin: version 9.1.11*\n"
+                "Pin-Priority: 1001\n"
+            ),
+        },
+    ]
+    assert parsed["runcmd"] == [
+        (
+            "curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg "
+            "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg"
+        ),
+        (
+            "rm -f /etc/apt/sources.list.d/pve-enterprise.list "
+            "/etc/apt/sources.list.d/pbs-enterprise.list"
+        ),
+        "DEBIAN_FRONTEND=noninteractive apt-get update",
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y proxmox-ve",
+        "systemctl enable pveproxy",
+    ]
+    assert userdata.index("proxmox-release-bookworm.gpg") < userdata.index(
+        "rm -f /etc/apt/sources.list.d/"
     )
-    assert response.generated_userdata.index("proxmox-release-bookworm.gpg") < (
-        response.generated_userdata.index("download.proxmox.com/debian/pve")
-    )
-    assert "grub-pc/install_devices multiselect /dev/sda" in response.generated_userdata
-    assert response.generated_userdata.index("grub-pc/install_devices") < (
-        response.generated_userdata.index("apt-get install -y proxmox-ve")
-    )
-    assert "\n      Pin-Priority: 1001\n" in response.generated_userdata
+    assert "grub-pc/install_devices multiselect /dev/sda" not in userdata
+    assert "pve-enterprise.sources" not in userdata
 
 
 def test_opnsense_source_tree_pipeline_uses_catalog_source_path():

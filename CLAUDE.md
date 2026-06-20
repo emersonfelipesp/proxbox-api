@@ -9,6 +9,16 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ---
 
+> **LLM Agent Safety — Destructive Operations:** proxbox-api exposes routes
+> that permanently destroy Proxmox VMs, LXC containers, snapshots, and backups.
+> **Never invoke `DELETE /proxmox/{vm_type}/{vmid}`, snapshot-delete, or backup-delete
+> autonomously.** Every write verb requires `ProxmoxEndpoint.allow_writes=True`
+> (default: `False`) and an `X-Proxbox-Actor` header. Stop/reboot require user
+> notification before invocation. See `AGENTS.md` §"LLM Agent Safety Guardrails"
+> for the full protocol.
+
+---
+
 ## Overview
 
 `proxbox-api` is a FastAPI backend that connects Proxmox inventory and lifecycle data to NetBox objects. It serves REST, SSE, and WebSocket endpoints for discovery, synchronization, endpoint management, generated Proxmox proxy routes, and Firecracker host-agent provisioning for the NMS Cloud runtime. The same repository also includes a standalone `nextjs-ui/` frontend for endpoint administration.

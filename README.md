@@ -519,3 +519,15 @@ uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
 ```
 
 Ensure the user running uvicorn can read the key (often `root` owns `/etc/letsencrypt`; use `group` ACLs, a deploy user + copied certs, or **hitch**/proxy instead). Use **`fullchain.pem`** for `--ssl-certfile` so clients receive the full chain.
+
+## LLM Agent Safety
+
+> **Before calling any destructive verb, read `AGENTS.md` §"LLM Agent Safety Guardrails".**
+
+All write verbs (`start`, `stop`, `snapshot`, `migrate`, `delete`) require `ProxmoxEndpoint.allow_writes=True` (database default: `False`) and an `X-Proxbox-Actor` attribution header. A `403 writes_disabled_for_endpoint` response is a hard stop.
+
+**LLM agents MUST NOT:**
+- Autonomously set `allow_writes=True` on any endpoint
+- Invoke `DELETE /proxmox/{vm_type}/{vmid}` or any snapshot/backup delete without explicit human confirmation
+
+The enforcement point is `proxbox_api/database.py::ProxmoxEndpoint.allow_writes` (field default `False`) and `proxbox_api/routes/proxmox_actions.py::_gate` (403 gate). Pinned by `tests/test_static_guardrails.py`.

@@ -329,6 +329,92 @@ async def test_bulk_device_reconcile_does_not_reuse_untagged_same_name_node(
 
 
 @pytest.mark.asyncio
+async def test_bulk_device_reconcile_uses_reconciled_cluster_site_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cluster scope wins over stale endpoint/default site during device writes."""
+
+    captured_device_phase: dict[str, Any] = {}
+
+    async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return []
+
+    async def _fake_bulk_phases(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        phases = kwargs["phases"] if "phases" in kwargs else args[1]
+        phase_names = {phase.name for phase in phases}
+
+        if "cluster_types" in phase_names:
+            return {
+                "cluster_types": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 1, "name": "Cluster", "slug": "cluster"})]
+                ),
+                "manufacturers": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 2, "name": "Proxmox", "slug": "proxmox"})]
+                ),
+                "device_roles": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 3, "name": "Proxmox Node"})]
+                ),
+                "sites": SimpleNamespace(
+                    records=[
+                        _FakePhaseRecord(
+                            {
+                                "id": 41,
+                                "name": "Proxmox Default Site - PVE-CLUSTER-01",
+                                "slug": "proxmox-default-site-pve-cluster-01",
+                            }
+                        )
+                    ]
+                ),
+            }
+
+        if "clusters" in phase_names:
+            return {
+                "clusters": SimpleNamespace(
+                    records=[
+                        _FakePhaseRecord(
+                            {
+                                "id": 11,
+                                "name": "PVE-CLUSTER-01",
+                                "scope_type": "dcim.site",
+                                "scope_id": 99,
+                            }
+                        )
+                    ]
+                ),
+                "device_types": SimpleNamespace(
+                    records=[_FakePhaseRecord({"id": 4, "model": "Proxmox Generic Device"})]
+                ),
+            }
+
+        device_phase = phases[0]
+        captured_device_phase["payload"] = dict(device_phase.payloads[0])
+        return {
+            "devices": SimpleNamespace(
+                records=[_FakePhaseRecord({"id": 101, **device_phase.payloads[0]})]
+            )
+        }
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(device_ensure, "rest_bulk_reconcile_phases_async", _fake_bulk_phases)
+
+    await device_ensure.ensure_proxmox_devices_bulk(
+        object(),
+        clusters_status=[
+            SimpleNamespace(
+                name="PVE-CLUSTER-01",
+                mode="cluster",
+                node_list=[SimpleNamespace(name="pve01")],
+            )
+        ],
+        tag_refs=[{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+        overwrite_flags=SyncOverwriteFlags(),
+    )
+
+    assert captured_device_phase["payload"]["cluster"] == 11
+    assert captured_device_phase["payload"]["site"] == 99
+
+
+@pytest.mark.asyncio
 async def test_bulk_device_reconcile_adopts_tagged_same_name_node(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

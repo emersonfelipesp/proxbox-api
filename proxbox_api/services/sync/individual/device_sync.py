@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from proxbox_api.services.proxmox_helpers import get_node_status_individual
+from proxbox_api.services.sync.device_ensure import _effective_cluster_site_id
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 
 
@@ -75,13 +76,17 @@ async def sync_node_individual(
         device_type = await service._get_or_create_device_type(getattr(manufacturer, "id", None))
         node_role = await service._get_or_create_device_role_node()
         site = await service._get_or_create_site(cluster_name)
+        site_id = _effective_cluster_site_id(
+            cluster,
+            fallback_site_id=getattr(site, "id", None),
+        )
 
         device = await service._get_or_create_device(
             device_name=node_name,
             cluster_id=getattr(cluster, "id", None),
             device_type_id=getattr(device_type, "id", None),
             role_id=getattr(node_role, "id", None),
-            site_id=getattr(site, "id", None),
+            site_id=site_id,
         )
 
         netbox_object = device.serialize() if hasattr(device, "serialize") else None
