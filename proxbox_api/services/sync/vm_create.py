@@ -20,6 +20,7 @@ from proxbox_api.schemas.proxmox import ClusterStatusSchemaList
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.cloudinit import sync_vm_cloudinit
 from proxbox_api.services.sync.devices import (
+    _effective_cluster_site_id,
     _ensure_cluster,
     _ensure_cluster_type,
     _ensure_device,
@@ -92,6 +93,10 @@ async def ensure_vm_dependencies(
             site_id=getattr(site, "id", None),
             tenant_id=getattr(tenant, "id", None),
         )
+        site_id = _effective_cluster_site_id(
+            cluster,
+            fallback_site_id=getattr(site, "id", None),
+        )
         manufacturer = await _ensure_manufacturer(
             netbox_session,
             tag_refs=tag_refs,
@@ -111,7 +116,7 @@ async def ensure_vm_dependencies(
             cluster_id=getattr(cluster, "id", None),
             device_type_id=getattr(device_type, "id", None),
             role_id=getattr(device_role, "id", None),
-            site_id=getattr(site, "id", None),
+            site_id=site_id,
             tag_refs=tag_refs,
             overwrite_device_role=(
                 overwrite_flags.overwrite_device_role if overwrite_flags else True
