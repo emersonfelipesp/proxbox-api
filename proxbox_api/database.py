@@ -104,6 +104,7 @@ class ProxmoxEndpoint(SQLModel, table=True):
     username: str = Field(index=True)
     password: str | None = Field(default=None)
     verify_ssl: bool = Field(default=True)
+    # Safety invariant: False by default — all destructive Proxmox verbs are gated here; see AGENTS.md §"LLM Agent Safety Guardrails" and proxbox_api/routes/proxmox_actions.py::_gate.
     allow_writes: bool = Field(default=False)
     enabled: bool = Field(default=True)
     token_name: str | None = Field(default=None)

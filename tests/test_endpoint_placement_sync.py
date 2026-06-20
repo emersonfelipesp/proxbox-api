@@ -97,3 +97,22 @@ def test_vm_payload_includes_endpoint_site_and_excludes_tenant() -> None:
 
     assert payload["site"] == 42
     assert "tenant" not in payload
+
+
+def test_effective_cluster_site_id_prefers_reconciled_site_scope() -> None:
+    """Dependent writes must follow the cluster's actual NetBox site scope."""
+
+    assert (
+        device_ensure._effective_cluster_site_id(
+            SimpleNamespace(scope_type="dcim.site", scope_id=77),
+            fallback_site_id=42,
+        )
+        == 77
+    )
+    assert (
+        device_ensure._effective_cluster_site_id(
+            SimpleNamespace(scope_type="dcim.location", scope_id=99),
+            fallback_site_id=42,
+        )
+        == 42
+    )

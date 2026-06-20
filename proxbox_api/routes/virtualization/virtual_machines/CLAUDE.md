@@ -143,6 +143,15 @@ Main synchronization endpoints for virtual machines and related resources.
   gather results is re-raised so the outer `try/except` in `create_virtual_machines`
   can wrap it as a `ProxboxException`.
 
+- **Cluster site scope is authoritative for dependent writes.** After
+  `_ensure_cluster` reconciles a NetBox cluster, VM sync uses the returned
+  cluster's `dcim.site` scope as the site for node-device and VM payloads,
+  falling back to the endpoint/default site only when the cluster has no site
+  scope. This prevents NetBox from rejecting devices or VMs with "assigned
+  cluster belongs to a different site" when an existing cluster is scoped to a
+  different site than the endpoint resolver returned. Regression coverage:
+  `tests/test_vm_sync_two_phase.py::test_full_update_uses_reconciled_cluster_site_scope`.
+
 - **Interface-dense guests (guest-agent payloads).** Guest-agent
   `network-get-interfaces` calls use a dedicated timeout
   (`PROXBOX_GUEST_AGENT_TIMEOUT` / plugin key `guest_agent_timeout`, default

@@ -116,7 +116,20 @@ class CloudVMProvisionRequest(BaseModel):
         description="VM memory in MiB (Proxmox 'memory' convention; field name kept for API compatibility)",
     )
     cores: Optional[int] = Field(None, ge=1)
+    sockets: Optional[int] = Field(None, ge=1)
     disk_gb: Optional[int] = Field(None, ge=1)
+    bridge: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Override the cloned VM's net0 bridge, for example vmbr1.",
+    )
+    vlan_tag: Optional[int] = Field(
+        None,
+        ge=1,
+        le=4094,
+        description="Optional Proxmox VLAN tag to apply to net0.",
+    )
     full_clone: bool = True
 
 

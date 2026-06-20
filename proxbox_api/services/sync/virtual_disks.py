@@ -266,16 +266,18 @@ async def _sync_parent_vm_disk_total(
     desired_disk_total: int,
 ) -> bool:
     """Patch the VM disk total after child virtual disks have converged."""
+    # vm may arrive as a RestRecord (no __contains__ / __setitem__); normalise to dict.
+    vm_data = to_mapping(vm)
 
-    if "disk" not in vm:
+    if "disk" not in vm_data:
         return False
 
-    vm_id = relation_id(vm.get("id"))
+    vm_id = relation_id(vm_data.get("id"))
     if vm_id is None:
         return False
 
     try:
-        current_disk = int(vm.get("disk") or 0)
+        current_disk = int(vm_data.get("disk") or 0)
     except (TypeError, ValueError):
         current_disk = 0
     if current_disk == desired_disk_total:
@@ -287,7 +289,7 @@ async def _sync_parent_vm_disk_total(
         vm_id,
         {"disk": desired_disk_total},
     )
-    vm["disk"] = desired_disk_total
+    vm_data["disk"] = desired_disk_total
     return True
 
 

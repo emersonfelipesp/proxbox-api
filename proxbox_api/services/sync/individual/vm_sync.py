@@ -25,6 +25,7 @@ from proxbox_api.services.proxmox_helpers import (
     get_vm_config_individual,
     get_vm_resource_individual,
 )
+from proxbox_api.services.sync.device_ensure import _effective_cluster_site_id
 from proxbox_api.services.sync.discovery_tags import (
     resolve_discovery_tag_id,
     vm_discovery_tag_slug,
@@ -312,7 +313,7 @@ async def sync_vm_individual(
             python_exception=str(exc),
         )
 
-    proxmox_resource = get_vm_resource_individual(px, node, vm_type, vmid) or {}
+    proxmox_resource = await get_vm_resource_individual(px, node, vm_type, vmid) or {}
     proxmox_resource = {
         "vmid": vmid,
         "name": proxmox_resource.get("name") or f"vm-{vmid}",
@@ -373,7 +374,10 @@ async def sync_vm_individual(
         device_id = int(getattr(device, "id", 0) or 0) if device else None
         role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
         vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
-        site_id = int(getattr(_site, "id", 0) or 0) if _site else None
+        site_id = _effective_cluster_site_id(
+            cluster,
+            fallback_site_id=getattr(_site, "id", None),
+        )
         tenant = await service._get_or_create_tenant()
         tenant_id = int(getattr(tenant, "id", 0) or 0) if tenant else None
 

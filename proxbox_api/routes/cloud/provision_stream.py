@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Header
@@ -16,6 +17,7 @@ from proxbox_api.routes.cloud.provision import (
     _cloud_provision_gate,
     _configure_cloud_init_vm,
     _journal_provision_best_effort,
+    _resize_vm_disk,
     _start_vm_after_provision,
 )
 from proxbox_api.routes.proxmox_actions import _open_proxmox_session
@@ -38,8 +40,254 @@ _SSE_HEADERS = {
 _STEPS = [
     ("clone_template", "Clone template VM"),
     ("configure_cloud_init", "Configure cloud-init"),
+    ("resize_disk", "Resize VM disk"),
     ("start_vm", "Start virtual machine"),
 ]
+
+
+@dataclass
+class _StreamProvisionState:
+    clone_upid: str | None = None
+    config_upid: str | None = None
+    resize_upid: str | None = None
+    start_upid: str | None = None
+    failed: bool = False
+
+
+async def _clone_template_for_stream(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+) -> tuple[str | None, str | None]:
+    try:
+        return await _clone_template_vm(proxmox, req), None
+    except Exception as error:  # noqa: BLE001
+        return None, scrub_cloud_init({"e": str(error)})["e"]
+
+
+async def _configure_cloud_init_for_stream(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+) -> tuple[str | None, str | None]:
+    try:
+        return await _configure_cloud_init_vm(proxmox, req), None
+    except Exception as error:  # noqa: BLE001
+        return None, scrub_cloud_init({"e": str(error)})["e"]
+
+
+async def _resize_vm_disk_for_stream(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+) -> tuple[str | None, str | None]:
+    try:
+        return await _resize_vm_disk(proxmox, req), None
+    except Exception as error:  # noqa: BLE001
+        return None, scrub_cloud_init({"e": str(error)})["e"]
+
+
+async def _start_vm_for_stream(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+) -> tuple[str | None, str | None]:
+    try:
+        return await _start_vm_after_provision(proxmox, req), None
+    except Exception as error:  # noqa: BLE001
+        return None, scrub_cloud_init({"e": str(error)})["e"]
+
+
+async def _emit_clone_template_events(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    state: _StreamProvisionState,
+) -> AsyncIterator[str]:
+    yield sse_event(
+        "terminal_line",
+        {
+            "line": f"Cloning template VMID {req.template_vmid} → VMID {req.new_vmid} on {req.target_node}…"
+        },
+    )
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "clone_template",
+            "label": "Clone template VM",
+            "status": "started",
+        },
+    )
+    state.clone_upid, clone_error = await _clone_template_for_stream(proxmox, req)
+    if clone_error is not None:
+        state.failed = True
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "clone_template",
+                "label": "Clone template VM",
+                "status": "error",
+                "error": clone_error,
+            },
+        )
+        yield sse_event("complete", {"ok": False, "error": clone_error, "step": "clone_template"})
+        return
+
+    yield sse_event("terminal_line", {"line": f"Clone task: {state.clone_upid or 'ok'}"})
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "clone_template",
+            "label": "Clone template VM",
+            "status": "done",
+            "upid": state.clone_upid,
+        },
+    )
+
+
+async def _emit_configure_cloud_init_events(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    state: _StreamProvisionState,
+) -> AsyncIterator[str]:
+    yield sse_event("terminal_line", {"line": "Applying cloud-init configuration…"})
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "configure_cloud_init",
+            "label": "Configure cloud-init",
+            "status": "started",
+        },
+    )
+    state.config_upid, config_error = await _configure_cloud_init_for_stream(proxmox, req)
+    if config_error is not None:
+        state.failed = True
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "configure_cloud_init",
+                "label": "Configure cloud-init",
+                "status": "error",
+                "error": config_error,
+            },
+        )
+        yield sse_event(
+            "complete", {"ok": False, "error": config_error, "step": "configure_cloud_init"}
+        )
+        return
+
+    yield sse_event("terminal_line", {"line": f"Config task: {state.config_upid or 'ok'}"})
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "configure_cloud_init",
+            "label": "Configure cloud-init",
+            "status": "done",
+            "upid": state.config_upid,
+        },
+    )
+
+
+async def _emit_resize_disk_events(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    state: _StreamProvisionState,
+) -> AsyncIterator[str]:
+    if req.disk_gb is None:
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "resize_disk",
+                "label": "Resize VM disk",
+                "status": "skipped",
+            },
+        )
+        return
+
+    yield sse_event(
+        "terminal_line",
+        {"line": f"Resizing scsi0 to {req.disk_gb}G…"},
+    )
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "resize_disk",
+            "label": "Resize VM disk",
+            "status": "started",
+        },
+    )
+    state.resize_upid, resize_error = await _resize_vm_disk_for_stream(proxmox, req)
+    if resize_error is not None:
+        state.failed = True
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "resize_disk",
+                "label": "Resize VM disk",
+                "status": "error",
+                "error": resize_error,
+            },
+        )
+        yield sse_event("complete", {"ok": False, "error": resize_error, "step": "resize_disk"})
+        return
+
+    yield sse_event("terminal_line", {"line": f"Resize task: {state.resize_upid or 'ok'}"})
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "resize_disk",
+            "label": "Resize VM disk",
+            "status": "done",
+            "upid": state.resize_upid,
+        },
+    )
+
+
+async def _emit_start_vm_events(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    state: _StreamProvisionState,
+) -> AsyncIterator[str]:
+    if not req.start_after_provision:
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "start_vm",
+                "label": "Start virtual machine",
+                "status": "skipped",
+            },
+        )
+        return
+
+    yield sse_event("terminal_line", {"line": f"Starting VM {req.new_vmid}…"})
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "start_vm",
+            "label": "Start virtual machine",
+            "status": "started",
+        },
+    )
+    state.start_upid, start_error = await _start_vm_for_stream(proxmox, req)
+    if start_error is not None:
+        state.failed = True
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "start_vm",
+                "label": "Start virtual machine",
+                "status": "error",
+                "error": start_error,
+            },
+        )
+        yield sse_event("complete", {"ok": False, "error": start_error, "step": "start_vm"})
+        return
+
+    yield sse_event("terminal_line", {"line": f"Start task: {state.start_upid or 'ok'}"})
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "start_vm",
+            "label": "Start virtual machine",
+            "status": "done",
+            "upid": state.start_upid,
+        },
+    )
 
 
 async def _provision_stream_generator(
@@ -83,131 +331,17 @@ async def _provision_stream_generator(
             },
         )
 
-        yield sse_event(
-            "terminal_line",
-            {
-                "line": f"Cloning template VMID {req.template_vmid} → VMID {req.new_vmid} on {req.target_node}…"
-            },
-        )
-        yield sse_event(
-            "provision_step",
-            {
-                "step": "clone_template",
-                "label": "Clone template VM",
-                "status": "started",
-            },
-        )
-        try:
-            clone_upid = await _clone_template_vm(proxmox, req)
-        except Exception as error:  # noqa: BLE001
-            safe = scrub_cloud_init({"e": str(error)})["e"]
-            yield sse_event(
-                "provision_step",
-                {
-                    "step": "clone_template",
-                    "label": "Clone template VM",
-                    "status": "error",
-                    "error": safe,
-                },
-            )
-            yield sse_event("complete", {"ok": False, "error": safe, "step": "clone_template"})
-            return
-
-        yield sse_event("terminal_line", {"line": f"Clone task: {clone_upid or 'ok'}"})
-        yield sse_event(
-            "provision_step",
-            {
-                "step": "clone_template",
-                "label": "Clone template VM",
-                "status": "done",
-                "upid": clone_upid,
-            },
-        )
-
-        yield sse_event("terminal_line", {"line": "Applying cloud-init configuration…"})
-        yield sse_event(
-            "provision_step",
-            {
-                "step": "configure_cloud_init",
-                "label": "Configure cloud-init",
-                "status": "started",
-            },
-        )
-        try:
-            config_upid = await _configure_cloud_init_vm(proxmox, req)
-        except Exception as error:  # noqa: BLE001
-            safe = scrub_cloud_init({"e": str(error)})["e"]
-            yield sse_event(
-                "provision_step",
-                {
-                    "step": "configure_cloud_init",
-                    "label": "Configure cloud-init",
-                    "status": "error",
-                    "error": safe,
-                },
-            )
-            yield sse_event(
-                "complete", {"ok": False, "error": safe, "step": "configure_cloud_init"}
-            )
-            return
-
-        yield sse_event("terminal_line", {"line": f"Config task: {config_upid or 'ok'}"})
-        yield sse_event(
-            "provision_step",
-            {
-                "step": "configure_cloud_init",
-                "label": "Configure cloud-init",
-                "status": "done",
-                "upid": config_upid,
-            },
-        )
-
-        start_upid: str | None = None
-        if req.start_after_provision:
-            yield sse_event("terminal_line", {"line": f"Starting VM {req.new_vmid}…"})
-            yield sse_event(
-                "provision_step",
-                {
-                    "step": "start_vm",
-                    "label": "Start virtual machine",
-                    "status": "started",
-                },
-            )
-            try:
-                start_upid = await _start_vm_after_provision(proxmox, req)
-            except Exception as error:  # noqa: BLE001
-                safe = scrub_cloud_init({"e": str(error)})["e"]
-                yield sse_event(
-                    "provision_step",
-                    {
-                        "step": "start_vm",
-                        "label": "Start virtual machine",
-                        "status": "error",
-                        "error": safe,
-                    },
-                )
-                yield sse_event("complete", {"ok": False, "error": safe, "step": "start_vm"})
+        stream_state = _StreamProvisionState()
+        for emit_phase in (
+            _emit_clone_template_events,
+            _emit_configure_cloud_init_events,
+            _emit_resize_disk_events,
+            _emit_start_vm_events,
+        ):
+            async for event in emit_phase(proxmox, req, stream_state):
+                yield event
+            if stream_state.failed:
                 return
-
-            yield sse_event("terminal_line", {"line": f"Start task: {start_upid or 'ok'}"})
-            yield sse_event(
-                "provision_step",
-                {
-                    "step": "start_vm",
-                    "label": "Start virtual machine",
-                    "status": "done",
-                    "upid": start_upid,
-                },
-            )
-        else:
-            yield sse_event(
-                "provision_step",
-                {
-                    "step": "start_vm",
-                    "label": "Start virtual machine",
-                    "status": "skipped",
-                },
-            )
 
         vm_status = "started" if req.start_after_provision else "stopped"
         yield sse_event(
@@ -216,9 +350,10 @@ async def _provision_stream_generator(
 
         provision_response = CloudVMProvisionResponse(
             new_vmid=req.new_vmid,
-            clone_upid=clone_upid,
-            config_upid=config_upid,
-            start_upid=start_upid,
+            clone_upid=stream_state.clone_upid,
+            config_upid=stream_state.config_upid,
+            resize_upid=stream_state.resize_upid,
+            start_upid=stream_state.start_upid,
             status=vm_status,
         )
         await _journal_provision_best_effort(
@@ -235,9 +370,10 @@ async def _provision_stream_generator(
             {
                 "ok": True,
                 "new_vmid": req.new_vmid,
-                "clone_upid": clone_upid,
-                "config_upid": config_upid,
-                "start_upid": start_upid,
+                "clone_upid": stream_state.clone_upid,
+                "config_upid": stream_state.config_upid,
+                "resize_upid": stream_state.resize_upid,
+                "start_upid": stream_state.start_upid,
                 "status": vm_status,
             },
         )
