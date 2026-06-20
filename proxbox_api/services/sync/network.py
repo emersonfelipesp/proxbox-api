@@ -533,11 +533,11 @@ async def bulk_reconcile_vm_interfaces(
             patchable_fields=frozenset(_vm_interface_patchable),
             current_normalizer=lambda record: {
                 "name": record.get("name"),
-                "virtual_machine": record.get("virtual_machine"),
+                "virtual_machine": _relation_id_or_none(record.get("virtual_machine")),
                 "enabled": record.get("enabled"),
                 "type": record.get("type"),
                 "description": record.get("description"),
-                "untagged_vlan": record.get("untagged_vlan"),
+                "untagged_vlan": _relation_id_or_none(record.get("untagged_vlan")),
                 "mode": record.get("mode"),
                 "tags": record.get("tags"),
                 "custom_fields": record.get("custom_fields"),
