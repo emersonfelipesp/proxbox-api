@@ -2,6 +2,7 @@
 
 Closes https://git.nmulti.cloud/emersonfelipesp/proxbox-api/issues/90
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -127,6 +128,183 @@ def _coerce_list(raw: object) -> list[object]:
     return []
 
 
+def _online_node_names(nodes_raw: object) -> list[str]:
+    node_names: list[str] = []
+    for item in _coerce_list(nodes_raw):
+        if not isinstance(item, Mapping):
+            continue
+        node_status = item.get("status", "online")
+        node_name = item.get("node")
+        if node_name and node_status in ("online", ""):
+            node_names.append(str(node_name))
+    return node_names
+
+
+def _storage_names(storages_raw: object) -> list[str]:
+    names: list[str] = []
+    for item in _coerce_list(storages_raw):
+        if not isinstance(item, Mapping):
+            continue
+        storage_name = item.get("storage")
+        if storage_name:
+            names.append(str(storage_name))
+    return names
+
+
+def _item_value(item: object, key: str) -> object | None:
+    value = getattr(item, key, None)
+    if value is not None:
+        return value
+    if isinstance(item, Mapping):
+        return item.get(key)
+    return None
+
+
+def _template_item(
+    item: object,
+    *,
+    storage_name: str,
+    seen_volids: set[str],
+) -> CloudLXCTemplateItem | None:
+    volid = _item_value(item, "volid")
+    if not volid:
+        return None
+    volid_str = str(volid)
+    if volid_str in seen_volids:
+        return None
+    seen_volids.add(volid_str)
+
+    path = _item_value(item, "path")
+    size = _item_value(item, "size")
+    return CloudLXCTemplateItem(
+        volid=volid_str,
+        storage=storage_name,
+        path=str(path) if path else None,
+        size=size,
+    )
+
+
+async def _list_vztmpl_storages(
+    proxmox: ProxmoxSession,
+    node: str,
+) -> list[str]:
+    try:
+        storages_raw = await resolve_async(
+            proxmox.session.nodes(node).storage.get(content="vztmpl")
+        )
+    except Exception as err:  # noqa: BLE001
+        logger.info("lxc templates: could not list storages on node=%s: %s", node, err)
+        return []
+    return _storage_names(storages_raw)
+
+
+async def _list_storage_templates(
+    proxmox: ProxmoxSession,
+    node: str,
+    storage_name: str,
+    seen_volids: set[str],
+) -> list[CloudLXCTemplateItem]:
+    try:
+        items = await get_node_storage_content(proxmox, node, storage_name, content="vztmpl")
+    except Exception as err:  # noqa: BLE001
+        logger.info("lxc templates: skipping storage %s/%s: %s", node, storage_name, err)
+        return []
+
+    templates: list[CloudLXCTemplateItem] = []
+    for item in items or []:
+        template = _template_item(item, storage_name=storage_name, seen_volids=seen_volids)
+        if template is not None:
+            templates.append(template)
+    return templates
+
+
+def _build_lxc_create_params(
+    req: CloudLXCProvisionRequest,
+    new_vmid: int,
+) -> dict[str, object]:
+    params: dict[str, object] = {
+        "vmid": new_vmid,
+        "hostname": req.hostname,
+        "ostemplate": req.ostemplate,
+        "rootfs": f"{req.rootfs_storage}:{req.rootfs_size_gb}",
+    }
+    if req.memory_mb is not None:
+        params["memory"] = req.memory_mb
+    if req.cores is not None:
+        params["cores"] = req.cores
+    if req.password is not None:
+        params["password"] = req.password
+    return params
+
+
+async def _create_lxc_container(
+    proxmox: ProxmoxSession,
+    req: CloudLXCProvisionRequest,
+    params: dict[str, object],
+) -> str | None:
+    create_result = await resolve_async(proxmox.session.nodes(req.target_node).lxc.post(**params))
+    create_upid = _extract_upid(create_result)
+    if create_upid and create_upid.startswith("UPID:") and not _is_mock_mode():
+        await _wait_for_upid(proxmox, req.target_node, create_upid)
+    return create_upid
+
+
+async def _start_lxc_container(
+    proxmox: ProxmoxSession,
+    req: CloudLXCProvisionRequest,
+    new_vmid: int,
+) -> str | None:
+    if not req.start_after_provision:
+        return None
+    try:
+        start_result = await resolve_async(
+            proxmox.session.nodes(req.target_node).lxc(new_vmid).status.start.post()
+        )
+    except Exception as err:  # noqa: BLE001
+        logger.warning(
+            "lxc provision: container vmid=%s created but start failed: %s",
+            new_vmid,
+            err,
+        )
+        return None
+    return _extract_upid(start_result)
+
+
+async def _provision_lxc_on_proxmox(
+    proxmox: ProxmoxSession,
+    req: CloudLXCProvisionRequest,
+    actor: str | None,
+) -> CloudLXCProvisionResponse:
+    new_vmid = await _get_next_vmid(proxmox)
+    params = _build_lxc_create_params(req, new_vmid)
+
+    logger.debug(
+        "lxc provision: endpoint=%s vmid=%s node=%s ostemplate=%s rootfs=%s",
+        req.endpoint_id,
+        new_vmid,
+        req.target_node,
+        req.ostemplate,
+        params["rootfs"],
+    )
+
+    create_upid = await _create_lxc_container(proxmox, req, params)
+    start_upid = await _start_lxc_container(proxmox, req, new_vmid)
+
+    logger.info(
+        "lxc provision: success endpoint=%s vmid=%s node=%s actor=%s",
+        req.endpoint_id,
+        new_vmid,
+        req.target_node,
+        actor or "proxbox-api",
+    )
+    return CloudLXCProvisionResponse(
+        new_vmid=new_vmid,
+        create_upid=create_upid,
+        start_upid=start_upid,
+        status="started" if req.start_after_provision else "stopped",
+    )
+
+
 @router.get("/lxc/templates", response_model=list[CloudLXCTemplateItem])
 async def list_lxc_templates(
     session: SessionDep,
@@ -142,73 +320,20 @@ async def list_lxc_templates(
         proxmox = await _open_proxmox_session(gated)
 
         nodes_raw = await resolve_async(proxmox.session.nodes.get())
-        node_names: list[str] = []
-        for item in _coerce_list(nodes_raw):
-            if not isinstance(item, Mapping):
-                continue
-            node_status = item.get("status", "online")
-            node_name = item.get("node")
-            if node_name and node_status in ("online", ""):
-                node_names.append(str(node_name))
-
+        node_names = _online_node_names(nodes_raw)
         if not node_names:
             return []
 
         # Use the first online node to discover storages with vztmpl content
         node = node_names[0]
-
-        try:
-            storages_raw = await resolve_async(
-                proxmox.session.nodes(node).storage.get(content="vztmpl")
-            )
-        except Exception as err:  # noqa: BLE001
-            logger.info("lxc templates: could not list storages on node=%s: %s", node, err)
-            return []
-
-        storage_names: list[str] = []
-        for s in _coerce_list(storages_raw):
-            if isinstance(s, Mapping):
-                sname = s.get("storage")
-                if sname:
-                    storage_names.append(str(sname))
+        storage_names = await _list_vztmpl_storages(proxmox, node)
 
         templates: list[CloudLXCTemplateItem] = []
         seen_volids: set[str] = set()
         for storage_name in storage_names:
-            try:
-                items = await get_node_storage_content(
-                    proxmox, node, storage_name, content="vztmpl"
-                )
-                for item in items or []:
-                    volid = (
-                        getattr(item, "volid", None)
-                        or (isinstance(item, Mapping) and item.get("volid"))
-                        or None
-                    )
-                    if not volid or volid in seen_volids:
-                        continue
-                    seen_volids.add(str(volid))
-                    templates.append(
-                        CloudLXCTemplateItem(
-                            volid=str(volid),
-                            storage=storage_name,
-                            path=str(
-                                getattr(item, "path", None)
-                                or (isinstance(item, Mapping) and item.get("path"))
-                                or ""
-                            )
-                            or None,
-                            size=(
-                                getattr(item, "size", None)
-                                or (isinstance(item, Mapping) and item.get("size"))
-                                or None
-                            ),
-                        )
-                    )
-            except Exception as err:  # noqa: BLE001
-                logger.info(
-                    "lxc templates: skipping storage %s/%s: %s", node, storage_name, err
-                )
+            templates.extend(
+                await _list_storage_templates(proxmox, node, storage_name, seen_volids)
+            )
 
         return templates
     finally:
@@ -239,66 +364,7 @@ async def provision_lxc(
     proxmox: ProxmoxSession | None = None
     try:
         proxmox = await _open_proxmox_session(gated)
-        new_vmid = await _get_next_vmid(proxmox)
-
-        # Build creation params — password scrubbed from debug log, restored for actual call
-        params: dict[str, object] = {
-            "vmid": new_vmid,
-            "hostname": req.hostname,
-            "ostemplate": req.ostemplate,
-            "rootfs": f"{req.rootfs_storage}:{req.rootfs_size_gb}",
-        }
-        if req.memory_mb is not None:
-            params["memory"] = req.memory_mb
-        if req.cores is not None:
-            params["cores"] = req.cores
-        if req.password is not None:
-            params["password"] = req.password
-
-        logger.debug(
-            "lxc provision: endpoint=%s vmid=%s node=%s ostemplate=%s rootfs=%s",
-            req.endpoint_id,
-            new_vmid,
-            req.target_node,
-            req.ostemplate,
-            params["rootfs"],
-        )
-
-        create_result = await resolve_async(
-            proxmox.session.nodes(req.target_node).lxc.post(**params)
-        )
-        create_upid = _extract_upid(create_result)
-
-        if create_upid and create_upid.startswith("UPID:") and not _is_mock_mode():
-            await _wait_for_upid(proxmox, req.target_node, create_upid)
-
-        start_upid: str | None = None
-        if req.start_after_provision:
-            try:
-                start_result = await resolve_async(
-                    proxmox.session.nodes(req.target_node).lxc(new_vmid).status.start.post()
-                )
-                start_upid = _extract_upid(start_result)
-            except Exception as err:  # noqa: BLE001
-                logger.warning(
-                    "lxc provision: container vmid=%s created but start failed: %s",
-                    new_vmid,
-                    err,
-                )
-
-        logger.info(
-            "lxc provision: success endpoint=%s vmid=%s node=%s actor=%s",
-            req.endpoint_id,
-            new_vmid,
-            req.target_node,
-            actor or "proxbox-api",
-        )
-        return CloudLXCProvisionResponse(
-            new_vmid=new_vmid,
-            create_upid=create_upid,
-            start_upid=start_upid,
-            status="started" if req.start_after_provision else "stopped",
-        )
+        return await _provision_lxc_on_proxmox(proxmox, req, actor)
     except HTTPException:
         raise
     except Exception as error:  # noqa: BLE001

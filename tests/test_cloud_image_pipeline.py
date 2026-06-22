@@ -148,11 +148,7 @@ def test_pve_version_pin_keeps_cloud_init_top_level_keys_unindented():
         },
         {
             "path": "/etc/apt/preferences.d/nmulticloud-pve-pin",
-            "content": (
-                "Package: proxmox-ve\n"
-                "Pin: version 9.1.11*\n"
-                "Pin-Priority: 1001\n"
-            ),
+            "content": ("Package: proxmox-ve\nPin: version 9.1.11*\nPin-Priority: 1001\n"),
         },
     ]
     assert parsed["runcmd"] == [

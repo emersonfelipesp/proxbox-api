@@ -86,18 +86,10 @@ def test_cloud_routes_are_registered_on_app(monkeypatch):
     test_app = factory.create_app()
     routes = list(_iter_registered_routes(test_app.routes))
 
-    assert any(
-        path == "/cloud/vm/provision" and "POST" in methods for path, methods in routes
-    )
-    assert any(
-        path == "/cloud/templates" and "GET" in methods for path, methods in routes
-    )
-    assert any(
-        path == "/cloud/templates/images" and "POST" in methods for path, methods in routes
-    )
-    assert any(
-        path == "/cloud/vm/templates" and "GET" in methods for path, methods in routes
-    )
+    assert any(path == "/cloud/vm/provision" and "POST" in methods for path, methods in routes)
+    assert any(path == "/cloud/templates" and "GET" in methods for path, methods in routes)
+    assert any(path == "/cloud/templates/images" and "POST" in methods for path, methods in routes)
+    assert any(path == "/cloud/vm/templates" and "GET" in methods for path, methods in routes)
 
 
 def _valid_request_payload() -> dict[str, object]:
