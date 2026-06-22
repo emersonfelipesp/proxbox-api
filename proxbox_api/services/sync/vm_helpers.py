@@ -15,6 +15,7 @@ _VM_DISK_AGGREGATE_ERROR_RE = re.compile(
     r"aggregate size of assigned virtual disks \((\d+)\)",
     flags=re.IGNORECASE,
 )
+_PROXMOX_NET_CONFIG_KEY_RE = re.compile(r"^net(\d+)$")
 
 
 def _compute_vm_patchable_fields(
@@ -243,6 +244,43 @@ def parse_key_value_string(value: object) -> dict[str, str]:
         if key:
             parsed[key] = raw
     return parsed
+
+
+def iter_proxmox_net_config_items(
+    vm_config: dict[str, object],
+) -> list[tuple[str, object]]:
+    """Return exact ``net<N>`` config entries sorted by numeric suffix.
+
+    Proxmox VM config keys are sparse: a VM can legitimately have ``net1``
+    without ``net0``. Iterate over the keys that are present instead of walking
+    from zero until the first gap.
+    """
+    entries: list[tuple[int, str, object]] = []
+    for key, value in vm_config.items():
+        key_text = str(key)
+        match = _PROXMOX_NET_CONFIG_KEY_RE.match(key_text)
+        if match:
+            entries.append((int(match.group(1)), key_text, value))
+    entries.sort(key=lambda item: item[0])
+    return [(key_text, value) for _index, key_text, value in entries]
+
+
+def parse_proxmox_net_configs(
+    vm_config: dict[str, object],
+) -> list[dict[str, dict[str, str]]]:
+    """Parse all exact Proxmox ``net<N>`` entries from a VM config payload."""
+    networks: list[dict[str, dict[str, str]]] = []
+    for network_name, network_info in iter_proxmox_net_config_items(vm_config):
+        network_dict = parse_key_value_string(network_info)
+        if not network_dict:
+            logger.debug(
+                "Skipping non-string or empty network config %s during parse: %r",
+                network_name,
+                type(network_info).__name__,
+            )
+            continue
+        networks.append({network_name: network_dict})
+    return networks
 
 
 def _is_skippable_ip(ip_text: str, ignore_ipv6_link_local: bool = True) -> tuple[bool, str | None]:

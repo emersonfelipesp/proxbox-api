@@ -75,7 +75,7 @@ def test_create_app_skips_static_mount_when_directory_is_missing(monkeypatch):
 
     test_app = factory.create_app()
 
-    assert not any(route.path == "/static" for route in test_app.routes)
+    assert not any(getattr(route, "path", None) == "/static" for route in test_app.routes)
 
 
 def test_openapi_generation_pipeline_from_sample_capture():

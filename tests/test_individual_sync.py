@@ -150,13 +150,8 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
     async def _fake_get_vm_config_individual(*args, **kwargs):
         return {"onboot": 1, "agent": 1}
 
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.vm_sync.get_vm_config_individual",
-        _fake_get_vm_config_individual,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.vm_sync.get_vm_resource_individual",
-        lambda *args, **kwargs: {
+    async def _fake_get_vm_resource_individual(*args, **kwargs):
+        return {
             "vmid": 101,
             "name": "db01",
             "node": "pve01",
@@ -165,7 +160,15 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
             "maxcpu": 4,
             "maxmem": 8_000_000_000,
             "maxdisk": 120_000_000_000,
-        },
+        }
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.vm_sync.get_vm_config_individual",
+        _fake_get_vm_config_individual,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.vm_sync.get_vm_resource_individual",
+        _fake_get_vm_resource_individual,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.vm_sync.rest_list_async",
