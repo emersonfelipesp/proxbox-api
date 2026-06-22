@@ -170,6 +170,14 @@ Main synchronization endpoints for virtual machines and related resources.
   frame on the stream instead of returning a silent empty/partial success.
   Regression coverage: `tests/test_interface_dense_vm_sync.py`.
 
+- **Sparse Proxmox network config keys.** QEMU config payloads can legitimately
+  expose `net1`, `net2`, or higher `net<N>` keys without a `net0` entry. VM
+  interface sync must iterate exact `net<N>` keys present in the payload and
+  sort them by numeric suffix; never walk from `net0` until the first gap.
+  Prefix lookalikes such as `netboot` and `running-nets-host-mtu` are not VM
+  NIC config entries. Regression coverage:
+  `tests/test_vm_network_config_parsing.py`.
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.

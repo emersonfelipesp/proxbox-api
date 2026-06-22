@@ -118,7 +118,7 @@ from proxbox_api.services.sync.vm_helpers import (
     extract_vm_disk_aggregate_size,
     normalized_mac,
     parse_comma_separated_ints,
-    parse_key_value_string,
+    parse_proxmox_net_configs,
     preferred_primary_ip_order,
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
@@ -828,30 +828,9 @@ async def _dispatch_vm_operation_queue(
     return resolved_records, failed_keys
 
 
-def _parse_network_config_entry(raw_value: object) -> dict[str, str]:
-    """Parse a Proxmox `netX` config entry into a key/value mapping.
-
-    Proxmox returns these values as comma-separated `key=value` pairs.
-    When a non-string value slips through, treat it as absent instead of
-    raising an attribute error on `.split()`.
-    """
-    return parse_key_value_string(raw_value)
-
-
 def _parse_vm_networks(vm_config: dict[str, object]) -> list[dict[str, dict[str, str]]]:
-    """Extract and parse `net0`, `net1`, ... entries from a VM config."""
-    networks: list[dict[str, dict[str, str]]] = []
-    network_id = 0
-    while True:
-        network_name = f"net{network_id}"
-        raw = vm_config.get(network_name)
-        if raw is None:
-            break
-        network_dict = _parse_network_config_entry(raw)
-        if network_dict:
-            networks.append({network_name: network_dict})
-        network_id += 1
-    return networks
+    """Extract and parse exact ``net<N>`` entries from a VM config."""
+    return parse_proxmox_net_configs(vm_config)
 
 
 def _filter_cluster_resources_for_vm(  # noqa: C901

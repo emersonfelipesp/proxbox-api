@@ -356,8 +356,33 @@ def test_router_is_registered_under_proxmox_cluster_prefix():
 
     from proxbox_api.app.factory import create_app
 
+    def _join_mount_path(prefix: str, path: str) -> str:
+        if not prefix:
+            return path
+        if path == "/":
+            return prefix
+        return f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+
     app = create_app()
-    paths = {route.path for route in app.routes}
+    paths: set[str] = set()
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            paths.add(path)
+        include_context = getattr(route, "include_context", None)
+        prefix = getattr(include_context, "prefix", "") or ""
+        original_router = getattr(route, "original_router", None)
+        for original_route in getattr(original_router, "routes", ()) or ():
+            original_path = getattr(original_route, "path", None)
+            if isinstance(original_path, str):
+                paths.add(_join_mount_path(prefix, original_path))
+        effective_route_contexts = getattr(route, "effective_route_contexts", None)
+        if callable(effective_route_contexts):
+            paths.update(
+                context.path
+                for context in effective_route_contexts()
+                if isinstance(getattr(context, "path", None), str)
+            )
     assert "/proxmox/cluster/ha/status" in paths
     assert "/proxmox/cluster/ha/resources" in paths
     assert "/proxmox/cluster/ha/resources/by-vm/{vmid}" in paths
