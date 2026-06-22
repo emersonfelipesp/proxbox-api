@@ -35,6 +35,7 @@ from proxbox_api.services.sync.individual.interface_sync import sync_interface_i
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
+    iter_proxmox_net_config_items,
     normalize_current_virtual_machine_payload,
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
@@ -568,11 +569,7 @@ async def sync_vm_with_related(
             vm_config = await get_vm_config_individual(px, node, vm_type, vmid)
         except Exception:
             vm_config = {}
-        interface_names = sorted(
-            key
-            for key in vm_config
-            if isinstance(key, str) and key.startswith("net") and not key.startswith("nets")
-        )
+        interface_names = [key for key, _value in iter_proxmox_net_config_items(vm_config)]
         if not interface_names and vm_type == "qemu":
             interface_names = ["net0"]
         for interface_name in interface_names:

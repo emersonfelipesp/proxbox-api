@@ -32,6 +32,19 @@ def _parse_key_value_string(value: object) -> dict[str, str]:
 _DYNAMIC_KEY_RE = re.compile(
     r"^(scsi|net|ide|sata|virtio|unused|smbios|hostpci|usb|serial|parallel|numa|ipconfig|virtiofs)\d+$"
 )
+_NET_CONFIG_KEY_RE = re.compile(r"^net(\d+)$")
+
+
+def _iter_net_config_items(extra: dict[str, object]) -> list[tuple[str, object]]:
+    """Return exact ``net<N>`` config entries sorted by numeric suffix."""
+    entries: list[tuple[int, str, object]] = []
+    for key, value in extra.items():
+        key_text = str(key)
+        match = _NET_CONFIG_KEY_RE.match(key_text)
+        if match:
+            entries.append((int(match.group(1)), key_text, value))
+    entries.sort(key=lambda item: item[0])
+    return [(key_text, value) for _index, key_text, value in entries]
 
 
 class VMConfig(BaseModel):
@@ -247,16 +260,10 @@ class VMConfig(BaseModel):
         """Parsed network configuration entries from raw VM config."""
 
         networks: list[dict[str, object]] = []
-        index = 0
-        while True:
-            key = f"net{index}"
-            raw_value = (self.model_extra or {}).get(key)
-            if raw_value is None:
-                break
+        for key, raw_value in _iter_net_config_items(self.model_extra or {}):
             parsed = _parse_key_value_string(raw_value)
             if parsed:
                 networks.append({key: parsed})
-            index += 1
         return networks
 
 

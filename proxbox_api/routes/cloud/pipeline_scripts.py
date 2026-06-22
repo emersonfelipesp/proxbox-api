@@ -162,10 +162,7 @@ def _append_zabbix_config(lines: list[str], zabbix_server: str) -> None:
                 "/etc/zabbix/zabbix_agent2.conf"
             ),
             "    else",
-            (
-                f"      printf 'ServerActive={zabbix_server}\\n' "
-                ">> /etc/zabbix/zabbix_agent2.conf"
-            ),
+            (f"      printf 'ServerActive={zabbix_server}\\n' >> /etc/zabbix/zabbix_agent2.conf"),
             "    fi",
         ]
     )

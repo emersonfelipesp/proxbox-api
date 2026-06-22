@@ -5,7 +5,7 @@ from __future__ import annotations
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async
-from proxbox_api.services.sync.vm_helpers import parse_key_value_string
+from proxbox_api.services.sync.vm_helpers import parse_proxmox_net_configs
 
 
 async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
@@ -97,7 +97,7 @@ async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
 def parse_network_config(vm_config: dict[str, object]) -> list[dict[str, dict[str, str]]]:
     """Parse Proxmox VM network configuration into list of network dicts.
 
-    Extracts net0, net1, net2, etc. from config and parses key=value pairs.
+    Extracts exact net<N> entries from config and parses key=value pairs.
 
     Args:
         vm_config: VM configuration dict from Proxmox
@@ -105,29 +105,7 @@ def parse_network_config(vm_config: dict[str, object]) -> list[dict[str, dict[st
     Returns:
         List of parsed network configs
     """
-    networks: list[dict[str, dict[str, str]]] = []
-    network_id = 0
-    while True:
-        network_name = f"net{network_id}"
-        network_info = vm_config.get(network_name)
-        if network_info is None:
-            break
-        try:
-            network_dict = parse_key_value_string(network_info)
-            if not network_dict:
-                logger.debug(
-                    "Skipping non-string or empty network config %s during parse: %r",
-                    network_name,
-                    type(network_info).__name__,
-                )
-                network_id += 1
-                continue
-            networks.append({network_name: network_dict})
-        except (ValueError, IndexError) as e:
-            logger.warning("Failed to parse network config %s: %s", network_name, e)
-        network_id += 1
-
-    return networks
+    return parse_proxmox_net_configs(vm_config)
 
 
 def get_interface_name_from_config_and_agent(

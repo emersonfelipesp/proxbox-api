@@ -6,6 +6,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.services.sync.vm_helpers import (
+    iter_proxmox_net_config_items,
     parse_key_value_string,
     resolve_netbox_cluster_id_by_name,
 )
@@ -205,11 +206,10 @@ def parse_disk_config_entry(raw_value: object) -> dict[str, str]:
 def extract_net_interface_config(vm_config: dict[str, object]) -> dict[str, dict[str, str]]:
     """Extract parsed netX interface entries from a VM config payload."""
     net_config: dict[str, dict[str, str]] = {}
-    for key, value in vm_config.items():
-        if key.startswith("net") and not key.startswith("nets"):
-            config_entry = parse_key_value_string(value)
-            if config_entry:
-                net_config[key] = config_entry
+    for key, value in iter_proxmox_net_config_items(vm_config):
+        config_entry = parse_key_value_string(value)
+        if config_entry:
+            net_config[key] = config_entry
     return net_config
 
 
