@@ -16,6 +16,8 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 ## Current Modules
 
 - `__init__.py`: sync service namespace for Proxmox-to-NetBox flows.
+- `cluster_links.py`: repairs netbox-proxbox `ProxmoxCluster.netbox_cluster`
+  links by exact NetBox cluster-name resolution after cluster reconciliation.
 - `clusters.py`: cluster synchronization helpers.
 - `device_ensure.py`: device creation and reconciliation helpers.
 - `devices.py`: device synchronization from Proxmox nodes to NetBox.
@@ -79,6 +81,13 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   cluster-dependent write paths on the same helper to avoid NetBox validation
   errors where the assigned cluster belongs to a different site than the
   dependent object payload.
+- **ProxmoxCluster link invariant.** After a NetBox
+  `virtualization.Cluster` is reconciled, cluster sync calls
+  `cluster_links.sync_proxmox_cluster_netbox_link()` to set or repair every
+  matching netbox-proxbox `ProxmoxCluster.netbox_cluster` row by exact cluster
+  name. This backfills existing multi-endpoint plugin rows whose
+  `netbox_cluster` was previously null and keeps the NMS Cloud
+  cluster-to-endpoint map resolvable after re-sync.
 
 ## Extension Guidance
 
