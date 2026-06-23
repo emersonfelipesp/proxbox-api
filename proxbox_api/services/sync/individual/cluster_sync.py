@@ -8,6 +8,7 @@ from proxbox_api.constants import DISCOVERY_TAG_CLUSTER
 from proxbox_api.netbox_rest import rest_first_async, rest_list_async
 from proxbox_api.services.netbox_writers import upsert_cluster, upsert_cluster_type
 from proxbox_api.services.run_session import SyncContext
+from proxbox_api.services.sync.cluster_links import sync_proxmox_cluster_netbox_link
 from proxbox_api.services.sync.discovery_tags import discovery_tag_ref, merge_tag_refs
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
 
@@ -109,6 +110,7 @@ async def sync_cluster_individual(
             mode="cluster",
             tag_refs=cluster_tag_refs,
         )
+        await sync_proxmox_cluster_netbox_link(ctx.nb, cluster_name=cluster_name)
 
         netbox_object = (
             cluster_result.record.serialize()

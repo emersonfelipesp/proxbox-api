@@ -24,6 +24,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxSiteSyncState,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.sync.cluster_links import sync_proxmox_cluster_netbox_link
 from proxbox_api.services.sync.discovery_tags import discovery_tag_ref, merge_tag_refs
 from proxbox_api.types import NetBoxRecord
 
@@ -657,6 +658,9 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
     cluster_by_name = {
         str(record.get("name")): record for record in dependency_phase_results["clusters"].records
     }
+    for cluster_name in sorted(cluster_by_name):
+        await sync_proxmox_cluster_netbox_link(nb, cluster_name=cluster_name)
+
     device_type = (
         dependency_phase_results["device_types"].records[0]
         if dependency_phase_results["device_types"].records
