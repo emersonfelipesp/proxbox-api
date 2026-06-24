@@ -31,6 +31,13 @@ All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. 
 - `GET /admin/logs` - In-memory backend log buffer with optional filters for `level`, `limit`, `offset`, `since`, and `operation_id`.
 - `GET /admin/logs/stream` - SSE real-time log stream. Supports query parameters `level`, `errors_only`, `operation_id`, and `newer_than_id`.
 
+## Service Route Groups
+
+PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
+documented in [Service Routes](./service-routes.md). That page also explains
+`PROXBOX_FEATURES` sidecar-only mounting and the write gates used by cloud and
+intent routes.
+
 ## Cloud Firecracker (`/cloud/firecracker`)
 
 These endpoints are called by `nms-backend` after it resolves the selected

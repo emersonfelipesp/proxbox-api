@@ -67,6 +67,10 @@ Firecracker host-agent provisioning is documented in
 [`docs/operations/firecracker.md`](docs/operations/firecracker.md), including
 the Cloud endpoints, SSE events, request shape, and response shape.
 
+PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
+indexed in [`docs/api/service-routes.md`](docs/api/service-routes.md), including
+`PROXBOX_FEATURES` sidecar-only behavior.
+
 ### Local docs build
 
 ```bash
