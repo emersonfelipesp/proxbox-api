@@ -116,11 +116,12 @@ async def test_sync_node_network_maps_types_enabled_and_topology(monkeypatch):
     assert patches["vmbr1.200"]["mode"] == "tagged"
     assert patches["vmbr1.200"]["tagged_vlans"] == [900 + 200]
 
-    # IPs: both families on vmbr0, plus the VLAN sub-interface address.
+    # IPs: vmbr0 gets its v4; the v6 (2001:...::/64) is a network ID and is
+    # skipped (NetBox won't assign it). VLAN sub-interface gets its address.
     by_iface = {}
     for c in ip_calls:
         by_iface.setdefault(c["interface_id"], []).append(c["ip"])
-    assert sorted(by_iface[iface_ids["vmbr0"]]) == ["141.94.139.106/24", "2001:41d0:403:4a6a::/64"]
+    assert by_iface[iface_ids["vmbr0"]] == ["141.94.139.106/24"]
     assert by_iface[iface_ids["vmbr1.200"]] == ["10.16.200.3/24"]
 
     # MAC: only the bridge with an `hwaddress` option gets one, normalized to
@@ -131,6 +132,20 @@ async def test_sync_node_network_maps_types_enabled_and_topology(monkeypatch):
         "type": "dcim.interface",
         "interface_id": iface_ids["vmbr0"],
     }
+
+
+def test_is_network_id():
+    # Subnet network addresses (host bits zero) are network IDs.
+    assert network._is_network_id("2001:41d0:403:4a6a::/64") is True
+    assert network._is_network_id("10.0.0.0/24") is True
+    # Real host addresses are not.
+    assert network._is_network_id("141.94.139.106/24") is False
+    assert network._is_network_id("10.16.200.3/24") is False
+    # Host-style prefixes are assignable even at the "network" address.
+    assert network._is_network_id("10.0.0.0/32") is False
+    assert network._is_network_id("10.0.0.0/31") is False
+    assert network._is_network_id("2001:db8::/128") is False
+    assert network._is_network_id("2001:db8::/127") is False
 
 
 async def test_sync_node_network_skips_when_no_entries(monkeypatch):

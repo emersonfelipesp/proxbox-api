@@ -172,6 +172,22 @@ def _node_network_membership(
     return member_bridge, member_bond
 
 
+def _is_network_id(cidr: str) -> bool:
+    """True if ``cidr`` is a subnet's network address (host bits all zero).
+
+    NetBox refuses to assign such an address to an interface. Mirrors its
+    leniency for host-style prefixes (/31,/32 and /127,/128), where the
+    "network" address is a valid assignable host.
+    """
+    try:
+        iface = _ip_interface(cidr)
+    except ValueError:
+        return False
+    return iface.ip == iface.network.network_address and iface.network.prefixlen < (
+        iface.max_prefixlen - 1
+    )
+
+
 def _hwaddress_from_options(entry: dict) -> str | None:
     """Extract a MAC from a Proxmox interface entry's ``options`` (``hwaddress ...``).
 
@@ -300,6 +316,11 @@ async def sync_node_network(  # noqa: C901
         for cidr_field in ("cidr", "cidr6"):
             cidr = entry.get(cidr_field)
             if not cidr or iface_id is None:
+                continue
+            if _is_network_id(cidr):
+                # e.g. Proxmox reporting a node's v6 as the ::/64 base; NetBox
+                # won't assign a network ID to an interface.
+                logger.debug("Skipping network-ID address %s on node interface %s", cidr, iface)
                 continue
             try:
                 await _reconcile_interface_ip(
