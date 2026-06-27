@@ -43,6 +43,18 @@ def _relation_id_or_none(value: object) -> int | None:
         return None
 
 
+def _host_address(ip_addr: str) -> str:
+    """Return the host portion of a CIDR (drops the mask).
+
+    NetBox's ``address`` filter is exact-CIDR, so querying ``1.2.3.4/24`` will
+    NOT match an existing ``1.2.3.4/32`` record. Looking up adoptable records by
+    host (mask-agnostic) lets us adopt a pre-existing address regardless of its
+    stored mask — e.g. an operator-seeded ``/32`` — instead of failing to create
+    a duplicate under ENFORCE_GLOBAL_UNIQUE.
+    """
+    return ip_addr.split("/", 1)[0]
+
+
 async def _reconcile_interface_ip(
     nb,
     *,
@@ -80,7 +92,7 @@ async def _reconcile_interface_ip(
         existing = await rest_list_async(
             nb,
             "/api/ipam/ip-addresses/",
-            query={"address": ip_addr, "limit": 50},
+            query={"address": _host_address(ip_addr), "limit": 50},
         )
     except Exception as list_exc:
         # If ownership cannot be resolved, fall back to the interface-scoped
