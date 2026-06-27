@@ -172,6 +172,20 @@ def _node_network_membership(
     return member_bridge, member_bond
 
 
+def _hwaddress_from_options(entry: dict) -> str | None:
+    """Extract a MAC from a Proxmox interface entry's ``options`` (``hwaddress ...``).
+
+    Proxmox exposes a MAC in /network only for bridges/bonds carrying an explicit
+    ``hwaddress`` option; physical NIC MACs are not present in the network API
+    (they require ethtool/sysfs via the hardware-discovery path).
+    """
+    for opt in entry.get("options") or []:
+        parts = str(opt).split()
+        if len(parts) == 2 and parts[0].lower() == "hwaddress":
+            return parts[1]
+    return None
+
+
 def _node_iface_normalizer(record: dict) -> dict:
     return {
         "device": record.get("device"),
@@ -215,6 +229,8 @@ async def sync_node_network(  # noqa: C901
     interface's scalar fields + IPs (+ VLAN objects) and collects a name -> id
     map; phase 2 patches the cross-references once all ids are known.
     """
+    from proxbox_api.services.sync.mac_address import normalize_mac, reconcile_mac_for_interface
+
     now = now or datetime.now(timezone.utc)
     device_id = device.get("id")
     entries = [
@@ -300,6 +316,25 @@ async def sync_node_network(  # noqa: C901
                 result.setdefault("ip_addresses", []).append(cidr)
             except Exception as ip_exc:  # noqa: BLE001
                 logger.warning("Failed to sync IP %s on node interface %s: %s", cidr, iface, ip_exc)
+
+        # MAC (bridges/bonds only — see _hwaddress_from_options). NetBox 4.5+
+        # stores it as a dcim.MACAddress referenced by primary_mac_address.
+        mac = normalize_mac(_hwaddress_from_options(entry))
+        if mac and iface_id is not None:
+            try:
+                await reconcile_mac_for_interface(
+                    nb,
+                    mac=mac,
+                    assigned_object_type="dcim.interface",
+                    assigned_object_id=iface_id,
+                    interface_list_path="/api/dcim/interfaces/",
+                    tag_refs=tag_refs,
+                )
+                result["mac_address"] = mac
+            except Exception as mac_exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to sync MAC %s on node interface %s: %s", mac, iface, mac_exc
+                )
         results.append(result)
 
     # Phase 2 — topology cross-references, now that every interface has an id.
