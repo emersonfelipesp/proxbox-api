@@ -23,6 +23,7 @@ NETWORK = [
         "cidr": "141.94.139.106/24",
         "gateway": "141.94.139.254",
         "cidr6": "2001:41d0:403:4a6a::/64",
+        "options": ["hwaddress a0:42:3f:4c:61:aa"],
     },
     {"iface": "vmbr1", "type": "bridge", "active": 1, "bridge_ports": "eno2"},
     {
@@ -61,13 +62,25 @@ def _install_mocks(monkeypatch):
         ip_calls.append({"ip": ip_addr, "interface_id": interface_id})
         return 1
 
+    mac_calls: list[dict] = []
+
+    async def fake_mac(nb, *, mac, assigned_object_type, assigned_object_id, **kw):
+        mac_calls.append(
+            {"mac": mac, "type": assigned_object_type, "interface_id": assigned_object_id}
+        )
+        return 1, "created"
+
     monkeypatch.setattr(network, "rest_reconcile_async", fake_reconcile)
     monkeypatch.setattr(network, "_reconcile_interface_ip", fake_ip)
-    return iface_ids, iface_calls, ip_calls
+    # sync_node_network imports these from mac_address at call time.
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.mac_address.reconcile_mac_for_interface", fake_mac
+    )
+    return iface_ids, iface_calls, ip_calls, mac_calls
 
 
 async def test_sync_node_network_maps_types_enabled_and_topology(monkeypatch):
-    iface_ids, iface_calls, ip_calls = _install_mocks(monkeypatch)
+    iface_ids, iface_calls, ip_calls, mac_calls = _install_mocks(monkeypatch)
 
     await network.sync_node_network(
         nb=object(), device={"id": 1}, network_entries=NETWORK, tag_refs=[]
@@ -109,6 +122,15 @@ async def test_sync_node_network_maps_types_enabled_and_topology(monkeypatch):
         by_iface.setdefault(c["interface_id"], []).append(c["ip"])
     assert sorted(by_iface[iface_ids["vmbr0"]]) == ["141.94.139.106/24", "2001:41d0:403:4a6a::/64"]
     assert by_iface[iface_ids["vmbr1.200"]] == ["10.16.200.3/24"]
+
+    # MAC: only the bridge with an `hwaddress` option gets one, normalized to
+    # NetBox canonical form and assigned to the dcim.interface.
+    assert len(mac_calls) == 1
+    assert mac_calls[0] == {
+        "mac": "A0:42:3F:4C:61:AA",
+        "type": "dcim.interface",
+        "interface_id": iface_ids["vmbr0"],
+    }
 
 
 async def test_sync_node_network_skips_when_no_entries(monkeypatch):
