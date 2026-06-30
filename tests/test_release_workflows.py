@@ -56,6 +56,8 @@ def test_ci_e2e_loads_prepared_image_artifacts_before_stack_start():
     assert "prepare-e2e-service-images:" in workflow
     assert "prepare-proxmox-image:" in workflow
     assert "build-proxbox-image:" in workflow
+    assert "proxbox-e2e-proxmox-mock:${{ matrix.service }}" in workflow
+    assert "emersonfelipesp/proxmox-sdk:latest-${{ matrix.service }}" not in workflow
     assert "proxbox_image_matrix" in workflow
     _assert_order(
         e2e_block,
@@ -83,8 +85,25 @@ def test_netbox_source_build_fallback_uses_current_upstream_base_image():
 
     assert "FROM=ubuntu:24.04" not in ci_workflow
     assert "FROM=ubuntu:24.04" not in publish_workflow
-    assert ci_workflow.count('--build-arg "FROM=ubuntu:26.04"') == 1
-    assert publish_workflow.count('--build-arg "FROM=ubuntu:26.04"') == 2
+    assert "FROM=ubuntu:26.04" not in ci_workflow
+    assert "FROM=ubuntu:26.04" not in publish_workflow
+    assert ci_workflow.count('--build-arg "FROM=${CI_OFFICIAL_IMAGE_PREFIX}/ubuntu:26.04"') == 1
+    assert (
+        publish_workflow.count('--build-arg "FROM=${CI_OFFICIAL_IMAGE_PREFIX}/ubuntu:26.04"') == 2
+    )
+
+
+def test_ci_docker_builds_use_mirror_backed_python_base_images():
+    workflow = _read(CI_WORKFLOW_PATH)
+
+    assert "CI_OFFICIAL_IMAGE_PREFIX: mirror.gcr.io/library" in workflow
+    assert (
+        '--build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-alpine"' in workflow
+    )
+    assert (
+        '--build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-slim-bookworm"'
+        in workflow
+    )
 
 
 def test_publish_workflow_routes_tags_to_testpypi_and_rcs_to_pypi():

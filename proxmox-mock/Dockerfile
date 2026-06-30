@@ -1,4 +1,6 @@
-FROM python:3.13-slim-bookworm AS builder
+ARG PYTHON_BASE_IMAGE=python:3.13-slim-bookworm
+
+FROM ${PYTHON_BASE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -15,7 +17,7 @@ RUN uv venv --seed /app/.venv && \
     /app/.venv/bin/python -m pip install --upgrade pip && \
     /app/.venv/bin/pip install .
 
-FROM python:3.13-slim-bookworm AS runtime
+FROM ${PYTHON_BASE_IMAGE} AS runtime
 
 WORKDIR /app
 

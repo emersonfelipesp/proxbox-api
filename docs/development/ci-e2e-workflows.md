@@ -51,10 +51,15 @@ flowchart TD
 CI prepares Docker images once as short-lived workflow artifacts, then every
 E2E matrix leg loads those artifacts before starting the stack. This keeps the
 large NetBox-version matrix from repeatedly pulling Docker Hub images or
-rebuilding Proxbox API targets. The NetBox prep job pulls the public image when
-available and falls back to a source build when the registry image is missing.
-The fallback source build follows the current upstream `netbox-docker` base
-image, `ubuntu:26.04`, so the package set matches the upstream Dockerfile.
+rebuilding Proxbox API targets. Official Python, PostgreSQL, Redis, nginx, and
+NetBox fallback base images are pulled through `mirror.gcr.io/library` to avoid
+Docker Hub quota failures. The Proxmox mock image is built from the checked-out
+`proxmox-mock/` package for each `pve`, `pbs`, and `pdm` service marker. The
+NetBox prep job pulls the public image when available and falls back to a
+source build when the registry image is missing. The fallback source build
+follows the current upstream `netbox-docker` base image, `ubuntu:26.04`, via the
+mirror-backed image reference, so the package set matches the upstream
+Dockerfile.
 
 ## E2E Stack
 
@@ -90,6 +95,9 @@ Important E2E rules:
 - `/api/status/` must be ready before tokens and endpoints are configured.
 - Docker images are loaded from prepared artifacts; E2E matrix jobs do not pull
   Docker Hub images or rebuild Proxbox API containers directly.
+- Proxmox mock containers use the local schema-driven mock package and expose
+  `PROXMOX_MOCK_SERVICE` so PBS/PDM service smoke tests can verify the active
+  service marker without pulling external mock images.
 - Docker-backed Proxmox tests run with the `mock_http` marker.
 - The in-process `MockBackend` pass runs separately with the `mock_backend`
   marker.
