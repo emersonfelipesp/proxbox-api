@@ -303,12 +303,18 @@ Implemented in `proxbox_api/routes/proxmox/firewall.py`. All read endpoints are 
 
 ### SDN (read-only, PVE 9.2+)
 
-Implemented in `proxbox_api/routes/proxmox/sdn.py`. All endpoints are read-only. Returns 501 (caught and skipped) on PVE < 9.2 clusters; healthy clusters still contribute their rows.
+Implemented in `proxbox_api/routes/proxmox/sdn.py`. All endpoints are read-only. Older clusters that do not expose a path are counted as skipped warnings; healthy clusters still contribute their rows.
 
+- `GET /proxmox/sdn/controllers` — List SDN controllers across all clusters. Returns `list[SdnControllerSchema]`.
+- `GET /proxmox/sdn/zones` — List SDN zones across all clusters. Returns `list[SdnZoneSchema]`.
+- `GET /proxmox/sdn/vnets` — List SDN VNets across all clusters. Returns `list[SdnVNetSchema]`.
+- `GET /proxmox/sdn/subnets` — List SDN VNet subnets across all clusters. Returns `list[SdnSubnetSchema]`.
 - `GET /proxmox/sdn/fabrics` — List SDN fabrics (WireGuard/BGP/VXLAN/OSPF) across all clusters. Returns `list[SdnFabricSchema]`.
 - `GET /proxmox/sdn/fabrics/all` — List all SDN fabrics including inherited ones across all clusters. Returns `list[SdnFabricSchema]`.
 - `GET /proxmox/sdn/route-maps` — List SDN route-map objects (BGP/EVPN route filtering) across all clusters. Returns `list[SdnRouteMapSchema]`.
 - `GET /proxmox/sdn/prefix-lists` — List SDN prefix-list objects (CIDR ranges for BGP/EVPN filtering) across all clusters. Returns `list[SdnPrefixListSchema]`.
+- `GET /proxmox/sdn/node-status` — List node-local zone content, bridge, MAC-VRF, and IP-VRF rows. Returns `list[SdnNodeStatusSchema]`.
+- `GET /proxmox/sdn/create/stream` — Server-Sent Events stage that reconciles read-only SDN state into NetBox: EVPN/VXLAN VNets to `vpn.L2VPN`, resolvable runtime targets to `vpn.L2VPNTermination`, EVPN import route targets to `ipam.RouteTarget`, valid subnets to `ipam.Prefix`, and all Proxmox-specific SDN rows to `netbox-proxbox` plugin metadata.
 
 ### Datacenter (PVE 9.2+)
 
