@@ -461,6 +461,11 @@ async def bulk_reconcile_vlans(
             "/api/ipam/vlans/",
             payloads=vlan_payloads,
             lookup_fields=["vid", "site", "tenant"],
+            # NetBox's `site`/`tenant` filters match by slug, but the payload
+            # carries their NetBox ids. Without this remap the id is silently
+            # ignored, so the existence check is not scoped to site/tenant and
+            # the reconcile can match/patch the wrong VLAN (or recreate one).
+            lookup_query_field_map={"site": "site_id", "tenant": "tenant_id"},
             schema=NetBoxVlanSyncState,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
@@ -529,6 +534,11 @@ async def bulk_reconcile_vm_interfaces(
             "/api/virtualization/interfaces/",
             payloads=interface_payloads,
             lookup_fields=["name", "virtual_machine"],
+            # NetBox's `virtual_machine` filter matches by VM *name*; the payload
+            # carries the VM id, so without this remap the id is silently ignored
+            # and the existence check is not scoped to the VM. The reconcile then
+            # tries to re-create existing interfaces (HTTP 400 "already exists").
+            lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
             schema=NetBoxVirtualMachineInterfaceSyncState,
             patchable_fields=frozenset(_vm_interface_patchable),
             current_normalizer=lambda record: {
