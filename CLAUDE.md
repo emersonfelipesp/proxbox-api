@@ -25,10 +25,10 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ### Companion repos (cross-link map)
 
-- **`netbox-proxbox` v0.0.20.post1** — the NetBox plugin that consumes this backend.
+- **`netbox-proxbox` v0.0.21** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.20.post1` ↔ `proxbox-api 0.0.17.post2` ↔ `proxmox-sdk 0.0.11.post2`
-  ↔ `netbox-sdk 0.0.9.post2`. Operational-verb routes (start/stop/snapshot/migrate)
+  pairing is `netbox-proxbox 0.0.21` ↔ `proxbox-api 0.0.18.post5` ↔ `proxmox-sdk 0.0.12`
+  ↔ `netbox-sdk 0.0.10`. Operational-verb routes (start/stop/snapshot/migrate)
   require `proxbox-api >= 0.0.17`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
   Firecracker Cloud uses the plugin for host pools, host-agent inventory, image
@@ -110,7 +110,7 @@ Open the nearest scoped guide for the code you are changing.
 
 - `proxbox_api/`: FastAPI package, session factories, schemas, routes, sync services, code generation, and shared utilities.
 - `proxbox-reconcile-rs/`: optional PyO3/maturin Rust package for VM operation-queue reconciliation parity testing and opt-in execution.
-- `proxmox-mock/`: Standalone `proxmox-mock-api` dev-dependency package (editable install from `pyproject.toml` `[tool.uv.sources]`). Used in tests as the mock Proxmox server. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.11.post2` in `pyproject.toml`), not a local subdirectory.
+- `proxmox-mock/`: Standalone `proxmox-mock-api` dev-dependency package (editable install from `pyproject.toml` `[tool.uv.sources]`). Used in tests as the mock Proxmox server. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.12` in `pyproject.toml`), not a local subdirectory.
 - `nextjs-ui/`: Next.js frontend used to manage one NetBox endpoint and multiple Proxmox endpoints.
 - `tests/`: Unit, integration, and end-to-end tests for the backend package.
 - `benchmarks/`: local benchmark helpers, including VM reconciliation queue datasets and timers.
@@ -249,7 +249,7 @@ while the Docker container is healthy on port `18800`.
 
 ## Dependencies
 
-- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.11.post2` (external PyPI package), `netbox-sdk==0.0.9.post1` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`
+- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.12` (external PyPI package), `netbox-sdk==0.0.10` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`
 - Tests: `pytest`, `httpx`, `playwright`, `pytest-cov`, `pytest-asyncio`, `pytest-xdist`
 - Docs: `mkdocs`, `mkdocs-material`, `mkdocs-static-i18n`
 
