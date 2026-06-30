@@ -29,7 +29,7 @@ Top-level namespace for FastAPI route packages.
   - `DELETE /proxmox/{vm_type}/{vmid}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
   - `POST /proxmox/{vm_type}/{vmid}/backup?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
   - `DELETE /proxmox/{vm_type}/{vmid}/snapshot/{snapname}?endpoint_id={id}` where `vm_type` is `qemu` or `lxc`
-- `ssh_terminal.py`: Browser SSH terminal routes mounted at `/ssh/*`. `POST /ssh/sessions` creates a one-time ticket; WebSocket `/ssh/sessions/{session_id}/ws` bridges a PTY to the target host via `asyncssh`.
+- `ssh_terminal.py`: Browser SSH terminal routes mounted at `/ssh/*`. `POST /ssh/sessions` creates a one-time ticket; WebSocket `/ssh/sessions/{session_id}/ws` bridges a PTY to the target host via `asyncssh`. `GET /ssh/host-key-fingerprint?host=&port=` opens an `asyncssh` handshake (no auth — public host key only) and returns the canonical `SHA256:<base64>` fingerprint so the NetBox plugin can auto-fill the pinned `ssh_known_host_fingerprint`. The scan reuses the exact terminal host-key args (`known_hosts=b""`, `server_host_key_algs="default"`) so the returned value matches what `validate_host_public_key` later verifies.
 - `virtualization/`: virtualization bootstrap and VM sync routes.
 - `sync/`: internal sync route helpers used by other route packages, including `sync/individual/`.
 

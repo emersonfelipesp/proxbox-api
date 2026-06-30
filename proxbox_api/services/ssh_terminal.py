@@ -379,6 +379,88 @@ def _pinned_client_factory(asyncssh_module: Any, expected_fingerprint: str) -> o
     return PinnedHostKeyClient
 
 
+class HostKeyScanError(Exception):
+    """Raised when a host-key fingerprint scan cannot be completed."""
+
+
+def _capture_client_factory(asyncssh_module: Any, captured: dict[str, Any]) -> object:
+    class CaptureHostKeyClient(asyncssh_module.SSHClient):  # type: ignore[misc]
+        def validate_host_public_key(self, host, addr, port, key):  # noqa: ANN001
+            # Scanning, not trusting: capture the key and accept so the
+            # handshake proceeds far enough to expose it. Trust is decided
+            # later by the operator who reviews the returned fingerprint.
+            captured["key"] = key
+            return True
+
+    return CaptureHostKeyClient
+
+
+async def scan_host_key_fingerprint(
+    host: str, port: int = 22, *, timeout: float = 10.0
+) -> tuple[str, str]:
+    """Return ``(canonical_fingerprint, key_type)`` for the host's SSH key.
+
+    The scan MUST mirror :func:`connect_and_relay`'s host-key handling exactly,
+    so the value returned here is byte-identical to what
+    ``validate_host_public_key`` later verifies during a real terminal session:
+
+    * ``known_hosts=b""`` — empty bytes (NOT ``None``). ``None`` disables host-key
+      checking entirely and the client factory's ``validate_host_public_key`` is
+      never consulted, so nothing would be captured. Empty bytes loads no system
+      ``known_hosts`` while still routing every host key through the callback.
+    * ``server_host_key_algs="default"`` — same algorithm preference as the
+      terminal, so the same server key is negotiated and fingerprinted.
+
+    Host-key validation happens during key exchange, before authentication, so
+    the key is captured even though the scan never authenticates. A post-key
+    auth failure is therefore success; only connect-refused / timeout / DNS
+    failures (no key captured) are real errors.
+    """
+    asyncssh = _load_asyncssh()
+    captured: dict[str, Any] = {}
+    conn = None
+    try:
+        conn = await asyncssh.connect(
+            host,
+            port=port,
+            username="proxbox-host-key-scan",
+            password=None,
+            client_keys=[],
+            agent_path=None,
+            known_hosts=b"",
+            server_host_key_algs="default",
+            client_factory=_capture_client_factory(asyncssh, captured),
+            connect_timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 — auth failure after key capture is expected
+        if "key" not in captured:
+            raise HostKeyScanError(
+                f"Could not retrieve SSH host key from {host}:{port}: {exc}"
+            ) from exc
+    finally:
+        if conn is not None:
+            conn.close()
+            try:
+                await conn.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+
+    key = captured.get("key")
+    if key is None:
+        raise HostKeyScanError(f"No SSH host key received from {host}:{port}")
+    fingerprint = _fingerprint_from_key(key)
+    key_type = ""
+    getter = getattr(key, "get_algorithm", None)
+    if callable(getter):
+        try:
+            value = getter()
+        except Exception:  # noqa: BLE001
+            value = None
+        if value:
+            key_type = value.decode() if isinstance(value, bytes) else str(value)
+    return fingerprint, key_type
+
+
 async def _maybe_drain(writer: object) -> None:
     drain = getattr(writer, "drain", None)
     if not callable(drain):
