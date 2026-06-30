@@ -11,6 +11,13 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code you are changing.
 
+## Certified Stack Pairing
+
+Current pairing: `netbox-proxbox 0.0.21 ... proxbox-api 0.0.19 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
+`proxbox-api 0.0.19` ships the Proxmox SDN sync collectors, NetBox
+L2VPN/RouteTarget/Prefix reconcile, plugin inventory reconciliation, and
+VM-interface reconcile idempotency hardening.
+
 ## Required Checks
 
 Run these before pushing anything that touches the backend package:
