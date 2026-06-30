@@ -5,20 +5,57 @@ from __future__ import annotations
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.services.ssh_terminal import (
+    HostKeyScanError,
     TerminalCredentialError,
     TerminalSessionError,
     connect_and_relay,
     fetch_terminal_credential,
+    scan_host_key_fingerprint,
     terminal_session_manager,
 )
 
 router = APIRouter()
+
+
+class HostKeyFingerprintPublic(BaseModel):
+    """Scanned SSH host-key fingerprint for pinned-fingerprint auto-fill."""
+
+    host: str
+    port: int
+    fingerprint: str
+    key_type: str
+
+
+@router.get("/host-key-fingerprint", response_model=HostKeyFingerprintPublic)
+async def get_host_key_fingerprint(
+    host: str = Query(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9._:\-\[\]]+$",
+        description="Hostname or IP of the SSH host to fingerprint.",
+    ),
+    port: int = Query(22, ge=1, le=65535),
+) -> HostKeyFingerprintPublic:
+    """Return the host's canonical ``SHA256:<base64>`` SSH host-key fingerprint.
+
+    The handshake mirrors the browser-terminal connection exactly, so the value
+    returned here is what the pinned-fingerprint check verifies on a real
+    session. It authenticates nothing; only the public host key is read.
+    """
+    try:
+        fingerprint, key_type = await scan_host_key_fingerprint(host, port)
+    except HostKeyScanError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return HostKeyFingerprintPublic(
+        host=host, port=port, fingerprint=fingerprint, key_type=key_type
+    )
 
 
 class TerminalSessionCreate(BaseModel):
