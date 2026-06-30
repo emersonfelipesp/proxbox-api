@@ -1,8 +1,10 @@
 """Tests for the SSH host-key fingerprint scan endpoint and service.
 
-The scan must mirror the browser-terminal connection EXACTLY so the fetched
-fingerprint equals what the pinned-fingerprint check verifies on a real
-session. These tests pin that invariant and the capture/normalize behavior.
+The scan must mirror the browser-terminal connection so the fetched fingerprint
+equals what the pinned-fingerprint check verifies on a real session. The host
+key is captured two ways — ``validate_host_public_key`` (when the runtime
+consults it) and ``conn.get_server_host_key()`` (the deployed runtime bypasses
+the callback) — and these tests pin both paths plus the route wiring.
 """
 
 from __future__ import annotations
@@ -32,6 +34,17 @@ class _FakeKey:
         return b"ssh-ed25519"
 
 
+class _FakeConn:
+    def __init__(self, key: _FakeKey | None) -> None:
+        self._key = key
+
+    def get_server_host_key(self) -> _FakeKey | None:
+        return self._key
+
+    def close(self) -> None:
+        pass
+
+
 class _FakePermissionDenied(Exception):
     pass
 
@@ -40,20 +53,30 @@ class _FakeSSHClient:
     pass
 
 
-def _fake_asyncssh(*, on_connect_record: dict | None = None) -> object:
+def _fake_asyncssh(*, mode: str, record: dict | None = None) -> object:
+    """Fake asyncssh whose connect() simulates one of the capture paths.
+
+    mode="validate"    — runtime calls validate_host_public_key (dev venv path).
+    mode="conn"        — runtime skips the callback; key is read from the stashed
+                          connection via get_server_host_key() (deployed path).
+    mode="unreachable" — connect refused before any callback (real error).
+    """
     fake = types.SimpleNamespace()
     fake.SSHClient = _FakeSSHClient
     fake.PermissionDenied = _FakePermissionDenied
     fake.Error = Exception
 
     async def connect(host, **kwargs):  # noqa: ANN001, ANN003
-        if on_connect_record is not None:
-            on_connect_record.update(kwargs)
-        # Mirror real asyncssh: validate_host_public_key fires during key
-        # exchange (before auth). Instantiate the client factory class, run the
-        # callback with a fake server key, then fail auth.
+        if record is not None:
+            record.update(kwargs)
+        if mode == "unreachable":
+            raise OSError("connection refused")
         client = kwargs["client_factory"]()
-        client.validate_host_public_key(host, None, kwargs["port"], _FakeKey())
+        # connection_made always fires first and stashes the connection.
+        client.connection_made(_FakeConn(_FakeKey()))
+        if mode == "validate":
+            client.validate_host_public_key(host, None, kwargs["port"], _FakeKey())
+        # Auth always fails (the scan never authenticates).
         raise fake.PermissionDenied("authentication failed (expected in scan)")
 
     fake.connect = connect
@@ -61,58 +84,57 @@ def _fake_asyncssh(*, on_connect_record: dict | None = None) -> object:
 
 
 # ---------------------------------------------------------------------------
-# Source contract — the scan must mirror the terminal connect args
+# Source contract — terminal-matching args + both capture paths present
 # ---------------------------------------------------------------------------
 
 
-def test_scan_mirrors_terminal_host_key_args() -> None:
+def test_scan_mirrors_terminal_host_key_args_and_has_conn_fallback() -> None:
     source = Path("proxbox_api/services/ssh_terminal.py").read_text()
     scan_src = source.split("async def scan_host_key_fingerprint", 1)[1].split(
         "\nasync def _maybe_drain", 1
     )[0]
     assert 'known_hosts=b""' in scan_src
     assert 'server_host_key_algs="default"' in scan_src
-    # known_hosts=None disables the callback entirely -> nothing captured.
     assert "known_hosts=None" not in scan_src
+    # Robust capture: callback path + connection fallback.
+    assert "validate_host_public_key" in source
+    assert "get_server_host_key" in scan_src
+    assert "connection_made" in source
 
 
 # ---------------------------------------------------------------------------
-# Behavior — capture + canonical fingerprint
+# Behavior — both capture paths yield the canonical fingerprint
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_scan_returns_canonical_fingerprint_and_key_type(monkeypatch) -> None:
+async def test_scan_captures_via_validate_callback(monkeypatch) -> None:
     record: dict = {}
     monkeypatch.setattr(
         ssh_terminal,
         "_load_asyncssh",
-        lambda: _fake_asyncssh(on_connect_record=record),
+        lambda: _fake_asyncssh(mode="validate", record=record),
     )
-
     fingerprint, key_type = await scan_host_key_fingerprint("10.0.0.9", 22)
-
-    # Padding stripped, prefix preserved — exactly what the verifier compares.
     assert fingerprint == f"SHA256:{_FP_BODY}"
     assert key_type == "ssh-ed25519"
-    # The connect call used the terminal-matching host-key args.
     assert record["known_hosts"] == b""
     assert record["server_host_key_algs"] == "default"
 
 
 @pytest.mark.asyncio
-async def test_scan_raises_when_no_key_captured(monkeypatch) -> None:
-    fake = types.SimpleNamespace()
-    fake.SSHClient = _FakeSSHClient
-    fake.PermissionDenied = _FakePermissionDenied
-    fake.Error = Exception
+async def test_scan_captures_via_connection_when_callback_skipped(monkeypatch) -> None:
+    # Mirrors the deployed runtime: validate_host_public_key is never called,
+    # so the key must come from conn.get_server_host_key().
+    monkeypatch.setattr(ssh_terminal, "_load_asyncssh", lambda: _fake_asyncssh(mode="conn"))
+    fingerprint, key_type = await scan_host_key_fingerprint("10.0.0.9", 22)
+    assert fingerprint == f"SHA256:{_FP_BODY}"
+    assert key_type == "ssh-ed25519"
 
-    async def connect(host, **kwargs):  # noqa: ANN001, ANN003 — connection never reaches key exchange
-        raise OSError("connection refused")
 
-    fake.connect = connect
-    monkeypatch.setattr(ssh_terminal, "_load_asyncssh", lambda: fake)
-
+@pytest.mark.asyncio
+async def test_scan_raises_when_host_unreachable(monkeypatch) -> None:
+    monkeypatch.setattr(ssh_terminal, "_load_asyncssh", lambda: _fake_asyncssh(mode="unreachable"))
     with pytest.raises(HostKeyScanError):
         await scan_host_key_fingerprint("10.0.0.9", 22)
 
