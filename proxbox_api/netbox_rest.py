@@ -1231,18 +1231,30 @@ async def _rest_reconcile_async_impl(  # noqa: C901
             created = await rest_create_async(nb, path, desired_payload)
             return created, "created"
         except ProxboxException as exc:
-            # Re-fetch and scan: list filters can miss rows (API quirks); duplicate errors
-            # are not always phrased with "already exists" / "must be unique".
-            # When the error is a duplicate, clear the path cache so _find_existing()
-            # below issues a fresh request rather than returning a stale empty result.
-            if _is_duplicate_error(getattr(exc, "detail", str(exc))):
+            # NetBox already confirmed that the row exists. Give the API a
+            # short window to make the row visible to list/filter reads before
+            # treating the duplicate as an idempotent no-op.
+            if not _is_duplicate_error(getattr(exc, "detail", str(exc))):
+                raise
+            duplicate_refetch_attempts = 3
+            for duplicate_refetch_attempt in range(duplicate_refetch_attempts):
                 _invalidate_get_cache_for_path(api, normalized_path)
-            existing = await _find_existing()
-            if existing is None:
-                existing = await _scan_existing()
-            if existing is not None:
-                return await _reconcile(existing)
-            raise
+                existing = await _find_existing()
+                if existing is None:
+                    existing = await _scan_existing()
+                if existing is not None:
+                    return await _reconcile(existing)
+                if duplicate_refetch_attempt < duplicate_refetch_attempts - 1:
+                    await asyncio.sleep(0.1 * (duplicate_refetch_attempt + 1))
+            logger.warning(
+                "NetBox reported duplicate for %s with lookup %s, but the row "
+                "could not be re-fetched after %s attempt(s); treating it as "
+                "already present for this reconcile pass.",
+                path,
+                lookup,
+                duplicate_refetch_attempts,
+            )
+            return RestRecord(api, normalized_path, desired_payload), "unchanged"
 
     return await _reconcile(existing)
 

@@ -62,6 +62,14 @@ def test_sdn_zone_normalizer_reads_hyphenated_aliases():
     assert _netbox_status(zone.state, zone.pending) == "planned"
 
 
+def test_sdn_netbox_status_mapping():
+    assert _netbox_status("deleted") == "decommissioning"
+    assert _netbox_status("available") == "active"
+    assert _netbox_status("") == "active"
+    assert _netbox_status(None) == "active"
+    assert _netbox_status("new") == "planned"
+
+
 def test_sdn_vnet_normalizer_reads_tag_and_vlanaware():
     vnet = _to_vnet(
         "cluster-a",
@@ -120,13 +128,31 @@ async def test_collect_sdn_inventory_includes_cluster_and_node_runtime_rows():
     }
 
 
+@pytest.mark.parametrize(
+    "unsupported",
+    [
+        pytest.param(
+            ResourceException(
+                status_code=501,
+                status_message="Not Implemented",
+                content="Method not implemented",
+            ),
+            id="resource-501",
+        ),
+        pytest.param(
+            ResourceException(
+                status_code=404,
+                status_message="Not Found",
+                content="No such API path",
+            ),
+            id="resource-404",
+        ),
+        pytest.param(RuntimeError("no such api path"), id="message-no-such-api-path"),
+        pytest.param(RuntimeError("endpoint not implemented"), id="message-not-implemented"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_collect_sdn_inventory_treats_unsupported_sdn_as_skipped():
-    unsupported = ResourceException(
-        status_code=501,
-        status_message="Not Implemented",
-        content="Method not implemented",
-    )
+async def test_collect_sdn_inventory_treats_unsupported_sdn_as_skipped(unsupported):
     px = _FakePx({"cluster/sdn/controllers": unsupported})
 
     inventory = await collect_sdn_inventory_for_session(px, include_node_runtime=False)
@@ -204,9 +230,130 @@ async def test_sdn_l2vpn_mapping_writes_route_targets_l2vpn_and_prefix(monkeypat
     assert l2vpn_call["payload"]["slug"] == "proxbox-17-cluster-a-evpn-prod-tenant100"
     assert l2vpn_call["payload"]["type"] == "vxlan-evpn"
     assert l2vpn_call["payload"]["identifier"] == 100100
+    assert l2vpn_call["payload"]["import_targets"] == [1, 2]
     assert l2vpn_call["payload"]["export_targets"] == []
     prefix_call = next(call for call in calls if call["path"] == "/api/ipam/prefixes/")
     assert prefix_call["payload"]["prefix"] == "10.100.0.0/24"
+
+
+@pytest.mark.asyncio
+async def test_sdn_l2vpn_mapping_supports_vxlan_and_skips_unmanaged_zones(monkeypatch):
+    calls = []
+
+    async def _fake_reconcile(_nb, path, *, lookup, payload, fields, **_kwargs):
+        del lookup, fields
+        calls.append({"path": path, "payload": payload})
+        return 42, True
+
+    import proxbox_api.services.sync.sdn as sdn_module
+
+    monkeypatch.setattr(sdn_module, "_reconcile", _fake_reconcile)
+
+    inventory = SdnInventory(
+        endpoint_id=17,
+        endpoint_name="pve-a",
+        cluster_name="cluster-a",
+        zones=[
+            SdnZoneSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="vxlan-prod",
+                type="vxlan",
+            ),
+            SdnZoneSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="simple-prod",
+                type="simple",
+            ),
+        ],
+        vnets=[
+            SdnVNetSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="vxlan-prod",
+                vnet="tenant200",
+                tag=200200,
+            ),
+            SdnVNetSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="simple-prod",
+                vnet="tenant300",
+                tag=300300,
+            ),
+        ],
+    )
+    counters = SdnSyncCounters()
+
+    vnet_l2vpn_ids, subnet_prefix_ids = await _sync_netbox_l2vpn_objects(
+        object(),
+        inventory,
+        counters,
+    )
+
+    assert vnet_l2vpn_ids == {("vxlan-prod", "tenant200"): 42}
+    assert subnet_prefix_ids == {}
+    assert counters.l2vpns == 1
+    assert counters.skipped == 1
+    l2vpn_calls = [call for call in calls if call["path"] == "/api/vpn/l2vpns/"]
+    assert len(l2vpn_calls) == 1
+    assert l2vpn_calls[0]["payload"]["type"] == "vxlan"
+    assert "tenant300" not in l2vpn_calls[0]["payload"]["name"]
+
+
+@pytest.mark.asyncio
+async def test_sdn_l2vpn_reconcile_error_records_object_error(monkeypatch):
+    async def _fake_reconcile(_nb, path, *, lookup, payload, fields, **_kwargs):
+        del lookup, payload, fields
+        if path == "/api/vpn/l2vpns/":
+            raise RuntimeError("l2vpn write failed")
+        return 1, True
+
+    import proxbox_api.services.sync.sdn as sdn_module
+
+    monkeypatch.setattr(sdn_module, "_reconcile", _fake_reconcile)
+
+    inventory = SdnInventory(
+        endpoint_id=17,
+        endpoint_name="pve-a",
+        cluster_name="cluster-a",
+        zones=[
+            SdnZoneSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="evpn-prod",
+                type="evpn",
+            )
+        ],
+        vnets=[
+            SdnVNetSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="evpn-prod",
+                vnet="tenant100",
+            )
+        ],
+    )
+    counters = SdnSyncCounters()
+
+    vnet_l2vpn_ids, subnet_prefix_ids = await _sync_netbox_l2vpn_objects(
+        object(),
+        inventory,
+        counters,
+    )
+
+    assert vnet_l2vpn_ids == {}
+    assert subnet_prefix_ids == {}
+    assert counters.per_endpoint_errors == {"cluster-a": 1}
+    assert counters.object_errors == [
+        {
+            "kind": "l2vpn",
+            "name": "evpn-prod/tenant100",
+            "error": "l2vpn write failed",
+        }
+    ]
+    assert counters.as_dict()["object_errors"] == counters.object_errors
 
 
 @pytest.mark.asyncio
@@ -271,6 +418,65 @@ async def test_sdn_l2vpn_termination_uses_explicit_target(monkeypatch):
     assert binding_call["payload"]["source_type"] == "l2vpn-termination"
     assert binding_call["payload"]["target_type"] == "ipam.vlan"
     assert binding_call["payload"]["target_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_sdn_l2vpn_termination_resolves_vlan_by_vid(monkeypatch):
+    calls = []
+
+    async def _fake_rest_first(_nb, path, *, query):
+        if path == "/api/ipam/vlans/":
+            assert query == {"vid": 200, "limit": 2}
+            return {"id": 77, "vid": 200}
+        if path == "/api/vpn/l2vpn-terminations/":
+            return None
+        raise AssertionError(f"unexpected rest_first path: {path}")
+
+    async def _fake_reconcile(_nb, path, *, lookup, payload, fields, **_kwargs):
+        del lookup, fields
+        calls.append({"path": path, "payload": payload})
+        return 99 if path == "/api/vpn/l2vpn-terminations/" else 199, True
+
+    import proxbox_api.services.sync.sdn as sdn_module
+
+    monkeypatch.setattr(sdn_module, "rest_first_async", _fake_rest_first)
+    monkeypatch.setattr(sdn_module, "_reconcile", _fake_reconcile)
+
+    inventory = SdnInventory(
+        endpoint_id=17,
+        endpoint_name="pve-a",
+        cluster_name="cluster-a",
+        node_status=[
+            SdnNodeStatusSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                node="node-a",
+                zone="vxlan-prod",
+                vnet="tenant200",
+                kind="node-zone-content",
+                name="net0",
+                raw_config={"vid": 200},
+            )
+        ],
+    )
+    counters = SdnSyncCounters()
+
+    await _sync_l2vpn_terminations(
+        object(),
+        inventory,
+        counters,
+        vnet_l2vpn_ids={("vxlan-prod", "tenant200"): 42},
+    )
+
+    termination_call = next(
+        call for call in calls if call["path"] == "/api/vpn/l2vpn-terminations/"
+    )
+    assert termination_call["payload"] == {
+        "l2vpn": 42,
+        "assigned_object_type": "ipam.vlan",
+        "assigned_object_id": 77,
+    }
+    assert counters.terminations == 1
 
 
 @pytest.mark.asyncio
