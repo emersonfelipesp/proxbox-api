@@ -77,9 +77,7 @@ async def test_confirmed_duplicate_without_refetch_returns_unchanged(monkeypatch
     session = _Session(
         post_status=400,
         post_body={
-            "non_field_errors": [
-                "Interface with this Virtual machine and Name already exists."
-            ]
+            "non_field_errors": ["Interface with this Virtual machine and Name already exists."]
         },
     )
 
@@ -108,9 +106,7 @@ async def test_bulk_reconcile_counts_confirmed_duplicate_miss_as_unchanged(monke
     session = _Session(
         post_status=400,
         post_body={
-            "non_field_errors": [
-                "Interface with this Virtual machine and Name already exists."
-            ]
+            "non_field_errors": ["Interface with this Virtual machine and Name already exists."]
         },
     )
 
