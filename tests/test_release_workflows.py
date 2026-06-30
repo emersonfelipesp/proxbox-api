@@ -66,6 +66,16 @@ def test_ci_downloads_netbox_image_artifact_only_when_registry_pull_fails():
     assert "continue-on-error: true" not in download_step
 
 
+def test_netbox_source_build_fallback_uses_current_upstream_base_image():
+    ci_workflow = _read(CI_WORKFLOW_PATH)
+    publish_workflow = _read(PUBLISH_WORKFLOW_PATH)
+
+    assert "FROM=ubuntu:24.04" not in ci_workflow
+    assert "FROM=ubuntu:24.04" not in publish_workflow
+    assert ci_workflow.count('--build-arg "FROM=ubuntu:26.04"') == 1
+    assert publish_workflow.count('--build-arg "FROM=ubuntu:26.04"') == 2
+
+
 def test_publish_workflow_routes_tags_to_testpypi_and_rcs_to_pypi():
     workflow = _read(PUBLISH_WORKFLOW_PATH)
 
@@ -85,7 +95,15 @@ def test_publish_workflow_never_reuses_consumed_package_versions():
 def test_netbox_e2e_version_set_matches_supported_plugin_range():
     versions = json.loads(NETBOX_VERSIONS_PATH.read_text(encoding="utf-8"))
 
-    assert versions == ["v4.5.8", "v4.5.9", "v4.6.0", "v4.6.1", "v4.6.2", "v4.6.3"]
+    assert versions == [
+        "v4.5.8",
+        "v4.5.9",
+        "v4.6.0",
+        "v4.6.1",
+        "v4.6.2",
+        "v4.6.3",
+        "v4.6.4",
+    ]
 
 
 def test_pypi_package_validation_happens_before_docker_publish_and_e2e():

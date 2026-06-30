@@ -40,7 +40,9 @@ flowchart TD
 ```
 
 The E2E jobs pull the public NetBox image first. They only download the
-source-built NetBox image artifact when that registry pull fails.
+source-built NetBox image artifact when that registry pull fails. The fallback
+source build follows the current upstream `netbox-docker` base image,
+`ubuntu:26.04`, so the package set matches the upstream Dockerfile.
 
 ## E2E Stack
 

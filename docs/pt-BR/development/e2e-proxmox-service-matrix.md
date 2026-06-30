@@ -36,10 +36,10 @@ produto cartesiano de:
 |---|---|---|
 | `base` (combinacao de transporte) | Lista hard-coded em `setup.gen` | 7 combinacoes cobrindo `http_manage`, `https_nginx`, `https_granian` e dual-stack IPv6 |
 | `netbox_proxbox_mode` | Input `INPUT_NETBOX_PROXBOX_MODE` e o tipo de evento | `dev` em push/PR, `[dev, pypi]` em release |
-| `netbox_version` | `.github/netbox-versions.json` | Atualmente tres tags NetBox certificadas |
+| `netbox_version` | `.github/netbox-versions.json` | Tags NetBox certificadas: `v4.5.8`, `v4.5.9` e `v4.6.0` ate `v4.6.4` |
 | `proxmox_service` | Lista hard-coded `["pve", "pbs", "pdm"]` | Tres servicos em todas as execucoes |
 
-O produto cartesiano e portanto **7 (transporte) × 1–2 (modo) × 3 (NetBox) × 3 (servico) = 63–126 celulas**.
+O produto cartesiano e portanto **7 (transporte) × 1–2 (modo) × 7 (NetBox) × 3 (servico) = 147–294 celulas**.
 Cada celula usa `fail-fast: false`, entao a falha de uma celula nao aborta o
 restante do run.
 
