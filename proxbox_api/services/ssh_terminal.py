@@ -383,16 +383,58 @@ class HostKeyScanError(Exception):
     """Raised when a host-key fingerprint scan cannot be completed."""
 
 
-def _capture_client_factory(asyncssh_module: Any, captured: dict[str, Any]) -> object:
-    class CaptureHostKeyClient(asyncssh_module.SSHClient):  # type: ignore[misc]
+def _scan_client_factory(asyncssh_module: Any, state: dict[str, Any]) -> object:
+    class ScanHostKeyClient(asyncssh_module.SSHClient):  # type: ignore[misc]
+        def connection_made(self, conn):  # noqa: ANN001
+            # Stash the connection so the negotiated server host key can be read
+            # via ``conn.get_server_host_key()`` after key exchange, even when
+            # ``validate_host_public_key`` is not invoked (see scan docstring).
+            state["conn"] = conn
+
         def validate_host_public_key(self, host, addr, port, key):  # noqa: ANN001
             # Scanning, not trusting: capture the key and accept so the
-            # handshake proceeds far enough to expose it. Trust is decided
-            # later by the operator who reviews the returned fingerprint.
-            captured["key"] = key
+            # handshake proceeds. Trust is decided later by the operator who
+            # reviews the returned fingerprint.
+            state["key"] = key
             return True
 
-    return CaptureHostKeyClient
+    return ScanHostKeyClient
+
+
+def _key_algorithm(key: object) -> str:
+    getter = getattr(key, "get_algorithm", None)
+    if not callable(getter):
+        return ""
+    try:
+        value = getter()
+    except Exception:  # noqa: BLE001
+        return ""
+    if not value:
+        return ""
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+def _resolve_scanned_host_key(state: dict[str, Any]) -> object | None:
+    """Return the captured server host key, preferring the callback value.
+
+    Falls back to ``conn.get_server_host_key()`` for runtimes that skip
+    ``validate_host_public_key`` (see :func:`scan_host_key_fingerprint`).
+    """
+    key = state.get("key")
+    if key is not None:
+        return key
+    conn = state.get("conn")
+    if conn is None:
+        return None
+    try:
+        key = conn.get_server_host_key()
+    except Exception:  # noqa: BLE001
+        key = None
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return key
 
 
 async def scan_host_key_fingerprint(
@@ -400,24 +442,27 @@ async def scan_host_key_fingerprint(
 ) -> tuple[str, str]:
     """Return ``(canonical_fingerprint, key_type)`` for the host's SSH key.
 
-    The scan MUST mirror :func:`connect_and_relay`'s host-key handling exactly,
-    so the value returned here is byte-identical to what
-    ``validate_host_public_key`` later verifies during a real terminal session:
+    The fingerprint is the SHA-256 of the negotiated server host key, computed
+    with the same helper the browser terminal uses, so it is byte-identical to
+    what ``validate_host_public_key`` verifies during a real session. The scan
+    mirrors :func:`connect_and_relay`'s host-key args:
 
-    * ``known_hosts=b""`` — empty bytes (NOT ``None``). ``None`` disables host-key
-      checking entirely and the client factory's ``validate_host_public_key`` is
-      never consulted, so nothing would be captured. Empty bytes loads no system
-      ``known_hosts`` while still routing every host key through the callback.
+    * ``known_hosts=b""`` — load no system ``known_hosts`` entries.
     * ``server_host_key_algs="default"`` — same algorithm preference as the
       terminal, so the same server key is negotiated and fingerprinted.
 
-    Host-key validation happens during key exchange, before authentication, so
-    the key is captured even though the scan never authenticates. A post-key
-    auth failure is therefore success; only connect-refused / timeout / DNS
-    failures (no key captured) are real errors.
+    The scan never authenticates, so ``asyncssh.connect`` raises
+    ``PermissionDenied`` after key exchange — that is the expected success path.
+    The host key is captured two ways: (1) ``validate_host_public_key`` when the
+    runtime consults it, and (2) ``conn.get_server_host_key()`` read from the
+    connection stashed in ``connection_made`` for runtimes where the callback is
+    bypassed (the deployed asyncssh build treats ``known_hosts=b""`` as
+    no-verification and skips the callback). Only a failure that yields neither a
+    captured key nor a connection (connect-refused / timeout / DNS) is a real
+    error.
     """
     asyncssh = _load_asyncssh()
-    captured: dict[str, Any] = {}
+    state: dict[str, Any] = {}
     conn = None
     try:
         conn = await asyncssh.connect(
@@ -429,11 +474,11 @@ async def scan_host_key_fingerprint(
             agent_path=None,
             known_hosts=b"",
             server_host_key_algs="default",
-            client_factory=_capture_client_factory(asyncssh, captured),
+            client_factory=_scan_client_factory(asyncssh, state),
             connect_timeout=timeout,
         )
-    except Exception as exc:  # noqa: BLE001 — auth failure after key capture is expected
-        if "key" not in captured:
+    except Exception as exc:  # noqa: BLE001 — auth failure after key exchange is expected
+        if state.get("key") is None and state.get("conn") is None:
             raise HostKeyScanError(
                 f"Could not retrieve SSH host key from {host}:{port}: {exc}"
             ) from exc
@@ -445,20 +490,10 @@ async def scan_host_key_fingerprint(
             except Exception:  # noqa: BLE001
                 pass
 
-    key = captured.get("key")
+    key = _resolve_scanned_host_key(state)
     if key is None:
         raise HostKeyScanError(f"No SSH host key received from {host}:{port}")
-    fingerprint = _fingerprint_from_key(key)
-    key_type = ""
-    getter = getattr(key, "get_algorithm", None)
-    if callable(getter):
-        try:
-            value = getter()
-        except Exception:  # noqa: BLE001
-            value = None
-        if value:
-            key_type = value.decode() if isinstance(value, bytes) else str(value)
-    return fingerprint, key_type
+    return _fingerprint_from_key(key), _key_algorithm(key)
 
 
 async def _maybe_drain(writer: object) -> None:
