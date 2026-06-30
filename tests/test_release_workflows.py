@@ -49,21 +49,32 @@ def test_netbox_e2e_readiness_is_long_enough_for_migrations_and_api_status():
     assert publish_workflow.count("NetBox API did not become ready") >= 2
 
 
-def test_ci_downloads_netbox_image_artifact_only_when_registry_pull_fails():
+def test_ci_e2e_loads_prepared_image_artifacts_before_stack_start():
     workflow = _read(CI_WORKFLOW_PATH)
-    e2e_image_block = workflow.split("Resolve NetBox image source", 1)[1]
+    e2e_block = workflow.split("e2e-docker:", 1)[1]
 
+    assert "prepare-e2e-service-images:" in workflow
+    assert "prepare-proxmox-image:" in workflow
+    assert "build-proxbox-image:" in workflow
+    assert "proxbox_image_matrix" in workflow
     _assert_order(
-        e2e_image_block,
-        'if docker pull "${NETBOX_IMAGE}" 2>/dev/null; then',
-        "Download NetBox image artifact (if built from source)",
-        "docker load < /tmp/netbox-image.tar.gz",
+        e2e_block,
+        "Download NetBox image artifact",
+        "Download Proxmox mock image artifact",
+        "Download E2E service image artifact",
+        "Download Proxbox API image artifact",
+        "Load Docker image artifacts",
         "Start E2E stack",
     )
-    assert "if: steps.netbox_image.outputs.source == 'artifact'" in workflow
-    download_step = workflow.split("Download NetBox image artifact (if built from source)", 1)[1]
-    download_step = download_step.split("Load NetBox image from artifact", 1)[0]
-    assert "continue-on-error: true" not in download_step
+    assert "Resolve NetBox image source" not in workflow
+    assert 'docker pull "${PROXMOX_OPENAPI_IMAGE}"' not in e2e_block
+
+    start_backend_block = e2e_block.split("Start Proxbox API backend container", 1)[1]
+    start_backend_block = start_backend_block.split(
+        "Verify Proxbox API reaches NetBox with requested transport", 1
+    )[0]
+    assert "docker build" not in start_backend_block
+    assert '"${PROXBOX_IMAGE}"' in start_backend_block
 
 
 def test_netbox_source_build_fallback_uses_current_upstream_base_image():

@@ -198,6 +198,8 @@ jobs:
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
       netbox_versions: ${{ steps.gen.outputs.netbox_versions }}
+      proxmox_services: ${{ steps.gen.outputs.proxmox_services }}
+      proxbox_image_matrix: ${{ steps.gen.outputs.proxbox_image_matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -245,9 +247,16 @@ jobs:
               for ver in netbox_versions
               for service in proxmox_services
           ]
+          proxbox_image_includes = [
+              {"netbox_proxbox_mode": mode, "proxbox_docker_target": target}
+              for mode in modes
+              for target in sorted({entry["proxbox_docker_target"] for entry in base})
+          ]
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
               fh.write(f"matrix={json.dumps({'include': includes})}\n")
               fh.write(f"netbox_versions={json.dumps(netbox_versions)}\n")
+              fh.write(f"proxmox_services={json.dumps(proxmox_services)}\n")
+              fh.write(f"proxbox_image_matrix={json.dumps({'include': proxbox_image_includes})}\n")
           PYEOF
         env:
           INPUT_NETBOX_PROXBOX_MODE: ${{ inputs.netbox_proxbox_mode || 'dev' }}
@@ -306,15 +315,126 @@ jobs:
           path: /tmp/netbox-image.tar.gz
           retention-days: 1
 
+  prepare-e2e-service-images:
+    name: Prepare E2E service images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull and save E2E service images
+        run: |
+          set -eux
+          docker pull postgres:16-alpine
+          docker pull redis:7-alpine
+          docker pull nginx:1.27-alpine
+          docker save postgres:16-alpine redis:7-alpine nginx:1.27-alpine \
+            | gzip > /tmp/e2e-service-images.tar.gz
+
+      - name: Upload E2E service image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-service-images
+          path: /tmp/e2e-service-images.tar.gz
+          retention-days: 1
+
+  prepare-proxmox-image:
+    name: Prepare Proxmox mock image [${{ matrix.service }}]
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.setup.outputs.proxmox_services) }}
+    env:
+      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest-${{ matrix.service }}
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull and save Proxmox mock image
+        run: |
+          set -eux
+          docker pull "${PROXMOX_OPENAPI_IMAGE}"
+          docker save "${PROXMOX_OPENAPI_IMAGE}" | gzip > /tmp/proxmox-sdk-image.tar.gz
+
+      - name: Upload Proxmox mock image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxmox-sdk-image-${{ matrix.service }}
+          path: /tmp/proxmox-sdk-image.tar.gz
+          retention-days: 1
+
+  build-proxbox-image:
+    name: Build Proxbox image [${{ matrix.netbox_proxbox_mode }}/${{ matrix.proxbox_docker_target }}]
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.proxbox_image_matrix) }}
+    env:
+      PROXBOX_IMAGE: proxbox-e2e:${{ matrix.netbox_proxbox_mode }}-${{ matrix.proxbox_docker_target }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve dev SDK overrides
+        run: |
+          if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
+            echo 'DEV_OVERRIDES=git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main' >> "$GITHUB_ENV"
+          else
+            echo "DEV_OVERRIDES=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Proxbox API image
+        run: |
+          set -eux
+          docker build --target "${{ matrix.proxbox_docker_target }}" \
+            ${DEV_OVERRIDES:+--build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}"} \
+            -t "${PROXBOX_IMAGE}" .
+          docker save "${PROXBOX_IMAGE}" | gzip > /tmp/proxbox-image.tar.gz
+
+      - name: Upload Proxbox API image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxbox-image-${{ matrix.netbox_proxbox_mode }}-${{ matrix.proxbox_docker_target }}
+          path: /tmp/proxbox-image.tar.gz
+          retention-days: 1
+
   e2e-docker:
     name: E2E Docker / PX:${{ matrix.proxmox_service }} NB:${{ matrix.netbox_transport }} PB:${{ matrix.proxbox_transport }} [${{ matrix.network_stack }}] [${{ matrix.netbox_version }}] (${{ matrix.netbox_proxbox_mode }})
     runs-on: ubuntu-latest
-    needs: [test, setup, build-netbox-image]
+    needs:
+      - test
+      - setup
+      - build-netbox-image
+      - prepare-e2e-service-images
+      - prepare-proxmox-image
+      - build-proxbox-image
     if: |
       always() &&
       !cancelled() &&
       needs.test.result == 'success' &&
-      needs.setup.result == 'success'
+      needs.setup.result == 'success' &&
+      needs.build-netbox-image.result == 'success' &&
+      needs.prepare-e2e-service-images.result == 'success' &&
+      needs.prepare-proxmox-image.result == 'success' &&
+      needs.build-proxbox-image.result == 'success'
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -322,20 +442,12 @@ jobs:
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox_version }}
       PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest-${{ matrix.proxmox_service }}
+      PROXBOX_IMAGE: proxbox-e2e:${{ matrix.netbox_proxbox_mode }}-${{ matrix.proxbox_docker_target }}
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
       UV_HTTP_TIMEOUT: "120"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Log in to Docker Hub
-        # Authenticated pulls avoid the low anonymous Docker Hub rate limit for
-        # the service/base images this e2e matrix pulls.
-        uses: docker/login-action@v3
-        continue-on-error: true
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -355,38 +467,37 @@ jobs:
             echo "target=netbox-proxbox" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Resolve dev SDK overrides
-        run: |
-          if [ "${{ matrix.netbox_proxbox_mode }}" = "dev" ]; then
-            echo 'DEV_OVERRIDES=git+https://github.com/emersonfelipesp/netbox-sdk.git@main git+https://github.com/emersonfelipesp/proxmox-sdk.git@main' >> "$GITHUB_ENV"
-          else
-            echo "DEV_OVERRIDES=" >> "$GITHUB_ENV"
-          fi
-
-      - name: Resolve NetBox image source
-        id: netbox_image
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if docker pull "${NETBOX_IMAGE}" 2>/dev/null; then
-              echo "source=registry" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Registry pull attempt ${attempt}/5 failed for ${NETBOX_IMAGE}; retrying in $((attempt * 10))s"
-            sleep "$((attempt * 10))"
-          done
-          echo "source=artifact" >> "$GITHUB_OUTPUT"
-
-      - name: Download NetBox image artifact (if built from source)
-        if: steps.netbox_image.outputs.source == 'artifact'
+      - name: Download NetBox image artifact
         uses: actions/download-artifact@v4
         with:
           name: netbox-image-${{ matrix.netbox_version }}
-          path: /tmp/
+          path: /tmp/e2e-images/netbox/
 
-      - name: Load NetBox image from artifact
-        if: steps.netbox_image.outputs.source == 'artifact'
+      - name: Download Proxmox mock image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: proxmox-sdk-image-${{ matrix.proxmox_service }}
+          path: /tmp/e2e-images/proxmox/
+
+      - name: Download E2E service image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-service-images
+          path: /tmp/e2e-images/services/
+
+      - name: Download Proxbox API image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: proxbox-image-${{ matrix.netbox_proxbox_mode }}-${{ matrix.proxbox_docker_target }}
+          path: /tmp/e2e-images/proxbox/
+
+      - name: Load Docker image artifacts
         run: |
-          docker load < /tmp/netbox-image.tar.gz
+          set -eux
+          docker load < /tmp/e2e-images/netbox/netbox-image.tar.gz
+          docker load < /tmp/e2e-images/proxmox/proxmox-sdk-image.tar.gz
+          docker load < /tmp/e2e-images/services/e2e-service-images.tar.gz
+          docker load < /tmp/e2e-images/proxbox/proxbox-image.tar.gz
 
       - name: Start E2E stack
         run: |
@@ -434,8 +545,6 @@ jobs:
 
           docker run -d --name netbox-e2e-redis --network proxbox-e2e \
             redis:7-alpine
-
-          docker pull "${PROXMOX_OPENAPI_IMAGE}"
 
           docker run -d --name proxmox-e2e-mock --network proxbox-e2e -p "${HOST_BIND}18006:8000" \
             -e PROXMOX_API_MODE=mock \
@@ -683,13 +792,9 @@ jobs:
           echo "NETBOX_TOKEN_ID=$TOKEN_ID" >> "$GITHUB_ENV"
           echo "NETBOX_API_TOKEN=$TOKEN_VALUE" >> "$GITHUB_ENV"
 
-      - name: Build and start Proxbox API backend container
+      - name: Start Proxbox API backend container
         run: |
           set -eux
-          docker build --target "${{ matrix.proxbox_docker_target }}" \
-            ${DEV_OVERRIDES:+--build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}"} \
-            -t "proxbox-e2e:${{ matrix.proxbox_transport }}" .
-
           if [ "${{ matrix.network_stack }}" = "ipv6" ]; then
             PROXBOX_BIND_HOST_VALUE="::"
           else
@@ -702,7 +807,7 @@ jobs:
             -e PROXBOX_ENCRYPTION_KEY \
             -e SSL_CERT_FILE=/ci-tls/ca.crt \
             -v "$GITHUB_WORKSPACE/.ci-tls:/ci-tls:ro" \
-            "proxbox-e2e:${{ matrix.proxbox_transport }}"
+            "${PROXBOX_IMAGE}"
 
           for i in $(seq 1 120); do
             if curl ${{ matrix.proxbox_curl_flags }} -fsS --max-time 5 "${{ matrix.proxbox_base_url }}/" >/dev/null 2>&1; then
