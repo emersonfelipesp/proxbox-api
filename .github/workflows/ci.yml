@@ -18,6 +18,7 @@ on:
 
 env:
   PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
+  CI_OFFICIAL_IMAGE_PREFIX: mirror.gcr.io/library
 
 jobs:
   test:
@@ -102,7 +103,10 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build raw image
-        run: docker build --target raw -t proxbox-api:bind-smoke .
+        run: |
+          docker build --target raw \
+            --build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-alpine" \
+            -t proxbox-api:bind-smoke .
 
       # We verify success by reading uvicorn's startup log instead of curling
       # the published port. Docker's userland port proxy cannot forward an
@@ -159,7 +163,10 @@ jobs:
           echo "TIMEOUT"; docker logs pb-default; exit 1
 
       - name: Build granian image
-        run: docker build --target granian -t proxbox-api:bind-smoke-granian .
+        run: |
+          docker build --target granian \
+            --build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-alpine" \
+            -t proxbox-api:bind-smoke-granian .
 
       - name: Granian image tolerates Compose list-form quoted value (regression for #52)
         run: |
@@ -299,7 +306,7 @@ jobs:
           git clone --depth 1 --branch "${NETBOX_VERSION}" \
             https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
           docker build \
-            --build-arg "FROM=ubuntu:26.04" \
+            --build-arg "FROM=${CI_OFFICIAL_IMAGE_PREFIX}/ubuntu:26.04" \
             --build-arg "NETBOX_PATH=.netbox" \
             -t "${NETBOX_IMAGE}" \
             /tmp/netbox-docker
@@ -329,9 +336,12 @@ jobs:
       - name: Pull and save E2E service images
         run: |
           set -eux
-          docker pull postgres:16-alpine
-          docker pull redis:7-alpine
-          docker pull nginx:1.27-alpine
+          docker pull "${CI_OFFICIAL_IMAGE_PREFIX}/postgres:16-alpine"
+          docker pull "${CI_OFFICIAL_IMAGE_PREFIX}/redis:7-alpine"
+          docker pull "${CI_OFFICIAL_IMAGE_PREFIX}/nginx:1.27-alpine"
+          docker tag "${CI_OFFICIAL_IMAGE_PREFIX}/postgres:16-alpine" postgres:16-alpine
+          docker tag "${CI_OFFICIAL_IMAGE_PREFIX}/redis:7-alpine" redis:7-alpine
+          docker tag "${CI_OFFICIAL_IMAGE_PREFIX}/nginx:1.27-alpine" nginx:1.27-alpine
           docker save postgres:16-alpine redis:7-alpine nginx:1.27-alpine \
             | gzip > /tmp/e2e-service-images.tar.gz
 
@@ -343,7 +353,7 @@ jobs:
           retention-days: 1
 
   prepare-proxmox-image:
-    name: Prepare Proxmox mock image [${{ matrix.service }}]
+    name: Build Proxmox mock image [${{ matrix.service }}]
     runs-on: ubuntu-latest
     needs: setup
     strategy:
@@ -351,19 +361,18 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.setup.outputs.proxmox_services) }}
     env:
-      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest-${{ matrix.service }}
+      PROXMOX_OPENAPI_IMAGE: proxbox-e2e-proxmox-mock:${{ matrix.service }}
     steps:
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        continue-on-error: true
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v6
 
-      - name: Pull and save Proxmox mock image
+      - name: Build and save Proxmox mock image
         run: |
           set -eux
-          docker pull "${PROXMOX_OPENAPI_IMAGE}"
+          docker build -f proxmox-mock/Dockerfile \
+            --build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-slim-bookworm" \
+            -t "${PROXMOX_OPENAPI_IMAGE}" \
+            proxmox-mock
           docker save "${PROXMOX_OPENAPI_IMAGE}" | gzip > /tmp/proxmox-sdk-image.tar.gz
 
       - name: Upload Proxmox mock image artifact
@@ -405,6 +414,7 @@ jobs:
         run: |
           set -eux
           docker build --target "${{ matrix.proxbox_docker_target }}" \
+            --build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-alpine" \
             ${DEV_OVERRIDES:+--build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}"} \
             -t "${PROXBOX_IMAGE}" .
           docker save "${PROXBOX_IMAGE}" | gzip > /tmp/proxbox-image.tar.gz
@@ -441,7 +451,7 @@ jobs:
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     env:
       NETBOX_IMAGE: netboxcommunity/netbox:${{ matrix.netbox_version }}
-      PROXMOX_OPENAPI_IMAGE: emersonfelipesp/proxmox-sdk:latest-${{ matrix.proxmox_service }}
+      PROXMOX_OPENAPI_IMAGE: proxbox-e2e-proxmox-mock:${{ matrix.proxmox_service }}
       PROXBOX_IMAGE: proxbox-e2e:${{ matrix.netbox_proxbox_mode }}-${{ matrix.proxbox_docker_target }}
       PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
       UV_HTTP_TIMEOUT: "120"
@@ -549,9 +559,10 @@ jobs:
           docker run -d --name proxmox-e2e-mock --network proxbox-e2e -p "${HOST_BIND}18006:8000" \
             -e PROXMOX_API_MODE=mock \
             -e PROXMOX_MOCK_SCHEMA_VERSION=latest \
+            -e PROXMOX_MOCK_SERVICE="${{ matrix.proxmox_service }}" \
             -e PROXMOX_MOCK_BIND_HOST="${PROXMOX_MOCK_BIND_HOST}" \
             "${PROXMOX_OPENAPI_IMAGE}" \
-            sh -c 'exec uvicorn ${APP_MODULE} --host "${PROXMOX_MOCK_BIND_HOST}" --port "${PORT:-8000}"'
+            sh -c 'exec uvicorn proxmox_mock.main:app --host "${PROXMOX_MOCK_BIND_HOST}" --port "${PORT:-8000}"'
 
           mkdir -p .ci-tls
           cat > .ci-tls/netbox-openssl.cnf <<'EOF'

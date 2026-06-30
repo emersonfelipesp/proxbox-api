@@ -15,9 +15,10 @@ def create_mock_app() -> FastAPI:
     """Build the standalone Proxmox mock API app."""
 
     version_tag = os.environ.get("PROXMOX_MOCK_SCHEMA_VERSION", DEFAULT_PROXMOX_OPENAPI_TAG)
+    service = os.environ.get("PROXMOX_MOCK_SERVICE", "pve").strip().lower() or "pve"
 
     app = FastAPI(
-        title="Proxmox Mock API",
+        title=f"Proxmox Mock API ({service})",
         description="Schema-driven in-memory FastAPI mock for the generated Proxmox API.",
         version=__version__,
     )
@@ -25,7 +26,8 @@ def create_mock_app() -> FastAPI:
     @app.get("/")
     async def root() -> dict[str, object]:
         return {
-            "message": "Schema-driven Proxmox mock API",
+            "message": f"Schema-driven Proxmox mock API ({service})",
+            "service": service,
             "schema_version": version_tag,
             "package_version": __version__,
         }

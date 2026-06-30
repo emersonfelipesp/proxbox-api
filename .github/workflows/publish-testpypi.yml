@@ -33,6 +33,7 @@ permissions:
 env:
   PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
   PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
+  CI_OFFICIAL_IMAGE_PREFIX: mirror.gcr.io/library
 
 jobs:
   prepare-release:
@@ -409,7 +410,7 @@ jobs:
             git clone --depth 1 --branch "${NETBOX_VERSION}" \
               https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
             docker build \
-              --build-arg "FROM=ubuntu:26.04" \
+              --build-arg "FROM=${CI_OFFICIAL_IMAGE_PREFIX}/ubuntu:26.04" \
               --build-arg "NETBOX_PATH=.netbox" \
               -t "${NETBOX_IMAGE}" \
               /tmp/netbox-docker
@@ -434,6 +435,7 @@ jobs:
             "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${NETBOX_PROXBOX_TARGET}' && mkdir -p /etc/netbox/config && printf 'PLUGINS = [\"netbox_proxbox\"]\\n' > /etc/netbox/config/plugins.py && i=0 && until /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py migrate --no-input; do i=\$((i+1)); if [ \$i -ge 120 ]; then echo 'migrate exhausted retries'; exit 1; fi; sleep 2; done && /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py runserver 0.0.0.0:8000 --insecure"
 
           docker build --target raw \
+            --build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-alpine" \
             --build-arg "DEV_OVERRIDES=${DEV_OVERRIDES}" \
             -t proxbox-e2e:raw .
 
@@ -697,7 +699,7 @@ jobs:
             git clone --depth 1 --branch "${NETBOX_VERSION}" \
               https://github.com/netbox-community/netbox.git /tmp/netbox-docker/.netbox
             docker build \
-              --build-arg "FROM=ubuntu:26.04" \
+              --build-arg "FROM=${CI_OFFICIAL_IMAGE_PREFIX}/ubuntu:26.04" \
               --build-arg "NETBOX_PATH=.netbox" \
               -t "${NETBOX_IMAGE}" \
               /tmp/netbox-docker
