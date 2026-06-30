@@ -8,6 +8,35 @@ class ProxmoxModeOptions(str, Enum):
     multi = "multi"
 
 
+class ProxmoxAccessMethod(str, Enum):
+    """Per-endpoint transport access method.
+
+    Orthogonal to the read/write trust axis (``ProxmoxEndpoint.allow_writes``):
+    this controls *how* an endpoint may be reached, not *whether* writes are
+    allowed.
+
+    - ``api`` — Read and Write over the Proxmox HTTP API only. Default for
+      newly-created endpoints.
+    - ``api_ssh`` — Read and Write over the Proxmox HTTP API **plus** SSH. SSH
+      is an optional complement to API.
+
+    There is intentionally no "SSH only" member: SSH can never be enabled
+    without API, so an SSH-only endpoint is structurally unrepresentable.
+    """
+
+    api = "api"
+    api_ssh = "api_ssh"
+
+    @classmethod
+    def ssh_enabled(cls, value: "str | ProxmoxAccessMethod | None") -> bool:
+        """Return True when ``value`` permits the SSH transport (``api_ssh``)."""
+        if value is None:
+            return False
+        if isinstance(value, cls):
+            return value is cls.api_ssh
+        return str(value) == cls.api_ssh.value
+
+
 class ProxmoxUpperPaths(str, Enum):
     access = "access"
     cluster = "cluster"

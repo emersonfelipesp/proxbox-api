@@ -438,6 +438,31 @@ an operator trust assertion, not a transient configuration parameter.
 - `proxbox_api/routes/proxmox_actions.py::_gate` — 403 gate executed at the top of every destructive verb handler
 - `tests/test_static_guardrails.py` — static contract tests that pin all of the above invariants
 
+### Transport Access Boundary: `ProxmoxEndpoint.access_methods`
+
+Orthogonal to `allow_writes` (the read/write axis), each endpoint declares a
+**transport access method** that controls whether the **SSH transport** may be
+used at all:
+
+- `access_methods="api"` (default for new endpoints) — Read and Write over the
+  Proxmox HTTP API only.
+- `access_methods="api_ssh"` — Read and Write over the API **plus** SSH.
+
+API is always the mandatory baseline; **SSH-only is structurally
+unrepresentable** (the enum has exactly two members and the API rejects any
+other value with a 422). SSH is refused with `reason="ssh_not_enabled_for_endpoint"`
+(403) on SSH-initiating paths that resolve to a SQLite-id endpoint when the
+endpoint is API-only.
+
+**Do not autonomously set `access_methods="api_ssh"`** to unlock SSH execution;
+it is an operator assertion like `allow_writes`.
+
+**Enforcement locations (proxbox-api, SQLite-id paths):**
+- `proxbox_api/enum/proxmox.py::ProxmoxAccessMethod` — the two-value enum that makes SSH-only unrepresentable
+- `proxbox_api/routes/proxmox/access_gate.py::require_ssh_access` / `gate_ssh_access` — the 403 SSH gate
+- `proxbox_api/routes/cloud/template_images.py` and `proxbox_api/routes/cloud/azure_vhd_imports.py` — Cloud Image Build Pipeline / Azure VHD import SSH execution gated here
+- The **browser SSH terminal** uses a NetBox-side id space, so its access-method gate lives in the `netbox-proxbox` plugin (credential-serving endpoint), not here. proxbox-api's `/ssh/sessions` route is intentionally not SQLite-gated.
+
 ### Destructive Routes — Explicit Human Confirmation Required
 
 | Route | Operation | Reversible? |
