@@ -20,6 +20,7 @@ This documentation covers installation, configuration, architecture, API referen
 - Virtual machine, interface, IP, disk, storage, and backup synchronization toward NetBox.
 - High-Availability readout across every configured cluster — see [Cluster HA API](api/cluster-ha.md).
 - VM operational verbs (start / stop / snapshot / migrate) gated by `ProxmoxEndpoint.allow_writes`, with idempotency, journal auditing, and SSE progress for migrate — see [HTTP API Reference — VM Operational Verbs](api/http-reference.md#vm-operational-verbs).
+- Optional PBS, PDM, Ceph, intent, SSH, and NMS Cloud route groups - see [Service Routes](api/service-routes.md).
 - Admin log inspection, cache inspection, and full-update orchestration.
 
 ## Audience

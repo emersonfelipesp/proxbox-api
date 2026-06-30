@@ -64,6 +64,7 @@ nav:
       - Caching: architecture/caching.md
   - API:
       - HTTP Reference: api/http-reference.md
+      - Service Routes: api/service-routes.md
       - WebSocket Reference: api/websocket-reference.md
       - Cache API: api/cache.md
       - Cluster HA: api/cluster-ha.md

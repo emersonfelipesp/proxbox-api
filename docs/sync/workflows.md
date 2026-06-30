@@ -247,6 +247,31 @@ Core behavior:
 - Discovers Proxmox storage definitions.
 - Reconciles NetBox plugin storage records used by backup and snapshot flows.
 
+## SDN Sync Flow
+
+Endpoint:
+
+- `GET /proxmox/sdn/create/stream`
+
+Core behavior:
+
+- Reads Proxmox SDN controllers, zones, VNets, VNet subnets, fabrics, route
+  maps, prefix lists, node zone content, bridges, MAC-VRF, and IP-VRF rows.
+- Maps EVPN and VXLAN VNets into NetBox `vpn.L2VPN` records. EVPN
+  `rt-import` values are reconciled as `ipam.RouteTarget` import targets.
+- Maps valid SDN subnet CIDRs into NetBox `ipam.Prefix` records.
+- Creates `vpn.L2VPNTermination` records only when runtime rows expose an
+  explicit NetBox target or an unambiguous VLAN id. Existing terminations for a
+  different L2VPN are left untouched and recorded as binding conflicts.
+- Stores Proxmox-specific SDN metadata and raw payloads in `netbox-proxbox`
+  plugin inventory endpoints.
+- Treats missing or unsupported SDN Proxmox API paths as skipped warnings so
+  older clusters do not fail the sync stream.
+
+The route never writes SDN configuration back to Proxmox. It is intended to be
+called by the NetBox plugin's optional `sdn` stage after VM interface and IP
+address stages have already run.
+
 ## SSE Streaming Mode
 
 Each sync flow has a corresponding `/stream` endpoint that emits Server-Sent Events in real time:
@@ -254,6 +279,7 @@ Each sync flow has a corresponding `/stream` endpoint that emits Server-Sent Eve
 - `GET /full-update/stream`
 - `GET /dcim/devices/create/stream`
 - `GET /virtualization/virtual-machines/create/stream`
+- `GET /proxmox/sdn/create/stream`
 
 How it works:
 

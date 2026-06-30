@@ -198,8 +198,10 @@ async def test_existing_tagged_device_different_site_is_adopted(
     """Issue #561: a ``proxbox``-tagged same-name device in another site is reused.
 
     The operator opted in by tagging the pre-existing physical hypervisor, so
-    Proxbox adopts it: it is pinned to its own existing site (preserving the
-    manual data) and attached to the Proxmox cluster, with no duplicate created.
+    Proxbox adopts it: it is updated in place — attached to the Proxmox cluster
+    and its site is moved to match the cluster's scope_site (NetBox enforces that
+    device.site == cluster.scope_site, so leaving the stale site in place would
+    cause a "The assigned cluster belongs to a different site" validation error).
     """
     existing = _FakeExistingDevice(_existing_payload(device_type_id=42, role_id=10, tagged=True))
     existing._current.update({"cluster": 77, "site": 99})
@@ -224,12 +226,12 @@ async def test_existing_tagged_device_different_site_is_adopted(
         overwrite_flags=SyncOverwriteFlags(),
     )
 
-    # Existing record is updated in place: attached to the target cluster while
-    # pinned to its own site (99), so the unique-name-per-site constraint holds
-    # and the manually-curated data on the device is preserved.
+    # Existing record is updated in place: cluster and site are both moved so that
+    # device.site (41) matches cluster 11's scope_site (41).  NetBox rejects any
+    # PATCH that assigns a cluster whose scope_site differs from the device's site.
     assert existing.saved is True
     assert existing.applied.get("cluster") == 11
-    assert existing.applied.get("site") in (None, 99)
+    assert existing.applied.get("site") == 41
 
 
 @pytest.mark.asyncio

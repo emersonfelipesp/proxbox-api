@@ -196,7 +196,6 @@ def _build_netbox_vm_payload(
     proxmox_url: str | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
-    tenant_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -211,6 +210,14 @@ def _build_netbox_vm_payload(
     maxcpu = int(resource.get("maxcpu") or 0)
     maxmem = resource.get("maxmem")
     maxdisk = resource.get("maxdisk")
+
+    # Right after a clone the new VM is not yet in Proxmox /cluster/resources, so
+    # ``maxcpu`` is 0. NetBox rejects vcpus=0 (DecimalField MinValueValidator 0.01;
+    # null is allowed). Fall back to the VM config's cores*sockets, which is
+    # reliably present post-clone, and send null only when neither is known.
+    config_cores = int(config.get("cores") or 0) if config else 0
+    config_sockets = int(config.get("sockets") or 1) if config else 1
+    vcpus_value = maxcpu or (config_cores * config_sockets) or None
 
     memory_mb = _mb_from_bytes(maxmem)
     disk_mb = _mb_from_bytes(maxdisk)
@@ -242,9 +249,8 @@ def _build_netbox_vm_payload(
         "cluster": cluster_id,
         "device": device_id,
         "site": site_id,
-        "tenant": tenant_id,
         "role": role_id,
-        "vcpus": maxcpu,
+        "vcpus": vcpus_value,
         "memory": memory_mb,
         "disk": disk_mb,
         "tags": tag_ids,
@@ -379,8 +385,6 @@ async def sync_vm_individual(
             cluster,
             fallback_site_id=getattr(_site, "id", None),
         )
-        tenant = await service._get_or_create_tenant()
-        tenant_id = int(getattr(tenant, "id", 0) or 0) if tenant else None
 
         px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
         px_port = getattr(px, "http_port", 8006)
@@ -434,7 +438,6 @@ async def sync_vm_individual(
             proxmox_url=px_url,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
-            tenant_id=tenant_id,
         )
         netbox_version = await detect_netbox_version(nb)
         supports_vm_type = supports_virtual_machine_type(netbox_version)

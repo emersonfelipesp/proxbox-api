@@ -76,6 +76,8 @@ def test_cloud_package_exposes_both_routers():
         "templates_router",
         "versions_router",
     )
+    assert cloud.azure_vhd_imports_router is not None
+    assert cloud.lxc_router is not None
 
 
 def test_cloud_routes_are_registered_on_app(monkeypatch):

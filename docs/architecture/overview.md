@@ -37,7 +37,9 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
   - `/admin`
   - `/admin/encryption` — encryption key inspection and rotation surface.
   - `/auth` — bootstrap and API-key management.
-  - `/cloud/firecracker/provision` and `/cloud/firecracker/provision/stream` — Firecracker host-agent provisioning for NMS Cloud. These routes health-check the selected host, read capabilities, prepare assets, create the micro-VM, and optionally start it.
+  - `/cloud/*` - NMS Cloud VM, LXC, template, image-factory, Azure VHD import, and Firecracker provisioning routes. See [Service Routes](../api/service-routes.md).
+  - `/intent/*` - NetBox-to-Proxmox plan/apply/deletion-request safety routes. See [Service Routes](../api/service-routes.md).
+  - `/pbs/*`, `/pdm/*`, `/ceph/*`, and `/ceph/v2/*` - optional sidecar service routes. These mount by default when imports succeed, or selectively when `PROXBOX_FEATURES` is set to `pbs`, `pdm`, and/or `ceph`.
   - `/netbox`
   - `/proxmox`
   - `/proxmox/cluster/ha/*` — read-only High-Availability aggregation across configured clusters; see [Cluster HA API](../api/cluster-ha.md).
@@ -47,6 +49,7 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
   - `/extras`
   - `/sync/individual`
   - `/sync/active` — process-local probe for an in-flight `/full-update` run.
+- Sidecar-only mode: when `PROXBOX_FEATURES` contains only optional sidecar flags (`pbs`, `ceph`, `pdm`), the core Proxmox/NetBox/sync/cloud/intent route groups are skipped and only the selected service routes mount alongside root metadata and auth.
 - SQLite-backed endpoint configuration and bootstrap state.
 - NetBox API access via `netbox-sdk` sync and async clients.
 - Proxmox API access via `proxmox-sdk` sync SDK sessions and typed helper wrappers.

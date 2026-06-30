@@ -36,7 +36,7 @@ the cross-product of:
 |---|---|---|
 | `base` (transport bundle) | Hard-coded list in `setup.gen` | 7 transport combinations covering `http_manage`, `https_nginx`, `https_granian`, and IPv6 dual-stack |
 | `netbox_proxbox_mode` | `INPUT_NETBOX_PROXBOX_MODE` (workflow input) and the event type | `dev` for push/PR, `[dev, pypi]` on release |
-| `netbox_version` | `.github/netbox-versions.json` | Currently three certified NetBox tags |
+| `netbox_version` | `.github/netbox-versions.json` | Certified NetBox tags: `v4.5.8`, `v4.5.9`, and `v4.6.0` through `v4.6.3` |
 | `proxmox_service` | Hard-coded `["pve", "pbs", "pdm"]` | All three services on every run |
 
 The full cross-product is therefore **7 (transport) × 1–2 (mode) × 3 (NetBox) × 3 (service) = 63–126 cells**.

@@ -1072,14 +1072,29 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     # name-regex mapping; proxbox-api never sends tenant on the create body.
     virtual_machine_type: int | None = None
     role: int | None = None
-    vcpus: int = 0
+    # NetBox vcpus is a DecimalField that is null-or->=0.01; 0 is rejected.
+    # Keep it Optional so a freshly-cloned VM (no resource/config CPU yet) sends
+    # null instead of an invalid 0.
+    vcpus: int | None = None
     memory: int = 0
     disk: int = 0
     tags: list[int] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
     description: str | None = None
 
-    @field_validator("vcpus", "memory", "disk", mode="before")
+    @field_validator("vcpus", mode="before")
+    @classmethod
+    def coerce_optional_vcpus(cls, value: object) -> int | None:
+        # Pass None through (NetBox accepts null vcpus) and never emit 0.
+        if value is None:
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced or None
+
+    @field_validator("memory", "disk", mode="before")
     @classmethod
     def coerce_nullable_vm_ints(cls, value: object) -> int:
         if value is None:

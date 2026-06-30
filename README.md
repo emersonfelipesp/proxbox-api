@@ -21,7 +21,7 @@
 - **Bottom — downstream SDKs**:
   - **Write target** — `netbox-sdk` → `netbox · REST API` (4.5.x / 4.6.x). Async with a
     cached GET layer (60s TTL); concurrency capped by `PROXBOX_NETBOX_MAX_CONCURRENT`.
-  - **Read source** — `proxmox-sdk` → `proxmox · REST API` (8.1 / 8.2 / 8.3 / latest, per `SUPPORTED_PROXMOX_VERSIONS` in `proxbox_api/constants.py`). PVE 9.x route groups (HA rules, firewall writes, SDN fabrics, datacenter CPU models, access token regeneration, CRS config) are implemented and degrade gracefully on older clusters. Async, read-only for discovery, `mock | real` modes; concurrency capped by `PROXBOX_VM_SYNC_MAX_CONCURRENCY`.
+  - **Read source** — `proxmox-sdk` → `proxmox · REST API` (8.1 / 8.2 / 8.3 / latest, per `SUPPORTED_PROXMOX_VERSIONS` in `proxbox_api/constants.py`). PVE 9.x route groups (HA rules, firewall writes, SDN controllers/zones/VNets/subnets/fabrics, datacenter CPU models, access token regeneration, CRS config) are implemented and degrade gracefully on older clusters. Async, read-only for discovery, `mock | real` modes; concurrency capped by `PROXBOX_VM_SYNC_MAX_CONCURRENCY`.
   - **Firecracker host-agent** — `/cloud/firecracker/provision` and
     `/cloud/firecracker/provision/stream` call the selected host-agent VM to
     health-check KVM, read capacity, prepare kernel/rootfs assets, create the
@@ -66,6 +66,10 @@ opt-in testing.
 Firecracker host-agent provisioning is documented in
 [`docs/operations/firecracker.md`](docs/operations/firecracker.md), including
 the Cloud endpoints, SSE events, request shape, and response shape.
+
+PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
+indexed in [`docs/api/service-routes.md`](docs/api/service-routes.md), including
+`PROXBOX_FEATURES` sidecar-only behavior.
 
 ### Local docs build
 
