@@ -1225,6 +1225,7 @@ async def _sync_netbox_l2vpn_objects(  # noqa: C901
             continue
         zone = zones_by_name.get(vnet.zone)
         if zone is None or str(zone.type or "").lower() not in _MANAGED_L2VPN_TYPES:
+            counters.skipped += 1
             continue
 
         import_target_ids: list[int] = []
