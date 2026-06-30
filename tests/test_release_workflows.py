@@ -85,7 +85,15 @@ def test_publish_workflow_never_reuses_consumed_package_versions():
 def test_netbox_e2e_version_set_matches_supported_plugin_range():
     versions = json.loads(NETBOX_VERSIONS_PATH.read_text(encoding="utf-8"))
 
-    assert versions == ["v4.5.8", "v4.5.9", "v4.6.0", "v4.6.1", "v4.6.2", "v4.6.3"]
+    assert versions == [
+        "v4.5.8",
+        "v4.5.9",
+        "v4.6.0",
+        "v4.6.1",
+        "v4.6.2",
+        "v4.6.3",
+        "v4.6.4",
+    ]
 
 
 def test_pypi_package_validation_happens_before_docker_publish_and_e2e():

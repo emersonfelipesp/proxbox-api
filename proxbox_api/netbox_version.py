@@ -1,6 +1,6 @@
 """Live NetBox version detection and capability gates.
 
-`/api/status/` returns ``{"netbox-version": "4.6.0", ...}`` on every
+`/api/status/` returns ``{"netbox-version": "4.6.4", ...}`` on every
 supported NetBox release. This module fetches that value once per session,
 caches it on the session object, and exposes a small comparison API. Sync
 services use it to gate 4.6-only behaviours (for example, creating
