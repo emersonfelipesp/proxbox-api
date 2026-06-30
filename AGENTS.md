@@ -37,7 +37,15 @@ PROXBOX_RECONCILIATION_ENGINE=compare \
   uv run pytest tests/reconciliation -q
 ```
 
-If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.11.post2`); there is no local `proxmox-sdk/` subdirectory in this repo.
+If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.12`); there is no local `proxmox-sdk/` subdirectory in this repo.
+
+SDN support lives in `proxbox_api/routes/proxmox/sdn.py` and
+`proxbox_api/services/sync/sdn.py`. Keep it read-only against Proxmox: the
+`GET /proxmox/sdn/create/stream` stage may reconcile NetBox L2VPN,
+L2VPNTermination, RouteTarget, Prefix, and plugin metadata objects, but it must
+not apply, rollback, lock, or mutate Proxmox SDN configuration. Unsupported
+older clusters should emit skipped warnings rather than failing healthy
+endpoints.
 
 If you edit `nextjs-ui/`, also run:
 

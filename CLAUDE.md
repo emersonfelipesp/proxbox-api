@@ -27,7 +27,7 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 - **`netbox-proxbox` v0.0.20.post1** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.20.post1` ↔ `proxbox-api 0.0.17.post2` ↔ `proxmox-sdk 0.0.11.post2`
+  pairing is `netbox-proxbox 0.0.20.post1` ↔ `proxbox-api 0.0.17.post2` ↔ `proxmox-sdk 0.0.12`
   ↔ `netbox-sdk 0.0.9.post2`. Operational-verb routes (start/stop/snapshot/migrate)
   require `proxbox-api >= 0.0.17`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
@@ -110,7 +110,7 @@ Open the nearest scoped guide for the code you are changing.
 
 - `proxbox_api/`: FastAPI package, session factories, schemas, routes, sync services, code generation, and shared utilities.
 - `proxbox-reconcile-rs/`: optional PyO3/maturin Rust package for VM operation-queue reconciliation parity testing and opt-in execution.
-- `proxmox-mock/`: Standalone `proxmox-mock-api` dev-dependency package (editable install from `pyproject.toml` `[tool.uv.sources]`). Used in tests as the mock Proxmox server. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.11.post2` in `pyproject.toml`), not a local subdirectory.
+- `proxmox-mock/`: Standalone `proxmox-mock-api` dev-dependency package (editable install from `pyproject.toml` `[tool.uv.sources]`). Used in tests as the mock Proxmox server. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.12` in `pyproject.toml`), not a local subdirectory.
 - `nextjs-ui/`: Next.js frontend used to manage one NetBox endpoint and multiple Proxmox endpoints.
 - `tests/`: Unit, integration, and end-to-end tests for the backend package.
 - `benchmarks/`: local benchmark helpers, including VM reconciliation queue datasets and timers.
@@ -173,7 +173,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`): start, stop, snapshot, migrate, reboot, delete, backup, and snapshot-delete for QEMU and LXC guests. All gated by `ProxmoxEndpoint.allow_writes`.
 - **High-Availability** (`routes/proxmox/ha.py`, `/proxmox/cluster/ha/*`): status, resources, groups, rules, summary, disarm, arm, manager-status, CRS config.
 - **Firewall** (`routes/proxmox/firewall.py`, `/proxmox/firewall/*`): datacenter, node, and VM-level rules, security groups, IP sets, aliases, and options. Write endpoints gated by `allow_writes`.
-- **SDN** (`routes/proxmox/sdn.py`, `/proxmox/sdn/*`): fabrics, fabrics/all, route-maps, prefix-lists (PVE 9.2+; returns 501 on older).
+- **SDN** (`routes/proxmox/sdn.py`, `/proxmox/sdn/*`): controllers, zones, VNets, VNet subnets, fabrics, route-maps, prefix-lists, node runtime rows, and read-only `create/stream` NetBox reconciliation. Unsupported older clusters are skipped with warnings instead of failing the stream.
 - **Datacenter** (`routes/proxmox/datacenter.py`, `/proxmox/datacenter/*`): custom CPU models CRUD + datacenter options (PVE 9.2+).
 - **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
 - **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, and `disk_gb` overrides and applies them through the Proxmox API during clone configuration. The Cloud Image Build Pipeline SSH execution path sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the NMS route `/cloud/azure-to-nmulticloud-migration`. See `routes/cloud/CLAUDE.md`.
@@ -249,7 +249,7 @@ while the Docker container is healthy on port `18800`.
 
 ## Dependencies
 
-- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.11.post2` (external PyPI package), `netbox-sdk==0.0.9.post1` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`
+- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.12` (external PyPI package), `netbox-sdk==0.0.9.post1` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`
 - Tests: `pytest`, `httpx`, `playwright`, `pytest-cov`, `pytest-asyncio`, `pytest-xdist`
 - Docs: `mkdocs`, `mkdocs-material`, `mkdocs-static-i18n`
 
