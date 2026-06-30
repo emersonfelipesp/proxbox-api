@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.routes.cloud.azure_vhd_pipeline import build_azure_vhd_import_response
+from proxbox_api.routes.proxmox.access_gate import gate_ssh_access
 from proxbox_api.routes.proxmox_actions import _gate
 from proxbox_api.schemas.cloud_provision import AzureVhdImportRequest, AzureVhdImportResponse
 
@@ -36,5 +37,8 @@ async def import_azure_vhd(
         )
         if isinstance(gated, JSONResponse):
             return gated
+        # The import runs over SSH, so also enforce the per-endpoint
+        # SSH-transport gate (access_methods="api_ssh"); orthogonal to writes.
+        await gate_ssh_access(session, request.endpoint_id)
 
     return build_azure_vhd_import_response(request)

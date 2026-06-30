@@ -17,6 +17,7 @@ from proxbox_api.routes.cloud.cloud_init_templates import (
 )
 from proxbox_api.routes.cloud.pipeline_scripts import build_pipeline_response
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
+from proxbox_api.routes.proxmox.access_gate import gate_ssh_access
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.schemas.cloud_provision import (
     CloudImageTemplateBuildRequest,
@@ -119,6 +120,12 @@ async def build_cloud_image_template(
         or req.user_data_yaml is not None
         or req.product_type in {ProxmoxProductType.pfsense, ProxmoxProductType.opnsense}
     ):
+        # When the pipeline will actually run over SSH against a known endpoint,
+        # enforce the per-endpoint SSH-transport gate (access_methods="api_ssh").
+        # With no endpoint_id there is no endpoint to consult, so the remaining
+        # gates (PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION, PROXBOX_SSH_KEY_DIR) apply.
+        if req.execute and req.endpoint_id is not None:
+            await gate_ssh_access(session, req.endpoint_id)
         return build_pipeline_response(req)
 
     if req.endpoint_id is None or not req.target_node or not req.image_url:

@@ -68,6 +68,51 @@ def test_azure_vhd_import_route_returns_windows_safe_boot_plan(auth_test_client)
     assert any("Install VirtIO storage" in step for step in body["follow_up_steps"])
 
 
+def _create_proxmox_endpoint(client, *, name, ip, allow_writes, access_methods) -> int:
+    resp = client.post(
+        "/proxmox/endpoints",
+        json={
+            "name": name,
+            "ip_address": ip,
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+            "allow_writes": allow_writes,
+            "access_methods": access_methods,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["id"]
+
+
+def test_azure_vhd_import_execute_blocked_when_ssh_not_enabled(auth_test_client) -> None:
+    """execute=true against an API-only endpoint is refused by the SSH gate."""
+    endpoint_id = _create_proxmox_endpoint(
+        auth_test_client,
+        name="azure-api-only",
+        ip="192.168.1.200",
+        allow_writes=True,  # passes the allow_writes gate so the SSH gate is reached
+        access_methods="api",  # API only -> SSH refused
+    )
+
+    response = auth_test_client.post(
+        "/cloud/azure/vhd-imports",
+        json={
+            "target_node": "pve-node-01",
+            "vmid": 9405,
+            "name": "azure-ssh-blocked",
+            "azure_vhd_url": PUBLIC_VHD_URL,
+            "execute": True,
+            "endpoint_id": endpoint_id,
+            "ssh_host": "pve.example.test",
+        },
+    )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["reason"] == "ssh_not_enabled_for_endpoint"
+
+
 def test_azure_vhd_import_execute_requires_endpoint_id(auth_test_client) -> None:
     response = auth_test_client.post(
         "/cloud/azure/vhd-imports",

@@ -201,3 +201,72 @@ class TestProxmoxEndpointCRUD:
 
         get_resp = auth_test_client.get(f"/proxmox/endpoints/{endpoint_id}")
         assert get_resp.status_code == 404
+
+    def test_create_defaults_access_methods_to_api(self, auth_test_client):
+        """New endpoints created through the API default to API-only."""
+        payload = {
+            "name": "pve-access-default",
+            "ip_address": "192.168.1.120",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+        }
+        resp = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["access_methods"] == "api"
+
+    def test_create_accepts_api_ssh(self, auth_test_client):
+        payload = {
+            "name": "pve-access-ssh",
+            "ip_address": "192.168.1.121",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+            "access_methods": "api_ssh",
+        }
+        resp = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["access_methods"] == "api_ssh"
+
+    def test_create_rejects_ssh_only(self, auth_test_client):
+        """SSH-only is unrepresentable: 'ssh' must be a 422."""
+        payload = {
+            "name": "pve-access-sshonly",
+            "ip_address": "192.168.1.122",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+            "access_methods": "ssh",
+        }
+        resp = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert resp.status_code == 422, resp.text
+
+    def test_update_access_methods(self, auth_test_client):
+        payload = {
+            "name": "pve-access-update",
+            "ip_address": "192.168.1.123",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+        }
+        created = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert created.status_code == 200, created.text
+        endpoint_id = created.json()["id"]
+        assert created.json()["access_methods"] == "api"
+
+        upd = auth_test_client.put(
+            f"/proxmox/endpoints/{endpoint_id}",
+            json={"access_methods": "api_ssh"},
+        )
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["access_methods"] == "api_ssh"
+
+        bad = auth_test_client.put(
+            f"/proxmox/endpoints/{endpoint_id}",
+            json={"access_methods": "ssh"},
+        )
+        assert bad.status_code == 422, bad.text
