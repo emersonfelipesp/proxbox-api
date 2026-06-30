@@ -27,8 +27,10 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 - **`netbox-proxbox` v0.0.21** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.21` ↔ `proxbox-api 0.0.18.post5` ↔ `proxmox-sdk 0.0.12`
-  ↔ `netbox-sdk 0.0.10`. Operational-verb routes (start/stop/snapshot/migrate)
+  pairing is `netbox-proxbox 0.0.21 ... proxbox-api 0.0.19 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
+  `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
+  RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
+  VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
   require `proxbox-api >= 0.0.17`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
   Firecracker Cloud uses the plugin for host pools, host-agent inventory, image
