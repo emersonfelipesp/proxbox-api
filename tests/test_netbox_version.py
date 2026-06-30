@@ -36,6 +36,7 @@ def _netbox_api(version: str) -> SimpleNamespace:
     ("raw", "expected"),
     [
         ("4.6.0", (4, 6, 0)),
+        ("4.6.4", (4, 6, 4)),
         ("4.6.0-beta2", (4, 6, 0)),
         ("v4.5.9", (4, 5, 9)),
         ("4.5", (4, 5, 0)),
@@ -49,10 +50,10 @@ def test_parse_netbox_version(raw: str | None, expected: tuple[int, int, int]) -
 
 @pytest.mark.asyncio
 async def test_detect_netbox_version_caches_status_result() -> None:
-    nb = _netbox_api("4.6.0")
+    nb = _netbox_api("4.6.4")
 
-    assert await detect_netbox_version(nb) == (4, 6, 0)
-    assert await detect_netbox_version(nb) == (4, 6, 0)
+    assert await detect_netbox_version(nb) == (4, 6, 4)
+    assert await detect_netbox_version(nb) == (4, 6, 4)
     assert nb.client.calls == [("GET", "/api/status/")]
 
 
@@ -74,7 +75,7 @@ async def test_ensure_vm_type_skips_virtual_machine_type_before_netbox_46(monkey
 
 @pytest.mark.asyncio
 async def test_ensure_vm_type_reconciles_virtual_machine_type_on_netbox_46(monkeypatch) -> None:
-    nb = _netbox_api("4.6.0")
+    nb = _netbox_api("4.6.4")
     captured: dict[str, object] = {}
 
     async def _fake_reconcile(*args: object, **kwargs: object) -> object:
@@ -193,7 +194,7 @@ async def test_create_or_update_vm_ignores_stale_vm_type_id_before_netbox_46(
 async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
     monkeypatch,
 ) -> None:
-    nb = _netbox_api("4.6.0")
+    nb = _netbox_api("4.6.4")
     captured: dict[str, object] = {}
 
     async def _fake_reconcile(*args: object, **kwargs: object) -> object:
@@ -241,7 +242,7 @@ async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
 async def test_ensure_vm_type_uses_preresolved_version_without_network_call(monkeypatch) -> None:
     # When a pre-resolved netbox_version is supplied, detect_netbox_version must not
     # be called (the /api/status/ endpoint must never be reached).
-    nb = _netbox_api("4.6.0")
+    nb = _netbox_api("4.6.4")
 
     async def _fake_reconcile(*args: object, **kwargs: object) -> object:
         return SimpleNamespace(id=19)
