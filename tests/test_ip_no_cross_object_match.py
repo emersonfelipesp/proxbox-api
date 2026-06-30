@@ -25,8 +25,15 @@ def _run_resolve(monkeypatch, existing_for_address):
 
     async def _fake_rest_list(nb, path, query=None):
         query = query or {}
-        # Address ownership lookup performed by _reconcile_interface_ip.
-        if query.get("address") == _ADDR and "vminterface_id" not in query and "tag" not in query:
+        # Address ownership lookup performed by _reconcile_interface_ip. The
+        # lookup is mask-agnostic (queries by host) so a differently-masked
+        # pre-existing record is still found and adopted.
+        host = _ADDR.split("/", 1)[0]
+        if (
+            query.get("address") in {_ADDR, host}
+            and "vminterface_id" not in query
+            and "tag" not in query
+        ):
             return list(existing_for_address)
         # cleanup_stale_ips_for_interface (vminterface_id + tag) -> nothing stale.
         return []
