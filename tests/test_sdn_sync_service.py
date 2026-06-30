@@ -303,6 +303,60 @@ async def test_sdn_l2vpn_mapping_supports_vxlan_and_skips_unmanaged_zones(monkey
 
 
 @pytest.mark.asyncio
+async def test_sdn_l2vpn_reconcile_error_records_object_error(monkeypatch):
+    async def _fake_reconcile(_nb, path, *, lookup, payload, fields, **_kwargs):
+        del lookup, payload, fields
+        if path == "/api/vpn/l2vpns/":
+            raise RuntimeError("l2vpn write failed")
+        return 1, True
+
+    import proxbox_api.services.sync.sdn as sdn_module
+
+    monkeypatch.setattr(sdn_module, "_reconcile", _fake_reconcile)
+
+    inventory = SdnInventory(
+        endpoint_id=17,
+        endpoint_name="pve-a",
+        cluster_name="cluster-a",
+        zones=[
+            SdnZoneSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="evpn-prod",
+                type="evpn",
+            )
+        ],
+        vnets=[
+            SdnVNetSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                zone="evpn-prod",
+                vnet="tenant100",
+            )
+        ],
+    )
+    counters = SdnSyncCounters()
+
+    vnet_l2vpn_ids, subnet_prefix_ids = await _sync_netbox_l2vpn_objects(
+        object(),
+        inventory,
+        counters,
+    )
+
+    assert vnet_l2vpn_ids == {}
+    assert subnet_prefix_ids == {}
+    assert counters.per_endpoint_errors == {"cluster-a": 1}
+    assert counters.object_errors == [
+        {
+            "kind": "l2vpn",
+            "name": "evpn-prod/tenant100",
+            "error": "l2vpn write failed",
+        }
+    ]
+    assert counters.as_dict()["object_errors"] == counters.object_errors
+
+
+@pytest.mark.asyncio
 async def test_sdn_l2vpn_termination_uses_explicit_target(monkeypatch):
     calls = []
 

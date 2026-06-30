@@ -200,6 +200,7 @@ class SdnSyncCounters:
     stale: int = 0
     plugin_metadata: int = 0
     per_endpoint_errors: dict[str, int] = field(default_factory=dict)
+    object_errors: list[dict[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -214,10 +215,28 @@ class SdnSyncCounters:
             "stale": self.stale,
             "plugin_metadata": self.plugin_metadata,
             "per_endpoint_errors": self.per_endpoint_errors,
+            "object_errors": self.object_errors,
         }
 
     def record_endpoint_error(self, endpoint: str) -> None:
         self.per_endpoint_errors[endpoint] = self.per_endpoint_errors.get(endpoint, 0) + 1
+
+    def record_object_error(
+        self,
+        endpoint: str,
+        *,
+        kind: str,
+        name: str,
+        error: Exception,
+    ) -> None:
+        self.record_endpoint_error(endpoint)
+        self.object_errors.append(
+            {
+                "kind": kind,
+                "name": name,
+                "error": str(error),
+            }
+        )
 
 
 def _to_mapping(raw: object) -> dict[str, object]:
@@ -844,6 +863,39 @@ async def _plugin_upsert(
     return changed
 
 
+async def _plugin_upsert_counted(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    kind: str,
+    name: str,
+    path: str,
+    lookup: dict[str, object],
+    payload: dict[str, object],
+    fields: tuple[str, ...],
+) -> None:
+    try:
+        changed = await _plugin_upsert(
+            nb,
+            path,
+            lookup=lookup,
+            payload=payload,
+            fields=fields,
+        )
+    except Exception as error:  # noqa: BLE001
+        counters.record_object_error(
+            inventory.cluster_name,
+            kind=kind,
+            name=name or path,
+            error=error,
+        )
+        logger.warning("Could not sync SDN plugin %s %s: %s", kind, name or path, error)
+        return
+    if changed:
+        counters.plugin_metadata += 1
+
+
 async def _sync_plugin_inventory(  # noqa: C901
     nb: object,
     inventory: SdnInventory,
@@ -861,9 +913,13 @@ async def _sync_plugin_inventory(  # noqa: C901
         if not controller.controller:
             counters.skipped += 1
             continue
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-controllers/",
+            inventory,
+            counters,
+            kind="controller",
+            name=controller.controller,
+            path="/api/plugins/proxbox/sdn-controllers/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -895,16 +951,19 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "status",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
     for fabric in inventory.fabrics:
         if not fabric.fabric:
             counters.skipped += 1
             continue
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-fabrics/",
+            inventory,
+            counters,
+            kind="fabric",
+            name=fabric.fabric,
+            path="/api/plugins/proxbox/sdn-fabrics/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -936,16 +995,19 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "status",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
     for route_map in inventory.route_maps:
         if not route_map.name:
             counters.skipped += 1
             continue
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-route-maps/",
+            inventory,
+            counters,
+            kind="route-map",
+            name=route_map.name,
+            path="/api/plugins/proxbox/sdn-route-maps/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -976,16 +1038,19 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "status",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
     for prefix_list in inventory.prefix_lists:
         if not prefix_list.name:
             counters.skipped += 1
             continue
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-prefix-lists/",
+            inventory,
+            counters,
+            kind="prefix-list",
+            name=prefix_list.name,
+            path="/api/plugins/proxbox/sdn-prefix-lists/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -1014,16 +1079,19 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "status",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
     for zone in inventory.zones:
         if not zone.zone:
             counters.skipped += 1
             continue
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-zones/",
+            inventory,
+            counters,
+            kind="zone",
+            name=zone.zone,
+            path="/api/plugins/proxbox/sdn-zones/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -1061,17 +1129,20 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "status",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
     for vnet in inventory.vnets:
         if not vnet.vnet:
             counters.skipped += 1
             continue
         l2vpn_id = vnet_l2vpn_ids.get((vnet.zone or "", vnet.vnet))
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-vnets/",
+            inventory,
+            counters,
+            kind="vnet",
+            name=vnet.vnet,
+            path="/api/plugins/proxbox/sdn-vnets/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -1105,8 +1176,7 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "status",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
     for subnet in inventory.subnets:
         if not subnet.vnet or not subnet.subnet:
@@ -1116,9 +1186,13 @@ async def _sync_plugin_inventory(  # noqa: C901
         skip_reason = "" if prefix_id else "Invalid or ambiguous subnet payload."
         if prefix_id is None:
             counters.skipped += 1
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-subnets/",
+            inventory,
+            counters,
+            kind="subnet",
+            name=subnet.subnet,
+            path="/api/plugins/proxbox/sdn-subnets/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -1153,8 +1227,7 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "status",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
     for row in inventory.node_status:
         source = "/".join(
@@ -1163,9 +1236,13 @@ async def _sync_plugin_inventory(  # noqa: C901
         if not source:
             counters.skipped += 1
             continue
-        if await _plugin_upsert(
+        await _plugin_upsert_counted(
             nb,
-            "/api/plugins/proxbox/sdn-bindings/",
+            inventory,
+            counters,
+            kind="binding",
+            name=source,
+            path="/api/plugins/proxbox/sdn-bindings/",
             lookup={
                 "endpoint": endpoint_id,
                 "cluster_name": inventory.cluster_name,
@@ -1200,8 +1277,7 @@ async def _sync_plugin_inventory(  # noqa: C901
                 "conflict_reason",
                 "raw_config",
             ),
-        ):
-            counters.plugin_metadata += 1
+        )
 
 
 async def _sync_netbox_l2vpn_objects(  # noqa: C901
@@ -1233,7 +1309,12 @@ async def _sync_netbox_l2vpn_objects(  # noqa: C901
             try:
                 rt_id, changed = await _ensure_route_target(nb, rt_name)
             except Exception as error:  # noqa: BLE001
-                counters.record_endpoint_error(inventory.cluster_name)
+                counters.record_object_error(
+                    inventory.cluster_name,
+                    kind="route-target",
+                    name=rt_name,
+                    error=error,
+                )
                 logger.warning("Could not sync RouteTarget %s: %s", rt_name, error)
                 continue
             if rt_id is not None:
@@ -1252,7 +1333,12 @@ async def _sync_netbox_l2vpn_objects(  # noqa: C901
                 import_target_ids=import_target_ids,
             )
         except Exception as error:  # noqa: BLE001
-            counters.record_endpoint_error(inventory.cluster_name)
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="l2vpn",
+                name=f"{vnet.zone}/{vnet.vnet}",
+                error=error,
+            )
             logger.warning("Could not sync L2VPN for %s/%s: %s", vnet.zone, vnet.vnet, error)
             continue
         if l2vpn_id is not None:
@@ -1271,7 +1357,12 @@ async def _sync_netbox_l2vpn_objects(  # noqa: C901
         try:
             prefix_id, changed = await _ensure_prefix(nb, subnet)
         except Exception as error:  # noqa: BLE001
-            counters.record_endpoint_error(inventory.cluster_name)
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="prefix",
+                name=subnet.subnet,
+                error=error,
+            )
             logger.warning("Could not sync Prefix for SDN subnet %s: %s", subnet.subnet, error)
             continue
         if prefix_id is not None:
@@ -1333,6 +1424,43 @@ async def _record_binding(
             "raw_config",
         ),
     )
+
+
+async def _record_termination_binding_counted(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    endpoint_id: int,
+    source_name: str,
+    target_type: str,
+    target_id: int,
+    raw_config: dict[str, object],
+    status: str = "active",
+    conflict_reason: str = "",
+) -> bool:
+    try:
+        return await _record_binding(
+            nb,
+            endpoint_id=endpoint_id,
+            cluster_name=inventory.cluster_name,
+            source_type="l2vpn-termination",
+            source_name=source_name,
+            target_type=target_type,
+            target_id=target_id,
+            status=status,
+            conflict_reason=conflict_reason,
+            raw_config=raw_config,
+        )
+    except Exception as error:  # noqa: BLE001
+        counters.record_object_error(
+            inventory.cluster_name,
+            kind="l2vpn-termination-binding",
+            name=source_name,
+            error=error,
+        )
+        logger.warning("Could not record SDN termination binding %s: %s", source_name, error)
+        return False
 
 
 async def _resolve_termination_target(
@@ -1417,7 +1545,12 @@ async def _sync_l2vpn_terminations(
                 target_id=target_id,
             )
         except Exception as error:  # noqa: BLE001
-            counters.record_endpoint_error(inventory.cluster_name)
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="l2vpn-termination",
+                name=source_name,
+                error=error,
+            )
             logger.warning(
                 "Could not sync L2VPN termination for %s/%s: %s",
                 row.vnet,
@@ -1427,32 +1560,38 @@ async def _sync_l2vpn_terminations(
             continue
         if conflict_reason:
             counters.skipped += 1
-            if await _record_binding(
+            binding_changed = await _record_termination_binding_counted(
                 nb,
+                inventory,
+                counters,
                 endpoint_id=endpoint_id,
-                cluster_name=inventory.cluster_name,
-                source_type="l2vpn-termination",
                 source_name=source_name,
                 target_type=target_type,
                 target_id=target_id,
                 status="conflict",
                 conflict_reason=conflict_reason,
-                raw_config={**row.raw_config, "l2vpn": l2vpn_id, "termination": termination_id},
-            ):
+                raw_config={
+                    **row.raw_config,
+                    "l2vpn": l2vpn_id,
+                    "termination": termination_id,
+                },
+            )
+            if binding_changed:
                 counters.plugin_metadata += 1
             continue
         if changed:
             counters.terminations += 1
-        if await _record_binding(
+        binding_changed = await _record_termination_binding_counted(
             nb,
+            inventory,
+            counters,
             endpoint_id=endpoint_id,
-            cluster_name=inventory.cluster_name,
-            source_type="l2vpn-termination",
             source_name=source_name,
             target_type=target_type,
             target_id=target_id,
             raw_config={**row.raw_config, "l2vpn": l2vpn_id, "termination": termination_id},
-        ):
+        )
+        if binding_changed:
             counters.plugin_metadata += 1
 
 
