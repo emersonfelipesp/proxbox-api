@@ -95,6 +95,35 @@ def test_allow_writes_defaults_false_in_database_model():
 
 
 # ---------------------------------------------------------------------------
+# Transport access method: api/api_ssh, SSH-only unrepresentable
+# ---------------------------------------------------------------------------
+
+
+def test_access_methods_defaults_to_api_in_database_model():
+    content = _read("proxbox_api/database.py")
+    assert 'access_methods: str = Field(default="api")' in content, (
+        "ProxmoxEndpoint.access_methods must default to 'api' (API only) for new rows"
+    )
+
+
+def test_access_method_enum_has_no_ssh_only_member():
+    content = _read("proxbox_api/enum/proxmox.py")
+    assert "class ProxmoxAccessMethod" in content, "ProxmoxAccessMethod enum must exist"
+    assert 'api = "api"' in content and 'api_ssh = "api_ssh"' in content, (
+        "ProxmoxAccessMethod must define exactly api and api_ssh"
+    )
+    # SSH-only must be unrepresentable: no bare 'ssh' member value.
+    assert 'ssh = "ssh"' not in content, "ProxmoxAccessMethod must not define an SSH-only member"
+
+
+def test_agents_md_documents_access_methods_boundary():
+    content = _read("AGENTS.md")
+    assert "access_methods" in content and "ssh_not_enabled_for_endpoint" in content, (
+        "AGENTS.md must document the access_methods transport boundary and its 403 reason"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Security: no forbidden patterns in route handlers
 # ---------------------------------------------------------------------------
 

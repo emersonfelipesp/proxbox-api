@@ -93,6 +93,12 @@ Proxmox packages so cloud-init never blocks on an interactive grub prompt.
 
 - Gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` (a 403 with the
   enable-instruction is returned otherwise).
+- When `execute=true` and an `endpoint_id` is supplied, additionally gated by
+  the endpoint's transport access method: `ProxmoxEndpoint.access_methods` must
+  be `api_ssh`, enforced via `routes/proxmox/access_gate.py::gate_ssh_access`.
+  An API-only endpoint returns 403 `reason="ssh_not_enabled_for_endpoint"`. This
+  is orthogonal to `allow_writes` (the Azure path runs both gates). With no
+  `endpoint_id` there is no endpoint to consult, so only the env/key gates apply.
 - The ssh command is `ssh -p <port> [-i <ssh_identity_file>] <user>@<ssh_host>
   'bash -s'`. `ssh_identity_file` must resolve under `PROXBOX_SSH_KEY_DIR`
   (validated in `schemas/cloud_provision.py`); `ssh_host` is validated against

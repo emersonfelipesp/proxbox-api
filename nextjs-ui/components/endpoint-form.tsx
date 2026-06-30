@@ -2,7 +2,12 @@
 
 import { useMemo, useState } from "react"
 
-import type { NetBoxEndpoint, ProxmoxEndpoint, ProxmoxEndpointPayload } from "@/lib/types"
+import type {
+  NetBoxEndpoint,
+  ProxmoxAccessMethod,
+  ProxmoxEndpoint,
+  ProxmoxEndpointPayload,
+} from "@/lib/types"
 
 type FormMode = "create" | "edit"
 
@@ -200,6 +205,9 @@ export function ProxmoxEndpointForm(props: ProxmoxFormProps) {
   const [username, setUsername] = useState(initial?.username ?? "")
   const [password, setPassword] = useState(initial?.password ?? "")
   const [verifySsl, setVerifySsl] = useState(initial?.verify_ssl ?? true)
+  const [accessMethods, setAccessMethods] = useState<ProxmoxAccessMethod>(
+    initial?.access_methods ?? "api",
+  )
   const [tokenName, setTokenName] = useState(initial?.token_name ?? "")
   const [tokenValue, setTokenValue] = useState(initial?.token_value ?? "")
   const [error, setError] = useState<string | null>(null)
@@ -238,6 +246,7 @@ export function ProxmoxEndpointForm(props: ProxmoxFormProps) {
       port,
       username: username.trim(),
       verify_ssl: verifySsl,
+      access_methods: accessMethods,
     }
 
     if (mode === "create") {
@@ -297,6 +306,20 @@ export function ProxmoxEndpointForm(props: ProxmoxFormProps) {
         <label className="space-y-1">
           <span className={labelClass}>Token Value</span>
           <input className={inputClass} type="password" value={tokenValue ?? ""} onChange={(e) => setTokenValue(e.target.value)} placeholder="xxxxxxxx-xxxx-xxxx" />
+        </label>
+        <label className="space-y-1">
+          <span className={labelClass}>Access method</span>
+          <select
+            className={inputClass}
+            value={accessMethods}
+            onChange={(e) => setAccessMethods(e.target.value as ProxmoxAccessMethod)}
+          >
+            <option value="api">API only (Read + Write)</option>
+            <option value="api_ssh">API + SSH (Read + Write)</option>
+          </select>
+          <span className="text-xs text-[var(--muted)]">
+            SSH only complements API; there is no SSH-only option.
+          </span>
         </label>
       </div>
       <label className="flex items-center gap-2 text-sm text-[var(--panel-foreground)]">

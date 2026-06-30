@@ -5,16 +5,36 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlmodel import select
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.enum.proxmox import ProxmoxAccessMethod
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
+
+_ACCESS_METHOD_VALUES = tuple(m.value for m in ProxmoxAccessMethod)
+
+
+def _validate_access_methods(value: str | None) -> str | None:
+    """Accept only ``api`` / ``api_ssh``; reject SSH-only and unknown values.
+
+    Returning a 422 (via ``ValueError``) makes ``ssh`` and any other value
+    impossible to persist, enforcing the "API is mandatory, SSH-only is not
+    allowed" invariant at the API boundary.
+    """
+    if value is None:
+        return None
+    if value not in _ACCESS_METHOD_VALUES:
+        raise ValueError(
+            f"access_methods must be one of {list(_ACCESS_METHOD_VALUES)} "
+            "(SSH-only is not allowed; SSH only complements API)"
+        )
+    return value
 
 
 class ProxmoxEndpointCreate(BaseModel):
@@ -27,6 +47,7 @@ class ProxmoxEndpointCreate(BaseModel):
     verify_ssl: bool = True
     enabled: bool = True
     allow_writes: bool = False
+    access_methods: str = ProxmoxAccessMethod.api.value
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
     site_id: int | None = Field(default=None, ge=1)
@@ -38,6 +59,12 @@ class ProxmoxEndpointCreate(BaseModel):
     timeout: int | None = Field(default=None, ge=1, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
+
+    @field_validator("access_methods")
+    @classmethod
+    def _check_access_methods(cls, value: str) -> str:
+        validated = _validate_access_methods(value)
+        return validated if validated is not None else ProxmoxAccessMethod.api.value
 
 
 class ProxmoxEndpointUpdate(BaseModel):
@@ -50,6 +77,7 @@ class ProxmoxEndpointUpdate(BaseModel):
     verify_ssl: bool | None = None
     enabled: bool | None = None
     allow_writes: bool | None = None
+    access_methods: str | None = None
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
     site_id: int | None = Field(default=None, ge=1)
@@ -61,6 +89,11 @@ class ProxmoxEndpointUpdate(BaseModel):
     timeout: int | None = Field(default=None, ge=1, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
+
+    @field_validator("access_methods")
+    @classmethod
+    def _check_access_methods(cls, value: str | None) -> str | None:
+        return _validate_access_methods(value)
 
 
 class ProxmoxEndpointPublic(BaseModel):
@@ -77,6 +110,7 @@ class ProxmoxEndpointPublic(BaseModel):
     verify_ssl: bool
     enabled: bool
     allow_writes: bool
+    access_methods: str = ProxmoxAccessMethod.api.value
     site_id: int | None = None
     site_slug: str | None = None
     site_name: str | None = None

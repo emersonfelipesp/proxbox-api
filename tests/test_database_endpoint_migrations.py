@@ -65,3 +65,51 @@ def test_pdm_endpoint_migration_adds_enabled_to_legacy_table(tmp_path, monkeypat
         "last_seen_at",
     } <= _columns(engine, table)
     engine.dispose()
+
+
+def _make_legacy_proxmox_endpoint_table(engine, table: str) -> None:
+    """A pre-access_methods proxmoxendpoint table with one existing row."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"""
+                CREATE TABLE {table} (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    ip_address VARCHAR NOT NULL,
+                    domain VARCHAR,
+                    port INTEGER NOT NULL DEFAULT 8006,
+                    username VARCHAR NOT NULL,
+                    password VARCHAR,
+                    verify_ssl BOOLEAN NOT NULL DEFAULT 1,
+                    allow_writes BOOLEAN NOT NULL DEFAULT 0,
+                    enabled BOOLEAN NOT NULL DEFAULT 1
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                f"INSERT INTO {table} (name, ip_address, username) "
+                "VALUES ('legacy', '10.0.0.9', 'root@pam')"
+            )
+        )
+
+
+def test_proxmox_endpoint_migration_backfills_existing_rows_to_api_ssh(tmp_path, monkeypatch):
+    """Existing endpoints must keep SSH working on upgrade (backfill ``api_ssh``)."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'proxmox.db'}")
+    monkeypatch.setattr(database, "engine", engine)
+    table = database.ProxmoxEndpoint.__tablename__
+    _make_legacy_proxmox_endpoint_table(engine, table)
+
+    assert "access_methods" not in _columns(engine, table)
+
+    database._migrate_proxmox_endpoint_columns()
+
+    assert "access_methods" in _columns(engine, table)
+    with engine.begin() as conn:
+        value = conn.execute(text(f"SELECT access_methods FROM {table}")).scalar_one()
+    # NON-BREAKING backfill: pre-existing rows keep the SSH transport.
+    assert value == "api_ssh"
+    engine.dispose()

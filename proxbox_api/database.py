@@ -106,6 +106,14 @@ class ProxmoxEndpoint(SQLModel, table=True):
     verify_ssl: bool = Field(default=True)
     # Safety invariant: False by default — all destructive Proxmox verbs are gated here; see AGENTS.md §"LLM Agent Safety Guardrails" and proxbox_api/routes/proxmox_actions.py::_gate.
     allow_writes: bool = Field(default=False)
+    # Transport access method (orthogonal to allow_writes). Values: "api"
+    # (Read+Write over API only) or "api_ssh" (Read+Write over API + SSH). SSH is
+    # an optional complement to API; "ssh only" is unrepresentable. NEW rows
+    # default to "api" (this ORM default); PRE-EXISTING rows are backfilled to
+    # "api_ssh" by _migrate_proxmox_endpoint_columns() so currently-ungated SSH
+    # usage is not silently broken on upgrade. See proxbox_api/enum/proxmox.py
+    # ProxmoxAccessMethod and the SSH-access gate in routes/ssh_terminal.py.
+    access_methods: str = Field(default="api")
     enabled: bool = Field(default=True)
     token_name: str | None = Field(default=None)
     token_value: str | None = Field(default=None)
@@ -122,6 +130,11 @@ class ProxmoxEndpoint(SQLModel, table=True):
     @property
     def has_token(self) -> bool:
         return bool(self.token_name and self.token_value)
+
+    @property
+    def ssh_enabled(self) -> bool:
+        """True when this endpoint permits the SSH transport (``api_ssh``)."""
+        return self.access_methods == "api_ssh"
 
     @property
     def host(self) -> str:
@@ -549,6 +562,15 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
         stmts.append(f"ALTER TABLE {table} ADD COLUMN tenant_name VARCHAR")
     if "allow_writes" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
+    if "access_methods" not in existing:
+        # Backfill pre-existing rows to "api_ssh" (NON-BREAKING): SSH paths were
+        # previously ungated, so defaulting legacy endpoints to "api" would 403
+        # any in-use SSH terminal / cloud-image SSH on upgrade. New rows created
+        # through the ORM use the model default "api" instead (see
+        # ProxmoxEndpoint.access_methods).
+        stmts.append(
+            f"ALTER TABLE {table} ADD COLUMN access_methods VARCHAR NOT NULL DEFAULT 'api_ssh'"
+        )
     if "enabled" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
     if "verify_ssl" not in existing:

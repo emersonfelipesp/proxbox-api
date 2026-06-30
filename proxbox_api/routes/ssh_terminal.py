@@ -96,6 +96,13 @@ async def create_terminal_session(
     payload: TerminalSessionCreate,
     request: Request,
 ) -> TerminalSessionPublic:
+    # NOTE: the per-endpoint SSH access-method gate (access_methods="api_ssh")
+    # for the browser terminal is enforced on the netbox-proxbox side, where the
+    # endpoint_id is native and the SSH credentials live. proxbox-api's SQLite
+    # ProxmoxEndpoint table uses an independent id space, so it is NOT the
+    # authority for terminal SSH access. proxbox-api enforces access_methods only
+    # for its own SQLite-id SSH paths (Cloud Image Build Pipeline / Azure VHD
+    # import). See routes/proxmox/access_gate.py and the netbox-proxbox plugin.
     actor = payload.actor or request.headers.get("X-Proxbox-Actor")
     try:
         session, ticket = await terminal_session_manager.create_session(
