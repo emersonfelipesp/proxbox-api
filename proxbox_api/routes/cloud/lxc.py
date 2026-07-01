@@ -18,6 +18,7 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.exception import ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.routes.cloud.qemu_templates import _endpoint_for_read
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.services.proxmox_helpers import get_node_storage_content, get_node_task_status
 from proxbox_api.session.proxmox import ProxmoxSession
@@ -309,15 +310,20 @@ async def _provision_lxc_on_proxmox(
 async def list_lxc_templates(
     session: SessionDep,
     endpoint_id: int = Query(ge=1),
-) -> list[CloudLXCTemplateItem] | JSONResponse:
-    """List available LXC CT templates from all storages on the given Proxmox endpoint."""
-    gated = await _gate(session, endpoint_id)
-    if isinstance(gated, JSONResponse):
-        return gated
+) -> list[CloudLXCTemplateItem]:
+    """List available LXC CT templates from all storages on the given Proxmox endpoint.
+
+    This is a read-only discovery route, so it resolves the endpoint through
+    ``_endpoint_for_read`` (existence + ``enabled``) — the same read gate the
+    sibling QEMU template route uses — instead of the write gate ``_gate``.
+    Listing templates must NOT require ``ProxmoxEndpoint.allow_writes=True``;
+    that flag only guards mutating verbs (see ``provision_lxc`` below).
+    """
+    endpoint = await _endpoint_for_read(session, endpoint_id)
 
     proxmox: ProxmoxSession | None = None
     try:
-        proxmox = await _open_proxmox_session(gated)
+        proxmox = await _open_proxmox_session(endpoint)
 
         nodes_raw = await resolve_async(proxmox.session.nodes.get())
         node_names = _online_node_names(nodes_raw)
