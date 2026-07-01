@@ -39,6 +39,12 @@ converts it to QCOW2, and attaches it to a generated Proxmox VM shell.
   import script and optionally runs it over SSH.
 - `provision.py`, `provision_stream.py` — QEMU provision (REST + SSE).
 - `firecracker.py` — `/cloud/firecracker/provision` (+ stream).
+- `lxc.py` — `GET /cloud/lxc/templates` (read-only CT-template listing) and
+  `POST /cloud/lxc/provision` (write). **Gate distinction:** template listing is a
+  read and resolves the endpoint via `_endpoint_for_read` (existence + `enabled`),
+  the same read gate as `qemu_templates.py` — it must NOT use the `allow_writes`
+  write gate `_gate` (doing so 403'd the Templates tab on write-disabled
+  endpoints). `provision_lxc` is a real write and keeps `_gate`.
 
 ## Cloud Image Build Pipeline (`POST /cloud/templates/images`)
 
