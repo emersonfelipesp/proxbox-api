@@ -27,7 +27,7 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 - **`netbox-proxbox` v0.0.21** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.21 ... proxbox-api 0.0.19 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
+  pairing is `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post1 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
   `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
   RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
   VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
@@ -711,7 +711,7 @@ Note: `PKG_TOKEN` is the secret name for Gitea package uploads. The `GITEA_` pre
 - Manual fallback path was used: built dist locally, uploaded to Gitea registry directly, pushed tag to GitHub → GitHub Actions `push: tags: v*` fired → proxbox-api 0.0.16 published to PyPI.
 - GitHub draft release `v0.0.16` was created in a prior session but left as Draft. One-time cleanup: `gh release edit v0.0.16 --repo emersonfelipesp/proxbox-api --draft=false`.
 - `release: published` re-triggered the workflow; the new PyPI idempotency check (added in this PR) skips the upload cleanly.
-- Paired plugin: `netbox-proxbox 0.0.19`.
+- Paired plugin: `netbox-proxbox 0.0.22`.
 
 ### What was done for v0.0.17.post2
 
