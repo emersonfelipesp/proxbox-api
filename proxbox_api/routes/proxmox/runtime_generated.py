@@ -43,6 +43,16 @@ _GENERATED_ROUTE_STATE: dict[str, object] = {
     "loaded_from_cache": False,
 }
 
+# In-process cache of generated Pydantic model modules, keyed by version tag.
+# Building a module (codegen + exec + model_rebuild across the full Proxmox API
+# surface) costs several seconds, and the ASGI lifespan re-runs route
+# registration on every app startup. The test suite opens a TestClient(app)
+# context manager per test, so without memoization each test re-paid that
+# rebuild (~25s on some CPython patch levels), making the suite time out.
+# Production starts once per process, so reusing an already-built module here
+# does not change its behavior.
+_MODEL_MODULE_CACHE: dict[str, ModuleType] = {}
+
 
 def _schema_to_annotation(schema: dict[str, object] | None) -> object:
     if not isinstance(schema, dict):
@@ -103,18 +113,23 @@ def _render_proxmox_path(path_template: str, path_values: dict[str, object]) -> 
 
 
 def _load_model_module(openapi_document: dict[str, object], version_tag: str) -> ModuleType:
-    code = generate_pydantic_models_from_openapi(openapi_document)
-    module = ModuleType(f"proxbox_api.generated.proxmox.runtime_{version_tag.replace('.', '_')}")
-    sys.modules[module.__name__] = module
-    exec(code, module.__dict__)
-    for value in module.__dict__.values():
-        if (
-            isinstance(value, type)
-            and getattr(value, "__module__", None) == module.__name__
-            and hasattr(value, "model_rebuild")
-        ):
-            value.model_rebuild(_types_namespace=module.__dict__)
-    return module
+    with _GENERATED_ROUTE_STATE_LOCK:
+        cached_module = _MODEL_MODULE_CACHE.get(version_tag)
+        if cached_module is not None:
+            return cached_module
+        code = generate_pydantic_models_from_openapi(openapi_document)
+        module = ModuleType(f"proxbox_api.generated.proxmox.runtime_{version_tag.replace('.', '_')}")
+        sys.modules[module.__name__] = module
+        exec(code, module.__dict__)
+        for value in module.__dict__.values():
+            if (
+                isinstance(value, type)
+                and getattr(value, "__module__", None) == module.__name__
+                and hasattr(value, "model_rebuild")
+            ):
+                value.model_rebuild(_types_namespace=module.__dict__)
+        _MODEL_MODULE_CACHE[version_tag] = module
+        return module
 
 
 def _version_sort_key(version_tag: str) -> tuple[int, str]:
@@ -597,10 +612,57 @@ def register_generated_proxmox_routes(
     version_tag: str | None = None,
     openapi_document: dict[str, object] | None = None,
     openapi_documents: dict[str, dict[str, object]] | None = None,
+    force_rebuild: bool = False,
 ) -> dict[str, object]:
-    """Register runtime-generated live Proxmox proxy routes on the FastAPI app."""
+    """Register runtime-generated live Proxmox proxy routes on the FastAPI app.
+
+    Pass ``force_rebuild=True`` to always rebuild and re-mount the full route set
+    even when it is already registered in-process. Callers that generate a new
+    schema version at runtime (see ``schema_version_manager``) must force the
+    rebuild so the freshly generated routes are picked up; the ASGI lifespan uses
+    the default (non-forced) call so repeated startups reuse the mounted set.
+    """
 
     with _GENERATED_ROUTE_STATE_LOCK:
+        # Fast path: the ASGI lifespan re-runs the default (full) registration on
+        # every app startup, but the app object and its generated routes persist
+        # in-process across restarts (shutdown does not unmount them). Rebuilding
+        # and re-adding ~1200 routes on every ``TestClient(app)`` __enter__ made
+        # the test suite crawl into the CI timeout. When the full set is already
+        # mounted on THIS app, reuse it. Explicit single-version re-registration
+        # (version_tag/openapi_document/openapi_documents) is never skipped, and
+        # production starts once per process so this never triggers there.
+        if (
+            not force_rebuild
+            and version_tag is None
+            and openapi_document is None
+            and openapi_documents is None
+            and _GENERATED_ROUTE_STATE["route_names"]
+        ):
+            existing_route_names = {getattr(route, "name", None) for route in app.routes}
+            if set(_GENERATED_ROUTE_STATE["route_names"]).issubset(existing_route_names):
+                cached_versions = _GENERATED_ROUTE_STATE["versions"]
+                return {
+                    "message": "Generated Proxmox live routes already registered.",
+                    "mounted_versions": sorted(cached_versions.keys(), key=_version_sort_key),
+                    "alias_version_tag": _GENERATED_ROUTE_STATE["alias_version_tag"],
+                    "cache_path": _GENERATED_ROUTE_STATE["cache_path"],
+                    "cache_source": "in-process",
+                    "route_count": len(_GENERATED_ROUTE_STATE["route_names"]),
+                    "versions": {
+                        mounted_version: {
+                            "route_count": state["route_count"],
+                            "path_count": state["path_count"],
+                            "method_count": state["method_count"],
+                            "schema_version": state["schema_version"],
+                        }
+                        for mounted_version, state in sorted(
+                            cached_versions.items(),
+                            key=lambda item: _version_sort_key(item[0]),
+                        )
+                    },
+                }
+
         cache_snapshot = None
         cache_source = "explicit"
         if openapi_documents is None and openapi_document is None and version_tag is None:

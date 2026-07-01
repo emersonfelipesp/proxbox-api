@@ -7,11 +7,15 @@ from pathlib import Path
 import pytest
 
 from proxbox_api.services.ssh_terminal import (
+    OneShotTerminalCredential,
     TerminalCredential,
     TerminalSessionError,
     TerminalSessionManager,
+    fetch_terminal_credential,
     terminal_session_manager,
 )
+
+_FINGERPRINT = "SHA256:abcdefghijklmnopqrstuvwxyz12345678901234567"
 
 
 @pytest.fixture(autouse=True)
@@ -159,3 +163,178 @@ def test_ssh_terminal_websocket_uses_ticket_without_backend_api_key(
     assert ready["type"] == "ready"
     assert ready["target"] == "proxbox@10.0.0.2:22"
     assert exit_frame == {"type": "exit", "status": 0}
+
+
+@pytest.mark.asyncio
+async def test_one_shot_credential_bypasses_netbox_fetch() -> None:
+    """A one-shot session builds its credential inline, never touching NetBox."""
+    manager = TerminalSessionManager()
+    session, _ticket = await manager.create_session(
+        target_type="node",
+        endpoint_id=1,
+        node_id=15,
+        host="10.0.0.15",
+        actor="alice",
+        cols=120,
+        rows=32,
+        one_shot_credential=OneShotTerminalCredential(
+            username="root",
+            port=22,
+            known_host_fingerprint=_FINGERPRINT,
+            password="one-shot-secret",
+        ),
+    )
+
+    # Passing a sentinel NetBox session that would raise if used proves the
+    # one-shot path never performs the stored-credential fetch.
+    class _Boom:
+        def __getattr__(self, _name):  # pragma: no cover - must never run
+            raise AssertionError("NetBox session must not be used for one-shot")
+
+    credential = await fetch_terminal_credential(_Boom(), session)
+
+    assert credential.target_type == "node"
+    assert credential.target_id == 15
+    assert credential.host == "10.0.0.15"
+    assert credential.username == "root"
+    assert credential.password == "one-shot-secret"
+    assert credential.known_host_fingerprint == _FINGERPRINT
+    assert credential.display == "root@10.0.0.15:22"
+
+
+@pytest.mark.asyncio
+async def test_one_shot_credential_supports_endpoint_target() -> None:
+    manager = TerminalSessionManager()
+    session, _ticket = await manager.create_session(
+        target_type="endpoint",
+        endpoint_id=7,
+        node_id=None,
+        host="pve.example.com",
+        actor="alice",
+        cols=120,
+        rows=32,
+        one_shot_credential=OneShotTerminalCredential(
+            username="root",
+            port=2222,
+            known_host_fingerprint=_FINGERPRINT,
+            private_key="-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----",
+        ),
+    )
+
+    credential = await fetch_terminal_credential(None, session)
+
+    assert credential.target_type == "endpoint"
+    assert credential.target_id == 7
+    assert credential.host == "pve.example.com"
+    assert credential.port == 2222
+    assert credential.private_key is not None
+    assert credential.password is None
+
+
+def test_one_shot_terminal_credential_repr_redacts_secrets() -> None:
+    cred = OneShotTerminalCredential(
+        username="root",
+        port=22,
+        known_host_fingerprint=_FINGERPRINT,
+        password="super-secret",
+        private_key="PRIVATE-KEY-MATERIAL",
+    )
+    text = repr(cred)
+    assert "super-secret" not in text
+    assert "PRIVATE-KEY-MATERIAL" not in text
+    assert "<redacted>" in text
+
+
+@pytest.mark.asyncio
+async def test_terminal_session_repr_omits_one_shot_credential() -> None:
+    manager = TerminalSessionManager()
+    session, _ticket = await manager.create_session(
+        target_type="node",
+        endpoint_id=1,
+        node_id=15,
+        host="10.0.0.15",
+        actor="alice",
+        cols=120,
+        rows=32,
+        one_shot_credential=OneShotTerminalCredential(
+            username="root",
+            port=22,
+            known_host_fingerprint=_FINGERPRINT,
+            password="never-in-repr",
+        ),
+    )
+    assert "never-in-repr" not in repr(session)
+
+
+def test_create_session_accepts_one_shot_credential(auth_test_client) -> None:
+    response = auth_test_client.post(
+        "/ssh/sessions",
+        json={
+            "target_type": "node",
+            "endpoint_id": 1,
+            "node_id": 15,
+            "host": "10.0.0.15",
+            "one_shot_credential": {
+                "username": "root",
+                "port": 22,
+                "known_host_fingerprint": _FINGERPRINT,
+                "password": "one-shot",
+            },
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["ticket"]
+    # The secret must never be echoed back to the caller.
+    assert "one-shot" not in response.text
+
+
+def test_one_shot_credential_requires_a_secret(auth_test_client) -> None:
+    response = auth_test_client.post(
+        "/ssh/sessions",
+        json={
+            "target_type": "node",
+            "endpoint_id": 1,
+            "node_id": 15,
+            "host": "10.0.0.15",
+            "one_shot_credential": {
+                "username": "root",
+                "known_host_fingerprint": _FINGERPRINT,
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_one_shot_credential_requires_fingerprint(auth_test_client) -> None:
+    response = auth_test_client.post(
+        "/ssh/sessions",
+        json={
+            "target_type": "node",
+            "endpoint_id": 1,
+            "node_id": 15,
+            "host": "10.0.0.15",
+            "one_shot_credential": {
+                "username": "root",
+                "known_host_fingerprint": "",
+                "password": "one-shot",
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_one_shot_endpoint_requires_host(auth_test_client) -> None:
+    response = auth_test_client.post(
+        "/ssh/sessions",
+        json={
+            "target_type": "endpoint",
+            "endpoint_id": 7,
+            "one_shot_credential": {
+                "username": "root",
+                "known_host_fingerprint": _FINGERPRINT,
+                "password": "one-shot",
+            },
+        },
+    )
+    assert response.status_code == 422
