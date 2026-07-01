@@ -265,6 +265,11 @@ Core behavior:
   different L2VPN are left untouched and recorded as binding conflicts.
 - Stores Proxmox-specific SDN metadata and raw payloads in `netbox-proxbox`
   plugin inventory endpoints.
+- When `sync_mode_sdn_bgp=always` or `bootstrap_only`, projects BGP
+  fabrics/controllers, resolvable sessions, route maps, prefix lists, and
+  validated communities into the optional `netbox_bgp` plugin. Missing
+  `netbox_bgp` APIs or unresolved session IP/ASN references are recorded as
+  skipped warnings rather than failing the SDN stream.
 - Treats missing or unsupported SDN Proxmox API paths as skipped warnings so
   older clusters do not fail the sync stream.
 

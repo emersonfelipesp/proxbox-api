@@ -26,7 +26,7 @@ Endpoints that expose Proxmox sessions, cluster data, node data, viewer generati
 - `nodes.py`: Proxmox node endpoints and node interface response schemas.
 - `replication.py`: Proxmox cluster replication endpoints.
 - `runtime_generated.py`: runtime-generated route registration helpers and cache management.
-- `sdn.py`: Software Defined Networking endpoints: fabrics, route-maps, prefix-lists (PVE 9.2+; degrades gracefully on older clusters).
+- `sdn.py`: Software Defined Networking endpoints: fabrics, route-maps, prefix-lists (PVE 9.2+; degrades gracefully on older clusters) plus the read-only `/sdn/create/stream` NetBox reconciliation route with optional `sync_mode_sdn_bgp` projection into `netbox_bgp`.
 - `viewer_codegen.py`: runtime endpoints to generate and return Proxmox OpenAPI, Pydantic, and live-route artifacts.
 
 ## How These Routes Work

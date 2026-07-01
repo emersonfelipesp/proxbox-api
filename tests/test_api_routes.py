@@ -42,6 +42,7 @@ from proxbox_api.routes.proxmox.endpoints import (
     get_proxmox_endpoints,
     update_proxmox_endpoint,
 )
+from proxbox_api.routes.proxmox.sdn import create_sdn_stream
 from proxbox_api.routes.virtualization.virtual_machines import (
     create_netbox_backups,
     create_virtual_machines,
@@ -64,6 +65,11 @@ def test_root_route_returns_service_metadata():
 def test_sync_entrypoints_share_proxbox_tag_dependency():
     for entrypoint in (create_proxmox_devices, create_virtual_machines, full_update_sync):
         assert "tag" in inspect.signature(entrypoint).parameters
+
+
+def test_sdn_stream_exposes_sdn_bgp_sync_mode_query_parameter():
+    parameter = inspect.signature(create_sdn_stream).parameters["sync_mode_sdn_bgp"]
+    assert parameter.default == "disabled"
 
 
 def test_vm_create_routes_run_netbox_dependency_bootstrap():

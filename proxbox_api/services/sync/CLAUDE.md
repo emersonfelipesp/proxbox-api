@@ -24,6 +24,9 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `network.py`: network and interface sync helpers.
 - `reconciliation/`: pure operation-queue reconciliation, Python fallback,
   optional Rust bridge, mismatch metric, and shared VM operation types.
+- `sdn.py`: read-only Proxmox SDN inventory sync, NetBox L2VPN/Prefix/plugin
+  metadata reconciliation, and optional `netbox_bgp` projection controlled by
+  `sync_mode_sdn_bgp`.
 - `snapshots.py`: snapshot sync helpers.
 - `storage_links.py`: storage-to-NetBox relationship helpers.
 - `storages.py`: storage sync helpers.

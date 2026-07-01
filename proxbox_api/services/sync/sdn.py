@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel, ConfigDict, Field
 
+from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async, rest_reconcile_async_with_status
 from proxbox_api.proxmox_async import resolve_async
@@ -21,8 +22,49 @@ if TYPE_CHECKING:
 
 _UNSUPPORTED_STATUS_CODES = {404, 501}
 _SLUG_FRAGMENT_RE = re.compile(r"[^a-z0-9]+")
+_BGP_COMMUNITY_RE = re.compile(r"^(?P<left>\d{1,10}):(?P<right>\d{1,10})$")
 _MANAGED_L2VPN_TYPES = {"evpn": "vxlan-evpn", "vxlan": "vxlan"}
 _TERMINATION_TARGET_TYPES = {"virtualization.vminterface", "dcim.interface", "ipam.vlan"}
+_VALID_SYNC_MODES = frozenset({"always", "bootstrap_only", "disabled"})
+_BGP_API_PEER_GROUPS = "/api/plugins/bgp/peer-group/"
+_BGP_API_SESSIONS = "/api/plugins/bgp/session/"
+_BGP_API_ROUTING_POLICIES = "/api/plugins/bgp/routing-policy/"
+_BGP_API_ROUTING_POLICY_RULES = "/api/plugins/bgp/routing-policy-rule/"
+_BGP_API_PREFIX_LISTS = "/api/plugins/bgp/prefix-list/"
+_BGP_API_PREFIX_LIST_RULES = "/api/plugins/bgp/prefix-list-rule/"
+_BGP_API_COMMUNITIES = "/api/plugins/bgp/community/"
+_NETBOX_BGP_TARGET_TYPES = {
+    "community": "netbox_bgp.community",
+    "peer_group": "netbox_bgp.bgppeergroup",
+    "prefix_list": "netbox_bgp.prefixlist",
+    "prefix_list_rule": "netbox_bgp.prefixlistrule",
+    "routing_policy": "netbox_bgp.routingpolicy",
+    "routing_policy_rule": "netbox_bgp.routingpolicyrule",
+    "session": "netbox_bgp.bgpsession",
+}
+_RELATION_ID_FIELDS = {
+    "endpoint",
+    "export_policies",
+    "import_policies",
+    "import_targets",
+    "export_targets",
+    "l2vpn",
+    "local_address",
+    "remote_address",
+    "local_as",
+    "remote_as",
+    "match_community",
+    "match_community_list",
+    "match_aspath_list",
+    "match_ip_address",
+    "match_ipv6_address",
+    "peer_group",
+    "prefix",
+    "prefix_list",
+    "prefix_list_in",
+    "prefix_list_out",
+    "routing_policy",
+}
 
 
 class _SdnSchema(BaseModel):
@@ -199,8 +241,16 @@ class SdnSyncCounters:
     skipped: int = 0
     stale: int = 0
     plugin_metadata: int = 0
+    bgp_peer_groups: int = 0
+    bgp_sessions: int = 0
+    bgp_routing_policies: int = 0
+    bgp_routing_policy_rules: int = 0
+    bgp_prefix_lists: int = 0
+    bgp_prefix_list_rules: int = 0
+    bgp_communities: int = 0
     per_endpoint_errors: dict[str, int] = field(default_factory=dict)
     object_errors: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[dict[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -214,8 +264,16 @@ class SdnSyncCounters:
             "skipped": self.skipped,
             "stale": self.stale,
             "plugin_metadata": self.plugin_metadata,
+            "bgp_peer_groups": self.bgp_peer_groups,
+            "bgp_sessions": self.bgp_sessions,
+            "bgp_routing_policies": self.bgp_routing_policies,
+            "bgp_routing_policy_rules": self.bgp_routing_policy_rules,
+            "bgp_prefix_lists": self.bgp_prefix_lists,
+            "bgp_prefix_list_rules": self.bgp_prefix_list_rules,
+            "bgp_communities": self.bgp_communities,
             "per_endpoint_errors": self.per_endpoint_errors,
             "object_errors": self.object_errors,
+            "warnings": self.warnings,
         }
 
     def record_endpoint_error(self, endpoint: str) -> None:
@@ -235,6 +293,15 @@ class SdnSyncCounters:
                 "kind": kind,
                 "name": name,
                 "error": str(error),
+            }
+        )
+
+    def record_object_warning(self, *, kind: str, name: str, warning: str) -> None:
+        self.warnings.append(
+            {
+                "kind": kind,
+                "name": name,
+                "warning": warning,
             }
         )
 
@@ -683,10 +750,20 @@ def _identity_normalizer(*fields: str):
         normalized: dict[str, object] = {}
         for field_name in fields:
             value = record.get(field_name)
-            if field_name in {"endpoint", "l2vpn", "prefix"}:
-                value = _relation_id(value)
-            elif field_name in {"import_targets", "export_targets"}:
+            if field_name in {
+                "export_policies",
+                "import_policies",
+                "import_targets",
+                "export_targets",
+                "match_community",
+                "match_community_list",
+                "match_aspath_list",
+                "match_ip_address",
+                "match_ipv6_address",
+            }:
                 value = _relation_ids(value)
+            elif field_name in _RELATION_ID_FIELDS:
+                value = _relation_id(value)
             normalized[field_name] = value
         return normalized
 
@@ -798,6 +875,443 @@ async def _ensure_prefix(nb: object, subnet: SdnSubnetSchema) -> tuple[int | Non
         lookup={"prefix": prefix},
         payload=payload,
         fields=("prefix", "status", "description"),
+    )
+
+
+def _truncate(value: str, max_length: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3].rstrip() + "..."
+
+
+def _normalize_sync_mode(value: object, *, param_name: str) -> str:
+    normalized = str(value or "disabled").strip().lower()
+    if normalized in _VALID_SYNC_MODES:
+        return normalized
+    logger.warning("Invalid %s=%r; treating it as disabled.", param_name, value)
+    return "disabled"
+
+
+def _sdn_bgp_projection_enabled(sync_mode_sdn_bgp: object) -> bool:
+    return _normalize_sync_mode(sync_mode_sdn_bgp, param_name="sync_mode_sdn_bgp") != "disabled"
+
+
+def _missing_optional_bgp_plugin(error: Exception) -> bool:
+    text = str(error).lower()
+    if "api/plugins/bgp" not in text and "netbox_bgp" not in text:
+        return False
+    return any(
+        fragment in text
+        for fragment in (
+            "404",
+            "not found",
+            "no route",
+            "not installed",
+            "unknown plugin",
+        )
+    )
+
+
+async def _netbox_bgp_available(nb: object) -> bool:
+    try:
+        await rest_first_async(nb, _BGP_API_PEER_GROUPS, query={"limit": 1})
+    except ProxboxException as error:
+        if _missing_optional_bgp_plugin(error):
+            return False
+        raise
+    return True
+
+
+def _valid_community_values(value: object) -> list[str]:
+    values: list[str] = []
+    for part in re.split(r"[\s,]+", str(value or "")):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        match = _BGP_COMMUNITY_RE.fullmatch(candidate)
+        if match is None:
+            continue
+        if int(match.group("left")) > 4_294_967_295:
+            continue
+        if int(match.group("right")) > 4_294_967_295:
+            continue
+        values.append(candidate)
+    return values
+
+
+def _bgp_action(value: object) -> str:
+    normalized = str(value or "permit").strip().lower()
+    if normalized in {"deny", "reject", "drop"}:
+        return "deny"
+    return "permit"
+
+
+def _ip_address_candidates(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        if "/" in value:
+            interface = ipaddress.ip_interface(value)
+        else:
+            address = ipaddress.ip_address(value)
+            prefix_length = 32 if address.version == 4 else 128
+            interface = ipaddress.ip_interface(f"{address}/{prefix_length}")
+    except ValueError:
+        return []
+    return [str(interface)]
+
+
+async def _resolve_ip_address_id(nb: object, value: str | None) -> int | None:
+    for candidate in _ip_address_candidates(value):
+        record = await rest_first_async(
+            nb,
+            "/api/ipam/ip-addresses/",
+            query={"address": candidate, "limit": 2},
+        )
+        record_id = _relation_id(_to_mapping(record)) if record is not None else None
+        if record_id is not None:
+            return record_id
+    return None
+
+
+async def _resolve_asn_id(nb: object, asn: int | None) -> int | None:
+    if asn is None:
+        return None
+    record = await rest_first_async(
+        nb,
+        "/api/ipam/asns/",
+        query={"asn": asn, "limit": 2},
+    )
+    return _relation_id(_to_mapping(record)) if record is not None else None
+
+
+async def _resolve_prefix_id(nb: object, prefix: str | None) -> int | None:
+    normalized = _valid_prefix(prefix)
+    if normalized is None:
+        return None
+    record = await rest_first_async(
+        nb,
+        "/api/ipam/prefixes/",
+        query={"prefix": normalized, "limit": 2},
+    )
+    return _relation_id(_to_mapping(record)) if record is not None else None
+
+
+def _prefix_family(prefix: str | None) -> str:
+    normalized = _valid_prefix(prefix)
+    if normalized is None:
+        return "ipv4"
+    network = ipaddress.ip_network(normalized, strict=False)
+    return "ipv6" if network.version == 6 else "ipv4"
+
+
+def _parse_peer_token(token: str) -> tuple[str, int | None]:
+    text = token.strip()
+    for delimiter in ("=", "@", "|"):
+        if delimiter not in text:
+            continue
+        peer, raw_asn = text.rsplit(delimiter, 1)
+        try:
+            return peer.strip(), int(raw_asn.strip())
+        except ValueError:
+            return text, None
+    return text, None
+
+
+async def _record_bgp_binding_counted(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    source_type: str,
+    source_name: str,
+    target_kind: str,
+    target_id: int | None,
+    raw_config: dict[str, object],
+) -> None:
+    endpoint_id = inventory.endpoint_id
+    target_type = _NETBOX_BGP_TARGET_TYPES[target_kind]
+    if endpoint_id is None or target_id is None:
+        return
+    try:
+        changed = await _record_binding(
+            nb,
+            endpoint_id=endpoint_id,
+            cluster_name=inventory.cluster_name,
+            source_type=source_type,
+            source_name=source_name,
+            target_type=target_type,
+            target_id=target_id,
+            raw_config=raw_config,
+        )
+    except Exception as error:  # noqa: BLE001
+        counters.record_object_error(
+            inventory.cluster_name,
+            kind=f"{source_type}-binding",
+            name=source_name,
+            error=error,
+        )
+        logger.warning("Could not record SDN BGP binding %s: %s", source_name, error)
+        return
+    if changed:
+        counters.plugin_metadata += 1
+
+
+async def _ensure_bgp_community(
+    nb: object,
+    value: str,
+) -> tuple[int | None, bool]:
+    payload = {
+        "value": value,
+        "status": "active",
+        "description": "Imported from Proxmox SDN route-map community action.",
+    }
+    return await _reconcile(
+        nb,
+        _BGP_API_COMMUNITIES,
+        lookup={"value": value},
+        payload=payload,
+        fields=("value", "status", "description"),
+    )
+
+
+async def _ensure_bgp_prefix_list(
+    nb: object,
+    inventory: SdnInventory,
+    prefix_list: SdnPrefixListSchema,
+) -> tuple[int | None, bool, str]:
+    family = _prefix_family(prefix_list.cidr)
+    name = _truncate(
+        f"Proxbox SDN {inventory.endpoint_id or 'unknown'} {inventory.cluster_name} "
+        f"{prefix_list.name or 'prefix-list'}",
+        100,
+    )
+    description = _truncate(
+        f"Imported from Proxmox SDN prefix-list {prefix_list.name or 'unknown'} "
+        f"on {inventory.endpoint_name}.",
+        200,
+    )
+    payload = {
+        "name": name,
+        "description": description,
+        "family": family,
+        "comments": "Managed by proxbox-api from read-only Proxmox SDN inventory.",
+    }
+    prefix_list_id, changed = await _reconcile(
+        nb,
+        _BGP_API_PREFIX_LISTS,
+        lookup={"name": name, "description": description, "family": family},
+        payload=payload,
+        fields=("name", "description", "family", "comments"),
+    )
+    return prefix_list_id, changed, family
+
+
+async def _ensure_bgp_prefix_list_rule(
+    nb: object,
+    *,
+    prefix_list_id: int,
+    prefix_list_name: str,
+    index: int,
+    source: SdnPrefixListSchema,
+) -> tuple[int | None, bool]:
+    normalized_prefix = _valid_prefix(source.cidr)
+    if normalized_prefix is None:
+        return None, False
+    prefix_id = await _resolve_prefix_id(nb, normalized_prefix)
+    payload: dict[str, object] = {
+        "prefix_list": prefix_list_id,
+        "index": index,
+        "action": _bgp_action(source.action),
+        "ge": source.ge,
+        "le": source.le,
+        "description": _truncate(
+            f"Imported from Proxmox SDN prefix-list {prefix_list_name}.",
+            200,
+        ),
+        "comments": "Managed by proxbox-api from read-only Proxmox SDN inventory.",
+    }
+    fields = (
+        "prefix_list",
+        "index",
+        "action",
+        "prefix",
+        "prefix_custom",
+        "ge",
+        "le",
+        "description",
+        "comments",
+    )
+    if prefix_id is not None:
+        payload["prefix"] = prefix_id
+        payload["prefix_custom"] = None
+    else:
+        payload["prefix"] = None
+        payload["prefix_custom"] = normalized_prefix
+    return await _reconcile(
+        nb,
+        _BGP_API_PREFIX_LIST_RULES,
+        lookup={"prefix_list_id": prefix_list_id, "index": index},
+        payload=payload,
+        fields=fields,
+    )
+
+
+async def _ensure_bgp_routing_policy(
+    nb: object,
+    inventory: SdnInventory,
+    route_map: SdnRouteMapSchema,
+) -> tuple[int | None, bool]:
+    name = _truncate(
+        f"Proxbox SDN {inventory.endpoint_id or 'unknown'} {inventory.cluster_name} "
+        f"{route_map.name or 'route-map'}",
+        100,
+    )
+    description = _truncate(
+        f"Imported from Proxmox SDN route-map {route_map.name or 'unknown'} "
+        f"on {inventory.endpoint_name}.",
+        200,
+    )
+    payload = {
+        "name": name,
+        "description": description,
+        "weight": route_map.order,
+        "comments": "Managed by proxbox-api from read-only Proxmox SDN inventory.",
+    }
+    return await _reconcile(
+        nb,
+        _BGP_API_ROUTING_POLICIES,
+        lookup={"name": name, "description": description},
+        payload=payload,
+        fields=("name", "description", "weight", "comments"),
+    )
+
+
+async def _ensure_bgp_routing_policy_rule(
+    nb: object,
+    *,
+    routing_policy_id: int,
+    index: int,
+    route_map: SdnRouteMapSchema,
+    match_ipv4_prefix_lists: list[int],
+    match_ipv6_prefix_lists: list[int],
+    community_values: list[str],
+) -> tuple[int | None, bool]:
+    match_custom = {
+        key: value
+        for key, value in {
+            "match_peer": route_map.match_peer,
+            "match_ip": route_map.match_ip,
+        }.items()
+        if value
+    }
+    set_actions = {"communities": community_values} if community_values else None
+    payload = {
+        "routing_policy": routing_policy_id,
+        "index": index,
+        "action": _bgp_action(route_map.action),
+        "match_ip_address": match_ipv4_prefix_lists,
+        "match_ipv6_address": match_ipv6_prefix_lists,
+        "match_custom": match_custom or None,
+        "set_actions": set_actions,
+        "description": _truncate(
+            f"Imported from Proxmox SDN route-map {route_map.name or 'unknown'}.",
+            500,
+        ),
+        "comments": "Managed by proxbox-api from read-only Proxmox SDN inventory.",
+    }
+    return await _reconcile(
+        nb,
+        _BGP_API_ROUTING_POLICY_RULES,
+        lookup={"routing_policy_id": routing_policy_id, "index": index},
+        payload=payload,
+        fields=(
+            "routing_policy",
+            "index",
+            "action",
+            "match_ip_address",
+            "match_ipv6_address",
+            "match_custom",
+            "set_actions",
+            "description",
+            "comments",
+        ),
+    )
+
+
+async def _ensure_bgp_peer_group(
+    nb: object,
+    inventory: SdnInventory,
+    *,
+    source_name: str,
+    source_kind: str,
+    raw_config: dict[str, object],
+) -> tuple[int | None, bool]:
+    name = _truncate(
+        f"Proxbox SDN {inventory.endpoint_id or 'unknown'} {inventory.cluster_name} {source_name}",
+        100,
+    )
+    description = _truncate(
+        f"Imported from Proxmox SDN {source_kind} {source_name} on {inventory.endpoint_name}.",
+        200,
+    )
+    payload = {
+        "name": name,
+        "description": description,
+        "comments": (
+            "Managed by proxbox-api from read-only Proxmox SDN inventory.\n"
+            f"Source: {source_kind}\n"
+            f"Raw: {raw_config}"
+        ),
+    }
+    return await _reconcile(
+        nb,
+        _BGP_API_PEER_GROUPS,
+        lookup={"name": name, "description": description},
+        payload=payload,
+        fields=("name", "description", "comments"),
+    )
+
+
+async def _ensure_bgp_session(
+    nb: object,
+    *,
+    name: str,
+    local_address_id: int,
+    remote_address_id: int,
+    local_as_id: int,
+    remote_as_id: int,
+    peer_group_id: int | None,
+    description: str,
+) -> tuple[int | None, bool]:
+    payload: dict[str, object] = {
+        "name": name,
+        "status": "active",
+        "local_address": local_address_id,
+        "remote_address": remote_address_id,
+        "local_as": local_as_id,
+        "remote_as": remote_as_id,
+        "peer_group": peer_group_id,
+        "description": description,
+        "comments": "Managed by proxbox-api from read-only Proxmox SDN inventory.",
+    }
+    return await _reconcile(
+        nb,
+        _BGP_API_SESSIONS,
+        lookup={"name": name},
+        payload=payload,
+        fields=(
+            "name",
+            "status",
+            "local_address",
+            "remote_address",
+            "local_as",
+            "remote_as",
+            "peer_group",
+            "description",
+            "comments",
+        ),
     )
 
 
@@ -1634,6 +2148,507 @@ async def _record_object_bindings(
             counters.plugin_metadata += 1
 
 
+async def _sync_bgp_prefix_lists(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+) -> dict[str, tuple[int, str]]:
+    prefix_lists: dict[str, tuple[int, str]] = {}
+    grouped: dict[str, list[SdnPrefixListSchema]] = {}
+    for row in inventory.prefix_lists:
+        if not row.name:
+            counters.skipped += 1
+            continue
+        grouped.setdefault(row.name, []).append(row)
+
+    for source_name, rows in grouped.items():
+        first = rows[0]
+        try:
+            prefix_list_id, changed, family = await _ensure_bgp_prefix_list(
+                nb,
+                inventory,
+                first,
+            )
+        except Exception as error:  # noqa: BLE001
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="bgp-prefix-list",
+                name=source_name,
+                error=error,
+            )
+            logger.warning("Could not sync BGP prefix-list %s: %s", source_name, error)
+            continue
+        if prefix_list_id is None:
+            counters.skipped += 1
+            continue
+        prefix_lists[source_name] = (prefix_list_id, family)
+        if changed:
+            counters.bgp_prefix_lists += 1
+        await _record_bgp_binding_counted(
+            nb,
+            inventory,
+            counters,
+            source_type="bgp-prefix-list",
+            source_name=source_name,
+            target_kind="prefix_list",
+            target_id=prefix_list_id,
+            raw_config=first.raw_config,
+        )
+
+        await _sync_bgp_prefix_list_rules(
+            nb,
+            inventory,
+            counters,
+            prefix_list_id=prefix_list_id,
+            source_name=source_name,
+            rows=rows,
+        )
+
+    return prefix_lists
+
+
+async def _sync_bgp_prefix_list_rules(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    prefix_list_id: int,
+    source_name: str,
+    rows: list[SdnPrefixListSchema],
+) -> None:
+    for index, row in enumerate(rows, start=1):
+        rule_index = index * 10
+        rule_name = f"{source_name}/{row.cidr or rule_index}"
+        if _valid_prefix(row.cidr) is None:
+            counters.record_object_warning(
+                kind="bgp-prefix-list-rule",
+                name=rule_name,
+                warning="Prefix-list rule skipped because cidr is invalid or missing.",
+            )
+            counters.skipped += 1
+            continue
+        try:
+            rule_id, rule_changed = await _ensure_bgp_prefix_list_rule(
+                nb,
+                prefix_list_id=prefix_list_id,
+                prefix_list_name=source_name,
+                index=rule_index,
+                source=row,
+            )
+        except Exception as error:  # noqa: BLE001
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="bgp-prefix-list-rule",
+                name=rule_name,
+                error=error,
+            )
+            logger.warning(
+                "Could not sync BGP prefix-list rule %s/%s: %s",
+                source_name,
+                row.cidr,
+                error,
+            )
+            continue
+        if rule_id is not None and rule_changed:
+            counters.bgp_prefix_list_rules += 1
+        await _record_bgp_binding_counted(
+            nb,
+            inventory,
+            counters,
+            source_type="bgp-prefix-list-rule",
+            source_name=f"{source_name}/{rule_index}",
+            target_kind="prefix_list_rule",
+            target_id=rule_id,
+            raw_config=row.raw_config,
+        )
+
+
+def _matched_prefix_lists(
+    match_ip: str | None,
+    prefix_lists: dict[str, tuple[int, str]],
+) -> tuple[list[int], list[int]]:
+    ipv4_ids: list[int] = []
+    ipv6_ids: list[int] = []
+    for token in _split_csv(match_ip):
+        matched = prefix_lists.get(token)
+        if matched is None:
+            continue
+        prefix_list_id, family = matched
+        if family == "ipv6":
+            ipv6_ids.append(prefix_list_id)
+        else:
+            ipv4_ids.append(prefix_list_id)
+    return ipv4_ids, ipv6_ids
+
+
+async def _sync_bgp_route_maps(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    prefix_lists: dict[str, tuple[int, str]],
+) -> dict[str, int]:
+    routing_policy_ids: dict[str, int] = {}
+    for index, route_map in enumerate(inventory.route_maps, start=1):
+        if not route_map.name:
+            counters.skipped += 1
+            continue
+        try:
+            policy_id, changed = await _ensure_bgp_routing_policy(
+                nb,
+                inventory,
+                route_map,
+            )
+        except Exception as error:  # noqa: BLE001
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="bgp-routing-policy",
+                name=route_map.name,
+                error=error,
+            )
+            logger.warning("Could not sync BGP routing policy %s: %s", route_map.name, error)
+            continue
+        if policy_id is None:
+            counters.skipped += 1
+            continue
+        routing_policy_ids[route_map.name] = policy_id
+        if changed:
+            counters.bgp_routing_policies += 1
+        await _record_bgp_binding_counted(
+            nb,
+            inventory,
+            counters,
+            source_type="bgp-routing-policy",
+            source_name=route_map.name,
+            target_kind="routing_policy",
+            target_id=policy_id,
+            raw_config=route_map.raw_config,
+        )
+
+        community_values = await _sync_bgp_route_map_communities(
+            nb,
+            inventory,
+            counters,
+            route_map=route_map,
+        )
+        await _sync_bgp_route_map_rule(
+            nb,
+            inventory,
+            counters,
+            route_map=route_map,
+            routing_policy_id=policy_id,
+            rule_index=route_map.order or index * 10,
+            prefix_lists=prefix_lists,
+            community_values=community_values,
+        )
+
+    return routing_policy_ids
+
+
+async def _sync_bgp_route_map_communities(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    route_map: SdnRouteMapSchema,
+) -> list[str]:
+    community_values = _valid_community_values(route_map.set_community)
+    for value in community_values:
+        try:
+            community_id, community_changed = await _ensure_bgp_community(nb, value)
+        except Exception as error:  # noqa: BLE001
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="bgp-community",
+                name=value,
+                error=error,
+            )
+            logger.warning("Could not sync BGP community %s: %s", value, error)
+            continue
+        if community_id is not None and community_changed:
+            counters.bgp_communities += 1
+        await _record_bgp_binding_counted(
+            nb,
+            inventory,
+            counters,
+            source_type="bgp-community",
+            source_name=value,
+            target_kind="community",
+            target_id=community_id,
+            raw_config={"set_community": route_map.set_community},
+        )
+    return community_values
+
+
+async def _sync_bgp_route_map_rule(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    route_map: SdnRouteMapSchema,
+    routing_policy_id: int,
+    rule_index: int,
+    prefix_lists: dict[str, tuple[int, str]],
+    community_values: list[str],
+) -> None:
+    match_ipv4_ids, match_ipv6_ids = _matched_prefix_lists(
+        route_map.match_ip,
+        prefix_lists,
+    )
+    try:
+        rule_id, rule_changed = await _ensure_bgp_routing_policy_rule(
+            nb,
+            routing_policy_id=routing_policy_id,
+            index=rule_index,
+            route_map=route_map,
+            match_ipv4_prefix_lists=match_ipv4_ids,
+            match_ipv6_prefix_lists=match_ipv6_ids,
+            community_values=community_values,
+        )
+    except Exception as error:  # noqa: BLE001
+        counters.record_object_error(
+            inventory.cluster_name,
+            kind="bgp-routing-policy-rule",
+            name=route_map.name or str(rule_index),
+            error=error,
+        )
+        logger.warning("Could not sync BGP routing policy rule %s: %s", route_map.name, error)
+        return
+    if rule_id is not None and rule_changed:
+        counters.bgp_routing_policy_rules += 1
+    await _record_bgp_binding_counted(
+        nb,
+        inventory,
+        counters,
+        source_type="bgp-routing-policy-rule",
+        source_name=f"{route_map.name}/{rule_index}",
+        target_kind="routing_policy_rule",
+        target_id=rule_id,
+        raw_config=route_map.raw_config,
+    )
+
+
+def _iter_bgp_peer_group_sources(
+    inventory: SdnInventory,
+) -> list[tuple[str, str, int | None, str | None, str | None, dict[str, object]]]:
+    sources: list[tuple[str, str, int | None, str | None, str | None, dict[str, object]]] = []
+    for controller in inventory.controllers:
+        source_name = controller.controller
+        if not source_name:
+            continue
+        if str(controller.type or "").lower() not in {"bgp", "evpn"}:
+            continue
+        sources.append(
+            (
+                "controller",
+                source_name,
+                controller.asn,
+                controller.peers,
+                controller.loopback,
+                controller.raw_config,
+            )
+        )
+    for fabric in inventory.fabrics:
+        source_name = fabric.fabric
+        if not source_name:
+            continue
+        if str(fabric.type or "").lower() not in {"bgp", "evpn"}:
+            continue
+        sources.append(
+            (
+                "fabric",
+                source_name,
+                fabric.asn,
+                fabric.peers,
+                _text(fabric.raw_config, "loopback", "local-address", "local_address"),
+                fabric.raw_config,
+            )
+        )
+    return sources
+
+
+async def _sync_bgp_peer_groups_and_sessions(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+) -> None:
+    for (
+        source_kind,
+        source_name,
+        local_asn,
+        peers,
+        local_address,
+        raw_config,
+    ) in _iter_bgp_peer_group_sources(inventory):
+        try:
+            peer_group_id, changed = await _ensure_bgp_peer_group(
+                nb,
+                inventory,
+                source_name=source_name,
+                source_kind=source_kind,
+                raw_config=raw_config,
+            )
+        except Exception as error:  # noqa: BLE001
+            counters.record_object_error(
+                inventory.cluster_name,
+                kind="bgp-peer-group",
+                name=source_name,
+                error=error,
+            )
+            logger.warning("Could not sync BGP peer group %s: %s", source_name, error)
+            continue
+        if peer_group_id is not None and changed:
+            counters.bgp_peer_groups += 1
+        await _record_bgp_binding_counted(
+            nb,
+            inventory,
+            counters,
+            source_type="bgp-peer-group",
+            source_name=f"{source_kind}/{source_name}",
+            target_kind="peer_group",
+            target_id=peer_group_id,
+            raw_config=raw_config,
+        )
+
+        local_as_id = await _resolve_asn_id(nb, local_asn)
+        local_address_id = await _resolve_ip_address_id(nb, local_address)
+        for peer in _split_csv(peers):
+            remote_address, parsed_remote_asn = _parse_peer_token(peer)
+            remote_asn = parsed_remote_asn or _int(
+                raw_config,
+                "remote-as",
+                "remote_as",
+                "peer-as",
+                "peer_as",
+            )
+            remote_address_id = await _resolve_ip_address_id(nb, remote_address)
+            remote_as_id = await _resolve_asn_id(nb, remote_asn)
+            missing = [
+                name
+                for name, value in {
+                    "local_address": local_address_id,
+                    "remote_address": remote_address_id,
+                    "local_as": local_as_id,
+                    "remote_as": remote_as_id,
+                }.items()
+                if value is None
+            ]
+            session_name = _truncate(
+                f"Proxbox SDN {inventory.endpoint_id or 'unknown'} {source_name} {remote_address}",
+                256,
+            )
+            if missing:
+                counters.skipped += 1
+                counters.record_object_warning(
+                    kind="bgp-session",
+                    name=session_name,
+                    warning=f"Skipped unresolved NetBox reference(s): {', '.join(missing)}.",
+                )
+                continue
+            try:
+                session_id, session_changed = await _ensure_bgp_session(
+                    nb,
+                    name=session_name,
+                    local_address_id=local_address_id,
+                    remote_address_id=remote_address_id,
+                    local_as_id=local_as_id,
+                    remote_as_id=remote_as_id,
+                    peer_group_id=peer_group_id,
+                    description=_truncate(
+                        f"Imported from Proxmox SDN {source_kind} {source_name}.",
+                        200,
+                    ),
+                )
+            except Exception as error:  # noqa: BLE001
+                counters.record_object_error(
+                    inventory.cluster_name,
+                    kind="bgp-session",
+                    name=session_name,
+                    error=error,
+                )
+                logger.warning("Could not sync BGP session %s: %s", session_name, error)
+                continue
+            if session_id is not None and session_changed:
+                counters.bgp_sessions += 1
+            await _record_bgp_binding_counted(
+                nb,
+                inventory,
+                counters,
+                source_type="bgp-session",
+                source_name=session_name,
+                target_kind="session",
+                target_id=session_id,
+                raw_config={
+                    **raw_config,
+                    "peer": peer,
+                    "local_address": local_address,
+                    "remote_address": remote_address,
+                    "local_asn": local_asn,
+                    "remote_asn": remote_asn,
+                },
+            )
+
+
+async def _sync_netbox_bgp_projection(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+) -> None:
+    if inventory.endpoint_id is None:
+        counters.skipped += 1
+        counters.record_object_warning(
+            kind="bgp-projection",
+            name=inventory.cluster_name,
+            warning="Skipped because the Proxbox endpoint id could not be resolved.",
+        )
+        return
+    prefix_lists = await _sync_bgp_prefix_lists(nb, inventory, counters)
+    await _sync_bgp_route_maps(
+        nb,
+        inventory,
+        counters,
+        prefix_lists=prefix_lists,
+    )
+    await _sync_bgp_peer_groups_and_sessions(nb, inventory, counters)
+
+
+async def _sync_netbox_bgp_projection_if_enabled(
+    nb: object,
+    inventory: SdnInventory,
+    counters: SdnSyncCounters,
+    *,
+    enabled: bool,
+    available: bool | None,
+) -> bool | None:
+    if not enabled:
+        return available
+    if available is None:
+        try:
+            available = await _netbox_bgp_available(nb)
+        except Exception as error:  # noqa: BLE001
+            counters.record_endpoint_error(inventory.cluster_name)
+            logger.warning("Could not probe netbox-bgp availability: %s", error)
+            available = False
+    if not available:
+        counters.skipped += 1
+        counters.record_object_warning(
+            kind="bgp-projection",
+            name=inventory.cluster_name,
+            warning="Skipped because the optional netbox_bgp API is unavailable.",
+        )
+        return available
+    try:
+        await _sync_netbox_bgp_projection(nb, inventory, counters)
+    except Exception as error:  # noqa: BLE001
+        counters.record_endpoint_error(inventory.cluster_name)
+        logger.warning(
+            "Could not sync SDN BGP projection for %s: %s",
+            inventory.cluster_name,
+            error,
+        )
+    return available
+
+
 async def _emit(
     bridge: WebSocketSSEBridge | None,
     status: str,
@@ -1673,11 +2688,14 @@ async def sync_sdn_to_netbox(
     websocket: WebSocketSSEBridge | None = None,
     use_websocket: bool = False,
     include_node_runtime: bool = True,
+    sync_mode_sdn_bgp: str = "disabled",
 ) -> dict[str, object]:
     """Collect Proxmox SDN inventory and reconcile read-only NetBox state."""
 
     del use_websocket
     counters = SdnSyncCounters()
+    sdn_bgp_enabled = _sdn_bgp_projection_enabled(sync_mode_sdn_bgp)
+    netbox_bgp_available: bool | None = None
 
     for px in pxs:
         cluster_name = str(getattr(px, "cluster_name", None) or getattr(px, "name", None) or px)
@@ -1735,6 +2753,14 @@ async def sync_sdn_to_netbox(
         except Exception as error:  # noqa: BLE001
             counters.record_endpoint_error(inventory.cluster_name)
             logger.warning("Could not sync SDN plugin metadata for %s: %s", cluster_name, error)
+
+        netbox_bgp_available = await _sync_netbox_bgp_projection_if_enabled(
+            netbox_session,
+            inventory,
+            counters,
+            enabled=sdn_bgp_enabled,
+            available=netbox_bgp_available,
+        )
 
         await _emit(
             websocket,
