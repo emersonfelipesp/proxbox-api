@@ -154,8 +154,10 @@ async def _generate_and_register(app: FastAPI, version_tag: str) -> None:
             version_tag,
         )
 
-        # Re-register all available versions (including the newly generated one)
-        register_generated_proxmox_routes(app)
+        # Re-register all available versions (including the newly generated one).
+        # Force the rebuild so the freshly generated version is mounted even
+        # though a route set is already registered in-process.
+        register_generated_proxmox_routes(app, force_rebuild=True)
 
         with _generation_lock:
             _generation_tasks[version_tag] = {"status": "completed", "error": None}
