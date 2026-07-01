@@ -13,7 +13,7 @@ Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code 
 
 ## Certified Stack Pairing
 
-Current pairing: `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post4 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
+Current pairing: `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
 `proxbox-api 0.0.19` ships the Proxmox SDN sync collectors, NetBox
 L2VPN/RouteTarget/Prefix reconcile, plugin inventory reconciliation, and
 VM-interface reconcile idempotency hardening.
