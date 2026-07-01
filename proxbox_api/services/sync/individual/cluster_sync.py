@@ -9,7 +9,11 @@ from proxbox_api.netbox_rest import rest_first_async, rest_list_async
 from proxbox_api.services.netbox_writers import upsert_cluster, upsert_cluster_type
 from proxbox_api.services.run_session import SyncContext
 from proxbox_api.services.sync.cluster_links import sync_proxmox_cluster_netbox_link
-from proxbox_api.services.sync.discovery_tags import discovery_tag_ref, merge_tag_refs
+from proxbox_api.services.sync.discovery_tags import (
+    discovery_tag_ref,
+    merge_tag_refs,
+    resolve_discovery_tag_id,
+)
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
 
 
@@ -94,7 +98,11 @@ async def sync_cluster_individual(
             query={"name": cluster_name},
         )
         if existing_cluster is None:
-            cluster_tag_refs = [*tag_refs, discovery_tag_ref(DISCOVERY_TAG_CLUSTER)]
+            cluster_tag_refs = list(tag_refs)
+            # Soft contract (issue #362): only stamp the discovery slug when the
+            # tag exists in NetBox, so a missing tag never fails the create.
+            if await resolve_discovery_tag_id(ctx.nb, DISCOVERY_TAG_CLUSTER) is not None:
+                cluster_tag_refs.append(discovery_tag_ref(DISCOVERY_TAG_CLUSTER))
         else:
             existing_tags = (
                 existing_cluster.serialize().get("tags")
