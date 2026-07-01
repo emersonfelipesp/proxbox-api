@@ -25,7 +25,10 @@ flowchart TD
     Free[test-free-threaded\ncontinue-on-error]
     Bind[Docker bind-host smoke\nraw + granian]
     Setup[setup\ngera matriz E2E]
-    BuildNB[build-netbox-image\nso se pull do registro falhar]
+    BuildNB[build-netbox-image\npull ou build NetBox uma vez]
+    BuildSvc[prepare-e2e-service-images\nPostgreSQL + Redis + nginx]
+    BuildPM[prepare-proxmox-image\nimagens mock Proxmox]
+    BuildPB[build-proxbox-image\ntargets Proxbox API]
     E2E[e2e-docker\nmatriz transporte x versao NetBox]
 
     Push --> Core
@@ -34,13 +37,28 @@ flowchart TD
     Push --> Bind
     Push --> Setup
     Setup --> BuildNB
+    Setup --> BuildPM
+    Setup --> BuildPB
+    Push --> BuildSvc
     Core --> E2E
     Setup --> E2E
     BuildNB --> E2E
+    BuildSvc --> E2E
+    BuildPM --> E2E
+    BuildPB --> E2E
 ```
 
-Os jobs E2E tentam baixar primeiro a imagem publica do NetBox. Eles so baixam o
-artefato de imagem construido a partir do codigo-fonte quando esse pull falha.
+O CI prepara imagens Docker uma vez como artefatos temporarios do workflow, e
+cada job da matriz E2E carrega esses artefatos antes de subir a stack. Isso
+evita pulls repetidos do Docker Hub e rebuilds do Proxbox API em uma matriz
+grande de versoes do NetBox. Imagens oficiais de Python, PostgreSQL, Redis,
+nginx e a base fallback do NetBox sao baixadas por `mirror.gcr.io/library` para
+evitar falhas por cota do Docker Hub. A imagem mock do Proxmox e construida a
+partir do pacote local `proxmox-mock/` para cada marcador de servico `pve`,
+`pbs` e `pdm`. O job do NetBox baixa a imagem publica quando disponivel e faz
+fallback para build a partir do codigo-fonte quando a imagem do registro nao
+existe. Esse build fallback segue a base atual do `netbox-docker`,
+`ubuntu:26.04`, usando a referencia via mirror.
 
 ## Stack E2E
 
@@ -56,7 +74,7 @@ flowchart LR
         NB[Container NetBox\nnetbox-proxbox instalado]
         NGINX[nginx HTTPS opcional]
         API[Container proxbox-api\ntarget raw, nginx ou granian]
-        PM[Container mock Proxmox\nproxmox-sdk:latest]
+        PM[Container mock Proxmox\nproxmox-mock local]
         PG[(PostgreSQL)]
         RD[(Redis)]
     end
@@ -75,6 +93,11 @@ Regras importantes do E2E:
 
 - A prontidao do NetBox aguarda ate 20 minutos por migracoes/indexacao.
 - `/api/status/` precisa estar pronto antes de configurar tokens e endpoints.
+- Imagens Docker sao carregadas a partir de artefatos preparados; os jobs da
+  matriz E2E nao fazem pull do Docker Hub nem rebuild direto dos conteineres
+  Proxbox API.
+- Containers mock do Proxmox usam o pacote local de mock schema-driven e expoem
+  `PROXMOX_MOCK_SERVICE` para validar o marcador ativo em testes PBS/PDM.
 - Testes Docker com mock Proxmox usam o marker `mock_http`.
 - A passagem em processo com `MockBackend` roda separadamente com o marker
   `mock_backend`.

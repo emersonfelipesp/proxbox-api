@@ -1,5 +1,7 @@
 # Build dependencies and the app into a virtualenv with uv from the checked-out repo.
-FROM python:3.13-alpine AS builder
+ARG PYTHON_BASE_IMAGE=python:3.13-alpine
+
+FROM ${PYTHON_BASE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -34,7 +36,7 @@ RUN uv pip install --python /app/.venv/bin/python ./proxbox-reconcile-rs && \
     /app/.venv/bin/python -c "from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert rust_available()"
 
 # Application tree + venv only (shared by Python-only runtime images).
-FROM python:3.13-alpine AS runtime-base
+FROM ${PYTHON_BASE_IMAGE} AS runtime-base
 
 WORKDIR /app
 
@@ -54,7 +56,7 @@ EXPOSE 8000
 VOLUME ["/data"]
 
 # Application tree + venv only (shared by PyO3/Rust runtime images).
-FROM python:3.13-alpine AS runtime-base-pyo3-rust
+FROM ${PYTHON_BASE_IMAGE} AS runtime-base-pyo3-rust
 
 WORKDIR /app
 
