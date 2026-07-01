@@ -27,7 +27,7 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 - **`netbox-proxbox` v0.0.21** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post2 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
+  pairing is `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post3 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
   `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
   RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
   VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
