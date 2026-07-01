@@ -45,11 +45,18 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
         captured.update(kwargs)
         return SimpleNamespace(id=77)
 
-    async def _fake_first(*_args: object, **_kwargs: object) -> None:
+    async def _fake_first(*args: object, **kwargs: object) -> object | None:
+        # Model bootstrap having created the discovery tags: the tag lookup
+        # resolves so the create branch stamps the discovery slug. Every other
+        # pre-check misses so the create branch fires.
+        path = args[1] if len(args) > 1 else kwargs.get("path")
+        if path == "/api/extras/tags/":
+            return SimpleNamespace(id=99)
         return None
 
     monkeypatch.setattr(device_ensure, "rest_first_async", _fake_first)
     monkeypatch.setattr(device_ensure, "rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr("proxbox_api.services.sync.discovery_tags.rest_first_async", _fake_first)
 
     await device_ensure._ensure_cluster(
         object(),
