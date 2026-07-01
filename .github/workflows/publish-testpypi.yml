@@ -274,6 +274,11 @@ jobs:
 
       - name: Run mocked schema-driven tests with coverage
         if: matrix.python-version != '3.12'
+        env:
+          # Use coverage's sys.monitoring backend (Python 3.12+). The default C
+          # trace backend is pathologically slow under pytest-xdist on Python
+          # 3.13, causing this job to crawl and hit the 45-minute timeout.
+          COVERAGE_CORE: sysmon
         run: |
           uv run pytest -n auto -v --tb=short --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
@@ -338,6 +343,11 @@ jobs:
 
       - name: Run mocked schema-driven tests with coverage
         if: matrix.python-version != '3.12'
+        env:
+          # Use coverage's sys.monitoring backend (Python 3.12+). The default C
+          # trace backend is pathologically slow under pytest-xdist on Python
+          # 3.13, causing this job to crawl and hit the 45-minute timeout.
+          COVERAGE_CORE: sysmon
         run: |
           uv run pytest -n auto -v --tb=short --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
