@@ -49,10 +49,12 @@ If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its 
 SDN support lives in `proxbox_api/routes/proxmox/sdn.py` and
 `proxbox_api/services/sync/sdn.py`. Keep it read-only against Proxmox: the
 `GET /proxmox/sdn/create/stream` stage may reconcile NetBox L2VPN,
-L2VPNTermination, RouteTarget, Prefix, and plugin metadata objects, but it must
-not apply, rollback, lock, or mutate Proxmox SDN configuration. Unsupported
-older clusters should emit skipped warnings rather than failing healthy
-endpoints.
+L2VPNTermination, RouteTarget, Prefix, plugin metadata objects, and optional
+`netbox_bgp` peer-group/session/routing-policy/prefix-list projections when
+`sync_mode_sdn_bgp` is `always` or `bootstrap_only`, but it must not apply,
+rollback, lock, or mutate Proxmox SDN configuration. Unsupported older clusters
+and missing optional `netbox_bgp` APIs should emit skipped warnings rather than
+failing healthy endpoints.
 
 If you edit `nextjs-ui/`, also run:
 

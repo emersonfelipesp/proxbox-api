@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from proxmox_sdk.sdk.exceptions import ResourceException
 
@@ -178,6 +179,15 @@ async def sdn_node_status(pxs: ProxmoxSessionsDep) -> list[SdnNodeStatusSchema]:
 async def create_sdn_stream(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
+    sync_mode_sdn_bgp: Annotated[
+        str,
+        Query(
+            description=(
+                "Controls optional netbox-bgp projection inside the SDN stream. "
+                "'disabled' skips it; 'always' and 'bootstrap_only' run it."
+            ),
+        ),
+    ] = "disabled",
 ):
     """Stream read-only Proxmox SDN sync progress into NetBox."""
 
@@ -191,6 +201,7 @@ async def create_sdn_stream(
                     pxs=pxs,
                     websocket=bridge,
                     use_websocket=True,
+                    sync_mode_sdn_bgp=sync_mode_sdn_bgp,
                 )
             finally:
                 await bridge.close()
