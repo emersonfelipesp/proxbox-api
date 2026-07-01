@@ -118,7 +118,9 @@ def _load_model_module(openapi_document: dict[str, object], version_tag: str) ->
         if cached_module is not None:
             return cached_module
         code = generate_pydantic_models_from_openapi(openapi_document)
-        module = ModuleType(f"proxbox_api.generated.proxmox.runtime_{version_tag.replace('.', '_')}")
+        module = ModuleType(
+            f"proxbox_api.generated.proxmox.runtime_{version_tag.replace('.', '_')}"
+        )
         sys.modules[module.__name__] = module
         exec(code, module.__dict__)
         for value in module.__dict__.values():
