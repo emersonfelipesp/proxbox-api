@@ -12,6 +12,7 @@ from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.services.ssh_terminal import (
     HostKeyScanError,
+    OneShotTerminalCredential,
     TerminalCredentialError,
     TerminalSessionError,
     connect_and_relay,
@@ -58,6 +59,33 @@ async def get_host_key_fingerprint(
     )
 
 
+class OneShotCredentialInput(BaseModel):
+    """Inline SSH credential for a single, unstored terminal session.
+
+    Supplied by the NetBox plugin when an operator opts to connect "just once"
+    without persisting a ``NodeSSHCredential``. The material lives only in the
+    in-memory ``TerminalSession`` for the ticket lifetime and is never written to
+    disk or logged. A pinned host-key fingerprint is mandatory because
+    ``connect_and_relay`` refuses to connect without one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=128)
+    port: int = Field(default=22, ge=1, le=65535)
+    known_host_fingerprint: str = Field(min_length=1, max_length=128)
+    password: str | None = None
+    private_key: str | None = None
+
+    @model_validator(mode="after")
+    def validate_secret(self) -> "OneShotCredentialInput":
+        if not ((self.password or "").strip() or (self.private_key or "").strip()):
+            raise ValueError("one_shot_credential requires a password or private_key")
+        if not self.known_host_fingerprint.strip():
+            raise ValueError("one_shot_credential requires known_host_fingerprint")
+        return self
+
+
 class TerminalSessionCreate(BaseModel):
     """HTTP request for creating a one-time browser SSH session ticket."""
 
@@ -70,6 +98,7 @@ class TerminalSessionCreate(BaseModel):
     actor: str | None = None
     cols: int = Field(default=120, ge=20, le=400)
     rows: int = Field(default=32, ge=5, le=200)
+    one_shot_credential: OneShotCredentialInput | None = None
 
     @model_validator(mode="after")
     def validate_target(self) -> "TerminalSessionCreate":
@@ -78,6 +107,11 @@ class TerminalSessionCreate(BaseModel):
                 raise ValueError("node_id is required for node SSH terminal sessions")
             if not (self.host or "").strip():
                 raise ValueError("host is required for node SSH terminal sessions")
+        # A one-shot session bypasses the stored-credential fetch, so the host
+        # must be supplied inline for every target type (node already requires
+        # it above; enforce it for endpoint too).
+        if self.one_shot_credential is not None and not (self.host or "").strip():
+            raise ValueError("host is required for one-shot SSH terminal sessions")
         return self
 
 
@@ -104,6 +138,16 @@ async def create_terminal_session(
     # for its own SQLite-id SSH paths (Cloud Image Build Pipeline / Azure VHD
     # import). See routes/proxmox/access_gate.py and the netbox-proxbox plugin.
     actor = payload.actor or request.headers.get("X-Proxbox-Actor")
+    one_shot = None
+    if payload.one_shot_credential is not None:
+        osc = payload.one_shot_credential
+        one_shot = OneShotTerminalCredential(
+            username=osc.username.strip(),
+            port=osc.port,
+            known_host_fingerprint=osc.known_host_fingerprint.strip(),
+            password=(osc.password or None),
+            private_key=(osc.private_key or None),
+        )
     try:
         session, ticket = await terminal_session_manager.create_session(
             target_type=payload.target_type,
@@ -113,6 +157,7 @@ async def create_terminal_session(
             actor=actor,
             cols=payload.cols,
             rows=payload.rows,
+            one_shot_credential=one_shot,
         )
     except TerminalSessionError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc

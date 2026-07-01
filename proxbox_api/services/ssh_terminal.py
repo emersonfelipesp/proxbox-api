@@ -13,7 +13,7 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -42,6 +42,30 @@ class TerminalCredentialError(TerminalSessionError):
 
 
 @dataclass
+class OneShotTerminalCredential:
+    """Inline, unstored SSH credential attached to a single terminal session.
+
+    Held only in the in-memory ``TerminalSession`` for the ticket lifetime and
+    never persisted. ``__repr__`` redacts the secrets so the value cannot leak
+    through an accidental ``repr()``/log of the session.
+    """
+
+    username: str
+    port: int
+    known_host_fingerprint: str
+    password: str | None = None
+    private_key: str | None = None
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial redaction
+        return (
+            "OneShotTerminalCredential("
+            f"username={self.username!r}, port={self.port!r}, "
+            f"known_host_fingerprint={self.known_host_fingerprint!r}, "
+            "password=<redacted>, private_key=<redacted>)"
+        )
+
+
+@dataclass
 class TerminalSession:
     """Short-lived ticket state for a browser terminal session."""
 
@@ -58,6 +82,9 @@ class TerminalSession:
     expires_at: datetime
     last_activity_at: datetime
     consumed: bool = False
+    # In-memory only, never persisted or logged; repr-suppressed as defense in
+    # depth (its own __repr__ also redacts the secrets).
+    one_shot_credential: OneShotTerminalCredential | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -107,6 +134,7 @@ class TerminalSessionManager:
         actor: str | None,
         cols: int,
         rows: int,
+        one_shot_credential: OneShotTerminalCredential | None = None,
     ) -> tuple[TerminalSession, str]:
         """Create a short-lived ticket and return ``(session, plaintext_ticket)``."""
         async with self._lock:
@@ -130,6 +158,7 @@ class TerminalSessionManager:
                 created_at=now,
                 expires_at=now + timedelta(seconds=self.ticket_ttl_seconds),
                 last_activity_at=now,
+                one_shot_credential=one_shot_credential,
             )
             self._sessions[session.session_id] = session
             return session, ticket
@@ -303,11 +332,46 @@ def _fetch_endpoint_credential(
     return _coerce_endpoint_credential(endpoint_id, host, payload)
 
 
+def _credential_from_one_shot(session: TerminalSession) -> TerminalCredential:
+    """Build a terminal credential from inline one-shot material.
+
+    No netbox-proxbox fetch happens for one-shot sessions — the operator typed
+    the credential into the browser modal for a single connection. The host is
+    taken from the session (the plugin sends the node/endpoint host inline), and
+    the pinned fingerprint is mandatory (enforced at request validation).
+    """
+    osc = session.one_shot_credential
+    if osc is None:  # pragma: no cover - guarded by caller
+        raise TerminalCredentialError("One-shot credential is missing")
+    host = (session.host or "").strip()
+    if not host:
+        raise TerminalCredentialError("One-shot SSH terminal session requires a host")
+    if not osc.known_host_fingerprint.strip():
+        raise TerminalCredentialError(
+            "One-shot SSH terminal session requires a known_host_fingerprint"
+        )
+    target_id = session.node_id if session.target_type == "node" else session.endpoint_id
+    return TerminalCredential(
+        target_type=session.target_type,
+        target_id=int(target_id or 0),
+        host=host,
+        port=osc.port,
+        username=osc.username,
+        known_host_fingerprint=osc.known_host_fingerprint,
+        password=osc.password or None,
+        private_key=osc.private_key or None,
+        display=f"{osc.username}@{host}:{osc.port}",
+    )
+
+
 async def fetch_terminal_credential(
     netbox_session: "Api",
     session: TerminalSession,
 ) -> TerminalCredential:
     """Resolve node or endpoint SSH credential material from netbox-proxbox."""
+    if session.one_shot_credential is not None:
+        return _credential_from_one_shot(session)
+
     if session.target_type == "node":
         if session.node_id is None or not session.host:
             raise TerminalCredentialError("Node terminal target requires node_id and host")
