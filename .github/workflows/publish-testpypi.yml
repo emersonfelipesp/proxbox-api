@@ -34,6 +34,11 @@ env:
   PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
   PROXBOX_SKIP_NETBOX_BOOTSTRAP: "1"
   CI_OFFICIAL_IMAGE_PREFIX: mirror.gcr.io/library
+  # Keep release validation deterministic on hosted runners.  Unbounded
+  # ``pytest -n auto`` over-schedules the TestClient-heavy suite and makes the
+  # PyPI candidate jobs crawl, especially when the py3.13 job also collects
+  # coverage.
+  PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
 
 jobs:
   prepare-release:
@@ -266,7 +271,7 @@ jobs:
       - name: Run mocked schema-driven tests
         if: matrix.python-version == '3.12'
         run: |
-          uv run pytest -n auto -v --tb=short tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
+          uv run pytest -n auto -v --tb=short --durations=20 tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
@@ -280,7 +285,7 @@ jobs:
           # 3.13, causing this job to crawl and hit the 45-minute timeout.
           COVERAGE_CORE: sysmon
         run: |
-          uv run pytest -n auto -v --tb=short --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
+          uv run pytest -n auto -v --tb=short --durations=20 --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
@@ -335,7 +340,7 @@ jobs:
       - name: Run mocked schema-driven tests
         if: matrix.python-version == '3.12'
         run: |
-          uv run pytest -n auto -v --tb=short tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
+          uv run pytest -n auto -v --tb=short --durations=20 tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
@@ -349,7 +354,7 @@ jobs:
           # 3.13, causing this job to crawl and hit the 45-minute timeout.
           COVERAGE_CORE: sysmon
         run: |
-          uv run pytest -n auto -v --tb=short --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
+          uv run pytest -n auto -v --tb=short --durations=20 --cov=proxbox_api --cov-report=term-missing --cov-report=xml tests --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_prefers_guest_agent_ip \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_falls_back_to_config_when_guest_agent_unavailable \
             --deselect=tests/test_qemu_guest_agent_sync.py::test_vm_sync_skips_guest_agent_call_when_disabled \
