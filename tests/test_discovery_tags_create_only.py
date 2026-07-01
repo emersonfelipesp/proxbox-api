@@ -173,9 +173,15 @@ def empty_netbox(monkeypatch: pytest.MonkeyPatch):
     posts: list[dict[str, Any]] = []
 
     async def _fake_first(_nb: object, path: str, *, query: dict[str, Any]) -> Any:
+        # Model the documented precondition that bootstrap created the four
+        # discovery tags: the tag lookup resolves so the create branch stamps
+        # the discovery slug. Every other pre-check (cluster, cluster-type)
+        # still misses so its create branch fires.
+        if path == "/api/extras/tags/":
+            slug = (query or {}).get("slug")
+            if slug:
+                return _FakeRecord({"slug": slug, "name": slug}, record_id=99)
         del query
-        # The cluster-type lookup still needs to miss so its create branch
-        # fires; the cluster pre-check returns None to force create.
         del path
         return None
 
@@ -189,6 +195,12 @@ def empty_netbox(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(netbox_rest, "rest_first_async", _fake_first)
     monkeypatch.setattr(netbox_rest, "rest_create_async", _fake_create)
+    # resolve_discovery_tag_id binds rest_first_async in discovery_tags at import
+    # time, so patch that reference too (models bootstrap having created the tags).
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.discovery_tags.rest_first_async",
+        _fake_first,
+    )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
@@ -290,6 +302,12 @@ def cluster_with_discovery_tag(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(netbox_rest, "rest_first_async", _fake_first)
     monkeypatch.setattr(netbox_rest, "rest_create_async", _fake_create)
+    # resolve_discovery_tag_id binds rest_first_async in discovery_tags at import
+    # time, so patch that reference too (models bootstrap having created the tags).
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.discovery_tags.rest_first_async",
+        _fake_first,
+    )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
@@ -382,6 +400,12 @@ def cluster_without_discovery_tag(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(netbox_rest, "rest_first_async", _fake_first)
     monkeypatch.setattr(netbox_rest, "rest_create_async", _fake_create)
+    # resolve_discovery_tag_id binds rest_first_async in discovery_tags at import
+    # time, so patch that reference too (models bootstrap having created the tags).
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.discovery_tags.rest_first_async",
+        _fake_first,
+    )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
@@ -423,3 +447,62 @@ async def test_resync_does_not_retroactively_stamp_existing_cluster(
     tags = cluster_without_discovery_tag["cluster"].get("tags") or []
     slugs = {tag.get("slug") for tag in tags if isinstance(tag, dict)}
     assert DISCOVERY_TAG_CLUSTER not in slugs
+
+
+@pytest.mark.asyncio
+async def test_first_cluster_sync_skips_discovery_tag_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When bootstrap has NOT created the discovery tag, the first cluster sync
+    must still create the cluster — just without stamping the (missing) slug,
+    rather than failing with NetBox 'Related object not found'."""
+    posts: list[dict[str, Any]] = []
+
+    async def _miss_first(_nb: object, _path: str, *, query: dict[str, Any]) -> Any:
+        del query
+        return None  # every lookup misses, including /api/extras/tags/
+
+    async def _fake_create(_nb: object, path: str, payload: dict[str, Any], **_kw: Any) -> Any:
+        posts.append({"path": path, "payload": dict(payload)})
+        return _FakeRecord(payload, record_id=42)
+
+    async def _fake_list(_nb: object, _path: str, query: dict[str, Any] | None = None) -> list[Any]:
+        del query
+        return []
+
+    monkeypatch.setattr(netbox_rest, "rest_first_async", _miss_first)
+    monkeypatch.setattr(netbox_rest, "rest_create_async", _fake_create)
+    monkeypatch.setattr("proxbox_api.services.sync.discovery_tags.rest_first_async", _miss_first)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.cluster_sync.rest_list_async", _fake_list
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async", _miss_first
+    )
+
+    import proxbox_api.services.netbox_writers as nw
+
+    nw_original = nw._last_updated_cf
+    nw._last_updated_cf = lambda: {"proxmox_last_updated": _FROZEN_NOW}
+    try:
+        ctx = make_session(
+            nb=object(),
+            px_sessions=[SimpleNamespace(name="lab")],
+            tag=_TAG,
+            settings=make_settings(),
+            operation_id="test-discovery-first-sync-missing-tag",
+        )
+        result = await sync_cluster_individual(ctx, "lab")
+    finally:
+        nw._last_updated_cf = nw_original
+
+    assert result["action"] == "created", result
+    cluster_posts = [p for p in posts if p["path"] == "/api/virtualization/clusters/"]
+    assert len(cluster_posts) == 1
+    posted_slugs = {
+        t.get("slug")
+        for t in (cluster_posts[0]["payload"].get("tags") or [])
+        if isinstance(t, dict)
+    }
+    assert DISCOVERY_TAG_CLUSTER not in posted_slugs
+    assert "proxbox" in posted_slugs

@@ -25,7 +25,11 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.cluster_links import sync_proxmox_cluster_netbox_link
-from proxbox_api.services.sync.discovery_tags import discovery_tag_ref, merge_tag_refs
+from proxbox_api.services.sync.discovery_tags import (
+    discovery_tag_ref,
+    merge_tag_refs,
+    resolve_discovery_tag_id,
+)
 from proxbox_api.types import NetBoxRecord
 
 
@@ -798,10 +802,11 @@ async def _ensure_cluster(
         query={"name": cluster_name},
     )
     if existing_cluster is None:
-        effective_tag_refs: list[dict[str, object]] = [
-            *tag_refs,
-            discovery_tag_ref(DISCOVERY_TAG_CLUSTER),
-        ]
+        effective_tag_refs: list[dict[str, object]] = list(tag_refs)
+        # Soft contract (issue #362): only stamp the discovery slug when the tag
+        # exists in NetBox, so a missing tag never fails the cluster create.
+        if await resolve_discovery_tag_id(nb, DISCOVERY_TAG_CLUSTER) is not None:
+            effective_tag_refs.append(discovery_tag_ref(DISCOVERY_TAG_CLUSTER))
     else:
         existing_tags = (
             existing_cluster.serialize().get("tags")
@@ -1001,10 +1006,15 @@ async def _ensure_device(
     # whatever the existing device already carries so neither the discovery
     # tag nor operator-added tags get stripped.
     if existing_device is None:
-        effective_tag_refs: list[dict[str, object]] = [
-            *tag_refs,
-            discovery_tag_ref(DISCOVERY_TAG_NODE),
-        ]
+        effective_tag_refs: list[dict[str, object]] = list(tag_refs)
+        # The first-discovery audit tag is a soft contract (issue #362): stamp
+        # it only when it actually exists in NetBox. Bootstrap normally creates
+        # the four discovery slugs, but when it has not (e.g. bootstrap disabled
+        # or not yet run), sending the slug-only ref makes NetBox reject the
+        # device create with "Related object not found". A missing discovery tag
+        # must never block the sync, so skip stamping instead of failing.
+        if await resolve_discovery_tag_id(nb, DISCOVERY_TAG_NODE) is not None:
+            effective_tag_refs.append(discovery_tag_ref(DISCOVERY_TAG_NODE))
     else:
         effective_tag_refs = merge_tag_refs(
             list(tag_refs),

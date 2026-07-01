@@ -1532,7 +1532,7 @@ wheels = [
 
 [[package]]
 name = "proxbox-api"
-version = "0.0.19.post3"
+version = "0.0.19.post4"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
