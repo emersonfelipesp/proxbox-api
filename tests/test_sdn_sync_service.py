@@ -11,13 +11,17 @@ from proxbox_api.services.sync.sdn import (
     SdnVNetSchema,
     SdnZoneSchema,
     _netbox_status,
+    _sdn_bgp_projection_enabled,
     _split_csv,
     _sync_l2vpn_terminations,
+    _sync_netbox_bgp_projection,
     _sync_netbox_l2vpn_objects,
     _to_vnet,
     _to_zone,
+    _valid_community_values,
     _valid_prefix,
     collect_sdn_inventory_for_session,
+    sync_sdn_to_netbox,
 )
 
 
@@ -534,3 +538,166 @@ async def test_sdn_l2vpn_termination_conflict_records_binding(monkeypatch):
     )
     assert binding_call["payload"]["status"] == "conflict"
     assert "already terminates L2VPN 88" in binding_call["payload"]["conflict_reason"]
+
+
+def test_sdn_bgp_projection_mode_and_community_helpers():
+    assert _sdn_bgp_projection_enabled("always") is True
+    assert _sdn_bgp_projection_enabled("bootstrap_only") is True
+    assert _sdn_bgp_projection_enabled("disabled") is False
+    assert _sdn_bgp_projection_enabled("bogus") is False
+    assert _valid_community_values("65000:100, invalid 4294967296:1") == ["65000:100"]
+
+
+@pytest.mark.asyncio
+async def test_sdn_bgp_projection_skips_when_optional_plugin_unavailable(monkeypatch):
+    import proxbox_api.services.sync.sdn as sdn_module
+
+    async def _endpoint_id(_nb, _px):
+        return 17
+
+    monkeypatch.setattr(sdn_module, "_resolve_plugin_endpoint_id", _endpoint_id)
+
+    async def _empty_l2vpn(*_args, **_kwargs):
+        return {}, {}
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _missing_bgp(_nb):
+        return False
+
+    async def _unexpected_projection(*_args, **_kwargs):
+        raise AssertionError("BGP projection must not run when netbox_bgp is unavailable")
+
+    monkeypatch.setattr(sdn_module, "_sync_netbox_l2vpn_objects", _empty_l2vpn)
+    monkeypatch.setattr(sdn_module, "_sync_l2vpn_terminations", _noop)
+    monkeypatch.setattr(sdn_module, "_sync_plugin_inventory", _noop)
+    monkeypatch.setattr(sdn_module, "_record_object_bindings", _noop)
+    monkeypatch.setattr(sdn_module, "_netbox_bgp_available", _missing_bgp)
+    monkeypatch.setattr(sdn_module, "_sync_netbox_bgp_projection", _unexpected_projection)
+
+    result = await sync_sdn_to_netbox(
+        netbox_session=object(),
+        pxs=[_FakePx({})],
+        sync_mode_sdn_bgp="always",
+    )
+
+    counters = result["counters"]
+    assert counters["warnings"] == [
+        {
+            "kind": "bgp-projection",
+            "name": "cluster-a",
+            "warning": "Skipped because the optional netbox_bgp API is unavailable.",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sdn_bgp_projection_writes_bgp_objects_and_trace_bindings(monkeypatch):
+    calls = []
+    next_id = 100
+
+    async def _fake_reconcile(_nb, path, *, lookup, payload, fields, **_kwargs):
+        nonlocal next_id
+        del fields
+        next_id += 1
+        calls.append({"path": path, "lookup": lookup, "payload": payload, "id": next_id})
+        return next_id, True
+
+    async def _fake_rest_first(_nb, path, *, query):
+        if path == "/api/ipam/prefixes/":
+            return {"id": 501} if query["prefix"] == "10.10.0.0/24" else None
+        if path == "/api/ipam/ip-addresses/":
+            ids = {"192.0.2.1/32": 601, "192.0.2.2/32": 602}
+            record_id = ids.get(query["address"])
+            return {"id": record_id} if record_id is not None else None
+        if path == "/api/ipam/asns/":
+            ids = {65000: 701, 65001: 702}
+            record_id = ids.get(query["asn"])
+            return {"id": record_id} if record_id is not None else None
+        raise AssertionError(f"unexpected rest_first path: {path}")
+
+    import proxbox_api.services.sync.sdn as sdn_module
+
+    monkeypatch.setattr(sdn_module, "_reconcile", _fake_reconcile)
+    monkeypatch.setattr(sdn_module, "rest_first_async", _fake_rest_first)
+
+    inventory = SdnInventory(
+        endpoint_id=17,
+        endpoint_name="pve-a",
+        cluster_name="cluster-a",
+        controllers=[
+            sdn_module.SdnControllerSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                controller="bgp1",
+                type="bgp",
+                asn=65000,
+                peers="192.0.2.2=65001",
+                loopback="192.0.2.1",
+            )
+        ],
+        route_maps=[
+            sdn_module.SdnRouteMapSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                name="RM-IN",
+                action="permit",
+                match_ip="PL-IN",
+                set_community="65000:100 invalid",
+                order=10,
+            )
+        ],
+        prefix_lists=[
+            sdn_module.SdnPrefixListSchema(
+                endpoint_id=17,
+                cluster_name="cluster-a",
+                name="PL-IN",
+                cidr="10.10.0.0/24",
+                action="permit",
+                le=32,
+            )
+        ],
+    )
+    counters = SdnSyncCounters()
+
+    await _sync_netbox_bgp_projection(object(), inventory, counters)
+
+    paths = [call["path"] for call in calls]
+    assert "/api/plugins/bgp/prefix-list/" in paths
+    assert "/api/plugins/bgp/prefix-list-rule/" in paths
+    assert "/api/plugins/bgp/routing-policy/" in paths
+    assert "/api/plugins/bgp/routing-policy-rule/" in paths
+    assert "/api/plugins/bgp/community/" in paths
+    assert "/api/plugins/bgp/peer-group/" in paths
+    assert "/api/plugins/bgp/session/" in paths
+    assert counters.bgp_prefix_lists == 1
+    assert counters.bgp_prefix_list_rules == 1
+    assert counters.bgp_routing_policies == 1
+    assert counters.bgp_routing_policy_rules == 1
+    assert counters.bgp_communities == 1
+    assert counters.bgp_peer_groups == 1
+    assert counters.bgp_sessions == 1
+
+    prefix_rule = next(
+        call for call in calls if call["path"] == "/api/plugins/bgp/prefix-list-rule/"
+    )
+    assert prefix_rule["payload"]["prefix"] == 501
+    assert prefix_rule["payload"]["prefix_custom"] is None
+    policy_rule = next(
+        call for call in calls if call["path"] == "/api/plugins/bgp/routing-policy-rule/"
+    )
+    assert policy_rule["payload"]["match_ip_address"]
+    assert policy_rule["payload"]["set_actions"] == {"communities": ["65000:100"]}
+    session = next(call for call in calls if call["path"] == "/api/plugins/bgp/session/")
+    assert session["payload"]["local_address"] == 601
+    assert session["payload"]["remote_address"] == 602
+    assert session["payload"]["local_as"] == 701
+    assert session["payload"]["remote_as"] == 702
+    binding_targets = {
+        call["payload"]["target_type"]
+        for call in calls
+        if call["path"] == "/api/plugins/proxbox/sdn-bindings/"
+    }
+    assert "netbox_bgp.bgpsession" in binding_targets
+    assert "netbox_bgp.bgppeergroup" in binding_targets

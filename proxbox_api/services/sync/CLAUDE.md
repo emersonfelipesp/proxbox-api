@@ -24,6 +24,9 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `network.py`: network and interface sync helpers.
 - `reconciliation/`: pure operation-queue reconciliation, Python fallback,
   optional Rust bridge, mismatch metric, and shared VM operation types.
+- `sdn.py`: read-only Proxmox SDN inventory sync, NetBox L2VPN/Prefix/plugin
+  metadata reconciliation, and optional `netbox_bgp` projection controlled by
+  `sync_mode_sdn_bgp`.
 - `snapshots.py`: snapshot sync helpers.
 - `storage_links.py`: storage-to-NetBox relationship helpers.
 - `storages.py`: storage sync helpers.
@@ -88,6 +91,11 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   name. This backfills existing multi-endpoint plugin rows whose
   `netbox_cluster` was previously null and keeps the NMS Cloud
   cluster-to-endpoint map resolvable after re-sync.
+- **Shared-MAC guest interfaces.** Guest-agent interfaces that share a Proxmox
+  config NIC MAC are aggregated onto the single NetBox VMInterface for that
+  config NIC. The merge is keyed by the authoritative config NIC MAC, so VRRP
+  virtual MACs and already-normalized Linux alias interfaces are not merged
+  across different real NICs.
 
 ## Extension Guidance
 

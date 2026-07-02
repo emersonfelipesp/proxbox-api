@@ -314,7 +314,7 @@ Implemented in `proxbox_api/routes/proxmox/sdn.py`. All endpoints are read-only.
 - `GET /proxmox/sdn/route-maps` — List SDN route-map objects (BGP/EVPN route filtering) across all clusters. Returns `list[SdnRouteMapSchema]`.
 - `GET /proxmox/sdn/prefix-lists` — List SDN prefix-list objects (CIDR ranges for BGP/EVPN filtering) across all clusters. Returns `list[SdnPrefixListSchema]`.
 - `GET /proxmox/sdn/node-status` — List node-local zone content, bridge, MAC-VRF, and IP-VRF rows. Returns `list[SdnNodeStatusSchema]`.
-- `GET /proxmox/sdn/create/stream` — Server-Sent Events stage that reconciles read-only SDN state into NetBox: EVPN/VXLAN VNets to `vpn.L2VPN`, resolvable runtime targets to `vpn.L2VPNTermination`, EVPN import route targets to `ipam.RouteTarget`, valid subnets to `ipam.Prefix`, and all Proxmox-specific SDN rows to `netbox-proxbox` plugin metadata.
+- `GET /proxmox/sdn/create/stream?sync_mode_sdn_bgp=` — Server-Sent Events stage that reconciles read-only SDN state into NetBox: EVPN/VXLAN VNets to `vpn.L2VPN`, resolvable runtime targets to `vpn.L2VPNTermination`, EVPN import route targets to `ipam.RouteTarget`, valid subnets to `ipam.Prefix`, and all Proxmox-specific SDN rows to `netbox-proxbox` plugin metadata. `sync_mode_sdn_bgp=always` or `bootstrap_only` additionally projects BGP fabrics/controllers, sessions, route-maps, prefix-lists, and validated communities into the optional `netbox_bgp` plugin; `disabled` skips that projection.
 
 ### Datacenter (PVE 9.2+)
 
