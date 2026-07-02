@@ -8,7 +8,7 @@ from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxVlanSyncState
-from proxbox_api.services.sync.vm_helpers import normalized_mac
+from proxbox_api.services.sync.vm_helpers import merged_guest_iface_from_mac_index
 
 
 async def process_vm_network_interface(  # noqa: C901
@@ -16,7 +16,7 @@ async def process_vm_network_interface(  # noqa: C901
     virtual_machine: dict[str, object],
     interface_name: str,
     interface_config: dict[str, object],
-    guest_by_mac: dict[str, dict[str, object]],
+    guest_by_mac: dict[str, list[dict[str, object]]],
     guest_by_name: dict[str, dict[str, object]],
     use_guest_agent_interface_name: bool,
     tag_refs: list[dict[str, object]],
@@ -64,7 +64,7 @@ async def process_vm_network_interface(  # noqa: C901
     # Try to get guest interface info
     guest_iface = None
     if interface_mac:
-        guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
+        guest_iface = merged_guest_iface_from_mac_index(guest_by_mac, interface_mac)
     if guest_iface is None:
         guest_iface = guest_by_name.get(config_interface_name.lower())
 

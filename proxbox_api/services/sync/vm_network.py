@@ -23,9 +23,10 @@ from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
 from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
 from proxbox_api.services.sync.vm_helpers import (
+    build_guest_mac_index,
     extract_vm_disk_aggregate_size,
+    merged_guest_iface_from_mac_index,
     normalize_primary_ip_preference,
-    normalized_mac,
 )
 
 
@@ -91,11 +92,7 @@ async def sync_vm_interfaces(  # noqa: C901
     guest_by_name = {
         str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
     }
-    guest_by_mac = {
-        normalized_mac(iface.get("mac_address")): iface
-        for iface in guest_agent_interfaces
-        if normalized_mac(iface.get("mac_address"))
-    }
+    guest_by_mac = build_guest_mac_index(guest_agent_interfaces)
 
     for network in network_configs:
         for interface_name, config_dict in network.items():
@@ -107,7 +104,7 @@ async def sync_vm_interfaces(  # noqa: C901
             interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
             guest_iface = None
             if interface_mac:
-                guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
+                guest_iface = merged_guest_iface_from_mac_index(guest_by_mac, interface_mac)
             if guest_iface is None:
                 guest_iface = guest_by_name.get(config_interface_name.lower())
 
