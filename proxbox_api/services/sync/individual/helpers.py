@@ -6,7 +6,10 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.services.sync.vm_helpers import (
+    build_guest_mac_index,
     iter_proxmox_net_config_items,
+    merged_guest_iface_from_mac_index,
+    normalized_mac,
     parse_key_value_string,
     resolve_netbox_cluster_id_by_name,
 )
@@ -21,7 +24,7 @@ def normalize_mac(value: str | None) -> str:
     Returns:
         Normalized (lowercase, trimmed) MAC address string, or empty string.
     """
-    return str(value or "").strip().lower()
+    return normalized_mac(value)
 
 
 def resolve_proxmox_session(
@@ -129,18 +132,14 @@ def build_ip_lookup_key(ip_address: str) -> dict[str, str]:
 
 def _build_guest_interface_maps(
     guest_interfaces: list[dict],
-) -> tuple[dict[str, dict], dict[str, dict]]:
+) -> tuple[dict[str, dict], dict[str, list[dict[str, object]]]]:
     """Build lookup maps for guest interfaces by name and MAC."""
     by_name: dict[str, dict] = {}
-    by_mac: dict[str, dict] = {}
     for iface in guest_interfaces:
         name_key = str(iface.get("name", "")).strip().lower()
         if name_key:
             by_name[name_key] = iface
-        mac = normalize_mac(iface.get("mac_address"))
-        if mac:
-            by_mac[mac] = iface
-    return by_name, by_mac
+    return by_name, build_guest_mac_index(guest_interfaces)
 
 
 def resolve_guest_interface(
@@ -152,9 +151,11 @@ def resolve_guest_interface(
     if not guest_interfaces:
         return None, interface_name, mac_address
     guest_by_name, guest_by_mac = _build_guest_interface_maps(guest_interfaces)
-    guest_iface = guest_by_name.get(interface_name.lower())
-    if guest_iface is None and mac_address:
-        guest_iface = guest_by_mac.get(normalize_mac(mac_address))
+    guest_iface = None
+    if mac_address:
+        guest_iface = merged_guest_iface_from_mac_index(guest_by_mac, mac_address)
+    if guest_iface is None:
+        guest_iface = guest_by_name.get(interface_name.lower())
     if guest_iface is None:
         return None, interface_name, mac_address
     guest_name = str(guest_iface.get("name") or "").strip()

@@ -115,8 +115,9 @@ from proxbox_api.services.sync.virtual_machines import (
 from proxbox_api.services.sync.vm_create import ensure_vm_type
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
+    build_guest_mac_index,
     extract_vm_disk_aggregate_size,
-    normalized_mac,
+    merged_guest_iface_from_mac_index,
     parse_comma_separated_ints,
     parse_proxmox_net_configs,
     preferred_primary_ip_order,
@@ -2528,11 +2529,7 @@ async def create_virtual_machines(  # noqa: C901
                 str(iface.get("name", "")).strip().lower(): iface
                 for iface in guest_agent_interfaces
             }
-            guest_by_mac = {
-                normalized_mac(iface.get("mac_address")): iface
-                for iface in guest_agent_interfaces
-                if normalized_mac(iface.get("mac_address"))
-            }
+            guest_by_mac = build_guest_mac_index(guest_agent_interfaces)
 
             vm_networks = _parse_vm_networks(vm_config)
 
@@ -2565,7 +2562,9 @@ async def create_virtual_machines(  # noqa: C901
                         interface_mac = value.get("virtio", value.get("hwaddr", None))
                         guest_iface = None
                         if interface_mac:
-                            guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
+                            guest_iface = merged_guest_iface_from_mac_index(
+                                guest_by_mac, interface_mac
+                            )
                         if guest_iface is None:
                             guest_iface = guest_by_name.get(config_interface_name.lower())
                         resolved_interface_name = config_interface_name
@@ -3031,11 +3030,7 @@ async def create_only_vm_interfaces(  # noqa: C901
         guest_by_name = {
             str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
         }
-        guest_by_mac = {
-            normalized_mac(iface.get("mac_address")): iface
-            for iface in guest_agent_interfaces
-            if normalized_mac(iface.get("mac_address"))
-        }
+        guest_by_mac = build_guest_mac_index(guest_agent_interfaces)
 
         vm_networks = _parse_vm_networks(vm_config)
         interface_payloads: list[dict] = []
@@ -3049,7 +3044,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                 interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                 guest_iface = None
                 if interface_mac:
-                    guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
+                    guest_iface = merged_guest_iface_from_mac_index(guest_by_mac, interface_mac)
                 if guest_iface is None:
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 
@@ -3574,11 +3569,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         guest_by_name = {
             str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
         }
-        guest_by_mac = {
-            normalized_mac(iface.get("mac_address")): iface
-            for iface in guest_agent_interfaces
-            if normalized_mac(iface.get("mac_address"))
-        }
+        guest_by_mac = build_guest_mac_index(guest_agent_interfaces)
 
         vm_dns_name = await _resolve_vm_dns_name(
             proxmox_session=proxmox_session,
@@ -3613,7 +3604,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
                 guest_iface = None
                 if interface_mac:
-                    guest_iface = guest_by_mac.get(normalized_mac(interface_mac))
+                    guest_iface = merged_guest_iface_from_mac_index(guest_by_mac, interface_mac)
                 if guest_iface is None:
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 

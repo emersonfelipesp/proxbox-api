@@ -211,9 +211,76 @@ async def resolve_netbox_cluster_id_by_name(
     return resolved_id
 
 
-def normalized_mac(value: str | None) -> str:
+def normalized_mac(value: object | None) -> str:
     """Normalize MAC address to lowercase stripped string."""
     return str(value or "").strip().lower()
+
+
+def build_guest_mac_index(
+    guest_interfaces: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    """Index guest-agent interfaces by normalized MAC address."""
+    guest_by_mac: dict[str, list[dict[str, object]]] = {}
+    for iface in guest_interfaces:
+        if not isinstance(iface, dict):
+            continue
+        mac = normalized_mac(iface.get("mac_address"))
+        if not mac:
+            continue
+        guest_by_mac.setdefault(mac, []).append(iface)
+    return guest_by_mac
+
+
+def _merged_guest_iface_from_matches(
+    matches: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Merge guest-agent interface records that share one config NIC MAC."""
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    first = matches[0]
+    merged_ip_addresses: list[dict[str, object]] = []
+    seen_ip_keys: set[tuple[object, object]] = set()
+    for iface in matches:
+        for addr in iface.get("ip_addresses") or []:
+            if not isinstance(addr, dict):
+                continue
+            dedupe_key = (addr.get("ip_address"), addr.get("prefix"))
+            if dedupe_key in seen_ip_keys:
+                continue
+            seen_ip_keys.add(dedupe_key)
+            merged_ip_addresses.append(addr)
+
+    merged: dict[str, object] = {
+        "name": first.get("name"),
+        "mac_address": first.get("mac_address"),
+        "ip_addresses": merged_ip_addresses,
+    }
+    for key in ("fqdn", "hostname"):
+        if key in first:
+            merged[key] = first[key]
+    return merged
+
+
+def merged_guest_iface_from_mac_index(
+    guest_by_mac: dict[str, list[dict[str, object]]],
+    mac: object | None,
+) -> dict[str, object] | None:
+    """Return one guest interface view for a config NIC MAC."""
+    normalized = normalized_mac(mac)
+    if not normalized:
+        return None
+    return _merged_guest_iface_from_matches(guest_by_mac.get(normalized) or [])
+
+
+def merged_guest_iface_for_mac(
+    guest_interfaces: list[dict[str, object]],
+    mac: object | None,
+) -> dict[str, object] | None:
+    """Merge guest-agent interfaces that match one config NIC MAC."""
+    return merged_guest_iface_from_mac_index(build_guest_mac_index(guest_interfaces), mac)
 
 
 def parse_comma_separated_ints(value: object) -> list[int]:
