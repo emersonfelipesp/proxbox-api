@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
@@ -15,6 +16,27 @@ from sqlmodel import select
 from proxbox_api.database import NetBoxEndpoint, get_session
 from proxbox_api.logger import logger
 from proxbox_api.session.netbox import netbox_config_from_endpoint
+
+PERSIST_ENV = "PROXBOX_NETBOX_OPENAPI_PERSIST"
+_FALSEY = {"0", "false", "no", "off"}
+
+# In-memory fallback store used when filesystem persistence is disabled. It lets
+# schema resolution reuse a fetched document across calls without ever touching
+# the filesystem (read-only deployments, "no writes to disk" operators).
+_in_memory_openapi_cache: dict[str, object] | None = None
+
+
+def netbox_openapi_persistence_enabled() -> bool:
+    """Return True when the NetBox OpenAPI cache may be read/written on disk.
+
+    Persistence is enabled by default. Set ``PROXBOX_NETBOX_OPENAPI_PERSIST`` to
+    a falsey value (``0``/``false``/``no``/``off``) to run schema resolution
+    fully in-memory and never touch the filesystem. This is an operator-level
+    deployment concern (like ``PROXBOX_GENERATED_DIR``/``PROXBOX_DATABASE_PATH``),
+    so it is a process env var rather than a plugin setting.
+    """
+
+    return os.environ.get(PERSIST_ENV, "").strip().lower() not in _FALSEY
 
 
 def netbox_openapi_cache_path() -> Path:
@@ -101,7 +123,18 @@ async def fetch_live_netbox_openapi_async(timeout: int = 20) -> dict[str, object
 
 
 def save_netbox_openapi_cache(document: dict[str, object]) -> None:
-    """Persist fetched NetBox OpenAPI document to local cache."""
+    """Persist fetched NetBox OpenAPI document.
+
+    When filesystem persistence is disabled the document is retained in an
+    in-memory store instead of being written to disk, so schema resolution still
+    avoids repeated live fetches while writing nothing to the filesystem.
+    """
+
+    global _in_memory_openapi_cache
+
+    if not netbox_openapi_persistence_enabled():
+        _in_memory_openapi_cache = document
+        return
 
     path = netbox_openapi_cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +142,14 @@ def save_netbox_openapi_cache(document: dict[str, object]) -> None:
 
 
 def load_netbox_openapi_cache() -> dict[str, object] | None:
-    """Load cached NetBox OpenAPI from disk if present."""
+    """Load cached NetBox OpenAPI from the in-memory store or disk.
+
+    With persistence disabled, only the in-memory store is consulted; the
+    filesystem is never read.
+    """
+
+    if not netbox_openapi_persistence_enabled():
+        return _in_memory_openapi_cache
 
     path = netbox_openapi_cache_path()
     if not path.exists():
