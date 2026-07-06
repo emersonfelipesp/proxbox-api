@@ -206,6 +206,7 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `4096` | Maximum entries kept in the NetBox GET cache before LRU eviction kicks in. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Maximum total bytes held in the NetBox GET cache before LRU eviction kicks in. |
 | `PROXBOX_DEBUG_CACHE` | unset | When set to `1`, `true`, or `yes`, the NetBox GET cache emits per-hit/miss debug log lines. |
+| `PROXBOX_NETBOX_OPENAPI_PERSIST` | `true` | Whether the resolved NetBox OpenAPI schema is cached on disk at `proxbox_api/generated/netbox/openapi.json`. Set to `0`/`false`/`no`/`off` to run schema resolution **fully in-memory** — the fetched document is kept in a process-local store instead of being written to (or read from) the filesystem (read-only filesystems, no-disk-write deployments). Maps to the `ProxboxPluginSettings.netbox_openapi_persist` plugin field; resolves env override > plugin setting > default. See [NetBox OpenAPI schema cache](#netbox-openapi-schema-cache) below. |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `0.5` | Per-request pause (seconds) between custom-field creations during the extras bootstrap to avoid hammering NetBox. |
 | `PROXBOX_GENERATED_DIR` | `$XDG_DATA_HOME/proxbox/generated/proxmox` | Override output directory for the schema generator CLI (`proxbox-schema generate`). |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (empty) | Comma-separated extra CORS origins added to the runtime allowlist. |
@@ -215,6 +216,32 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_ENCRYPTION_KEY` | unset | Secret key for encrypting credentials at rest. See [Credential Encryption](#credential-encryption) below. |
 | `PROXBOX_ENCRYPTION_KEY_FILE` | unset | Path to a file containing the Fernet encryption key. Takes precedence over `PROXBOX_ENCRYPTION_KEY` when set; lets operators mount the key as a file/secret instead of an environment variable. |
 | `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | unset | When set to `1`, `true`, or `yes`, the backend boots even with no encryption key configured. Off by default — the backend refuses to start so credentials are never written plaintext in production. |
+
+### NetBox OpenAPI schema cache
+
+To validate the payloads it builds, proxbox-api resolves a NetBox OpenAPI
+contract at sync time (`proxbox_api/proxmox_to_netbox/netbox_schema.py`). The
+resolution order is **live NetBox `/api/schema/` → on-disk cache → bundled
+fallback contract**, and a successful live fetch is written to
+`proxbox_api/generated/netbox/openapi.json` so later runs reuse it without
+re-fetching.
+
+`PROXBOX_NETBOX_OPENAPI_PERSIST` (default `true`) controls that on-disk cache.
+Setting it to a falsey value (`0`/`false`/`no`/`off`) makes schema resolution
+run **fully in-memory**:
+
+- The fetched schema is kept only in a process-local, in-memory store —
+  `save`/`load` of the cache **never touch the filesystem**.
+- Resolution still avoids repeated live fetches within the same process; only
+  cross-restart persistence is lost (the schema is re-fetched after a restart).
+- Use it for **read-only filesystems** or deployments that must not write any
+  generated artifacts to disk.
+
+This toggle is also editable from the **netbox-proxbox** plugin settings page
+(the `netbox_openapi_persist` field). It resolves through the standard runtime
+order — the `PROXBOX_NETBOX_OPENAPI_PERSIST` environment variable overrides the
+plugin setting, which overrides the built-in default (`true`). Leaving it
+enabled preserves the historical disk-cache behavior byte-for-byte.
 
 ### NetBox PostgreSQL Connection Pool
 

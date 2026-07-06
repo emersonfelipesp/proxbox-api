@@ -13,6 +13,7 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["delete_orphans"] is False
     assert settings["reconciliation_engine"] == "python"
     assert settings["reconciliation_compare_strict"] is False
+    assert settings["netbox_openapi_persist"] is True
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -92,6 +93,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
                 "delete_orphans": True,
                 "reconciliation_engine": "compare",
                 "reconciliation_compare_strict": True,
+                "netbox_openapi_persist": False,
             }
         ],
     }
@@ -114,6 +116,7 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
     assert settings["delete_orphans"] is True
     assert settings["reconciliation_engine"] == "compare"
     assert settings["reconciliation_compare_strict"] is True
+    assert settings["netbox_openapi_persist"] is False
 
 
 def test_delete_orphans_runtime_bool_prefers_env_over_settings(monkeypatch):
