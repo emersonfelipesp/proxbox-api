@@ -108,3 +108,40 @@ def test_netbox_schema_resolution_prefers_live_then_cache_then_fallback(
         "status",
         "cluster",
     ]
+
+
+def test_netbox_schema_resolution_in_memory_when_persistence_disabled(
+    monkeypatch,
+    tmp_path,
+):
+    """With PROXBOX_NETBOX_OPENAPI_PERSIST disabled, resolution never touches disk."""
+
+    cache_path = tmp_path / "openapi.json"
+    monkeypatch.setattr(netbox_schema, "netbox_openapi_cache_path", lambda: cache_path)
+    monkeypatch.setattr(netbox_schema, "_in_memory_openapi_cache", None)
+    monkeypatch.setenv("PROXBOX_NETBOX_OPENAPI_PERSIST", "false")
+
+    assert netbox_schema.netbox_openapi_persistence_enabled() is False
+
+    # Live fetch: the document must be retained in-memory, not written to disk.
+    monkeypatch.setattr(
+        netbox_schema,
+        "fetch_live_netbox_openapi",
+        lambda timeout=20: NETBOX_OPENAPI_SNAPSHOT,
+    )
+    live_resolved = netbox_schema.resolve_netbox_schema_contract()
+    assert live_resolved["source"] == "live"
+    assert not cache_path.exists()
+
+    # Second resolution with no live endpoint reuses the in-memory document.
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", lambda timeout=20: None)
+    cached_resolved = netbox_schema.resolve_netbox_schema_contract()
+    assert cached_resolved["source"] == "cache"
+    assert cached_resolved["openapi"]["paths"]
+    assert not cache_path.exists()
+
+    # Clearing the in-memory store falls back to the docs-derived contract.
+    monkeypatch.setattr(netbox_schema, "_in_memory_openapi_cache", None)
+    fallback_resolved = netbox_schema.resolve_netbox_schema_contract()
+    assert fallback_resolved["source"] == "fallback"
+    assert not cache_path.exists()
