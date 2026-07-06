@@ -274,7 +274,6 @@ connection exists or is **operator-only infrastructure** that has no business in
 `PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
 `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
-`PROXBOX_NETBOX_OPENAPI_PERSIST`,
 `PROXBOX_CORS_EXTRA_ORIGINS`, `PROXBOX_SSH_KEY_DIR`. Anything that controls sync behavior, batching,
 concurrency, caching, or feature toggles belongs in `ProxboxPluginSettings`.
 
@@ -294,7 +293,6 @@ the `netbox-proxbox` side, do all five — the existing fields in
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
 - `PROXBOX_GENERATED_DIR`: override output directory for the schema generator CLI (`proxbox-schema`); default is `$XDG_DATA_HOME/proxbox/generated/proxmox` (typically `~/.local/share/proxbox/generated/proxmox`).
-- `PROXBOX_NETBOX_OPENAPI_PERSIST`: controls whether the resolved NetBox OpenAPI schema is cached on disk at `proxbox_api/generated/netbox/openapi.json` (default: enabled). Set to a falsey value (`0`/`false`/`no`/`off`) to run NetBox schema resolution **fully in-memory** — the fetched document is kept in a process-local store instead of being written to (or read from) the filesystem. Use this for read-only filesystems or deployments that must not write anything to disk. Resolution still avoids repeated live fetches within the process; only cross-restart persistence is lost.
 - `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. The raw value is hashed with SHA-256 to derive a Fernet key. Resolution order: env var > `ProxboxPluginSettings.encryption_key` (configurable from the NetBox plugin settings page) > local key file (default `<repo_root>/data/encryption.key`, managed via the `/admin/encryption/*` endpoints) > none. Startup never aborts; instead, when no key is configured, **credential writes are refused at the write sink** (`encrypt_value`) unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` is set — a deny-by-default guard that keeps the service running (reads and non-credential writes work) while preventing silent plaintext secret storage.
 - `PROXBOX_ENCRYPTION_KEY_FILE`: optional override for the local key file path used when neither the env var nor the plugin settings provide a key. Defaults to `<repo_root>/data/encryption.key`.
 - `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: explicit opt-in for plaintext credential storage. With no encryption key configured, credential **writes** (endpoint create/update that store a secret) are refused unless this is set to `1`/`true`/`yes`; reads and the rest of the service keep working. Use only in dev/tests.
@@ -326,6 +324,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `netbox_get_cache_max_bytes` | 52_428_800 (50 MB) |
 | `PROXBOX_DEBUG_CACHE` | `debug_cache` | false |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | `expose_internal_errors` | false |
+| `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 
 ## Validation

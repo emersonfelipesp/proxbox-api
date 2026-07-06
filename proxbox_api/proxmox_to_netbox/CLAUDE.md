@@ -29,7 +29,7 @@ That means:
 - `__init__.py`: public exports for transformation entry points and schema helpers.
 - `errors.py`: domain exceptions for transformation failures.
 - `proxmox_schema.py`: reads the generated Proxmox OpenAPI artifact used as the source contract.
-- `netbox_schema.py`: fetches and caches the NetBox OpenAPI contract, with a docs-derived fallback. On-disk caching is toggled by `PROXBOX_NETBOX_OPENAPI_PERSIST` (default on); when disabled (`0`/`false`/`no`/`off`) `netbox_openapi_persistence_enabled()` returns `False` and `save_/load_netbox_openapi_cache` use a process-local in-memory store instead of the filesystem, so resolution never reads or writes disk.
+- `netbox_schema.py`: fetches and caches the NetBox OpenAPI contract, with a docs-derived fallback. On-disk caching is toggled by `netbox_openapi_persistence_enabled()`, which resolves **env `PROXBOX_NETBOX_OPENAPI_PERSIST` > `ProxboxPluginSettings.netbox_openapi_persist` > default `True`** via `runtime_settings.get_bool`. When disabled, `save_/load_netbox_openapi_cache` use a process-local in-memory store instead of the filesystem, so resolution never reads or writes disk. The toggle is editable from the netbox-proxbox NetBox plugin settings page.
 - `models.py`: Pydantic v2 input and output models with normalization and validation logic.
 - `normalize.py`: orchestration layer that validates source and target schema contracts.
 - `schemas/`: schema-driven parsing modules, currently focused on disk parsing.
