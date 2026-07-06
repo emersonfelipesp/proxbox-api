@@ -40,6 +40,7 @@ class ProxboxSettingsDict(TypedDict):
     delete_orphans: NotRequired[bool]
     debug_cache: NotRequired[bool]
     expose_internal_errors: NotRequired[bool]
+    netbox_openapi_persist: NotRequired[bool]
     proxmox_timeout: NotRequired[int]
     proxmox_max_retries: NotRequired[int]
     proxmox_retry_backoff: NotRequired[float]

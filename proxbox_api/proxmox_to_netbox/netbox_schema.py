@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
@@ -13,12 +12,12 @@ from urllib.request import Request, urlopen
 from netbox_sdk.config import authorization_header_value
 from sqlmodel import select
 
+from proxbox_api import runtime_settings
 from proxbox_api.database import NetBoxEndpoint, get_session
 from proxbox_api.logger import logger
 from proxbox_api.session.netbox import netbox_config_from_endpoint
 
 PERSIST_ENV = "PROXBOX_NETBOX_OPENAPI_PERSIST"
-_FALSEY = {"0", "false", "no", "off"}
 
 # In-memory fallback store used when filesystem persistence is disabled. It lets
 # schema resolution reuse a fetched document across calls without ever touching
@@ -29,14 +28,19 @@ _in_memory_openapi_cache: dict[str, object] | None = None
 def netbox_openapi_persistence_enabled() -> bool:
     """Return True when the NetBox OpenAPI cache may be read/written on disk.
 
-    Persistence is enabled by default. Set ``PROXBOX_NETBOX_OPENAPI_PERSIST`` to
-    a falsey value (``0``/``false``/``no``/``off``) to run schema resolution
-    fully in-memory and never touch the filesystem. This is an operator-level
-    deployment concern (like ``PROXBOX_GENERATED_DIR``/``PROXBOX_DATABASE_PATH``),
-    so it is a process env var rather than a plugin setting.
+    Persistence is enabled by default. Disable it — via the
+    ``PROXBOX_NETBOX_OPENAPI_PERSIST`` env var or the ``netbox_openapi_persist``
+    NetBox plugin setting — to run schema resolution fully in-memory and never
+    touch the filesystem (read-only filesystems, no-disk-write deployments).
+    Resolution order is env override > ``ProxboxPluginSettings`` > default,
+    handled by :func:`proxbox_api.runtime_settings.get_bool`.
     """
 
-    return os.environ.get(PERSIST_ENV, "").strip().lower() not in _FALSEY
+    return runtime_settings.get_bool(
+        settings_key="netbox_openapi_persist",
+        env=PERSIST_ENV,
+        default=True,
+    )
 
 
 def netbox_openapi_cache_path() -> Path:

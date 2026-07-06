@@ -145,3 +145,34 @@ def test_netbox_schema_resolution_in_memory_when_persistence_disabled(
     fallback_resolved = netbox_schema.resolve_netbox_schema_contract()
     assert fallback_resolved["source"] == "fallback"
     assert not cache_path.exists()
+
+
+def test_netbox_openapi_persistence_resolves_env_over_plugin_setting(monkeypatch):
+    """Persistence toggle resolves env override > plugin setting > default."""
+
+    # Plugin setting disables persistence; no env override -> disabled.
+    monkeypatch.delenv("PROXBOX_NETBOX_OPENAPI_PERSIST", raising=False)
+    monkeypatch.setattr(
+        netbox_schema.runtime_settings,
+        "_load_settings",
+        lambda: {"netbox_openapi_persist": False},
+    )
+    assert netbox_schema.netbox_openapi_persistence_enabled() is False
+
+    # Env override wins over the plugin setting.
+    monkeypatch.setenv("PROXBOX_NETBOX_OPENAPI_PERSIST", "true")
+    assert netbox_schema.netbox_openapi_persistence_enabled() is True
+
+    # Env can also force-disable regardless of the plugin setting.
+    monkeypatch.setattr(
+        netbox_schema.runtime_settings,
+        "_load_settings",
+        lambda: {"netbox_openapi_persist": True},
+    )
+    monkeypatch.setenv("PROXBOX_NETBOX_OPENAPI_PERSIST", "off")
+    assert netbox_schema.netbox_openapi_persistence_enabled() is False
+
+    # No env and no plugin value -> default enabled.
+    monkeypatch.delenv("PROXBOX_NETBOX_OPENAPI_PERSIST", raising=False)
+    monkeypatch.setattr(netbox_schema.runtime_settings, "_load_settings", lambda: None)
+    assert netbox_schema.netbox_openapi_persistence_enabled() is True
