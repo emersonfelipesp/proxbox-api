@@ -26,7 +26,9 @@
     `/cloud/firecracker/provision/stream` call the selected host-agent VM to
     health-check KVM, read capacity, prepare kernel/rootfs assets, create the
     micro-VM, and optionally start it. NetBox inventory still lives in
-    `netbox-proxbox`; this service owns the host-agent HTTP contract.
+    `netbox-proxbox`; this service owns the host-agent HTTP contract and
+    validates caller-supplied host-agent URLs with its SSRF guard before making
+    outbound requests.
 
 The interactive version of this diagram lives at
 [emersonfelipesp.com/proxbox-api](https://emersonfelipesp.com/proxbox-api).

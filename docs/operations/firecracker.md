@@ -30,13 +30,27 @@ The non-streaming endpoint returns one JSON response. The streaming endpoint for
 
 Both routes require the normal `X-Proxbox-API-Key` middleware. `X-Proxbox-Actor` is optional and is forwarded into the host-agent metadata payload.
 
+## Trust Boundary
+
+`nms-backend` is expected to resolve the selected Firecracker host, host pool,
+image, and `FirecrackerMicroVM` NetBox records before calling proxbox-api. The
+request still carries `host_agent_base_url` and optional `host_agent_token`, so
+proxbox-api validates the URL before any outbound request: only `http` and
+`https` are accepted, the URL must include a host, credentials/query/fragment
+components are refused, and the host must pass the shared SSRF guard. The token
+is forwarded only to that validated host-agent.
+
+The streaming route emits a generic `An unexpected error occurred.` failure by
+default. Set `PROXBOX_EXPOSE_INTERNAL_ERRORS=true` only in trusted debugging
+contexts when upstream host-agent error details may be exposed to clients.
+
 ## Request Shape
 
 `FirecrackerProvisionRequest` accepts:
 
 | Field | Purpose |
 |---|---|
-| `host_agent_base_url` | Base URL for the selected Firecracker host-agent |
+| `host_agent_base_url` | Validated HTTP(S) base URL for the selected Firecracker host-agent |
 | `host_agent_token` | Optional bearer token passed to the host-agent |
 | `host_id`, `host_pool_id` | NetBox Proxbox IDs used for traceability |
 | `image` | Kernel/rootfs bundle with URLs, SHA256 digests, architecture, default user, and optional image ID |

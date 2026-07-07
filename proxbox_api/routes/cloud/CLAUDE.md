@@ -99,12 +99,13 @@ Proxmox packages so cloud-init never blocks on an interactive grub prompt.
 
 - Gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` (a 403 with the
   enable-instruction is returned otherwise).
-- When `execute=true` and an `endpoint_id` is supplied, additionally gated by
-  the endpoint's transport access method: `ProxmoxEndpoint.access_methods` must
-  be `api_ssh`, enforced via `routes/proxmox/access_gate.py::gate_ssh_access`.
-  An API-only endpoint returns 403 `reason="ssh_not_enabled_for_endpoint"`. This
-  is orthogonal to `allow_writes` (the Azure path runs both gates). With no
-  `endpoint_id` there is no endpoint to consult, so only the env/key gates apply.
+- `endpoint_id` is required when `execute=true`; requests without it fail closed
+  with 422 before the pipeline can render or run a script.
+- `execute=true` runs both endpoint gates before SSH: `_gate()` enforces
+  `ProxmoxEndpoint.allow_writes=True`, then `gate_ssh_access()` enforces
+  `ProxmoxEndpoint.access_methods="api_ssh"`. A write-disabled endpoint returns
+  403 before any SSH attempt; an API-only endpoint returns 403
+  `reason="ssh_not_enabled_for_endpoint"`.
 - The ssh command is `ssh -p <port> [-i <ssh_identity_file>] <user>@<ssh_host>
   'bash -s'`. `ssh_identity_file` must resolve under `PROXBOX_SSH_KEY_DIR`
   (validated in `schemas/cloud_provision.py`); `ssh_host` is validated against
@@ -113,6 +114,24 @@ Proxmox packages so cloud-init never blocks on an interactive grub prompt.
   `0.0.18.post1`) — never rely on an in-container `apk add`.
 - When the request sends no `-i`, the host provides the bake key as the default
   `/root/.ssh/id_ed25519` (see the compose mounts + host bootstrap doc below).
+
+## Firecracker Provisioning Trust Boundary
+
+`firecracker.py` accepts `host_agent_base_url` and optional `host_agent_token`
+from the caller because `nms-backend` resolves the selected NetBox Proxbox
+Firecracker host/image inventory before calling this backend. proxbox-api still
+validates the outbound target before constructing `FirecrackerHostAgentClient`:
+the base URL must use `http` or `https`, include a hostname, omit embedded
+credentials, omit query strings/fragments, and pass the shared SSRF host guard
+(`ssrf.py::validate_endpoint_url`). The bearer token is forwarded only to the
+validated host-agent.
+
+Firecracker provisioning is not a `ProxmoxEndpoint` write and does not use
+`allow_writes`; the trust boundary is the shared API key, the nms-backend
+inventory resolution step, and the host-agent URL SSRF validation above.
+Streaming failures are sanitized with the same
+`PROXBOX_EXPOSE_INTERNAL_ERRORS` gate as the app-level generic exception
+handler: clients see `An unexpected error occurred.` by default.
 
 ### Who calls it
 

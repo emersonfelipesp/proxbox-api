@@ -25,7 +25,7 @@ from typing import Literal
 from fastapi import status
 from fastapi.responses import JSONResponse
 
-from proxbox_api.exception import ProxboxException, ProxmoxAPIError
+from proxbox_api.exception import NetBoxAPIError, ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_create_async, rest_first_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
@@ -160,7 +160,11 @@ async def write_verb_journal_entry(
     kind: JournalKind,
     comments: str,
 ) -> dict[str, object] | None:
-    """POST a verb-dispatch journal entry to NetBox. Returns the entry or ``None`` on failure."""
+    """POST a verb-dispatch journal entry to NetBox.
+
+    Raises on write failure so operational verbs fail closed instead of
+    succeeding without a durable audit record.
+    """
     payload = scrub_cloud_init(
         {
             "assigned_object_type": "virtualization.virtualmachine",
@@ -175,13 +179,25 @@ async def write_verb_journal_entry(
             "/api/extras/journal-entries/",
             payload,
         )
+    except ProxboxException as error:
+        logger.warning(
+            "Failed to write verb journal entry for netbox_vm_id=%s: %s",
+            netbox_vm_id,
+            error,
+        )
+        raise
     except Exception as error:  # noqa: BLE001
         logger.warning(
             "Failed to write verb journal entry for netbox_vm_id=%s: %s",
             netbox_vm_id,
             error,
         )
-        return None
+        raise NetBoxAPIError(
+            "Failed to write verb audit journal entry",
+            endpoint="/api/extras/journal-entries/",
+            method="POST",
+            original_error=error,
+        ) from error
     body = getattr(record, "data", None)
     if isinstance(body, dict):
         return body
