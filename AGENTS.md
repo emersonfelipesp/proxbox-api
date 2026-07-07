@@ -247,6 +247,11 @@ Firecracker provisioning lives in `proxbox_api/routes/cloud/firecracker.py`,
 `POST /cloud/firecracker/provision` or
 `POST /cloud/firecracker/provision/stream`. This repo owns the host-agent HTTP
 contract only; NetBox inventory remains in `netbox-proxbox`.
+`host_agent_base_url` is still supplied by the caller after that inventory
+resolution, but proxbox-api validates it before any outbound request: only
+`http`/`https` URLs with a host, no embedded credentials, no query/fragment, and
+a host accepted by the shared SSRF guard are allowed. Streamed failures return a
+generic browser-visible error unless `PROXBOX_EXPOSE_INTERNAL_ERRORS=true`.
 
 ## QEMU Cloud-Init Templates
 
@@ -266,6 +271,15 @@ applied through the Proxmox API during the clone configuration flow; no direct
 The Cloud Image Build Pipeline's SSH execution path sets `qm ... --agent
 enabled=1` before converting the VM to a template, so clones inherit the
 Proxmox-side QEMU guest agent setting.
+
+Execution rules:
+
+- `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` is mandatory for remote execution.
+- `endpoint_id` is required when `execute=true`; requests without it fail closed
+  with 422 before a script is rendered or SSH is attempted.
+- The route runs `_gate()` first so `ProxmoxEndpoint.allow_writes=True` is
+  required, then `gate_ssh_access()` so `access_methods="api_ssh"` is required
+  before the pipeline can start `ssh ... bash -s`.
 
 ## Azure VHD Import Pipeline
 

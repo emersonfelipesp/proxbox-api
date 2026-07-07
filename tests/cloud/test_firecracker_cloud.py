@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proxbox_api.firecracker_agent.app import create_firecracker_agent_app
+from proxbox_api.firecracker_agent.client import FirecrackerHostAgentError
 from proxbox_api.routes.cloud import firecracker as firecracker_routes
 from proxbox_api.schemas.firecracker import (
     FirecrackerAssetPrepareResponse,
@@ -31,7 +32,7 @@ def _image() -> FirecrackerImageBundle:
 
 def _request() -> FirecrackerProvisionRequest:
     return FirecrackerProvisionRequest(
-        host_agent_base_url="http://firecracker-host-agent.local",
+        host_agent_base_url="http://93.184.216.34:9090",
         host_agent_token="secret",
         host_id=11,
         host_pool_id=3,
@@ -148,3 +149,76 @@ def test_firecracker_request_rejects_extra_fields():
 
     with pytest.raises(ValueError):
         FirecrackerProvisionRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "host_agent_base_url",
+    [
+        "ftp://93.184.216.34:9090",
+        "http://127.0.0.1:9090",
+        "http://169.254.169.254/latest/meta-data",
+        "http://user:secret@93.184.216.34:9090",
+        "http://93.184.216.34:9090?target=/health",
+    ],
+)
+def test_firecracker_request_rejects_untrusted_host_agent_base_url(
+    host_agent_base_url: str,
+):
+    payload = _request().model_dump(mode="json")
+    payload["host_agent_base_url"] = host_agent_base_url
+
+    with pytest.raises(ValueError, match="host_agent_base_url"):
+        FirecrackerProvisionRequest.model_validate(payload)
+
+
+def test_firecracker_route_rejects_ssrf_host_agent_base_url(auth_test_client, monkeypatch):
+    class ForbiddenHostAgentClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise AssertionError("route must reject SSRF target before creating host-agent client")
+
+    monkeypatch.setattr(
+        firecracker_routes,
+        "FirecrackerHostAgentClient",
+        ForbiddenHostAgentClient,
+    )
+    payload = _request().model_dump(mode="json")
+    payload["host_agent_base_url"] = "http://127.0.0.1:9090"
+
+    response = auth_test_client.post("/cloud/firecracker/provision", json=payload)
+
+    assert response.status_code == 422
+    assert "host_agent_base_url" in response.text
+
+
+@pytest.mark.asyncio
+async def test_firecracker_provision_stream_sanitizes_upstream_error(monkeypatch):
+    class FailingHostAgentClient:
+        def __init__(self, base_url: str, *, token: str | None = None) -> None:
+            self.base_url = base_url
+            self.token = token
+
+        async def health(self) -> FirecrackerHostAgentHealth:
+            raise FirecrackerHostAgentError(
+                "traceback: /var/lib/firecracker/internal.py token=host-secret"
+            )
+
+    monkeypatch.delenv("PROXBOX_EXPOSE_INTERNAL_ERRORS", raising=False)
+    monkeypatch.setattr(
+        firecracker_routes,
+        "FirecrackerHostAgentClient",
+        FailingHostAgentClient,
+    )
+
+    chunks = [
+        chunk
+        async for chunk in firecracker_routes._firecracker_provision_stream_generator(
+            _request(),
+            actor="pytest",
+        )
+    ]
+
+    complete = [chunk for chunk in chunks if "event: complete" in chunk][-1]
+    payload = json.loads(complete.split("data: ", 1)[1])
+    assert payload == {"ok": False, "error": "An unexpected error occurred."}
+    assert "host-secret" not in complete
+    assert "/var/lib/firecracker" not in complete

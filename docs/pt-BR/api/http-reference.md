@@ -105,7 +105,7 @@ Todos os verbos aceitam:
 - `Idempotency-Key` (header, opcional) — janela de cache de 60 segundos por `(endpoint_id, verb, vmid)`. Um segundo POST com a mesma chave retorna o corpo em cache sem re-despachar.
 - `X-Proxbox-Actor` (header, opcional) — rotulo do ator gravado no journal entry do NetBox. Default: `proxbox-api`.
 
-Toda invocacao (sucesso, falha ou no-op) escreve exatamente um journal entry no `VirtualMachine` correspondente do NetBox, resolvido pelo custom field `proxmox_vm_id`.
+Toda invocacao (sucesso, falha ou no-op) escreve exatamente um journal entry no `VirtualMachine` correspondente do NetBox, resolvido pelo custom field `proxmox_vm_id`. Se a escrita do journal falhar, a rota falha fechada em vez de retornar sucesso sem registro de auditoria.
 
 | Method | Path | Proposito |
 |---|---|---|

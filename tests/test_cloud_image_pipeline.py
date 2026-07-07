@@ -6,6 +6,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 
+from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.routes.cloud.catalog import catalog_payload, find_product_version
 from proxbox_api.routes.cloud.template_images import build_pipeline_response
 from proxbox_api.schemas.cloud_provision import (
@@ -13,6 +14,23 @@ from proxbox_api.schemas.cloud_provision import (
     CloudImageProductType,
     CloudImageTemplateBuildRequest,
 )
+
+PUBLIC_IMAGE_URL = "http://93.184.216.34/cloud.qcow2"
+
+
+def _execute_route_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "product_type": "pfsense",
+        "execute": True,
+        "ssh_host": "93.184.216.34",
+        "image_url": PUBLIC_IMAGE_URL,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _fail_if_subprocess_runs(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("cloud image execution must not reach subprocess.run")
 
 
 def test_catalog_exposes_firewall_appliance_products():
@@ -229,3 +247,50 @@ def test_execute_requires_environment_opt_in():
         )
 
     assert exc.value.status_code == 403
+
+
+def test_execute_route_requires_endpoint_id_before_subprocess(auth_test_client, monkeypatch):
+    monkeypatch.setenv("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "true")
+    monkeypatch.setattr(
+        "proxbox_api.routes.cloud.pipeline_scripts.subprocess.run",
+        _fail_if_subprocess_runs,
+    )
+
+    response = auth_test_client.post(
+        "/cloud/templates/images",
+        json=_execute_route_payload(),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "endpoint_id is required when execute=true."
+
+
+def test_execute_route_enforces_allow_writes_before_subprocess(
+    auth_test_client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "true")
+    monkeypatch.setattr(
+        "proxbox_api.routes.cloud.pipeline_scripts.subprocess.run",
+        _fail_if_subprocess_runs,
+    )
+    endpoint = ProxmoxEndpoint(
+        name="pve-write-disabled",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        allow_writes=False,
+        access_methods="api_ssh",
+    )
+    db_session.add(endpoint)
+    db_session.commit()
+    db_session.refresh(endpoint)
+
+    response = auth_test_client.post(
+        "/cloud/templates/images",
+        json=_execute_route_payload(endpoint_id=endpoint.id),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["reason"] == "endpoint_writes_disabled"
+    assert response.json()["endpoint_id"] == endpoint.id

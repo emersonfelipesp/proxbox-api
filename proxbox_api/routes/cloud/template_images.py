@@ -120,11 +120,17 @@ async def build_cloud_image_template(
         or req.user_data_yaml is not None
         or req.product_type in {ProxmoxProductType.pfsense, ProxmoxProductType.opnsense}
     ):
-        # When the pipeline will actually run over SSH against a known endpoint,
-        # enforce the per-endpoint SSH-transport gate (access_methods="api_ssh").
-        # With no endpoint_id there is no endpoint to consult, so the remaining
-        # gates (PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION, PROXBOX_SSH_KEY_DIR) apply.
-        if req.execute and req.endpoint_id is not None:
+        if req.execute:
+            if req.endpoint_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="endpoint_id is required when execute=true.",
+                )
+            gated = await _gate(session, req.endpoint_id)
+            if isinstance(gated, JSONResponse):
+                return gated
+            # Remote execution writes to a Proxmox host over SSH, so enforce both
+            # the write trust gate and the orthogonal SSH-transport gate.
             await gate_ssh_access(session, req.endpoint_id)
         return build_pipeline_response(req)
 

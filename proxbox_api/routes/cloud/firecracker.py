@@ -14,6 +14,7 @@ from proxbox_api.firecracker_agent.client import (
     FirecrackerHostAgentError,
 )
 from proxbox_api.logger import logger
+from proxbox_api.runtime_settings import get_bool
 from proxbox_api.schemas.firecracker import (
     FirecrackerAssetPrepareRequest,
     FirecrackerMicroVMAction,
@@ -31,6 +32,17 @@ _SSE_HEADERS = {
     "X-Accel-Buffering": "no",
     "Connection": "keep-alive",
 }
+
+
+def _stream_error_detail(error: Exception) -> str:
+    if get_bool(
+        settings_key="expose_internal_errors",
+        env="PROXBOX_EXPOSE_INTERNAL_ERRORS",
+        default=False,
+    ):
+        safe = scrub_cloud_init({"e": str(error)}).get("e")
+        return safe if isinstance(safe, str) else "An unexpected error occurred."
+    return "An unexpected error occurred."
 
 
 async def _run_firecracker_provision(
@@ -172,11 +184,14 @@ async def _firecracker_provision_stream_generator(
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001
-            safe = scrub_cloud_init({"e": str(error)})["e"]
+            safe = scrub_cloud_init({"e": str(error)}).get("e")
+            safe_log = safe if isinstance(safe, str) else error.__class__.__name__
             logger.warning(
-                "firecracker provision stream failed microvm=%s: %s", req.microvm_id, safe
+                "firecracker provision stream failed microvm=%s: %s", req.microvm_id, safe_log
             )
-            await queue.put(sse_event("complete", {"ok": False, "error": safe}))
+            await queue.put(
+                sse_event("complete", {"ok": False, "error": _stream_error_detail(error)})
+            )
         else:
             await queue.put(sse_event("complete", response.model_dump(mode="json")))
         finally:

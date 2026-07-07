@@ -2,9 +2,15 @@
 
 from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from proxbox_api.settings_client import get_settings
+from proxbox_api.ssrf import validate_endpoint_url
+
+_HOST_AGENT_ALLOWED_SCHEMES = {"http", "https"}
 
 
 class FirecrackerNetworkMode(str, Enum):
@@ -139,6 +145,28 @@ class FirecrackerProvisionRequest(BaseModel):
     ssh_authorized_keys: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     start_after_provision: bool = True
+
+    @field_validator("host_agent_base_url")
+    @classmethod
+    def validate_host_agent_base_url(cls, value: str) -> str:
+        cleaned = value.strip().rstrip("/")
+        if not cleaned:
+            raise ValueError("host_agent_base_url must be a non-empty URL")
+
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in _HOST_AGENT_ALLOWED_SCHEMES:
+            raise ValueError("host_agent_base_url must use http or https")
+        if not parsed.hostname:
+            raise ValueError("host_agent_base_url must include a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError("host_agent_base_url must not include credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("host_agent_base_url must not include a query string or fragment")
+
+        safe, reason = validate_endpoint_url(cleaned, get_settings())
+        if not safe:
+            raise ValueError(f"host_agent_base_url rejected by SSRF protection: {reason}")
+        return cleaned
 
     @property
     def instance_ref(self) -> str | None:

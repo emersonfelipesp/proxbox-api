@@ -30,6 +30,20 @@ O endpoint sem stream retorna JSON final. O endpoint com stream envia Server-Sen
 
 Ambos usam o middleware normal `X-Proxbox-API-Key`. `X-Proxbox-Actor` e opcional e entra nos metadados enviados ao host-agent.
 
+## Limite de confianca
+
+`nms-backend` deve resolver no NetBox o host Firecracker, pool, imagem e o
+registro `FirecrackerMicroVM` antes de chamar o proxbox-api. A requisicao ainda
+leva `host_agent_base_url` e `host_agent_token` opcional, entao o proxbox-api
+valida a URL antes de qualquer chamada externa: apenas `http` e `https` sao
+aceitos, a URL precisa ter host, credenciais/query/fragmento sao recusados e o
+host precisa passar pelo guard SSRF compartilhado. O token so e encaminhado
+para esse host-agent validado.
+
+A rota SSE retorna `An unexpected error occurred.` por padrao em falhas. Use
+`PROXBOX_EXPOSE_INTERNAL_ERRORS=true` apenas em depuracao confiavel, quando
+detalhes do host-agent puderem ser expostos ao cliente.
+
 ## Eventos SSE
 
 | Evento | Payload |

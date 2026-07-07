@@ -63,6 +63,12 @@ optional `netbox_microvm_id`, `microvm_id`, `name`, optional `tenant_id`,
 `network`, `vcpus`, `memory_mib`, `disk_mib`, `ssh_authorized_keys`,
 `metadata`, and `start_after_provision`.
 
+`host_agent_base_url` is validated before proxbox-api creates the outbound
+host-agent client: it must be `http` or `https`, include a host, omit embedded
+credentials/query/fragment components, and pass the shared SSRF guard. The SSE
+variant returns a generic failure message by default unless
+`PROXBOX_EXPOSE_INTERNAL_ERRORS=true`.
+
 Successful responses return `FirecrackerProvisionResponse` with `ok`,
 `microvm_id`, `instance_ref`, `host_id`, `host_pool_id`, `image_id`, `status`,
 optional `guest_ip`, and optional `detail`.
@@ -204,7 +210,7 @@ All verb routes accept:
 - `Idempotency-Key` (header, optional) — 60-second cache window per `(endpoint_id, verb, vmid)`. A second POST with the same key returns the cached body without re-dispatching.
 - `X-Proxbox-Actor` (header, optional) — actor label written to the NetBox journal entry. Defaults to `proxbox-api`.
 
-Every invocation (success, failure, or no-op) writes exactly one journal entry on the linked NetBox `VirtualMachine` resolved by the `proxmox_vm_id` custom field.
+Every invocation (success, failure, or no-op) writes exactly one journal entry on the linked NetBox `VirtualMachine` resolved by the `proxmox_vm_id` custom field. If the journal write fails, the route fails closed instead of returning a successful verb response without an audit record.
 
 | Method | Path | Purpose |
 |---|---|---|

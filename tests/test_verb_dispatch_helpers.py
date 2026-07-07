@@ -19,9 +19,10 @@ from __future__ import annotations
 import re
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.responses import JSONResponse
 
-from proxbox_api.exception import ProxmoxAPIError
+from proxbox_api.exception import NetBoxAPIError, ProxmoxAPIError
 from proxbox_api.services import verb_dispatch
 
 
@@ -203,15 +204,15 @@ async def test_write_verb_journal_entry_posts_payload():
     assert payload["comments"] == "body"
 
 
-async def test_write_verb_journal_entry_returns_none_on_failure():
+async def test_write_verb_journal_entry_raises_on_failure():
     with patch(
         "proxbox_api.services.verb_dispatch.rest_create_async",
         new=AsyncMock(side_effect=RuntimeError("netbox down")),
     ):
-        entry = await verb_dispatch.write_verb_journal_entry(
-            nb=object(),
-            netbox_vm_id=42,
-            kind="warning",
-            comments="body",
-        )
-    assert entry is None
+        with pytest.raises(NetBoxAPIError, match="Failed to write verb audit journal entry"):
+            await verb_dispatch.write_verb_journal_entry(
+                nb=object(),
+                netbox_vm_id=42,
+                kind="warning",
+                comments="body",
+            )
