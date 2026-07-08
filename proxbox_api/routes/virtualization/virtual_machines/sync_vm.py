@@ -3583,6 +3583,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         ip_payloads: list[dict] = []
         first_ips: list[dict] = []  # Track first IP per VM
         ip_info: dict = {}
+        missing_interface_count = 0  # NICs whose NetBox interface is not present
 
         # Pre-fetch interfaces for this VM to get their IDs
         from proxbox_api.netbox_rest import rest_list_async
@@ -3616,8 +3617,15 @@ async def create_only_vm_ip_addresses(  # noqa: C901
 
                 interface_id = interface_name_to_id.get(resolved_name)
                 if not interface_id:
-                    logger.debug(
-                        "Skipping IP sync for interface %s on VM %s: interface not found in NetBox",
+                    # The IP stage can only attach an IP to a VM interface that
+                    # already exists in NetBox.  Surface this at WARNING (not
+                    # DEBUG) and count it so an IP-only run whose interfaces are
+                    # stale/missing is diagnosable instead of silently
+                    # reconciling nothing.  Run the VM-interface sync first.
+                    missing_interface_count += 1
+                    logger.warning(
+                        "Skipping IP sync for interface %s on VM %s: interface "
+                        "not found in NetBox (run the VM interface sync first)",
                         resolved_name,
                         vm_name,
                     )
@@ -3759,6 +3767,24 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                 },
                             }
                         )
+
+        if missing_interface_count and isinstance(websocket, WebSocketSSEBridge):
+            try:
+                await websocket.emit_phase_summary(
+                    phase="vm-ip-addresses",
+                    skipped=missing_interface_count,
+                    message=(
+                        f"Skipped {missing_interface_count} IP(s) on {vm_name}: "
+                        "their VM interface is not yet in NetBox — run the VM "
+                        "interface sync before (or together with) IP addresses"
+                    ),
+                )
+            except Exception as emit_exc:
+                logger.debug(
+                    "emit_phase_summary failed for missing interfaces on VM %s: %s",
+                    vm_name,
+                    emit_exc,
+                )
 
         return ip_payloads, first_ips, ip_info
 
