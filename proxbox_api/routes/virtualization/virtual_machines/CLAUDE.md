@@ -66,22 +66,21 @@ Main synchronization endpoints for virtual machines and related resources.
   CPU validation/payload building and NetBox dependency calls out of the fetch
   semaphore so pending Proxmox HTTP responses are drained promptly and aiohttp
   wall-clock timeouts do not fire while other slots are doing CPU or NetBox work.
-- **VM lookups are scoped by `(cluster_id, vmid)`, not vmid alone (issue #223).**
-  Proxmox `vmid` is only unique within one cluster, so the same `vmid` can exist
-  on several clusters. The VM snapshot index is keyed by the
-  `(NetBox cluster id, proxmox_vm_id)` tuple
-  (`_build_vm_index_by_proxmox_id`), and interface/IP sync resolve their NetBox
-  VM through `_resolve_vm_from_index_or_unique_vmid` and
-  `_resolve_netbox_virtual_machine_by_proxmox_id`, both of which take a
-  `cluster_id`/`cluster_name`. The NetBox cluster id is resolved by name once
-  per cluster via `resolve_netbox_cluster_id_by_name`
-  (`services/sync/vm_helpers.py`) and memoized in a per-run cache. When the
-  cluster cannot be resolved, the code falls back to a vmid-only lookup **only
-  when it is globally unambiguous** (exactly one NetBox VM matches); an
-  ambiguous vmid is logged and skipped rather than mapped to the wrong VM. This
-  prevents interfaces/IPs from attaching to a same-vmid VM on another cluster
-  and is why the interface-collection loop also filters Proxmox resources by
-  `cluster_name`. Regression coverage: `tests/test_vm_cross_cluster_vmid.py`.
+- **VM lookups are scoped by `(proxmox_endpoint_id, vmid)` first (issue #255).**
+  Proxmox `vmid` values can repeat across standalone endpoints, even when those
+  endpoints have no shared NetBox cluster identity. The VM snapshot index is
+  keyed by `(proxmox_endpoint_id, proxmox_vm_id)` via
+  `_build_vm_index_by_proxmox_id`, and full VM sync, interface sync, IP sync,
+  individual VM sync, and the reconciliation queue all prefer
+  `cf_proxmox_endpoint_id + cf_proxmox_vm_id`. Cluster-scoped matching remains
+  only as legacy fallback when no endpoint id is available. A VMID-only fallback
+  is allowed only for one legacy NetBox VM that has no endpoint id; ambiguous
+  VMIDs are logged and skipped instead of being mapped to the wrong endpoint.
+  Disk and snapshot sync must route config/list calls through the Proxmox
+  session whose endpoint id matches the NetBox VM, so a same-VMID guest on
+  another endpoint cannot supply disks or snapshots. Regression coverage:
+  `tests/test_vm_cross_cluster_vmid.py`, `tests/test_virtual_disks_sync.py`,
+  `tests/test_snapshots_sync.py`, and `tests/reconciliation/test_vm_queue_python.py`.
 - **VM create routes bootstrap NetBox dependencies before writing.** The
   `/create`, `/{netbox_vm_id}/create`, `/create/stream`, and
   `/{netbox_vm_id}/create/stream` handlers attach the

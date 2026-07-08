@@ -1165,9 +1165,9 @@ def test_vm_only_ip_sync_surfaces_missing_interface_skip(monkeypatch):
         if event == "phase_summary":
             summaries.append(payload)
 
-    assert any(
-        (s.get("result") or {}).get("skipped") for s in summaries
-    ), f"expected a phase_summary with a non-zero skip count, got {summaries!r}"
-    assert any(
-        "interface" in str(s.get("message", "")).lower() for s in summaries
-    ), f"expected the skip message to mention the missing interface, got {summaries!r}"
+    assert any((s.get("result") or {}).get("skipped") for s in summaries), (
+        f"expected a phase_summary with a non-zero skip count, got {summaries!r}"
+    )
+    assert any("interface" in str(s.get("message", "")).lower() for s in summaries), (
+        f"expected the skip message to mention the missing interface, got {summaries!r}"
+    )

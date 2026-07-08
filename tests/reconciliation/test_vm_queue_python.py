@@ -19,6 +19,7 @@ def _prepared_vm(
     memory: object = 2048,
     tags: list[object] | None = None,
     custom_fields: dict[str, object] | None = None,
+    endpoint_id: int = 500,
     role: object = 20,
     description: str | None = "Synced from Proxmox node pve01",
 ) -> PreparedVMState:
@@ -35,7 +36,11 @@ def _prepared_vm(
         "custom_fields": (
             custom_fields
             if custom_fields is not None
-            else {"proxmox_vm_id": vmid, "proxmox_vm_type": vm_type}
+            else {
+                "proxmox_endpoint_id": endpoint_id,
+                "proxmox_vm_id": vmid,
+                "proxmox_vm_type": vm_type,
+            }
         ),
         "description": description,
     }
@@ -45,7 +50,7 @@ def _prepared_vm(
         vm_config={},
         vm_config_obj=ProxmoxVmConfigInput.model_validate({}),
         desired_payload=desired_payload,
-        lookup={"cf_proxmox_vm_id": vmid, "cluster_id": 1},
+        lookup={"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": endpoint_id},
         now=datetime.now(timezone.utc),
         vm_type=vm_type,
     )
@@ -61,6 +66,7 @@ def _snapshot_vm(
     memory: object = 2048,
     tags: list[object] | None = None,
     custom_fields: dict[str, object] | None = None,
+    endpoint_id: int = 500,
     role: object = 20,
     description: str | None = "Synced from Proxmox node pve01",
     include_virtual_machine_type: bool = True,
@@ -68,6 +74,7 @@ def _snapshot_vm(
 ) -> dict[str, object]:
     if custom_fields is None:
         custom_fields = {}
+        custom_fields["proxmox_endpoint_id"] = endpoint_id
         if vmid is not None:
             custom_fields["proxmox_vm_id"] = vmid
         if vm_type is not None:
@@ -104,12 +111,12 @@ def _queue(
     return build_vm_operation_queue_python(prepared, snapshot, **flags)
 
 
-def test_missing_cluster_in_desired_payload_creates() -> None:
+def test_missing_cluster_in_desired_payload_matches_by_endpoint() -> None:
     prepared = [_prepared_vm(cluster=None)]
 
     queue = _queue(prepared, [_snapshot_vm()])
 
-    assert [op.method for op in queue] == ["CREATE"]
+    assert [op.method for op in queue] == ["GET"]
 
 
 def test_missing_proxmox_vmid_in_netbox_record_creates() -> None:
@@ -243,6 +250,22 @@ def test_qemu_vm_and_lxc_container_with_same_vmid_in_same_cluster_do_not_collide
     assert [op.existing_record["id"] for op in queue if op.existing_record] == [3001, 3002]
 
 
+def test_same_vmid_on_different_endpoints_does_not_collide() -> None:
+    prepared = [
+        _prepared_vm(vmid=100, endpoint_id=1, name="qemu-100"),
+        _prepared_vm(vmid=100, endpoint_id=2, name="qemu-100"),
+    ]
+    snapshot = [
+        _snapshot_vm(record_id=4001, vmid=100, endpoint_id=1, name="qemu-100"),
+        _snapshot_vm(record_id=4002, vmid=100, endpoint_id=2, name="qemu-100"),
+    ]
+
+    queue = _queue(prepared, snapshot)
+
+    assert [op.method for op in queue] == ["GET", "GET"]
+    assert [op.existing_record["id"] for op in queue if op.existing_record] == [4001, 4002]
+
+
 def test_int_and_float_memory_values_do_not_create_spurious_diff() -> None:
     prepared = [_prepared_vm(vmid=111, memory=2048)]
     snapshot = [_snapshot_vm(record_id=2111, vmid=111, name="qemu-111", memory=2048.0)]
@@ -297,6 +320,7 @@ def test_untyped_snapshot_record_matches_only_when_unambiguous() -> None:
     assert [op.method for op in queue] == ["UPDATE"]
     assert queue[0].existing_record and queue[0].existing_record["id"] == 2115
     assert queue[0].patch_payload["custom_fields"] == {
+        "proxmox_endpoint_id": 500,
         "proxmox_vm_id": 115,
         "proxmox_vm_type": "qemu",
     }

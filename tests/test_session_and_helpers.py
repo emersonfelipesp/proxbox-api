@@ -1538,6 +1538,7 @@ def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
                         "count": 1,
                         "results": [
                             {
+                                "id": 44,
                                 "ip_address": {"address": "10.0.0.10/24"},
                                 "domain": "pve.local",
                                 "port": 8006,
@@ -1559,6 +1560,7 @@ def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
 
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"
+    assert sessions[0].db_endpoint_id == 44
 
 
 def test_get_raw_netbox_session_closes_database_session(monkeypatch):

@@ -285,6 +285,7 @@ def _parse_netbox_endpoint(
         retry_backoff=float(raw_retry_backoff)
         if raw_retry_backoff is not None
         else settings.get("proxmox_retry_backoff"),  # type: ignore[arg-type]
+        db_endpoint_id=_netbox_field(endpoint, "id"),
         **_relation_metadata(endpoint, "site"),
         **_relation_metadata(endpoint, "tenant"),
     )

@@ -37,6 +37,7 @@ from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     normalize_current_virtual_machine_payload,
 )
+from proxbox_api.services.sync.vmid_helpers import normalize_positive_int
 
 
 async def ensure_vm_dependencies(
@@ -289,6 +290,7 @@ async def create_or_update_virtual_machine(
     netbox_version = await detect_netbox_version(netbox_session)
     supports_vm_type = supports_virtual_machine_type(netbox_version)
     resolved_virtual_machine_type_id = virtual_machine_type_id if supports_vm_type else None
+    endpoint_lookup_id = normalize_positive_int(endpoint_id)
 
     payload = build_netbox_virtual_machine_payload(
         proxmox_resource=proxmox_resource,
@@ -309,8 +311,13 @@ async def create_or_update_virtual_machine(
         netbox_session,
         "/api/virtualization/virtual-machines/",
         lookup={
-            "cf_proxmox_vm_id": vmid_int,
-            "cluster_id": cluster_id,
+            key: value
+            for key, value in {
+                "cf_proxmox_vm_id": vmid_int,
+                "cf_proxmox_endpoint_id": endpoint_lookup_id,
+                "cluster_id": cluster_id if endpoint_lookup_id is None else None,
+            }.items()
+            if value is not None
         },
         payload=payload,
         schema=NetBoxVirtualMachineCreateBody,
@@ -324,6 +331,7 @@ async def create_or_update_virtual_machine(
             record,
             supports_virtual_machine_type_field=supports_vm_type,
         ),
+        strict_lookup=True,
     )
 
     logger.debug("Created/updated virtual machine: %s", virtual_machine)

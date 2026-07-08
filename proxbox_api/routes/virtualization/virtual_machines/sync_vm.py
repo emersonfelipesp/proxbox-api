@@ -133,6 +133,10 @@ from proxbox_api.services.sync.vm_helpers import (
 from proxbox_api.services.sync.vm_helpers import (
     to_mapping as _to_mapping,
 )
+from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_endpoint_id,
+    extract_proxmox_session_endpoint_id,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
@@ -158,6 +162,44 @@ class _VMPreparationContext:
     endpoint_id_by_cluster: dict[str, int]
     resolve_vm_type: Callable[[str], Awaitable[object | None]]
     resolve_vm_proxmox_tag_ids: Callable[[str, dict[str, object]], Awaitable[list[int]]]
+
+
+def _vm_identity_lookup(
+    *,
+    vmid: object,
+    endpoint_id: int | None,
+    cluster_id: int | None,
+) -> dict[str, object]:
+    """Build the safest available NetBox lookup for a Proxmox VM."""
+    lookup: dict[str, object] = {"cf_proxmox_vm_id": int(vmid)}
+    if endpoint_id is not None:
+        lookup["cf_proxmox_endpoint_id"] = endpoint_id
+    elif cluster_id is not None:
+        lookup["cluster_id"] = cluster_id
+    return lookup
+
+
+def _endpoint_id_by_cluster_names(
+    pxs: object,
+    cluster_status: list[object] | None,
+) -> dict[str, int]:
+    """Map observed cluster/node names to the Proxmox endpoint id for the run."""
+    endpoint_id_by_cluster: dict[str, int] = {}
+    for px, cluster in zip(list(pxs or []), cluster_status or []):
+        endpoint_id = extract_proxmox_session_endpoint_id(px)
+        if endpoint_id is None:
+            continue
+        names = {
+            getattr(cluster, "name", None),
+            getattr(px, "name", None),
+            getattr(px, "cluster_name", None),
+            getattr(px, "node_name", None),
+        }
+        for name in names:
+            name_text = str(name or "").strip()
+            if name_text:
+                endpoint_id_by_cluster[name_text] = endpoint_id
+    return endpoint_id_by_cluster
 
 
 def _cluster_dependency_site_id(cluster_dependencies: dict[str, object]) -> int | None:
@@ -280,10 +322,13 @@ async def _prepare_vm_from_config(  # noqa: C901
         parse_description_metadata=context.behavior_flags.parse_description_metadata,
         overwrite_flags=context.effective_vm_overwrite_flags,
     )
-    lookup = {
-        "cf_proxmox_vm_id": int(resource.get("vmid")),
-        "cluster_id": int(getattr(cluster, "id", 0) or 0),
-    }
+    cluster_id = int(getattr(cluster, "id", 0) or 0) or None
+    endpoint_id = context.endpoint_id_by_cluster.get(str(cluster_name))
+    lookup = _vm_identity_lookup(
+        vmid=resource.get("vmid"),
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+    )
 
     return _PreparedVMState(
         cluster_name=str(cluster_name),
@@ -382,21 +427,16 @@ async def _load_netbox_virtual_machine_snapshot(
 def _build_vm_index_by_proxmox_id(
     snapshot: list[dict[str, object]],
 ) -> dict[tuple[int, int], dict[str, object]]:
-    """Index a VM snapshot by ``(cluster_id, cf_proxmox_vm_id)`` for O(1) lookup."""
+    """Index a VM snapshot by ``(proxmox_endpoint_id, proxmox_vm_id)``."""
     index: dict[tuple[int, int], dict[str, object]] = {}
     for vm in snapshot:
-        cluster_id = _relation_id(vm.get("cluster"))
-        if cluster_id is None:
+        endpoint_id = extract_proxmox_endpoint_id(vm)
+        if endpoint_id is None:
             continue
-        custom_fields = vm.get("custom_fields")
-        if not isinstance(custom_fields, dict):
+        vmid = _extract_proxmox_vmid_from_vm_record(vm)
+        if vmid is None:
             continue
-        try:
-            vmid = int(custom_fields.get("proxmox_vm_id") or 0)
-        except (TypeError, ValueError):
-            continue
-        if vmid:
-            index[(cluster_id, vmid)] = vm
+        index.setdefault((endpoint_id, vmid), vm)
     return index
 
 
@@ -449,21 +489,39 @@ def _resolve_vm_from_index_or_unique_vmid(
     vm_index: dict[tuple[int, int], dict[str, object]],
     candidates_by_vmid: dict[int, list[dict[str, object]]],
     *,
-    cluster_id: int | None,
+    endpoint_id: int | None,
     raw_vmid: object,
     cluster_name: str,
     sync_context: str,
 ) -> dict[str, object] | None:
-    """Resolve a VM by scoped key first, then by unique vmid-only fallback."""
+    """Resolve a VM by endpoint-scoped key, with legacy fallback only when safe."""
     try:
         vmid = int(str(raw_vmid).strip())
     except (TypeError, ValueError):
         return None
 
-    if cluster_id is not None:
-        scoped_vm = vm_index.get((cluster_id, vmid))
+    if endpoint_id is not None:
+        scoped_vm = vm_index.get((endpoint_id, vmid))
         if scoped_vm is not None:
             return scoped_vm
+
+        legacy_candidates = [
+            candidate
+            for candidate in candidates_by_vmid.get(vmid, [])
+            if extract_proxmox_endpoint_id(candidate) is None
+        ]
+        if len(legacy_candidates) == 1:
+            return legacy_candidates[0]
+        if legacy_candidates or candidates_by_vmid.get(vmid):
+            logger.warning(
+                "Skipping VM %s sync for endpoint_id=%s cluster=%s vmid=%s: "
+                "no unambiguous endpoint-scoped NetBox VM match",
+                sync_context,
+                endpoint_id,
+                cluster_name or "unknown",
+                vmid,
+            )
+        return None
 
     return _select_unique_vm_candidate_by_vmid(
         candidates_by_vmid,
@@ -530,7 +588,12 @@ async def _resolve_vm_names_pre_pass(
     the bare name; subsequent VMs receive ``" (2)"``, ``" (3)"``, ...
     """
 
-    typed_vm_index, untyped_vm_candidates = _build_vm_snapshot_identity_indexes(netbox_snapshot)
+    (
+        endpoint_typed_vm_index,
+        endpoint_untyped_vm_candidates,
+        cluster_typed_vm_index,
+        cluster_untyped_vm_candidates,
+    ) = _build_vm_snapshot_identity_indexes(netbox_snapshot)
     cluster_used_names: dict[int, set[str]] = {}
     cluster_no_id_used_names: set[str] = set()
     for record in netbox_snapshot:
@@ -571,10 +634,13 @@ async def _resolve_vm_names_pre_pass(
                 vmid = 0
             existing = _select_existing_vm_record(
                 prepared=prepared,
+                endpoint_id=extract_proxmox_endpoint_id(prepared.desired_payload),
                 cluster_id=cluster_id,
                 proxmox_vmid=vmid or None,
-                typed_index=typed_vm_index,
-                untyped_candidates=untyped_vm_candidates,
+                endpoint_typed_index=endpoint_typed_vm_index,
+                endpoint_untyped_candidates=endpoint_untyped_vm_candidates,
+                cluster_typed_index=cluster_typed_vm_index,
+                cluster_untyped_candidates=cluster_untyped_vm_candidates,
             )
             if existing is not None:
                 existing_name = existing.get("name")
@@ -598,10 +664,13 @@ async def _resolve_vm_names_pre_pass(
 
             existing = _select_existing_vm_record(
                 prepared=prepared,
+                endpoint_id=extract_proxmox_endpoint_id(prepared.desired_payload),
                 cluster_id=cluster_id,
                 proxmox_vmid=vmid,
-                typed_index=typed_vm_index,
-                untyped_candidates=untyped_vm_candidates,
+                endpoint_typed_index=endpoint_typed_vm_index,
+                endpoint_untyped_candidates=endpoint_untyped_vm_candidates,
+                cluster_typed_index=cluster_typed_vm_index,
+                cluster_untyped_candidates=cluster_untyped_vm_candidates,
             )
             resolution = await resolve_unique_vm_name(
                 None,
@@ -839,8 +908,10 @@ def _filter_cluster_resources_for_vm(  # noqa: C901
     *,
     vm_name: str,
     proxmox_vm_id: int | None,
-    cluster_name: str | None,
-    cluster_id: int | None,
+    endpoint_id: int | None = None,
+    endpoint_id_by_cluster: dict[str, int] | None = None,
+    cluster_name: str | None = None,
+    cluster_id: int | None = None,
 ) -> list[dict]:
     """Filter cluster resources to find VM matching name and/or ID criteria.
 
@@ -868,6 +939,10 @@ def _filter_cluster_resources_for_vm(  # noqa: C901
             cluster_key_str = str(cluster_key)
             if cluster_hint and cluster_key_str.strip().lower() != cluster_hint:
                 continue
+            if endpoint_id is not None and endpoint_id_by_cluster:
+                cluster_endpoint_id = endpoint_id_by_cluster.get(cluster_key_str)
+                if cluster_endpoint_id is not None and cluster_endpoint_id != endpoint_id:
+                    continue
             selected = []
             for resource in resources:
                 if not isinstance(resource, dict):
@@ -1061,10 +1136,11 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
     netbox_session: NetBoxSessionDep,
     proxmox_vm_id: int | str | None,
     *,
+    endpoint_id: int | None = None,
     cluster_id: int | None = None,
     cluster_name: str | None = None,
 ) -> dict[str, object] | None:
-    """Resolve the NetBox VM row for a Proxmox VM ID, scoped by NetBox cluster when possible."""
+    """Resolve the NetBox VM row for a Proxmox VM ID, scoped by endpoint when possible."""
     if proxmox_vm_id is None:
         return None
 
@@ -1073,17 +1149,20 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
     except (TypeError, ValueError):
         return None
 
+    resolved_endpoint_id = endpoint_id
     resolved_cluster_id = cluster_id
-    if resolved_cluster_id is None and cluster_name:
+    if resolved_endpoint_id is None and resolved_cluster_id is None and cluster_name:
         resolved_cluster_id = await resolve_netbox_cluster_id_by_name(netbox_session, cluster_name)
 
     query: dict[str, object] = {"cf_proxmox_vm_id": vmid}
-    if resolved_cluster_id is not None:
+    if resolved_endpoint_id is not None:
+        query["cf_proxmox_endpoint_id"] = resolved_endpoint_id
+    elif resolved_cluster_id is not None:
         query["cluster_id"] = resolved_cluster_id
     else:
         logger.warning(
-            "Resolving NetBox VM by Proxmox VMID %s without cluster scope; "
-            "caller did not provide a resolvable cluster",
+            "Resolving NetBox VM by Proxmox VMID %s without endpoint or cluster scope; "
+            "caller did not provide a resolvable endpoint or cluster",
             proxmox_vm_id,
         )
 
@@ -1097,8 +1176,9 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
         error_detail = getattr(exc, "detail", str(exc))
         error_msg = f"{type(exc).__name__}: {error_detail}"
         logger.warning(
-            "Could not resolve NetBox VM for Proxmox VMID %s cluster_id=%s: %s",
+            "Could not resolve NetBox VM for Proxmox VMID %s endpoint_id=%s cluster_id=%s: %s",
             proxmox_vm_id,
+            resolved_endpoint_id,
             resolved_cluster_id,
             error_msg,
         )
@@ -1107,9 +1187,9 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
     if not virtual_machines:
         return None
 
-    if resolved_cluster_id is None and len(virtual_machines) > 1:
+    if resolved_endpoint_id is None and resolved_cluster_id is None and len(virtual_machines) > 1:
         logger.warning(
-            "ambiguous vmid across clusters: proxmox_vm_id=%s matched %s NetBox VMs",
+            "ambiguous vmid across endpoints/clusters: proxmox_vm_id=%s matched %s NetBox VMs",
             proxmox_vm_id,
             len(virtual_machines),
         )
@@ -1427,6 +1507,7 @@ async def _create_virtual_machine_by_netbox_id(
     vm_name = str(vm_data.get("name", "")).strip()
     vm_cluster_name = _relation_name(vm_data.get("cluster"))
     vm_cluster_id = _relation_id(vm_data.get("cluster"))
+    vm_endpoint_id = extract_proxmox_endpoint_id(vm_data)
     cf = vm_data.get("custom_fields")
     proxmox_vm_id = None
     if isinstance(cf, dict):
@@ -1454,6 +1535,8 @@ async def _create_virtual_machine_by_netbox_id(
         cluster_resources,
         vm_name=vm_name,
         proxmox_vm_id=proxmox_vm_id,
+        endpoint_id=vm_endpoint_id,
+        endpoint_id_by_cluster=_endpoint_id_by_cluster_names(pxs, cluster_status),
         cluster_name=vm_cluster_name,
         cluster_id=vm_cluster_id,
     )
@@ -1750,7 +1833,7 @@ async def create_virtual_machines(  # noqa: C901
     # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link,
     # and a parallel mapping to the ProxmoxEndpoint DB ID for the console access custom field.
     proxmox_url_by_cluster: dict[str, str] = {}
-    endpoint_id_by_cluster: dict[str, int] = {}
+    endpoint_id_by_cluster = _endpoint_id_by_cluster_names(pxs, cluster_status)
     px_by_cluster: dict[str, object] = {}
     for px, cs in zip(pxs, cluster_status):
         cluster_n = getattr(cs, "name", None) or getattr(px, "cluster_name", None)
@@ -1758,11 +1841,15 @@ async def create_virtual_machines(  # noqa: C901
         px_port = getattr(px, "http_port", 8006)
         if cluster_n and px_domain:
             proxmox_url_by_cluster[str(cluster_n)] = f"https://{px_domain}:{px_port}"
-        if cluster_n:
-            px_by_cluster[str(cluster_n)] = px
-            px_db_endpoint_id = getattr(px, "db_endpoint_id", None)
-            if px_db_endpoint_id is not None:
-                endpoint_id_by_cluster[str(cluster_n)] = int(px_db_endpoint_id)
+        for px_name in {
+            cluster_n,
+            getattr(px, "name", None),
+            getattr(px, "cluster_name", None),
+            getattr(px, "node_name", None),
+        }:
+            px_name_text = str(px_name or "").strip()
+            if px_name_text:
+                px_by_cluster[px_name_text] = px
 
     # Per-cluster color-map cache: fetched once on first VM that needs it.
     tag_color_map_by_cluster: dict[str, dict[str, str]] = {}
@@ -2070,13 +2157,21 @@ async def create_virtual_machines(  # noqa: C901
 
         fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
 
-        async def _fetch_with_limit(resource: dict[str, object]) -> dict[str, object]:
+        async def _fetch_with_limit(
+            cluster_name: str,
+            resource: dict[str, object],
+        ) -> dict[str, object]:
             async with fetch_semaphore:
-                return await _fetch_vm_config_only(pxs=pxs, resource=resource)
+                cluster_px = px_by_cluster.get(str(cluster_name))
+                fetch_pxs = [cluster_px] if cluster_px is not None else pxs
+                return await _fetch_vm_config_only(pxs=fetch_pxs, resource=resource)
 
         fetch_t0 = time.perf_counter()
         fetch_results = await asyncio.gather(
-            *[_fetch_with_limit(resource) for _, resource in operation_inputs],
+            *[
+                _fetch_with_limit(cluster_name, resource)
+                for cluster_name, resource in operation_inputs
+            ],
             return_exceptions=True,
         )
         fetch_ms = (time.perf_counter() - fetch_t0) * 1000
@@ -2450,10 +2545,11 @@ async def create_virtual_machines(  # noqa: C901
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            lookup={
-                "cf_proxmox_vm_id": int(resource.get("vmid")),
-                "cluster_id": int(getattr(cluster, "id", 0) or 0),
-            },
+            lookup=_vm_identity_lookup(
+                vmid=resource.get("vmid"),
+                endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
+                cluster_id=int(getattr(cluster, "id", 0) or 0) or None,
+            ),
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=vm_patchable_fields,
@@ -2461,6 +2557,7 @@ async def create_virtual_machines(  # noqa: C901
                 record,
                 supports_virtual_machine_type_field=supports_vm_type,
             ),
+            strict_lookup=True,
         )
 
         await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
@@ -2943,10 +3040,12 @@ async def create_only_vm_interfaces(  # noqa: C901
     vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
     vm_candidates_by_vmid = _build_vm_candidates_by_proxmox_id(vm_snapshot)
     cluster_id_cache = _build_cluster_id_cache_from_vm_snapshot(vm_snapshot)
+    endpoint_id_by_cluster = _endpoint_id_by_cluster_names(pxs, cluster_status)
 
     async def _sync_vm_interfaces(  # noqa: C901
         cluster_name: str,
         cluster_id: int | None,
+        endpoint_id: int | None,
         resource: dict,
     ) -> tuple[list[dict], dict]:
         """Collect interface payloads for a single VM. Returns (payloads, interface_info_dict)."""
@@ -2977,7 +3076,7 @@ async def create_only_vm_interfaces(  # noqa: C901
         netbox_vm = _resolve_vm_from_index_or_unique_vmid(
             vm_index,
             vm_candidates_by_vmid,
-            cluster_id=cluster_id,
+            endpoint_id=endpoint_id,
             raw_vmid=vmid,
             cluster_name=cluster_name_str,
             sync_context="interface",
@@ -3006,7 +3105,7 @@ async def create_only_vm_interfaces(  # noqa: C901
         try:
             if proxmox_session and resource_node:
                 vm_config_result = get_vm_config(
-                    pxs=pxs,
+                    pxs=[proxmox_session],
                     node=resource_node,
                     type=vm_type,
                     vmid=int(vmid),
@@ -3134,10 +3233,11 @@ async def create_only_vm_interfaces(  # noqa: C901
     async def _run_task(
         cluster_name: str,
         cluster_id: int | None,
+        endpoint_id: int | None,
         resource: dict,
     ) -> tuple[list[dict], dict]:
         async with semaphore:
-            return await _sync_vm_interfaces(cluster_name, cluster_id, resource)
+            return await _sync_vm_interfaces(cluster_name, cluster_id, endpoint_id, resource)
 
     async def _create_cluster_tasks(cluster: dict) -> list:
         tasks = []
@@ -3147,9 +3247,10 @@ async def create_only_vm_interfaces(  # noqa: C901
                 str(cluster_name),
                 cache=cluster_id_cache,
             )
+            endpoint_id = endpoint_id_by_cluster.get(str(cluster_name))
             for resource in resources:
                 if resource.get("type") in ("qemu", "lxc"):
-                    tasks.append(_run_task(cluster_name, cluster_id, resource))
+                    tasks.append(_run_task(cluster_name, cluster_id, endpoint_id, resource))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     # Collect all interface payloads and metadata from all VMs
@@ -3495,10 +3596,12 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
     vm_candidates_by_vmid = _build_vm_candidates_by_proxmox_id(vm_snapshot)
     cluster_id_cache = _build_cluster_id_cache_from_vm_snapshot(vm_snapshot)
+    endpoint_id_by_cluster = _endpoint_id_by_cluster_names(pxs, cluster_status)
 
     async def _sync_vm_ips(
         cluster_name: str,
         cluster_id: int | None,
+        endpoint_id: int | None,
         resource: dict,
     ) -> tuple[list[dict], list[dict], dict]:  # noqa: C901
         """Collect IP payloads for a single VM. Returns (ip_payloads, first_ip_per_vm, ip_info)."""
@@ -3514,7 +3617,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         netbox_vm = _resolve_vm_from_index_or_unique_vmid(
             vm_index,
             vm_candidates_by_vmid,
-            cluster_id=cluster_id,
+            endpoint_id=endpoint_id,
             raw_vmid=vmid,
             cluster_name=cluster_name_str,
             sync_context="IP address",
@@ -3543,7 +3646,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         try:
             if proxmox_session and resource_node:
                 vm_config_result = get_vm_config(
-                    pxs=pxs,
+                    pxs=[proxmox_session],
                     node=resource_node,
                     type=vm_type,
                     vmid=int(vmid),
@@ -3794,10 +3897,11 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     async def _run_task(
         cluster_name: str,
         cluster_id: int | None,
+        endpoint_id: int | None,
         resource: dict,
     ) -> tuple[list[dict], list[dict], dict]:
         async with semaphore:
-            return await _sync_vm_ips(cluster_name, cluster_id, resource)
+            return await _sync_vm_ips(cluster_name, cluster_id, endpoint_id, resource)
 
     async def _create_cluster_tasks(cluster: dict) -> list:
         tasks = []
@@ -3807,9 +3911,10 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 str(cluster_name),
                 cache=cluster_id_cache,
             )
+            endpoint_id = endpoint_id_by_cluster.get(str(cluster_name))
             for resource in resources:
                 if resource.get("type") in ("qemu", "lxc"):
-                    tasks.append(_run_task(cluster_name, cluster_id, resource))
+                    tasks.append(_run_task(cluster_name, cluster_id, endpoint_id, resource))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     # Collect all IP payloads and metadata from all VMs

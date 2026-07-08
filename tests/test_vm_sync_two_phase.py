@@ -188,7 +188,7 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     assert prepared.resource is resource
     assert prepared.vm_config is vm_config
     assert prepared.vm_config_obj.qemu_agent_enabled is True
-    assert prepared.lookup == {"cf_proxmox_vm_id": 101, "cluster_id": 11}
+    assert prepared.lookup == {"cf_proxmox_vm_id": 101, "cf_proxmox_endpoint_id": 1}
     assert prepared.desired_payload["custom_fields"]["proxmox_vm_id"] == 101
     assert captured_payload_kwargs["proxmox_resource"] is resource
     assert captured_payload_kwargs["proxmox_config"] is vm_config
