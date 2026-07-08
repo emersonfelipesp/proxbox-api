@@ -1077,3 +1077,97 @@ def test_agent_kv_flag_enabled_calls_guest_agent_fetch(monkeypatch):
     )
 
     assert len(guest_agent_calls) == 1, "Guest agent must be fetched when agent KV flag head is '1'"
+
+
+def test_vm_only_ip_sync_surfaces_missing_interface_skip(monkeypatch):
+    """When a NIC's interface is absent from NetBox the IP is skipped visibly.
+
+    Regression: the skip used to be an invisible ``logger.debug`` + ``continue``,
+    so an IP-only run whose interfaces were stale/missing reconciled no IPs with
+    no error. It must now emit a ``phase_summary`` with a non-zero skip count.
+    """
+    from proxbox_api.utils.streaming import WebSocketSSEBridge
+
+    data = _vm_sync_inputs(
+        {
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+        }
+    )
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return data["vm_config"]
+
+    async def _fake_bulk_reconcile_ips(nb, payloads, **_kwargs):
+        return []
+
+    async def _fake_rest_list(*args, **kwargs):
+        # NetBox has an interface for this VM, but under a different name than
+        # the Proxmox NIC (net0) resolves to — so the IP cannot be attached.
+        return [{"id": 66, "name": "some-other-iface", "virtual_machine": 55}]
+
+    async def _fake_rest_first(*args, **kwargs):
+        return None
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        _fake_get_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
+    )
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _fake_rest_list)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_rest_first)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile_ips,
+    )
+
+    bridge = WebSocketSSEBridge()
+
+    result = asyncio.run(
+        create_only_vm_ip_addresses(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            websocket=bridge,
+            use_websocket=True,
+        )
+    )
+
+    # No IP could be attached because the interface was missing.
+    assert result == []
+
+    # Drain the bridge queue and confirm a phase summary surfaced the skip.
+    summaries: list[dict] = []
+    while not bridge._queue.empty():
+        item = bridge._queue.get_nowait()
+        if item is None:
+            continue
+        event, payload = item
+        if event == "phase_summary":
+            summaries.append(payload)
+
+    assert any(
+        (s.get("result") or {}).get("skipped") for s in summaries
+    ), f"expected a phase_summary with a non-zero skip count, got {summaries!r}"
+    assert any(
+        "interface" in str(s.get("message", "")).lower() for s in summaries
+    ), f"expected the skip message to mention the missing interface, got {summaries!r}"

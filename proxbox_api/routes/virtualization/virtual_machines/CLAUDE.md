@@ -178,6 +178,19 @@ Main synchronization endpoints for virtual machines and related resources.
   NIC config entries. Regression coverage:
   `tests/test_vm_network_config_parsing.py`.
 
+- **IP sync requires the interface to already exist; missing ones are surfaced.**
+  `_sync_vm_ips` attaches an IP only to a VM interface that already exists in
+  NetBox (looked up by resolved name in `interface_name_to_id`). When the
+  interface is absent it increments a per-VM `missing_interface_count`, logs a
+  **WARNING** (not DEBUG), and — on an SSE run — emits a
+  `emit_phase_summary(phase="vm-ip-addresses", skipped=N, …)` so an IP-only sync
+  whose interfaces are stale/missing is diagnosable instead of silently
+  reconciling nothing. The interface stage (`create_only_vm_interfaces`) does
+  **not** create IPs, so the IP stage depends on the interface stage having run
+  first; the `netbox-proxbox` plugin now auto-runs the VM-interface stage before
+  the IP-address stage. Coverage:
+  `tests/test_qemu_guest_agent_sync.py::test_vm_only_ip_sync_surfaces_missing_interface_skip`.
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.
