@@ -11,7 +11,13 @@ from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 
 
-def _prepared_vm(*, cluster_name: str, vmid: int, memory: int) -> sync_vm._PreparedVMState:
+def _prepared_vm(
+    *,
+    cluster_name: str,
+    vmid: int,
+    memory: int,
+    endpoint_id: int = 500,
+) -> sync_vm._PreparedVMState:
     desired_payload = {
         "name": f"vm-{vmid}",
         "status": "active",
@@ -22,7 +28,10 @@ def _prepared_vm(*, cluster_name: str, vmid: int, memory: int) -> sync_vm._Prepa
         "memory": memory,
         "disk": 30,
         "tags": [99],
-        "custom_fields": {"proxmox_vm_id": vmid},
+        "custom_fields": {
+            "proxmox_endpoint_id": endpoint_id,
+            "proxmox_vm_id": vmid,
+        },
         "description": "Synced from Proxmox node pve01",
     }
     return sync_vm._PreparedVMState(
@@ -31,7 +40,7 @@ def _prepared_vm(*, cluster_name: str, vmid: int, memory: int) -> sync_vm._Prepa
         vm_config={},
         vm_config_obj=ProxmoxVmConfigInput.model_validate({}),
         desired_payload=desired_payload,
-        lookup={"cf_proxmox_vm_id": vmid, "cluster_id": 1},
+        lookup={"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": endpoint_id},
         now=datetime.now(timezone.utc),
         vm_type="qemu",
     )
@@ -56,7 +65,7 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_vm_id": 102},
+            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 102},
             "description": "Synced from Proxmox node pve01",
         },
         {
@@ -70,7 +79,7 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
             "memory": 2048,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_vm_id": 103},
+            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 103},
             "description": "Synced from Proxmox node pve01",
         },
     ]
@@ -79,6 +88,57 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
 
     assert [op.method for op in queue] == ["CREATE", "GET", "UPDATE"]
     assert queue[2].patch_payload["memory"] == 8192
+
+
+def test_build_vm_operation_queue_keeps_same_vmid_endpoints_separate():
+    prepared = [
+        _prepared_vm(cluster_name="standalone-a", vmid=105, memory=2048, endpoint_id=1),
+        _prepared_vm(cluster_name="standalone-b", vmid=105, memory=2048, endpoint_id=2),
+    ]
+
+    snapshot = [
+        {
+            "id": 5105,
+            "name": "vm-105-a",
+            "status": "active",
+            "cluster": {"id": 1, "name": "standalone-a"},
+            "device": {"id": 10},
+            "role": {"id": 20},
+            "vcpus": 2,
+            "memory": 2048,
+            "disk": 30,
+            "tags": [{"id": 99}],
+            "custom_fields": {
+                "proxmox_endpoint_id": 1,
+                "proxmox_vm_id": 105,
+                "proxmox_vm_type": "qemu",
+            },
+            "description": "Synced from Proxmox node pve01",
+        },
+        {
+            "id": 5205,
+            "name": "vm-105-b",
+            "status": "active",
+            "cluster": {"id": 1, "name": "standalone-b"},
+            "device": {"id": 10},
+            "role": {"id": 20},
+            "vcpus": 2,
+            "memory": 2048,
+            "disk": 30,
+            "tags": [{"id": 99}],
+            "custom_fields": {
+                "proxmox_endpoint_id": 2,
+                "proxmox_vm_id": 105,
+                "proxmox_vm_type": "qemu",
+            },
+            "description": "Synced from Proxmox node pve01",
+        },
+    ]
+
+    queue = sync_vm._build_vm_operation_queue(prepared, snapshot)
+
+    assert [op.method for op in queue] == ["UPDATE", "UPDATE"]
+    assert [op.existing_record["id"] for op in queue if op.existing_record] == [5105, 5205]
 
 
 def test_build_vm_operation_queue_omits_vm_type_when_overwrite_disabled():
@@ -98,7 +158,7 @@ def test_build_vm_operation_queue_omits_vm_type_when_overwrite_disabled():
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_vm_id": 104},
+            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 104},
             "description": "Synced from Proxmox node pve01",
         }
     ]
@@ -129,7 +189,7 @@ def test_build_vm_operation_queue_omits_vm_type_when_netbox_lacks_native_field()
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_vm_id": 105},
+            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 105},
             "description": "Synced from Proxmox node pve01",
         }
     ]
@@ -163,7 +223,9 @@ def test_log_vm_reconciliation_measurement_includes_gate_fields(monkeypatch):
     operation_counts = sync_vm._log_vm_reconciliation_measurement(
         operation_queue=queue,
         prepared_vms=[prepared_qemu, prepared_lxc],
-        netbox_snapshot=[{"id": 2106, "custom_fields": {"proxmox_vm_id": 106}}],
+        netbox_snapshot=[
+            {"id": 2106, "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 106}}
+        ],
         duration_ms=12.34,
         supports_virtual_machine_type_field=True,
     )
@@ -229,7 +291,7 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     assert failed_keys == set()
 
     assert calls == ["create:201", "patch:4203"]
-    assert create_lookups == [{"cf_proxmox_vm_id": 201, "cluster_id": 1}]
+    assert create_lookups == [{"cf_proxmox_vm_id": 201, "cf_proxmox_endpoint_id": 500}]
     assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
     assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
     assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203

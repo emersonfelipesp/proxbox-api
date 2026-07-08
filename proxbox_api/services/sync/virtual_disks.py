@@ -23,9 +23,11 @@ from proxbox_api.services.sync.storage_links import (
 )
 from proxbox_api.services.sync.vm_helpers import relation_id, relation_name, to_mapping
 from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_endpoint_id,
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
     normalize_vmid,
+    select_proxmox_sessions_by_endpoint,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
@@ -36,6 +38,7 @@ class VmConfigTarget:
     node: str | None
     vm_type: str
     cluster_name: str | None
+    endpoint_id: int | None
     source: str
     netbox_device_name: str | None
     custom_field_node: str | None
@@ -125,7 +128,9 @@ def _cluster_resource_target(
         for candidate in candidates:
             if candidate[0] == cluster_name:
                 return candidate
-    return candidates[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
 
 
 def _resolve_vm_config_target(
@@ -140,6 +145,7 @@ def _resolve_vm_config_target(
     vm_data = to_mapping(vm)
     device_name = relation_name(vm_data.get("device"))
     custom_field_node = _proxmox_node_custom_field(vm_data)
+    endpoint_id = extract_proxmox_endpoint_id(vm_data)
 
     cluster_target = _cluster_resource_target(
         cluster_resources,
@@ -154,6 +160,7 @@ def _resolve_vm_config_target(
             node=node,
             vm_type=target_vm_type,
             cluster_name=target_cluster or cluster_name,
+            endpoint_id=endpoint_id,
             source="cluster_resources",
             netbox_device_name=device_name,
             custom_field_node=custom_field_node,
@@ -164,6 +171,7 @@ def _resolve_vm_config_target(
             node=custom_field_node,
             vm_type=vm_type,
             cluster_name=cluster_name,
+            endpoint_id=endpoint_id,
             source="custom_fields.proxmox_node",
             netbox_device_name=device_name,
             custom_field_node=custom_field_node,
@@ -173,6 +181,7 @@ def _resolve_vm_config_target(
         node=device_name,
         vm_type=vm_type,
         cluster_name=cluster_name,
+        endpoint_id=endpoint_id,
         source="device.name" if device_name else "unresolved",
         netbox_device_name=device_name,
         custom_field_node=custom_field_node,
@@ -406,18 +415,37 @@ async def _fetch_virtual_disk_vm_config(
         )
 
     logger.debug(
-        "Resolved virtual disk VM config target for %s (vmid=%s type=%s cluster=%s node=%s source=%s)",
+        "Resolved virtual disk VM config target for %s (vmid=%s type=%s endpoint_id=%s cluster=%s node=%s source=%s)",
         vm_name,
         vmid,
         vm_type,
+        target.endpoint_id,
         cluster_name,
         node_name,
         target.source,
     )
 
+    target_pxs = select_proxmox_sessions_by_endpoint(pxs, target.endpoint_id)
+    if target.endpoint_id is not None and not target_pxs:
+        logger.warning(
+            "No Proxmox session found for VM %s (vmid=%s endpoint_id=%s), skipping disk sync",
+            vm_name,
+            vmid,
+            target.endpoint_id,
+        )
+        return VmDiskFetchResult(
+            vm=vm,
+            vmid=vmid,
+            vm_name=vm_name,
+            cluster_name=cluster_name,
+            target=target,
+            vm_config=None,
+            failure_message="Endpoint session not available",
+        )
+
     try:
         vm_config = await resolve_vm_config(
-            pxs=pxs,
+            pxs=target_pxs,
             node=node_name,
             vm_type=vm_type,
             vmid=vmid,

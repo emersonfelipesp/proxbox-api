@@ -23,11 +23,14 @@ from proxbox_api.services.sync.vm_helpers import (
 from proxbox_api.services.sync.vm_helpers import (
     relation_id as _relation_id,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_endpoint_id
 
 logger = logging.getLogger(__name__)
 
 _VALID_ENGINES = {"python", "compare", "rust"}
 _MAX_DIFF_CHARS = 12000
+_TypedSnapshotIndex = dict[tuple[int, int, str], dict[str, object]]
+_UntypedSnapshotIndex = dict[tuple[int, int], list[dict[str, object]]]
 
 
 class RustOperationAdaptationError(RuntimeError):
@@ -48,7 +51,7 @@ def normalize_current_vm_payload(
 
 
 def extract_cluster_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, int] | None:
-    """Build the in-memory index key used to correlate NetBox VM records."""
+    """Build the legacy cluster-scoped index key used when endpoint identity is absent."""
 
     cluster_id = _relation_id(record.get("cluster"))
     if cluster_id is None:
@@ -62,6 +65,23 @@ def extract_cluster_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, in
     except (TypeError, ValueError):
         return None
     return (cluster_id, proxmox_vmid)
+
+
+def extract_endpoint_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, int] | None:
+    """Build the endpoint-scoped index key used to correlate NetBox VM records."""
+
+    endpoint_id = extract_proxmox_endpoint_id(record)
+    if endpoint_id is None:
+        return None
+    custom_fields = record.get("custom_fields")
+    if not isinstance(custom_fields, dict):
+        return None
+    raw_vmid = custom_fields.get("proxmox_vm_id")
+    try:
+        proxmox_vmid = int(str(raw_vmid).strip())
+    except (TypeError, ValueError):
+        return None
+    return (endpoint_id, proxmox_vmid)
 
 
 def normalize_proxmox_vm_type(value: object) -> str | None:
@@ -93,41 +113,70 @@ def extract_proxmox_vm_type(record: dict[str, object]) -> str | None:
 def build_vm_snapshot_identity_indexes(
     snapshot: list[dict[str, object]],
 ) -> tuple[
-    dict[tuple[int, int, str], dict[str, object]],
-    dict[tuple[int, int], list[dict[str, object]]],
+    _TypedSnapshotIndex,
+    _UntypedSnapshotIndex,
+    _TypedSnapshotIndex,
+    _UntypedSnapshotIndex,
 ]:
-    """Index NetBox VM records by typed identity plus legacy untyped candidates."""
+    """Index NetBox VM records by endpoint identity plus legacy cluster identity."""
 
-    typed_index: dict[tuple[int, int, str], dict[str, object]] = {}
-    untyped_candidates: dict[tuple[int, int], list[dict[str, object]]] = {}
+    endpoint_typed_index: _TypedSnapshotIndex = {}
+    endpoint_untyped_candidates: _UntypedSnapshotIndex = {}
+    cluster_typed_index: _TypedSnapshotIndex = {}
+    cluster_untyped_candidates: _UntypedSnapshotIndex = {}
     for current in snapshot:
-        key = extract_cluster_and_proxmox_vmid(current)
-        if key is None:
-            continue
-        untyped_candidates.setdefault(key, []).append(current)
         vm_type = extract_proxmox_vm_type(current)
-        if vm_type is not None:
-            typed_index.setdefault((key[0], key[1], vm_type), current)
-    return typed_index, untyped_candidates
+        endpoint_key = extract_endpoint_and_proxmox_vmid(current)
+        if endpoint_key is not None:
+            endpoint_untyped_candidates.setdefault(endpoint_key, []).append(current)
+            if vm_type is not None:
+                endpoint_typed_index.setdefault(
+                    (endpoint_key[0], endpoint_key[1], vm_type), current
+                )
+
+        cluster_key = extract_cluster_and_proxmox_vmid(current)
+        if cluster_key is not None:
+            cluster_untyped_candidates.setdefault(cluster_key, []).append(current)
+            if vm_type is not None:
+                cluster_typed_index.setdefault((cluster_key[0], cluster_key[1], vm_type), current)
+    return (
+        endpoint_typed_index,
+        endpoint_untyped_candidates,
+        cluster_typed_index,
+        cluster_untyped_candidates,
+    )
 
 
 def select_existing_vm_record(
     *,
     prepared: PreparedVMState,
+    endpoint_id: int | None,
     cluster_id: int | None,
     proxmox_vmid: int | None,
-    typed_index: dict[tuple[int, int, str], dict[str, object]],
-    untyped_candidates: dict[tuple[int, int], list[dict[str, object]]],
+    endpoint_typed_index: _TypedSnapshotIndex,
+    endpoint_untyped_candidates: _UntypedSnapshotIndex,
+    cluster_typed_index: _TypedSnapshotIndex,
+    cluster_untyped_candidates: _UntypedSnapshotIndex,
 ) -> dict[str, object] | None:
     """Find the NetBox VM record for prepared state without guessing on type collisions."""
 
-    if cluster_id is None or proxmox_vmid is None:
+    if proxmox_vmid is None:
+        return None
+    if endpoint_id is not None:
+        scope_id = endpoint_id
+        typed_index = endpoint_typed_index
+        untyped_candidates = endpoint_untyped_candidates
+    elif cluster_id is not None:
+        scope_id = cluster_id
+        typed_index = cluster_typed_index
+        untyped_candidates = cluster_untyped_candidates
+    else:
         return None
 
     prepared_vm_type = normalize_proxmox_vm_type(prepared.vm_type)
-    untyped_key = (cluster_id, proxmox_vmid)
+    untyped_key = (scope_id, proxmox_vmid)
     if prepared_vm_type is not None:
-        exact_record = typed_index.get((cluster_id, proxmox_vmid, prepared_vm_type))
+        exact_record = typed_index.get((scope_id, proxmox_vmid, prepared_vm_type))
         if exact_record is not None:
             return exact_record
 
@@ -162,23 +211,32 @@ def build_vm_operation_queue_python(  # noqa: C901
 ) -> list[NetBoxVMOperation]:
     """Classify desired VM state into GET/CREATE/UPDATE operations using Pydantic."""
 
-    typed_vm_index, untyped_vm_candidates = build_vm_snapshot_identity_indexes(netbox_snapshot)
+    (
+        endpoint_typed_vm_index,
+        endpoint_untyped_vm_candidates,
+        cluster_typed_vm_index,
+        cluster_untyped_vm_candidates,
+    ) = build_vm_snapshot_identity_indexes(netbox_snapshot)
 
     operation_queue: list[NetBoxVMOperation] = []
 
     for prepared in prepared_vms:
         cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
+        endpoint_id = extract_proxmox_endpoint_id(prepared.desired_payload)
         proxmox_vmid = _relation_id(prepared.resource.get("vmid"))
-        if cluster_id is None or proxmox_vmid is None:
+        if proxmox_vmid is None:
             operation_queue.append(NetBoxVMOperation(method="CREATE", prepared=prepared))
             continue
 
         existing_record = select_existing_vm_record(
             prepared=prepared,
+            endpoint_id=endpoint_id,
             cluster_id=cluster_id,
             proxmox_vmid=proxmox_vmid,
-            typed_index=typed_vm_index,
-            untyped_candidates=untyped_vm_candidates,
+            endpoint_typed_index=endpoint_typed_vm_index,
+            endpoint_untyped_candidates=endpoint_untyped_vm_candidates,
+            cluster_typed_index=cluster_typed_vm_index,
+            cluster_untyped_candidates=cluster_untyped_vm_candidates,
         )
         if existing_record is None:
             operation_queue.append(NetBoxVMOperation(method="CREATE", prepared=prepared))

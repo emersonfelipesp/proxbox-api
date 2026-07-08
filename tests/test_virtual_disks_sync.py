@@ -257,6 +257,81 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     assert reconciled_payloads[0].get("custom_fields", {}).get("proxbox_storage_id") == 42
 
 
+def test_create_virtual_disks_scopes_config_fetch_by_endpoint(monkeypatch):
+    calls = {"resolve_vm_config": []}
+    endpoint_a = SimpleNamespace(db_endpoint_id=1, name="pve")
+    endpoint_b = SimpleNamespace(db_endpoint_id=2, name="astro")
+
+    async def _fake_rest_list(_nb, _path, query=None):
+        if _path == "/api/virtualization/virtual-machines/":
+            return [
+                {
+                    "id": 7,
+                    "name": "vm-105-a",
+                    "cluster": {"name": "pve"},
+                    "custom_fields": {
+                        "proxmox_endpoint_id": 1,
+                        "proxmox_vm_id": 105,
+                        "proxmox_vm_type": "qemu",
+                        "proxmox_node": "pve",
+                    },
+                },
+                {
+                    "id": 8,
+                    "name": "vm-105-b",
+                    "cluster": {"name": "astro"},
+                    "custom_fields": {
+                        "proxmox_endpoint_id": 2,
+                        "proxmox_vm_id": 105,
+                        "proxmox_vm_type": "qemu",
+                        "proxmox_node": "astro",
+                    },
+                },
+            ]
+        if _path in {"/api/plugins/proxbox/storage/", "/api/virtualization/virtual-disks/"}:
+            return []
+        return []
+
+    async def _fake_resolve_vm_config(**kwargs):
+        calls["resolve_vm_config"].append(kwargs)
+        return {"scsi0": f"local-lvm:vm-{kwargs['vmid']}-disk-0,size=1G"}
+
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        return SimpleNamespace(records=[], created=len(payloads), updated=0, unchanged=0, failed=0)
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.resolve_vm_config",
+        _fake_resolve_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
+    )
+
+    result = asyncio.run(
+        create_virtual_disks(
+            netbox_session=object(),
+            pxs=[endpoint_a, endpoint_b],
+            cluster_status=[],
+            cluster_resources=[
+                {"pve": [{"type": "qemu", "name": "vm-105-a", "vmid": "105", "node": "pve"}]},
+                {"astro": [{"type": "qemu", "name": "vm-105-b", "vmid": "105", "node": "astro"}]},
+            ],
+            tag=None,
+            use_websocket=False,
+            use_css=False,
+        )
+    )
+
+    assert result == {"count": 2, "created": 2, "updated": 0, "skipped": 0}
+    assert [call["pxs"] for call in calls["resolve_vm_config"]] == [[endpoint_a], [endpoint_b]]
+    assert [call["node"] for call in calls["resolve_vm_config"]] == ["pve", "astro"]
+
+
 def test_create_virtual_disks_prefers_cluster_resource_node_over_vm_device(monkeypatch):
     result, calls = _run_virtual_disk_sync_for_vm(
         monkeypatch,

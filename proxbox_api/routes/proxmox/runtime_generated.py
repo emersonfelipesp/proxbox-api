@@ -8,6 +8,7 @@ import sys
 import threading
 from copy import deepcopy
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path as FilePath
 from types import ModuleType
 from typing import Literal
@@ -51,7 +52,16 @@ _GENERATED_ROUTE_STATE: dict[str, object] = {
 # rebuild (~25s on some CPython patch levels), making the suite time out.
 # Production starts once per process, so reusing an already-built module here
 # does not change its behavior.
-_MODEL_MODULE_CACHE: dict[str, ModuleType] = {}
+_MODEL_MODULE_CACHE: dict[tuple[str, str], ModuleType] = {}
+
+
+def _model_module_cache_key(
+    openapi_document: dict[str, object], version_tag: str
+) -> tuple[str, str]:
+    document_fingerprint = sha256(
+        json.dumps(openapi_document, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    return version_tag, document_fingerprint
 
 
 def _schema_to_annotation(schema: dict[str, object] | None) -> object:
@@ -113,8 +123,9 @@ def _render_proxmox_path(path_template: str, path_values: dict[str, object]) -> 
 
 
 def _load_model_module(openapi_document: dict[str, object], version_tag: str) -> ModuleType:
+    cache_key = _model_module_cache_key(openapi_document, version_tag)
     with _GENERATED_ROUTE_STATE_LOCK:
-        cached_module = _MODEL_MODULE_CACHE.get(version_tag)
+        cached_module = _MODEL_MODULE_CACHE.get(cache_key)
         if cached_module is not None:
             return cached_module
         code = generate_pydantic_models_from_openapi(openapi_document)
@@ -130,7 +141,7 @@ def _load_model_module(openapi_document: dict[str, object], version_tag: str) ->
                 and hasattr(value, "model_rebuild")
             ):
                 value.model_rebuild(_types_namespace=module.__dict__)
-        _MODEL_MODULE_CACHE[version_tag] = module
+        _MODEL_MODULE_CACHE[cache_key] = module
         return module
 
 

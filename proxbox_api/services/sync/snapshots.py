@@ -22,10 +22,14 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_helpers import to_mapping
 from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_endpoint_id,
+    extract_proxmox_node,
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
     normalize_vmid,
+    select_proxmox_sessions_by_endpoint,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
@@ -157,11 +161,30 @@ async def build_snapshot_payload(
 def _resolve_snapshot_node_from_resources(
     vmid: int,
     cluster_resources: list[dict[str, object]] | None,
+    cluster_name: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Resolve node and cluster from cluster resource listings."""
     if not cluster_resources:
         return None, None
 
+    vmid_key = normalize_vmid(vmid)
+    candidates = _snapshot_node_candidates_for_vmid(cluster_resources, vmid_key)
+    if not candidates:
+        return None, None
+    if cluster_name:
+        for node_name, candidate_cluster_name in candidates:
+            if str(candidate_cluster_name or "") == cluster_name:
+                return node_name, candidate_cluster_name
+    if len(candidates) == 1:
+        return candidates[0]
+    return None, None
+
+
+def _snapshot_node_candidates_for_vmid(
+    cluster_resources: list[dict[str, object]],
+    vmid_key: str,
+) -> list[tuple[str | None, str | None]]:
+    candidates: list[tuple[str | None, str | None]] = []
     for cluster in cluster_resources:
         if not isinstance(cluster, dict):
             continue
@@ -171,10 +194,22 @@ def _resolve_snapshot_node_from_resources(
         cluster_key, resources = cluster_items[0]
         if not isinstance(resources, list):
             continue
-        for resource in resources:
-            if normalize_vmid(resource.get("vmid")) == vmid:
-                return resource.get("node"), cluster_key
-    return None, None
+        candidates.extend(_snapshot_node_candidates_in_cluster(resources, cluster_key, vmid_key))
+    return candidates
+
+
+def _snapshot_node_candidates_in_cluster(
+    resources: list[object],
+    cluster_key: object,
+    vmid_key: str,
+) -> list[tuple[str | None, str | None]]:
+    candidates: list[tuple[str | None, str | None]] = []
+    for resource in resources:
+        if not isinstance(resource, dict):
+            continue
+        if normalize_vmid(resource.get("vmid")) == vmid_key:
+            candidates.append((resource.get("node"), cluster_key))
+    return candidates
 
 
 def _resolve_snapshot_node_from_status(
@@ -204,6 +239,7 @@ def _resolve_snapshot_node_from_status(
 def _resolve_snapshot_node_context(
     vmid: int,
     node: str | None,
+    cluster_name: str | None,
     cluster_status: list | None,
     cluster_resources: list[dict[str, object]] | None,
 ) -> tuple[str | None, str | None]:
@@ -211,6 +247,7 @@ def _resolve_snapshot_node_context(
     node_name, cluster_name = _resolve_snapshot_node_from_resources(
         vmid,
         cluster_resources,
+        cluster_name=cluster_name,
     )
     if node_name:
         return node_name, cluster_name
@@ -310,9 +347,16 @@ async def _sync_single_vm_snapshots(
     snapshot_payloads: list[dict] = []
     proxmox_snapshot_names: set[str] = set()
 
-    vmid = extract_proxmox_vmid(vm)
-    vm_name = vm.get("name", "unknown")
-    netbox_vm_id = vm.get("id")
+    vm_data = to_mapping(vm)
+    vmid = extract_proxmox_vmid(vm_data)
+    vm_name = vm_data.get("name", "unknown")
+    netbox_vm_id = vm_data.get("id")
+    endpoint_id = extract_proxmox_endpoint_id(vm_data)
+    stored_node = node or extract_proxmox_node(vm_data)
+    vm_cluster_name = None
+    cluster = vm_data.get("cluster")
+    if isinstance(cluster, dict):
+        vm_cluster_name = str(cluster.get("name") or "").strip() or None
 
     if not vmid:
         return ([], set())
@@ -332,13 +376,12 @@ async def _sync_single_vm_snapshots(
         )
 
     try:
-        proxmox_type = extract_proxmox_vm_type(vm) or vm.get("type", "qemu")
-        if proxmox_type not in ("qemu", "lxc"):
-            proxmox_type = "qemu"
+        proxmox_type = _normalize_snapshot_vm_type(extract_proxmox_vm_type(vm) or vm.get("type"))
 
         node_name, cluster_name = _resolve_snapshot_node_context(
             vmid,
-            node,
+            stored_node,
+            vm_cluster_name,
             cluster_status,
             cluster_resources,
         )
@@ -380,14 +423,20 @@ async def _sync_single_vm_snapshots(
             storage_index=storage_index,
         )
 
-        # Only query the Proxmox session that owns this VM's cluster/node.
-        # Fanning out to all sessions causes N duplicate warnings per VM when
-        # a session doesn't host the VM (e.g. HTTP 501 for LXC snapshots on the
-        # wrong cluster).
-        matched_pxs = [
-            px for px in pxs if px.name and (px.name == cluster_name or px.name == node_name)
-        ]
-        effective_pxs = matched_pxs if matched_pxs else pxs
+        effective_pxs = _snapshot_sessions_for_vm(
+            pxs,
+            endpoint_id=endpoint_id,
+            cluster_name=cluster_name,
+            node_name=node_name,
+        )
+        if endpoint_id is not None and not effective_pxs:
+            logger.warning(
+                "Snapshot sync skipped for VM %s (vmid=%s endpoint_id=%s): endpoint session not available",
+                vm_name,
+                vmid,
+                endpoint_id,
+            )
+            return ([], set())
 
         snapshot_payloads, proxmox_snapshot_names = await _collect_snapshot_payloads_for_vm(
             effective_pxs,
@@ -431,6 +480,29 @@ async def _sync_single_vm_snapshots(
             )
 
     return (snapshot_payloads, proxmox_snapshot_names)
+
+
+def _normalize_snapshot_vm_type(proxmox_type: object) -> str:
+    if proxmox_type in ("qemu", "lxc"):
+        return str(proxmox_type)
+    return "qemu"
+
+
+def _snapshot_sessions_for_vm(
+    pxs: list,
+    *,
+    endpoint_id: int | None,
+    cluster_name: str | None,
+    node_name: str | None,
+) -> list:
+    """Select the Proxmox session that can own this VM's snapshot calls."""
+    effective_pxs = select_proxmox_sessions_by_endpoint(pxs, endpoint_id)
+    if endpoint_id is not None:
+        return effective_pxs
+    matched_pxs = [
+        px for px in pxs if px.name and (px.name == cluster_name or px.name == node_name)
+    ]
+    return matched_pxs if matched_pxs else list(pxs)
 
 
 async def _list_all_vms_with_proxmox_id(
@@ -586,11 +658,12 @@ async def create_virtual_machine_snapshots(  # noqa: C901
 
     # Collect all snapshot payloads from all VMs, emit per-VM item_progress
     all_snapshot_payloads: list[dict] = []
-    proxmox_snapshot_names_by_vmid: dict[int, set[str]] = {}
+    proxmox_snapshot_names_by_vm_id: dict[int, set[str]] = {}
     vm_failed = 0
 
     for idx, (vm, result) in enumerate(zip(vms, results), start=1):
-        vm_name = str(vm.get("name", ""))
+        vm_data = to_mapping(vm)
+        vm_name = str(vm_data.get("name", ""))
         if isinstance(result, Exception):
             logger.warning("Snapshot sync task failed: %s", result)
             skipped += 1
@@ -609,12 +682,12 @@ async def create_virtual_machine_snapshots(  # noqa: C901
         else:
             snapshot_payloads, snapshot_names = result
             all_snapshot_payloads.extend(snapshot_payloads)
-            vm_vmid = extract_proxmox_vmid(vm)
-            if vm_vmid:
-                try:
-                    proxmox_snapshot_names_by_vmid[int(vm_vmid)] = snapshot_names
-                except (ValueError, TypeError):
-                    pass
+            netbox_vm_id = vm_data.get("id")
+            try:
+                if netbox_vm_id is not None:
+                    proxmox_snapshot_names_by_vm_id[int(netbox_vm_id)] = snapshot_names
+            except (ValueError, TypeError):
+                pass
             snap_count = len(snapshot_payloads)
             if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
                 await websocket.emit_item_progress(
@@ -662,32 +735,33 @@ async def create_virtual_machine_snapshots(  # noqa: C901
             skipped = len(all_snapshot_payloads)
             vm_failed += 1
 
-    if delete_nonexistent_snapshot and proxmox_snapshot_names_by_vmid:
+    if delete_nonexistent_snapshot and proxmox_snapshot_names_by_vm_id:
         try:
             netbox_snapshots = await rest_list_async(nb, "/api/plugins/proxbox/snapshots/")
             orphan_ids: list[int] = []
             for nb_snapshot in netbox_snapshots or []:
-                snapshot_vmid = nb_snapshot.vmid
-                snapshot_name = nb_snapshot.name
+                snapshot_data = to_mapping(nb_snapshot)
+                snapshot_name = snapshot_data.get("name")
+                snapshot_vm_id = _extract_fk_id(snapshot_data.get("virtual_machine"))
                 snapshot_id = (
-                    nb_snapshot.id
-                    if hasattr(nb_snapshot, "id")
-                    else (nb_snapshot.get("id") if isinstance(nb_snapshot, dict) else None)
+                    getattr(nb_snapshot, "id", None)
+                    if not isinstance(nb_snapshot, dict)
+                    else nb_snapshot.get("id")
                 )
                 if (
-                    snapshot_vmid
+                    snapshot_vm_id
                     and snapshot_name
                     and snapshot_id
-                    and snapshot_vmid in proxmox_snapshot_names_by_vmid
+                    and snapshot_vm_id in proxmox_snapshot_names_by_vm_id
                 ):
-                    proxmox_names = proxmox_snapshot_names_by_vmid[snapshot_vmid]
+                    proxmox_names = proxmox_snapshot_names_by_vm_id[snapshot_vm_id]
                     if snapshot_name not in proxmox_names:
                         orphan_ids.append(int(snapshot_id))
                         logger.info(
-                            "Marking orphaned snapshot %s (id=%s) for VM vmid=%s for bulk deletion",
+                            "Marking orphaned snapshot %s (id=%s) for NetBox VM id=%s for bulk deletion",
                             snapshot_name,
                             snapshot_id,
-                            snapshot_vmid,
+                            snapshot_vm_id,
                         )
             if orphan_ids:
                 try:

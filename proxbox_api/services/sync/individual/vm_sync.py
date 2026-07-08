@@ -40,6 +40,7 @@ from proxbox_api.services.sync.vm_helpers import (
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_session_endpoint_id
 
 
 def _mb_from_bytes(value: object) -> int:
@@ -160,11 +161,14 @@ async def _lookup_existing_vm_for_dry_run(
     *,
     cluster_name: str,
     vmid: int,
+    endpoint_id: int | None = None,
 ) -> object | None:
     """Resolve an existing VM for dry-run output without guessing ambiguous vmids."""
     cluster_id = await resolve_netbox_cluster_id_by_name(nb, cluster_name)
     vm_query: dict[str, object] = {"cf_proxmox_vm_id": vmid}
-    if cluster_id is not None:
+    if endpoint_id is not None:
+        vm_query["cf_proxmox_endpoint_id"] = endpoint_id
+    elif cluster_id is not None:
         vm_query["cluster_id"] = cluster_id
     existing = await rest_list_async(
         nb,
@@ -173,7 +177,7 @@ async def _lookup_existing_vm_for_dry_run(
     )
     if cluster_id is None and len(existing) > 1:
         logger.warning(
-            "ambiguous vmid across clusters: dry-run cluster=%s vmid=%s matched %s NetBox VMs",
+            "ambiguous vmid across endpoints/clusters: dry-run cluster=%s vmid=%s matched %s NetBox VMs",
             cluster_name,
             vmid,
             len(existing),
@@ -194,6 +198,7 @@ def _build_netbox_vm_payload(
     last_updated: datetime,
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
+    endpoint_id: int | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
 ) -> dict:
@@ -236,6 +241,7 @@ def _build_netbox_vm_payload(
         "proxmox_node": node,
         "proxmox_status": proxmox_status,
         "proxmox_last_updated": last_updated.isoformat(),
+        "proxmox_endpoint_id": endpoint_id,
     }
     if cluster_name:
         vm_custom_fields["proxmox_cluster"] = cluster_name
@@ -298,6 +304,7 @@ async def sync_vm_individual(
     effective_run_id = run_id or str(uuid.uuid4())
     service = BaseIndividualSyncService(nb, px, tag, overwrite_flags=overwrite_flags)
     now = datetime.now(timezone.utc)
+    endpoint_id = extract_proxmox_session_endpoint_id(px)
 
     tag_id = int(getattr(tag, "id", 0) or 0)
     tag_ids = [tag_id] if tag_id > 0 else []
@@ -339,6 +346,7 @@ async def sync_vm_individual(
             nb,
             cluster_name=cluster_name,
             vmid=vmid,
+            endpoint_id=endpoint_id,
         )
         netbox_object = None
         if existing_vm is not None:
@@ -394,7 +402,15 @@ async def sync_vm_individual(
         existing_vms = await rest_list_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
+            query={
+                key: value
+                for key, value in {
+                    "cf_proxmox_vm_id": vmid,
+                    "cf_proxmox_endpoint_id": endpoint_id,
+                    "cluster_id": cluster_id if endpoint_id is None else None,
+                }.items()
+                if value is not None
+            },
         )
 
         # Merge proxbox tag with any existing user tags so sync never erases them.
@@ -436,6 +452,7 @@ async def sync_vm_individual(
             last_updated=now,
             cluster_name=cluster_name,
             proxmox_url=px_url,
+            endpoint_id=endpoint_id,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
         )
@@ -454,8 +471,13 @@ async def sync_vm_individual(
             nb,
             "/api/virtualization/virtual-machines/",
             lookup={
-                "cf_proxmox_vm_id": vmid,
-                "cluster_id": cluster_id,
+                key: value
+                for key, value in {
+                    "cf_proxmox_vm_id": vmid,
+                    "cf_proxmox_endpoint_id": endpoint_id,
+                    "cluster_id": cluster_id if endpoint_id is None else None,
+                }.items()
+                if value is not None
             },
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
@@ -469,6 +491,7 @@ async def sync_vm_individual(
                 record,
                 supports_virtual_machine_type_field=supports_vm_type,
             ),
+            strict_lookup=True,
         )
 
         await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)

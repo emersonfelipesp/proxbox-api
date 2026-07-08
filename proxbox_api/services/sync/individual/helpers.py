@@ -13,6 +13,7 @@ from proxbox_api.services.sync.vm_helpers import (
     parse_key_value_string,
     resolve_netbox_cluster_id_by_name,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_session_endpoint_id
 
 
 def normalize_mac(value: str | None) -> str:
@@ -288,10 +289,20 @@ async def _lookup_vm_by_scope_or_unique_vmid(
     nb: object,
     *,
     vmid: int,
+    endpoint_id: int | None,
     cluster_id: int | None,
     cluster_name: str,
 ) -> tuple[object | None, bool]:
     """Resolve by scoped VMID when possible, otherwise by unique vmid-only fallback."""
+    if endpoint_id is not None:
+        existing_vms = await rest_list_async(
+            nb,
+            "/api/virtualization/virtual-machines/",
+            query={"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": endpoint_id},
+        )
+        if existing_vms:
+            return existing_vms[0], False
+        return None, False
     if cluster_id is not None:
         existing_vms = await rest_list_async(
             nb,
@@ -324,6 +335,7 @@ async def ensure_vm_record(
 ) -> tuple[object | None, str | None]:
     """Resolve the NetBox VM record for a Proxmox VM ID, creating it if requested."""
     resolved_cluster_name = str(cluster_name or getattr(px, "name", "") or "").strip()
+    endpoint_id = extract_proxmox_session_endpoint_id(px)
     resolved_cluster_id = cluster_id
     if resolved_cluster_id is None:
         resolved_cluster_id = await resolve_netbox_cluster_id_by_name(nb, resolved_cluster_name)
@@ -331,6 +343,7 @@ async def ensure_vm_record(
     vm_record, ambiguous = await _lookup_vm_by_scope_or_unique_vmid(
         nb,
         vmid=vmid,
+        endpoint_id=endpoint_id,
         cluster_id=resolved_cluster_id,
         cluster_name=resolved_cluster_name,
     )
@@ -361,6 +374,7 @@ async def ensure_vm_record(
     vm_record, ambiguous = await _lookup_vm_by_scope_or_unique_vmid(
         nb,
         vmid=vmid,
+        endpoint_id=endpoint_id,
         cluster_id=resolved_cluster_id,
         cluster_name=resolved_cluster_name,
     )
