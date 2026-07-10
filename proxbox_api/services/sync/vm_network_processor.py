@@ -23,6 +23,7 @@ async def process_vm_network_interface(  # noqa: C901
     resource_node: str,
     now: datetime | None = None,
     device: dict | None = None,
+    vm_interface_sync_strategy: object = "guest_os_model",
 ) -> dict[str, object] | None:
     """Process a single VM network interface with flattened logic (no deep nesting).
 
@@ -69,7 +70,17 @@ async def process_vm_network_interface(  # noqa: C901
         guest_iface = guest_by_name.get(config_interface_name.lower())
 
     # Use guest agent name if available and enabled
-    if use_guest_agent_interface_name and guest_iface:
+    from proxbox_api.services.sync.guest_vm_interface import (
+        should_use_guest_agent_core_interface_name,
+    )
+
+    if (
+        should_use_guest_agent_core_interface_name(
+            use_guest_agent_interface_name,
+            vm_interface_sync_strategy,
+        )
+        and guest_iface
+    ):
         guest_name = str(guest_iface.get("name") or "").strip()
         if guest_name:
             resolved_interface_name = guest_name

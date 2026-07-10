@@ -113,24 +113,33 @@ def get_interface_name_from_config_and_agent(
     config_dict: dict[str, object],
     guest_agent_interfaces: list[dict[str, object]],
     use_guest_agent_name: bool = True,
+    vm_interface_sync_strategy: object = "guest_os_model",
 ) -> str:
     """Determine final interface name from config and guest agent data.
 
-    Prefers guest agent name if available and enabled.
-    Falls back to config name otherwise.
+    The current default keeps the Proxmox config name for the core
+    virtualization.VMInterface. The deprecated ``legacy_rename`` strategy
+    preserves the old behavior and prefers guest-agent names when enabled.
 
     Args:
         config_interface_name: Interface name from Proxmox config
         config_dict: Network config dictionary
         guest_agent_interfaces: List of interfaces from guest agent
         use_guest_agent_name: Whether to use guest agent names
+        vm_interface_sync_strategy: guest_os_model (default) or legacy_rename
 
     Returns:
         Resolved interface name
     """
+    from proxbox_api.services.sync.guest_vm_interface import (
+        should_use_guest_agent_core_interface_name,
+    )
     from proxbox_api.services.sync.vm_helpers import normalized_mac
 
-    if not use_guest_agent_name:
+    if not should_use_guest_agent_core_interface_name(
+        use_guest_agent_name,
+        vm_interface_sync_strategy,
+    ):
         return config_interface_name
 
     # Try to match by MAC address first

@@ -76,6 +76,13 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
+from proxbox_api.services.sync.guest_vm_interface import (
+    VMInterfaceSyncStrategy,
+    normalize_vm_interface_sync_strategy,
+    reconcile_guest_vm_interfaces,
+    should_use_guest_agent_core_interface_name,
+    warn_legacy_vm_interface_strategy,
+)
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
 )
@@ -1221,6 +1228,7 @@ async def _create_vm_interface_parallel(
     dns_name: str | None = None,
     create_ip: bool = True,
     sync_mac: bool = True,
+    vm_interface_sync_strategy: object = "guest_os_model",
 ) -> dict:
     """Create a single VM interface with bridge, VLAN, and IP in parallel-friendly manner.
 
@@ -1289,6 +1297,7 @@ async def _create_vm_interface_parallel(
         interface_config,
         guest_iface,
         use_guest_agent_interface_name,
+        vm_interface_sync_strategy,
     )
 
     payload: dict = {
@@ -1340,6 +1349,9 @@ async def _create_vm_interface_parallel(
         else getattr(vm_interface, "id", None)
     )
     result["interface"] = vm_interface
+    result["interface_id"] = interface_id
+    result["mac_address"] = mac_address
+    result["interface_name"] = resolved_name
 
     if interface_id is not None and mac_address and sync_mac:
         from proxbox_api.services.sync.mac_address import (
@@ -1459,6 +1471,7 @@ async def _create_virtual_machine_by_netbox_id(
     websocket=None,
     use_websocket: bool = False,
     use_guest_agent_interface_name: bool = True,
+    vm_interface_sync_strategy: VMInterfaceSyncStrategy = "guest_os_model",
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
     overwrite_vm_role: bool | None = None,
@@ -1561,6 +1574,7 @@ async def _create_virtual_machine_by_netbox_id(
         websocket=websocket,
         use_websocket=use_websocket,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
+        vm_interface_sync_strategy=vm_interface_sync_strategy,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         overwrite_vm_role=overwrite_vm_role,
@@ -1627,8 +1641,18 @@ async def create_virtual_machines(  # noqa: C901
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, VM interface names "
-            "are created from guest-agent interface names instead of netX/nicX labels."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     netbox_vm_ids: str | None = Query(
@@ -1798,6 +1822,9 @@ async def create_virtual_machines(  # noqa: C901
     )
     sync_mode_vm = _normalize_sync_mode(sync_mode_vm, "sync_mode_vm")
     sync_mode_vm_template = _normalize_sync_mode(sync_mode_vm_template, "sync_mode_vm_template")
+    normalized_interface_strategy = normalize_vm_interface_sync_strategy(vm_interface_sync_strategy)
+    if normalized_interface_strategy == "legacy_rename":
+        warn_legacy_vm_interface_strategy()
     nb = netbox_session
     netbox_version = await detect_netbox_version(nb)
     supports_vm_type = supports_virtual_machine_type(netbox_version)
@@ -2665,7 +2692,13 @@ async def create_virtual_machines(  # noqa: C901
                         if guest_iface is None:
                             guest_iface = guest_by_name.get(config_interface_name.lower())
                         resolved_interface_name = config_interface_name
-                        if use_guest_agent_interface_name and guest_iface:
+                        if (
+                            should_use_guest_agent_core_interface_name(
+                                use_guest_agent_interface_name,
+                                normalized_interface_strategy,
+                            )
+                            and guest_iface
+                        ):
                             guest_name = str(guest_iface.get("name") or "").strip()
                             if guest_name:
                                 resolved_interface_name = guest_name
@@ -2687,6 +2720,7 @@ async def create_virtual_machines(  # noqa: C901
                                 dns_name=vm_dns_name,
                                 create_ip=assign_vm_interface_ips,
                                 sync_mac=sync_vm_interface_macs,
+                                vm_interface_sync_strategy=normalized_interface_strategy,
                             )
                         )
 
@@ -2763,6 +2797,47 @@ async def create_virtual_machines(  # noqa: C901
                         failed_interface_count,
                         total_interface_count,
                     )
+
+                core_interface_id_by_mac: dict[str, int] = {}
+                ip_ids_by_interface_id: dict[int, dict[str, int]] = {}
+                for result in interface_results:
+                    if isinstance(result, Exception):
+                        continue
+                    interface_id = result.get("interface_id")
+                    mac_address = result.get("mac_address")
+                    if interface_id is not None and mac_address:
+                        try:
+                            core_interface_id_by_mac[str(mac_address)] = int(interface_id)
+                        except (TypeError, ValueError):
+                            pass
+                    if interface_id is None:
+                        continue
+                    try:
+                        interface_id_int = int(interface_id)
+                    except (TypeError, ValueError):
+                        continue
+                    ip_map = ip_ids_by_interface_id.setdefault(interface_id_int, {})
+                    for ip_entry in result.get("all_ips") or []:
+                        if not isinstance(ip_entry, dict):
+                            continue
+                        ip_id = ip_entry.get("id")
+                        address = ip_entry.get("address")
+                        if ip_id is None or not address:
+                            continue
+                        try:
+                            ip_map[str(address)] = int(ip_id)
+                        except (TypeError, ValueError):
+                            continue
+
+                await reconcile_guest_vm_interfaces(
+                    nb,
+                    int(virtual_machine["id"]),
+                    guest_agent_interfaces,
+                    core_interface_id_by_mac,
+                    ip_ids_by_interface_id,
+                    tag_refs,
+                    normalized_interface_strategy,
+                )
 
             disk_tasks = [
                 _create_vm_disk_parallel(
@@ -3006,6 +3081,7 @@ async def create_only_vm_interfaces(  # noqa: C901
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
     overwrite_flags: SyncOverwriteFlags | None = None,
     sync_mac: bool = True,
+    vm_interface_sync_strategy: VMInterfaceSyncStrategy = "guest_os_model",
 ) -> list[dict]:
     """Sync VM interfaces only (no VM creation) with per-interface progress events.
 
@@ -3035,6 +3111,9 @@ async def create_only_vm_interfaces(  # noqa: C901
     tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
     now = datetime.now(timezone.utc)
     results: list[dict] = []
+    normalized_interface_strategy = normalize_vm_interface_sync_strategy(vm_interface_sync_strategy)
+    if normalized_interface_strategy == "legacy_rename":
+        warn_legacy_vm_interface_strategy()
 
     vm_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
     vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
@@ -3148,7 +3227,13 @@ async def create_only_vm_interfaces(  # noqa: C901
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 
                 resolved_name = config_interface_name
-                if use_guest_agent_interface_name and guest_iface:
+                if (
+                    should_use_guest_agent_core_interface_name(
+                        use_guest_agent_interface_name,
+                        normalized_interface_strategy,
+                    )
+                    and guest_iface
+                ):
                     guest_name = str(guest_iface.get("name") or "").strip()
                     if guest_name:
                         resolved_name = guest_name
@@ -3197,6 +3282,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                         "resolved_name": resolved_name,
                         "config_dict": config_dict,
                         "guest_iface": guest_iface,
+                        "guest_agent_interfaces": guest_agent_interfaces,
                         "vm_name": vm_name,
                         "site_id": _relation_id(netbox_vm.get("site")),
                         "tenant_id": _relation_id(netbox_vm.get("tenant")),
@@ -3386,6 +3472,43 @@ async def create_only_vm_interfaces(  # noqa: C901
                             mac_exc,
                         )
 
+            guest_contexts: dict[int, dict[str, object]] = {}
+            for info in all_interface_info.values():
+                vm_id_for_guest = info.get("vm_id")
+                iface_name_for_guest = info.get("resolved_name")
+                if not vm_id_for_guest or not iface_name_for_guest:
+                    continue
+                try:
+                    vm_id_int = int(vm_id_for_guest)
+                except (TypeError, ValueError):
+                    continue
+                iface_id = interface_name_vm_to_id.get((iface_name_for_guest, vm_id_int))
+                context = guest_contexts.setdefault(
+                    vm_id_int,
+                    {
+                        "guest_interfaces": info.get("guest_agent_interfaces") or [],
+                        "core_interface_id_by_mac": {},
+                    },
+                )
+                if not context.get("guest_interfaces"):
+                    context["guest_interfaces"] = info.get("guest_agent_interfaces") or []
+                mac_value = info.get("mac_address")
+                if mac_value and iface_id:
+                    cast("dict[str, int]", context["core_interface_id_by_mac"])[str(mac_value)] = (
+                        int(iface_id)
+                    )
+
+            for vm_id_int, context in guest_contexts.items():
+                await reconcile_guest_vm_interfaces(
+                    nb,
+                    vm_id_int,
+                    cast("list[dict[str, object]]", context.get("guest_interfaces") or []),
+                    cast("dict[str, int]", context.get("core_interface_id_by_mac") or {}),
+                    {},
+                    tag_refs,
+                    normalized_interface_strategy,
+                )
+
             # Emit WebSocket progress for each created interface
             if use_websocket and websocket:
                 for interface in created_interfaces:
@@ -3556,6 +3679,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     ignore_ipv6_link_local_addresses: bool = True,
     primary_ip_preference: Literal["ipv4", "ipv6"] = "ipv4",
     overwrite_flags: SyncOverwriteFlags | None = None,
+    vm_interface_sync_strategy: VMInterfaceSyncStrategy = "guest_os_model",
 ) -> list[dict]:
     """Sync VM IP addresses and primary IP assignment.
 
@@ -3591,6 +3715,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
     now = datetime.now(timezone.utc)
     results: list[dict] = []
+    normalized_interface_strategy = normalize_vm_interface_sync_strategy(vm_interface_sync_strategy)
+    if normalized_interface_strategy == "legacy_rename":
+        warn_legacy_vm_interface_strategy()
 
     vm_snapshot = await _load_netbox_virtual_machine_snapshot(nb)
     vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
@@ -3713,7 +3840,13 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     guest_iface = guest_by_name.get(config_interface_name.lower())
 
                 resolved_name = config_interface_name
-                if use_guest_agent_interface_name and guest_iface:
+                if (
+                    should_use_guest_agent_core_interface_name(
+                        use_guest_agent_interface_name,
+                        normalized_interface_strategy,
+                    )
+                    and guest_iface
+                ):
                     guest_name = str(guest_iface.get("name") or "").strip()
                     if guest_name:
                         resolved_name = guest_name
@@ -3830,11 +3963,14 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                                     }
                                 )
 
-                            ip_info[interface_ip] = {
-                                "address": interface_ip,
+                            ip_info[(payload["address"], int(interface_id))] = {
+                                "address": payload["address"],
                                 "interface_name": resolved_name,
                                 "interface_id": interface_id,
                                 "vm_name": vm_name,
+                                "vm_id": netbox_vm.get("id"),
+                                "mac_address": interface_mac,
+                                "guest_interfaces": guest_agent_interfaces,
                             }
                     else:
                         if use_websocket and websocket:
@@ -3955,8 +4091,22 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             if use_websocket and websocket:
                 for ip_record in created_ips:
                     address = ip_record.get("address")
-                    if address in all_ip_info:
-                        info = all_ip_info[address]
+                    assigned_interface_id = _relation_id(ip_record.get("assigned_object_id"))
+                    scoped_key = (
+                        (str(address), int(assigned_interface_id))
+                        if address and assigned_interface_id is not None
+                        else None
+                    )
+                    info = all_ip_info.get(scoped_key) if scoped_key else None
+                    if info is None and address:
+                        address_matches = [
+                            candidate
+                            for (candidate_address, _iface_id), candidate in all_ip_info.items()
+                            if candidate_address == address
+                        ]
+                        if len(address_matches) == 1:
+                            info = address_matches[0]
+                    if info is not None:
                         await websocket.send_json(
                             {
                                 "object": "vm_ip",
@@ -3979,6 +4129,79 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 }
                 for ip in created_ips
             ]
+
+            guest_contexts: dict[int, dict[str, object]] = {}
+            for ip_record in created_ips:
+                if not isinstance(ip_record, dict):
+                    serialize = getattr(ip_record, "serialize", None)
+                    ip_record = serialize() if callable(serialize) else {}
+                address = ip_record.get("address") if isinstance(ip_record, dict) else None
+                ip_id = ip_record.get("id") if isinstance(ip_record, dict) else None
+                if not address or ip_id is None:
+                    continue
+                assigned_interface_id = (
+                    _relation_id(ip_record.get("assigned_object_id"))
+                    if isinstance(ip_record, dict)
+                    else None
+                )
+                scoped_key = (
+                    (str(address), int(assigned_interface_id))
+                    if assigned_interface_id is not None
+                    else None
+                )
+                info = all_ip_info.get(scoped_key) if scoped_key else None
+                if info is None:
+                    address_matches = [
+                        candidate
+                        for (candidate_address, _iface_id), candidate in all_ip_info.items()
+                        if candidate_address == address
+                    ]
+                    if len(address_matches) == 1:
+                        info = address_matches[0]
+                if not info:
+                    continue
+                vm_id_raw = info.get("vm_id")
+                interface_id_raw = info.get("interface_id")
+                try:
+                    vm_id_int = int(vm_id_raw)
+                    interface_id_int = int(interface_id_raw)
+                    ip_id_int = int(ip_id)
+                except (TypeError, ValueError):
+                    continue
+                context = guest_contexts.setdefault(
+                    vm_id_int,
+                    {
+                        "guest_interfaces": info.get("guest_interfaces") or [],
+                        "core_interface_id_by_mac": {},
+                        "ip_ids_by_interface_id": {},
+                    },
+                )
+                if not context.get("guest_interfaces"):
+                    context["guest_interfaces"] = info.get("guest_interfaces") or []
+                mac_value = info.get("mac_address")
+                if mac_value:
+                    cast("dict[str, int]", context["core_interface_id_by_mac"])[str(mac_value)] = (
+                        interface_id_int
+                    )
+                ip_ids_by_interface = cast(
+                    "dict[int, dict[str, int]]",
+                    context["ip_ids_by_interface_id"],
+                )
+                ip_ids_by_interface.setdefault(interface_id_int, {})[str(address)] = ip_id_int
+
+            for vm_id_int, context in guest_contexts.items():
+                await reconcile_guest_vm_interfaces(
+                    nb,
+                    vm_id_int,
+                    cast("list[dict[str, object]]", context.get("guest_interfaces") or []),
+                    cast("dict[str, int]", context.get("core_interface_id_by_mac") or {}),
+                    cast(
+                        "dict[int, dict[str, int]]",
+                        context.get("ip_ids_by_interface_id") or {},
+                    ),
+                    tag_refs,
+                    normalized_interface_strategy,
+                )
 
             # Cleanup stale IPs per interface: remove any Proxbox-tagged IPs on the
             # interface that were NOT in this sync run
@@ -4055,8 +4278,18 @@ async def create_virtual_machine_by_netbox_id(
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, VM interface names "
-            "are created from guest-agent interface names instead of netX/nicX labels."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     ignore_ipv6_link_local_addresses: bool = Query(
@@ -4091,6 +4324,7 @@ async def create_virtual_machine_by_netbox_id(
         custom_fields=custom_fields,
         tag=tag,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
+        vm_interface_sync_strategy=vm_interface_sync_strategy,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         overwrite_flags=overwrite_flags,
@@ -4114,8 +4348,18 @@ async def create_virtual_machines_stream(
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, VM interface names "
-            "are created from guest-agent interface names instead of netX/nicX labels."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     netbox_vm_ids: str | None = Query(
@@ -4279,6 +4523,7 @@ async def create_virtual_machines_stream(
                     websocket=bridge,
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
+                    vm_interface_sync_strategy=vm_interface_sync_strategy,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
                     overwrite_vm_role=overwrite_vm_role,
@@ -4413,8 +4658,18 @@ async def create_virtual_machine_by_netbox_id_stream(
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, VM interface names "
-            "are created from guest-agent interface names instead of netX/nicX labels."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     ignore_ipv6_link_local_addresses: bool = Query(
@@ -4516,6 +4771,7 @@ async def create_virtual_machine_by_netbox_id_stream(
                     websocket=bridge,
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
+                    vm_interface_sync_strategy=vm_interface_sync_strategy,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
                     overwrite_vm_role=overwrite_vm_role,

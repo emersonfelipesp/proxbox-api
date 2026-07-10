@@ -65,6 +65,10 @@ uv run mkdocs build
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
 - API reference in `docs/api/` should match the actual route signatures in `proxbox_api/routes/`.
+- VM interface sync docs must describe `vm_interface_sync_strategy` with
+  `guest_os_model` as the default and `legacy_rename` as deprecated
+  compatibility mode. Public VM interface stream routes are owned by
+  `read_vm.py`; do not document `interfaces_vm.py` as a separate route source.
 - Architecture diagrams belong in `docs/architecture/`.
 - Reconciliation engine docs live under `docs/sync/reconciliation-architecture.md`
   and `docs/pt-BR/sync/reconciliation-architecture.md`; keep them aligned

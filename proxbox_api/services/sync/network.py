@@ -22,6 +22,9 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVlanSyncState,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.sync.guest_vm_interface import (
+    should_use_guest_agent_core_interface_name,
+)
 from proxbox_api.services.sync.ip_ownership import (
     _ip_address_current_normalizer,
     _reconcile_interface_ip,
@@ -153,11 +156,18 @@ def _resolve_vm_interface_identity(
     interface_config: dict,
     guest_iface: dict | None,
     use_guest_agent_interface_name: bool,
+    vm_interface_sync_strategy: object = "guest_os_model",
 ) -> tuple[str, str | None]:
     """Resolve the display name and MAC address for a VM interface."""
     mac_address = interface_config.get("virtio") or interface_config.get("hwaddr")
     resolved_name = interface_name
-    if use_guest_agent_interface_name and guest_iface:
+    if (
+        should_use_guest_agent_core_interface_name(
+            use_guest_agent_interface_name,
+            vm_interface_sync_strategy,
+        )
+        and guest_iface
+    ):
         guest_name = str(guest_iface.get("name") or "").strip()
         if guest_name:
             resolved_name = guest_name
@@ -334,6 +344,7 @@ async def _reconcile_vm_interface_record(
     use_guest_agent_interface_name: bool,
     now: datetime,
     device: dict | None = None,
+    vm_interface_sync_strategy: object = "guest_os_model",
 ) -> tuple[dict[str, object], int | None, str | None]:
     """Create or update the VM interface record."""
     from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
@@ -364,6 +375,7 @@ async def _reconcile_vm_interface_record(
         interface_config,
         guest_iface,
         use_guest_agent_interface_name,
+        vm_interface_sync_strategy,
     )
 
     payload: dict = {
@@ -834,6 +846,7 @@ async def sync_vm_interface_and_ip(
     now: datetime | None = None,
     device: dict | None = None,
     dns_name: str | None = None,
+    vm_interface_sync_strategy: object = "guest_os_model",
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -850,6 +863,7 @@ async def sync_vm_interface_and_ip(
             use_guest_agent_interface_name,
             now,
             device=device,
+            vm_interface_sync_strategy=vm_interface_sync_strategy,
         )
     else:
         vm_interface = await rest_first_async(

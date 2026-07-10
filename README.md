@@ -73,6 +73,21 @@ PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
 indexed in [`docs/api/service-routes.md`](docs/api/service-routes.md), including
 `PROXBOX_FEATURES` sidecar-only behavior.
 
+### VM interface sync strategy
+
+VM network sync accepts `vm_interface_sync_strategy` on the VM sync and
+interface/IP stream routes. The default `guest_os_model` keeps core NetBox
+`virtualization.VMInterface` records named from Proxmox config (`net0`,
+`net1`, ...) and writes guest OS interfaces (`ens18`, `eth0`, ...) to the
+netbox-proxbox plugin endpoints when QEMU guest-agent data is available. Guest
+address rows reference the same core `ipam.IPAddress` IDs already reconciled on
+the VMInterface; proxbox-api does not create duplicate IPAM records for the
+guest side.
+
+`legacy_rename` preserves the deprecated behavior where
+`use_guest_agent_interface_name=true` renames the core VMInterface to the guest
+OS name. The backend logs a deprecation warning when that strategy is selected.
+
 ### Local docs build
 
 ```bash

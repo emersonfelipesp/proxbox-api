@@ -258,6 +258,20 @@ O sync de interfaces de VM le as interfaces do guest pelo guest agent do QEMU
 (`network-get-interfaces`). Guests com muitas interfaces (roteadores VRRP,
 enderecos alias) exigem cuidado extra:
 
+- **Modelo duplo de interface de VM** — o padrao
+  `vm_interface_sync_strategy=guest_os_model` mantem a interface core do NetBox
+  `virtualization.VMInterface` nomeada pela config do Proxmox (`net0`, `net1`,
+  ...). Quando ha dados do guest-agent, o proxbox-api tambem faz upsert das
+  linhas de plugin `GuestVMInterface` do netbox-proxbox com nomes do sistema
+  operacional guest (`ens18`, `eth0`, ...) e liga suas linhas de endereco aos
+  mesmos IDs core de `ipam.IPAddress` ja reconciliados na VMInterface core. Ele
+  nunca cria registros IPAM duplicados para o lado guest. Releases antigos do
+  netbox-proxbox sem esses endpoints retornam 404; essas escritas de plugin sao
+  logadas e ignoradas sem falhar o sync core de interface/IP.
+- **Rename legado depreciado** — `vm_interface_sync_strategy=legacy_rename`
+  preserva o comportamento anterior em que `use_guest_agent_interface_name=true`
+  renomeia a VMInterface core de `net0` para o nome do sistema operacional
+  guest. O backend registra um aviso de depreciacao para esse modo.
 - **Timeout dedicado com um retry** — a chamada ao guest-agent usa
   `PROXBOX_GUEST_AGENT_TIMEOUT` (campo de plugin `guest_agent_timeout`, padrao
   15s) em vez do timeout curto de sessao, e tenta novamente uma vez em caso de

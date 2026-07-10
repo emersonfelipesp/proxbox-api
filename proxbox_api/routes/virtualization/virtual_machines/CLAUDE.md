@@ -190,6 +190,15 @@ Main synchronization endpoints for virtual machines and related resources.
   the IP-address stage. Coverage:
   `tests/test_qemu_guest_agent_sync.py::test_vm_only_ip_sync_surfaces_missing_interface_skip`.
 
+- **VM interface/IP stream route ownership.** The public
+  `/interfaces/create/stream` and `/interfaces/ip-address/create/stream`
+  handlers are registered from `read_vm.py`; `interfaces_vm.py` is only a
+  compatibility import module for older code references. Keep
+  `vm_interface_sync_strategy` and related query params on those registered
+  handlers, and avoid reintroducing duplicate registered routes for the same
+  paths. Coverage:
+  `tests/test_guest_vm_interface_sync.py::test_registered_stream_routes_expose_strategy_param`.
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.

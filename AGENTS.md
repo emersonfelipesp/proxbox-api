@@ -18,6 +18,21 @@ Current pairing: `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox
 L2VPN/RouteTarget/Prefix reconcile, plugin inventory reconciliation, and
 VM-interface reconcile idempotency hardening.
 
+## VM Interface Sync Strategy
+
+VM sync routes accept `vm_interface_sync_strategy`. The default
+`guest_os_model` keeps the core NetBox `virtualization.VMInterface` named by
+Proxmox config (`net0`, `net1`, ...) and writes guest OS interface rows
+(`ens18`, `eth0`, ...) through netbox-proxbox plugin endpoints. Guest address
+rows must reference the already-reconciled core `ipam.IPAddress` IDs; never
+create duplicate IPAM records for the guest side. If those plugin endpoints are
+missing on an older netbox-proxbox release, log and skip guest writes without
+failing core interface/IP sync.
+
+`legacy_rename` is deprecated compatibility mode. It preserves the previous
+`use_guest_agent_interface_name=true` behavior that renames the core
+VMInterface to the guest OS name and must emit a deprecation warning.
+
 ## Required Checks
 
 Run these before pushing anything that touches the backend package:

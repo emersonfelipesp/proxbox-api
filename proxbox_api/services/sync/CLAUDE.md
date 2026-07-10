@@ -20,6 +20,8 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   links by exact NetBox cluster-name resolution after cluster reconciliation.
 - `clusters.py`: cluster synchronization helpers.
 - `device_ensure.py`: device creation and reconciliation helpers.
+- `guest_vm_interface.py`: best-effort netbox-proxbox plugin reconciliation for
+  guest OS VM interfaces and guest-interface-to-core-IP links.
 - `devices.py`: device synchronization from Proxmox nodes to NetBox.
 - `network.py`: network and interface sync helpers.
 - `reconciliation/`: pure operation-queue reconciliation, Python fallback,
@@ -96,6 +98,21 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   config NIC. The merge is keyed by the authoritative config NIC MAC, so VRRP
   virtual MACs and already-normalized Linux alias interfaces are not merged
   across different real NICs.
+- **Dual VM interface model.** The default VM interface sync strategy is
+  `guest_os_model`: core NetBox `virtualization.VMInterface` rows keep their
+  canonical Proxmox config names (`net0`, `net1`, ...), and guest OS names
+  (`ens18`, `eth0`, ...) are written to netbox-proxbox plugin
+  `GuestVMInterface` rows via `guest_vm_interface.py`. Guest address links must
+  reference the existing core `ipam.IPAddress` IDs produced by core interface
+  IP reconciliation; guest sync must never POST duplicate IPAM addresses. Plugin
+  endpoint 404s from older netbox-proxbox releases are best-effort skips and
+  must not fail core sync. Guest plugin reconcile must client-side verify any
+  server-filtered first result before patching: `GuestVMInterface` must match
+  `(virtual_machine, name)` and address links must match `(guest_interface,
+  ip_address)`. If an endpoint ignores ID filters and returns a foreign record,
+  skip the guest write rather than patching it. `legacy_rename` is deprecated
+  compatibility mode and is the only strategy that may rename core VMInterfaces
+  to guest OS names.
 
 ## Extension Guidance
 

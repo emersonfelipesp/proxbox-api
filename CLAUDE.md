@@ -327,6 +327,28 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 
+### VM interface sync strategy
+
+VM sync, VM-interface sync, and VM-IP sync routes accept
+`vm_interface_sync_strategy`. The default `guest_os_model` keeps the core
+NetBox `virtualization.VMInterface` named by Proxmox config (`net0`, `net1`,
+...) and writes guest OS interfaces (`ens18`, `eth0`, ...) to the
+netbox-proxbox plugin endpoints:
+`/api/plugins/proxbox/guest-vm-interfaces/` and
+`/api/plugins/proxbox/guest-vm-interface-addresses/`. Guest address rows must
+reuse the existing core `ipam.IPAddress` IDs; do not create duplicate IPAM
+records for the guest side. If older netbox-proxbox releases return 404 for
+those plugin endpoints, log and skip the guest writes without failing core
+interface/IP sync. Do not trust plugin endpoint filters blindly: before patching
+a returned guest record, verify client-side that `GuestVMInterface` matches
+`(virtual_machine, name)` and that guest address rows match
+`(guest_interface, ip_address)`. If the endpoint returns a foreign record, log
+and skip instead of patching it.
+
+`legacy_rename` is deprecated and exists only for compatibility. It preserves
+the old `use_guest_agent_interface_name=true` behavior that renames the core
+VMInterface to the guest OS name and must emit the deprecation warning.
+
 ## Validation
 
 Run these checks before pushing changes (the `rtk` prefix is a local token-saving alias around the underlying `uv run` commands; `uv run ruff check .` etc. are the canonical forms):

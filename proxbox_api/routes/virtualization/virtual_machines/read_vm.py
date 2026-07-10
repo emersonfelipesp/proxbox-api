@@ -164,8 +164,18 @@ async def create_virtual_machines_interfaces(
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, VM interface names "
-            "are created from guest-agent interface names instead of netX/nicX labels."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     ignore_ipv6_link_local_addresses: bool = Query(
@@ -180,6 +190,14 @@ async def create_virtual_machines_interfaces(
         default="ipv4",
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    sync_vm_interface_macs: bool = Query(
+        default=True,
+        title="Sync VM Interface MACs",
+        description=(
+            "When false, VM interfaces are still created/updated but "
+            "MAC address reconciliation is skipped."
+        ),
     ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
@@ -197,9 +215,11 @@ async def create_virtual_machines_interfaces(
         websocket=None,
         use_websocket=False,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
+        vm_interface_sync_strategy=vm_interface_sync_strategy,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         overwrite_flags=overwrite_flags,
+        sync_mac=sync_vm_interface_macs,
     )
     return results
 
@@ -216,8 +236,18 @@ async def create_virtual_machines_interfaces_stream(
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, VM interface names "
-            "are created from guest-agent interface names instead of netX/nicX labels."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     ignore_ipv6_link_local_addresses: bool = Query(
@@ -232,6 +262,14 @@ async def create_virtual_machines_interfaces_stream(
         default="ipv4",
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
+    ),
+    sync_vm_interface_macs: bool = Query(
+        default=True,
+        title="Sync VM Interface MACs",
+        description=(
+            "When false, VM interfaces are still created/updated but "
+            "MAC address reconciliation is skipped."
+        ),
     ),
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
@@ -255,9 +293,11 @@ async def create_virtual_machines_interfaces_stream(
                     websocket=bridge,
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
+                    vm_interface_sync_strategy=vm_interface_sync_strategy,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
                     overwrite_flags=overwrite_flags,
+                    sync_mac=sync_vm_interface_macs,
                 )
             finally:
                 await bridge.close()
@@ -288,8 +328,18 @@ async def create_virtual_machines_interfaces_ip_address(
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, interface names "
-            "are taken from guest-agent data."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     ignore_ipv6_link_local_addresses: bool = Query(
@@ -318,6 +368,7 @@ async def create_virtual_machines_interfaces_ip_address(
         websocket=None,
         use_websocket=False,
         use_guest_agent_interface_name=use_guest_agent_interface_name,
+        vm_interface_sync_strategy=vm_interface_sync_strategy,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         overwrite_flags=overwrite_flags,
@@ -337,8 +388,18 @@ async def create_virtual_machines_ip_address_stream(
         default=True,
         title="Use Guest Agent Interface Name",
         description=(
-            "When true and QEMU guest-agent data is available, interface names "
-            "are taken from guest-agent data."
+            "Compatibility toggle for legacy_rename. In guest_os_model, core "
+            "VMInterfaces keep Proxmox netX names and guest OS names are written "
+            "to plugin guest interface rows."
+        ),
+    ),
+    vm_interface_sync_strategy: Literal["guest_os_model", "legacy_rename"] = Query(
+        default="guest_os_model",
+        title="VM Interface Sync Strategy",
+        description=(
+            "guest_os_model keeps core VMInterfaces named from Proxmox config (netX) "
+            "and writes guest OS interfaces to the netbox-proxbox plugin. "
+            "legacy_rename preserves the deprecated guest-agent rename behavior."
         ),
     ),
     ignore_ipv6_link_local_addresses: bool = Query(
@@ -373,6 +434,7 @@ async def create_virtual_machines_ip_address_stream(
                     websocket=bridge,
                     use_websocket=True,
                     use_guest_agent_interface_name=use_guest_agent_interface_name,
+                    vm_interface_sync_strategy=vm_interface_sync_strategy,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
                     overwrite_flags=overwrite_flags,

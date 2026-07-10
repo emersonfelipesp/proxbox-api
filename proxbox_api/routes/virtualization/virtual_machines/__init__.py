@@ -7,7 +7,6 @@ from fastapi import APIRouter
 from proxbox_api.routes.virtualization.virtual_machines import (
     backups_vm,
     disks_vm,
-    interfaces_vm,
     read_vm,
     snapshots_vm,
     storages_vm,
@@ -32,7 +31,6 @@ router.include_router(disks_vm.router)
 router.include_router(backups_vm.router)
 router.include_router(snapshots_vm.router)
 router.include_router(task_history_vm.router)
-router.include_router(interfaces_vm.router)
 router.include_router(sync_vm.router)
 
 __all__ = (

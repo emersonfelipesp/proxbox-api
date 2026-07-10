@@ -19,6 +19,11 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
+from proxbox_api.services.sync.guest_vm_interface import (
+    normalize_vm_interface_sync_strategy,
+    reconcile_guest_vm_interfaces,
+    warn_legacy_vm_interface_strategy,
+)
 from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
 from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
@@ -60,6 +65,7 @@ async def sync_vm_interfaces(  # noqa: C901
     now: datetime | None = None,
     device: dict | None = None,
     dns_name: str | None = None,
+    vm_interface_sync_strategy: object = "guest_os_model",
 ) -> tuple[list[dict[str, object]], int | None]:
     """Synchronize VM interfaces and IP addresses.
 
@@ -81,6 +87,9 @@ async def sync_vm_interfaces(  # noqa: C901
         now = datetime.now(timezone.utc)
 
     primary_ip_preference = normalize_primary_ip_preference(primary_ip_preference)
+    strategy = normalize_vm_interface_sync_strategy(vm_interface_sync_strategy)
+    if strategy == "legacy_rename":
+        warn_legacy_vm_interface_strategy()
 
     vm_id = virtual_machine.get("id")
     if not vm_id:
@@ -88,6 +97,8 @@ async def sync_vm_interfaces(  # noqa: C901
 
     netbox_vm_interfaces: list[dict[str, object]] = []
     first_ip_id: int | None = None
+    core_interface_id_by_mac: dict[str, int] = {}
+    ip_ids_by_interface_id: dict[int, dict[str, int]] = {}
 
     guest_by_name = {
         str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces
@@ -113,6 +124,7 @@ async def sync_vm_interfaces(  # noqa: C901
                 config_dict,
                 guest_agent_interfaces,
                 use_guest_agent_interface_name,
+                strategy,
             )
 
             # Create node-level dcim bridge and per-VM bridge VMInterface if needed
@@ -213,6 +225,11 @@ async def sync_vm_interfaces(  # noqa: C901
 
             interface_id_for_ip = vm_interface.get("id")
             if interface_id_for_ip is not None and iface_mac:
+                try:
+                    core_interface_id_by_mac[str(iface_mac)] = int(interface_id_for_ip)
+                except (TypeError, ValueError):
+                    pass
+            if interface_id_for_ip is not None and iface_mac:
                 from proxbox_api.services.sync.mac_address import (
                     reconcile_mac_for_vm_interface,
                 )
@@ -245,7 +262,30 @@ async def sync_vm_interfaces(  # noqa: C901
             )
             if ip_results and first_ip_id is None:
                 first_ip_id = ip_results[0][0]
+            if interface_id_for_ip is not None and ip_results:
+                try:
+                    interface_id_int = int(interface_id_for_ip)
+                except (TypeError, ValueError):
+                    interface_id_int = None
+                if interface_id_int is not None:
+                    ip_map = ip_ids_by_interface_id.setdefault(interface_id_int, {})
+                    for ip_id, address in ip_results:
+                        if ip_id is None:
+                            continue
+                        try:
+                            ip_map[str(address)] = int(ip_id)
+                        except (TypeError, ValueError):
+                            continue
 
+    await reconcile_guest_vm_interfaces(
+        nb,
+        int(vm_id),
+        guest_agent_interfaces,
+        core_interface_id_by_mac,
+        ip_ids_by_interface_id,
+        tag_refs,
+        strategy,
+    )
     return netbox_vm_interfaces, first_ip_id
 
 
