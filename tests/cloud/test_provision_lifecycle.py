@@ -76,6 +76,20 @@ async def _read_mock_vm_state() -> tuple[dict[str, object], dict[str, object]]:
         await sdk.close()
 
 
+def test_build_agent_override_merges_existing_options():
+    from proxbox_api.routes.cloud.provision import _build_agent_override
+
+    assert _build_agent_override(None) == "enabled=1"
+    assert _build_agent_override({}) == "enabled=1"
+    assert _build_agent_override({"agent": "1"}) == "enabled=1"
+    # Preserve sub-options while forcing the agent on (don't clobber the field).
+    assert (
+        _build_agent_override({"agent": "fstrim_cloned_disks=1,type=virtio"})
+        == "enabled=1,fstrim_cloned_disks=1,type=virtio"
+    )
+    assert _build_agent_override({"agent": "enabled=0,type=virtio"}) == "enabled=1,type=virtio"
+
+
 @pytest.mark.asyncio
 async def test_cloud_provision_clones_configures_cloudinit_and_starts(
     auth_headers,
@@ -127,7 +141,7 @@ async def test_cloud_provision_clones_configures_cloudinit_and_starts(
 
 
 @pytest.mark.asyncio
-async def test_cloud_provision_sets_cipassword_and_enables_agent(
+async def test_cloud_provision_sets_cipassword_and_can_disable_agent(
     auth_headers,
     db_session,
     monkeypatch,
