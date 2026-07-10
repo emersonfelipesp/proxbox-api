@@ -47,6 +47,11 @@ class ProxboxSettingsDict(TypedDict):
     default_role_qemu_id: NotRequired[int | None]
     default_role_lxc_id: NotRequired[int | None]
     hardware_discovery_enabled: NotRequired[bool]
+    cloud_network_lock_enabled: NotRequired[bool]
+    cloud_customer_prefix_id: NotRequired[int | None]
+    cloud_customer_bridge: NotRequired[str]
+    cloud_customer_vlan_tag: NotRequired[int | None]
+    cloud_customer_gateway: NotRequired[str]
 
 
 class SyncResultDict(TypedDict):

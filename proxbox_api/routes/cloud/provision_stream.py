@@ -13,10 +13,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.logger import logger
 from proxbox_api.routes.cloud.provision import (
+    _bind_allocated_ip_to_vm_best_effort,
     _clone_template_vm,
     _cloud_provision_gate,
     _configure_cloud_init_vm,
     _journal_provision_best_effort,
+    _prepare_qemu_cloud_network_request,
+    _release_cloud_network_lease,
+    _require_resolved_cloud_network,
     _resize_vm_disk,
     _start_vm_after_provision,
 )
@@ -297,7 +301,21 @@ async def _provision_stream_generator(
     gated: object,
 ) -> AsyncIterator[str]:
     proxmox: ProxmoxSession | None = None
+    lease = None
+    # True once the lease has been released OR bound to the VM. The finally block
+    # releases an unsettled lease so an allocated IP is never leaked, including on
+    # GeneratorExit (client disconnects while the generator is suspended at a
+    # yield) which is a BaseException and bypasses the except clauses below.
+    lease_settled = False
+
+    async def _settle_lease_release() -> None:
+        nonlocal lease_settled
+        if lease is not None and not lease_settled:
+            await _release_cloud_network_lease(lease)
+        lease_settled = True
+
     try:
+        req, lease = await _prepare_qemu_cloud_network_request(req, session)
         yield sse_event(
             "provision_step",
             {
@@ -309,6 +327,7 @@ async def _provision_stream_generator(
         try:
             proxmox = await _open_proxmox_session(gated)
         except Exception as error:  # noqa: BLE001
+            await _settle_lease_release()
             safe = scrub_cloud_init({"e": str(error)})["e"]
             yield sse_event(
                 "provision_step",
@@ -341,6 +360,7 @@ async def _provision_stream_generator(
             async for event in emit_phase(proxmox, req, stream_state):
                 yield event
             if stream_state.failed:
+                await _settle_lease_release()
                 return
 
         vm_status = "started" if req.start_after_provision else "stopped"
@@ -364,6 +384,8 @@ async def _provision_stream_generator(
             response=provision_response,
             actor=actor,
         )
+        await _bind_allocated_ip_to_vm_best_effort(req=req, lease=lease)
+        lease_settled = True  # IP now belongs to the VM; do not release it
 
         yield sse_event(
             "complete",
@@ -380,12 +402,15 @@ async def _provision_stream_generator(
 
     except asyncio.CancelledError:
         logger.info("cloud provision stream cancelled for vmid=%s", req.new_vmid)
+        await _settle_lease_release()
         yield sse_event("complete", {"ok": False, "error": "Stream cancelled."})
     except Exception as error:  # noqa: BLE001
+        await _settle_lease_release()
         safe = scrub_cloud_init({"e": str(error)})["e"]
         logger.warning("cloud provision stream unexpected error vmid=%s: %s", req.new_vmid, safe)
         yield sse_event("complete", {"ok": False, "error": safe})
     finally:
+        await _settle_lease_release()
         if proxmox is not None:
             await proxmox.aclose()
 
@@ -399,6 +424,8 @@ async def provision_vm_stream(
     gated = await _cloud_provision_gate(session, req.endpoint_id)
     if isinstance(gated, JSONResponse):
         return gated
+    if req.enforce_cloud_network:
+        _require_resolved_cloud_network()
 
     return StreamingResponse(
         _provision_stream_generator(req, session, actor, gated),

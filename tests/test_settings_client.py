@@ -14,6 +14,11 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["reconciliation_engine"] == "python"
     assert settings["reconciliation_compare_strict"] is False
     assert settings["netbox_openapi_persist"] is True
+    assert settings["cloud_network_lock_enabled"] is False
+    assert settings["cloud_customer_prefix_id"] is None
+    assert settings["cloud_customer_bridge"] == ""
+    assert settings["cloud_customer_vlan_tag"] is None
+    assert settings["cloud_customer_gateway"] == ""
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -43,6 +48,11 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "delete_orphans": True,
         "reconciliation_engine": "rust",
         "reconciliation_compare_strict": True,
+        "cloud_network_lock_enabled": True,
+        "cloud_customer_prefix_id": 321,
+        "cloud_customer_bridge": "vmbr1",
+        "cloud_customer_vlan_tag": 2050,
+        "cloud_customer_gateway": "168.0.98.1",
     }
 
     mock_response = MagicMock()
@@ -61,6 +71,11 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["delete_orphans"] is True
     assert settings["reconciliation_engine"] == "rust"
     assert settings["reconciliation_compare_strict"] is True
+    assert settings["cloud_network_lock_enabled"] is True
+    assert settings["cloud_customer_prefix_id"] == 321
+    assert settings["cloud_customer_bridge"] == "vmbr1"
+    assert settings["cloud_customer_vlan_tag"] == 2050
+    assert settings["cloud_customer_gateway"] == "168.0.98.1"
 
 
 def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):

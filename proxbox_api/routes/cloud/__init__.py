@@ -5,6 +5,7 @@ from proxbox_api.routes.cloud.catalog import versions_router
 from proxbox_api.routes.cloud.firecracker import router as firecracker_router
 from proxbox_api.routes.cloud.image_factory import router as image_factory_router
 from proxbox_api.routes.cloud.lxc import router as lxc_router
+from proxbox_api.routes.cloud.network import router as network_router
 from proxbox_api.routes.cloud.provision import router as provision_router
 from proxbox_api.routes.cloud.provision_stream import stream_router as provision_stream_router
 from proxbox_api.routes.cloud.pve_template import router as pve_template_router
@@ -20,6 +21,7 @@ __all__ = (
     "firecracker_router",
     "image_factory_router",
     "pve_template_router",
+    "network_router",
     "qemu_templates_router",
     "template_images_router",
     "templates_router",

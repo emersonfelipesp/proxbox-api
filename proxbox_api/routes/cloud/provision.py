@@ -7,7 +7,8 @@ import json
 import os
 import re
 from collections.abc import Mapping
-from typing import Annotated
+from dataclasses import dataclass
+from typing import Annotated, Awaitable, TypeVar
 
 from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -24,7 +25,16 @@ from proxbox_api.schemas.cloud_provision import (
     CloudVMProvisionRequest,
     CloudVMProvisionResponse,
 )
+from proxbox_api.services.cloud_network import (
+    AllocatedIPAddress,
+    CloudNetworkConfig,
+    allocate_ip,
+    release_ip,
+    resolve_cloud_network,
+    validate_cloud_network_configured,
+)
 from proxbox_api.services.proxmox_helpers import get_node_task_status
+from proxbox_api.services.sync.vm_network import ensure_ip_assigned_to_vm
 from proxbox_api.services.verb_dispatch import (
     resolve_netbox_vm_id,
     resolve_proxmox_node,
@@ -43,6 +53,13 @@ _TASK_POLL_INTERVAL_SECONDS = 1.0
 _JOURNAL_TIMEOUT_SECONDS = 5.0
 _DRIVE_PREFIXES = ("ide", "sata", "scsi", "virtio")
 _NETBOX_ENDPOINT_PATH = "/api/plugins/proxbox/endpoints/proxmox/"
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True, slots=True)
+class _CloudNetworkLease:
+    ip_id: int | None
+    netbox_session: object
 
 
 def _extract_task_id(response: object) -> str | None:
@@ -269,6 +286,127 @@ def _proxmox_step_failed(step: str, error: Exception) -> HTTPException:
             "error": safe_error,
         },
     )
+
+
+def _cloud_network_http_exception(error: ValueError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=str(error),
+    )
+
+
+def _request_with_cloud_network(
+    req: CloudVMProvisionRequest,
+    cloud_network: CloudNetworkConfig,
+    allocated_ip: AllocatedIPAddress,
+) -> CloudVMProvisionRequest:
+    cloud_init = req.cloud_init.model_copy(
+        update={"network": {"ip": allocated_ip.cidr, "gw": cloud_network.gateway}}
+    )
+    return req.model_copy(
+        update={
+            "bridge": cloud_network.bridge,
+            "vlan_tag": cloud_network.vlan_tag,
+            "cloud_init": cloud_init,
+        }
+    )
+
+
+def _require_resolved_cloud_network() -> CloudNetworkConfig:
+    cloud_network = resolve_cloud_network()
+    try:
+        validate_cloud_network_configured(cloud_network)
+    except ValueError as error:
+        raise _cloud_network_http_exception(error) from error
+    return cloud_network
+
+
+async def _prepare_qemu_cloud_network_request(
+    req: CloudVMProvisionRequest,
+    session: object,
+) -> tuple[CloudVMProvisionRequest, _CloudNetworkLease | None]:
+    if not req.enforce_cloud_network:
+        return req, None
+
+    cloud_network = _require_resolved_cloud_network()
+    if cloud_network.prefix_id is None:
+        raise _cloud_network_http_exception(ValueError("cloud network not configured"))
+    nb = await get_netbox_async_session(database_session=session)
+    allocated_ip = await allocate_ip(cloud_network.prefix_id, netbox_session=nb)
+    return _request_with_cloud_network(req, cloud_network, allocated_ip), _CloudNetworkLease(
+        ip_id=allocated_ip.id,
+        netbox_session=nb,
+    )
+
+
+async def _release_cloud_network_lease(lease: _CloudNetworkLease | None) -> None:
+    if lease is None or lease.ip_id is None:
+        return
+    await release_ip(lease.ip_id, netbox_session=lease.netbox_session)
+
+
+async def _run_proxmox_step_with_cloud_network_rollback(
+    step: str,
+    operation: Awaitable[_T],
+    lease: _CloudNetworkLease | None,
+) -> _T:
+    if lease is None:
+        # No cloud-network allocation to roll back: preserve legacy behavior
+        # exactly (the original exception propagates unchanged, same status/body)
+        # so enforce_cloud_network=False stays byte-identical to pre-feature.
+        return await operation
+    try:
+        return await operation
+    except Exception as error:  # noqa: BLE001
+        # NetBox allocation happens before Proxmox writes so the guest can
+        # receive a stable CIDR; release it if any later Proxmox step fails.
+        await _release_cloud_network_lease(lease)
+        raise _proxmox_step_failed(step, error) from error
+
+
+async def _bind_allocated_ip_to_vm_best_effort(
+    *,
+    req: CloudVMProvisionRequest,
+    lease: _CloudNetworkLease | None,
+) -> None:
+    if lease is None or lease.ip_id is None:
+        return
+    try:
+        netbox_vm_id = await resolve_netbox_vm_id(lease.netbox_session, req.new_vmid)
+        if netbox_vm_id is None:
+            logger.info(
+                "cloud provision: allocated IP id=%s for vmid=%s remains unbound; "
+                "NetBox VM not found yet",
+                lease.ip_id,
+                req.new_vmid,
+            )
+            return
+        assigned, reason = await ensure_ip_assigned_to_vm(
+            lease.netbox_session,
+            lease.ip_id,
+            netbox_vm_id,
+        )
+        if assigned:
+            logger.info(
+                "cloud provision: bound allocated IP id=%s to NetBox VM id=%s (%s)",
+                lease.ip_id,
+                netbox_vm_id,
+                reason,
+            )
+        else:
+            logger.info(
+                "cloud provision: allocated IP id=%s not bound to NetBox VM id=%s (%s)",
+                lease.ip_id,
+                netbox_vm_id,
+                reason,
+            )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "cloud provision: failed to bind allocated IP id=%s for vmid=%s: %s",
+            lease.ip_id,
+            req.new_vmid,
+            error,
+        )
 
 
 async def _get_qemu_config_best_effort(
@@ -504,35 +642,48 @@ async def provision_vm(
         return gated
 
     proxmox: ProxmoxSession | None = None
+    lease: _CloudNetworkLease | None = None
     try:
-        try:
-            proxmox = await _open_proxmox_session(gated)
-        except Exception as error:  # noqa: BLE001
-            raise _proxmox_step_failed("open_session", error) from error
-
-        try:
-            clone_upid = await _clone_template_vm(proxmox, req)
-        except Exception as error:  # noqa: BLE001
-            raise _proxmox_step_failed("clone", error) from error
-
-        try:
-            config_upid = await _configure_cloud_init_vm(proxmox, req)
-        except Exception as error:  # noqa: BLE001
-            raise _proxmox_step_failed("configure_cloud_init", error) from error
+        req, lease = await _prepare_qemu_cloud_network_request(req, session)
+        proxmox = await _run_proxmox_step_with_cloud_network_rollback(
+            "open_session",
+            _open_proxmox_session(gated),
+            lease,
+        )
+        clone_upid = await _run_proxmox_step_with_cloud_network_rollback(
+            "clone",
+            _clone_template_vm(proxmox, req),
+            lease,
+        )
+        config_upid = await _run_proxmox_step_with_cloud_network_rollback(
+            "configure_cloud_init",
+            _configure_cloud_init_vm(proxmox, req),
+            lease,
+        )
         if _is_upid(config_upid) and _should_wait_for_upid():
-            await _wait_for_upid(proxmox, req.target_node, config_upid)
+            await _run_proxmox_step_with_cloud_network_rollback(
+                "configure_cloud_init",
+                _wait_for_upid(proxmox, req.target_node, config_upid),
+                lease,
+            )
 
-        try:
-            resize_upid = await _resize_vm_disk(proxmox, req)
-        except Exception as error:  # noqa: BLE001
-            raise _proxmox_step_failed("resize_disk", error) from error
+        resize_upid = await _run_proxmox_step_with_cloud_network_rollback(
+            "resize_disk",
+            _resize_vm_disk(proxmox, req),
+            lease,
+        )
         if _is_upid(resize_upid) and _should_wait_for_upid():
-            await _wait_for_upid(proxmox, req.target_node, resize_upid)
+            await _run_proxmox_step_with_cloud_network_rollback(
+                "resize_disk",
+                _wait_for_upid(proxmox, req.target_node, resize_upid),
+                lease,
+            )
 
-        try:
-            start_upid = await _start_vm_after_provision(proxmox, req)
-        except Exception as error:  # noqa: BLE001
-            raise _proxmox_step_failed("start", error) from error
+        start_upid = await _run_proxmox_step_with_cloud_network_rollback(
+            "start",
+            _start_vm_after_provision(proxmox, req),
+            lease,
+        )
 
         response = CloudVMProvisionResponse(
             new_vmid=req.new_vmid,
@@ -550,7 +701,13 @@ async def provision_vm(
             response=response,
             actor=actor,
         )
+        await _bind_allocated_ip_to_vm_best_effort(req=req, lease=lease)
         return response
+    except HTTPException:
+        raise
+    except Exception:
+        await _release_cloud_network_lease(lease)
+        raise
     finally:
         if proxmox is not None:
             await proxmox.aclose()

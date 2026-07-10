@@ -130,6 +130,13 @@ class CloudVMProvisionRequest(BaseModel):
         le=4094,
         description="Optional Proxmox VLAN tag to apply to net0.",
     )
+    enforce_cloud_network: bool = Field(
+        False,
+        description=(
+            "When true, allocate the next IP from the configured cloud customer "
+            "NetBox prefix and force the configured bridge, VLAN tag, and gateway."
+        ),
+    )
     full_clone: bool = True
 
 

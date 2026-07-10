@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.routes.cloud import lxc
+from proxbox_api.services.cloud_network import AllocatedIPAddress, CloudNetworkConfig
 
 
 class _FakeSession:
@@ -96,3 +97,28 @@ async def test_provision_lxc_still_enforces_write_gate() -> None:
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 403
+
+
+def test_build_lxc_create_params_adds_cloud_network_net0() -> None:
+    req = lxc.CloudLXCProvisionRequest(
+        endpoint_id=16,
+        hostname="ct-test",
+        ostemplate="local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst",
+        target_node="pve01",
+        enforce_cloud_network=True,
+    )
+
+    params = lxc._build_lxc_create_params(
+        req,
+        1001,
+        cloud_network=CloudNetworkConfig(
+            lock_enabled=True,
+            prefix_id=123,
+            bridge="vmbr1",
+            vlan_tag=2050,
+            gateway="168.0.98.1",
+        ),
+        allocated_ip=AllocatedIPAddress(id=77, address="168.0.98.10", cidr="168.0.98.10/24"),
+    )
+
+    assert params["net0"] == "name=eth0,bridge=vmbr1,tag=2050,ip=168.0.98.10/24,gw=168.0.98.1"

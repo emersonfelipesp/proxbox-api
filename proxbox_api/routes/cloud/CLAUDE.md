@@ -38,6 +38,8 @@ converts it to QCOW2, and attaches it to a generated Proxmox VM shell.
 - `azure_vhd_pipeline.py` — renders the `curl` + `qemu-img convert` + `qm`
   import script and optionally runs it over SSH.
 - `provision.py`, `provision_stream.py` — QEMU provision (REST + SSE).
+- `network.py` — `GET /cloud/network/available-ips`, a read-only NetBox
+  available-IP peek for the configured customer prefix.
 - `firecracker.py` — `/cloud/firecracker/provision` (+ stream).
 - `lxc.py` — `GET /cloud/lxc/templates` (read-only CT-template listing) and
   `POST /cloud/lxc/provision` (write). **Gate distinction:** template listing is a
@@ -67,6 +69,29 @@ QEMU VM provisioning (`POST /cloud/vm/provision` and
 `vlan_tag`, and `disk_gb` overrides. They are applied through the Proxmox API
 after clone and before start, preserving the existing `net0` model/MAC when
 overriding bridge or VLAN tag.
+
+QEMU and LXC provisioning also accept `enforce_cloud_network` (default
+`false`). When true, proxbox-api resolves the customer-network settings from
+`ProxboxPluginSettings` through `runtime_settings`, requires a configured
+`cloud_customer_prefix_id`, `cloud_customer_bridge`, and
+`cloud_customer_gateway`, allocates the next available NetBox IP from
+`POST /api/ipam/prefixes/{id}/available-ips/`, and ignores caller-supplied
+bridge/VLAN/IP values in favor of the configured bridge, VLAN tag, allocated
+CIDR, and gateway. QEMU injects the allocated CIDR through Cloud-Init
+`ipconfig0` and applies bridge/VLAN through `net0`; LXC sends
+`net0=name=eth0,bridge=...,tag=...,ip=...,gw=...` during create.
+
+If Proxmox provisioning fails after a NetBox allocation, the route calls the
+cloud-network service's best-effort `release_ip()` rollback. After successful
+QEMU provisioning, proxbox-api attempts to bind the allocated IP to the VM's
+first NetBox VMInterface when the VM/interface rows already exist; if sync has
+not produced them yet, the address remains occupied in NetBox and the skip is
+logged rather than released.
+
+`GET /cloud/network/available-ips?limit=N` returns the configured prefix id,
+gateway, bridge, VLAN tag, lock flag, and a non-occupying list of available
+addresses from NetBox. It returns HTTP 409 with `cloud network not configured`
+when the required customer-network settings are missing.
 
 For Proxmox Backup Server images, prefer the pipeline path by setting
 `provider="debian_cloud_image"` so the generated PBS `#cloud-config` is written

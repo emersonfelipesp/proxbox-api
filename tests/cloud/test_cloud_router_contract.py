@@ -58,6 +58,7 @@ def test_cloud_package_exposes_both_routers():
     assert cloud.provision_stream_router is not None
     assert cloud.firecracker_router is not None
     assert cloud.image_factory_router is not None
+    assert cloud.network_router is not None
     assert cloud.template_images_router is not None
     assert cloud.templates_router is not None
     assert cloud.pve_template_router is not None
@@ -71,6 +72,7 @@ def test_cloud_package_exposes_both_routers():
         "firecracker_router",
         "image_factory_router",
         "pve_template_router",
+        "network_router",
         "qemu_templates_router",
         "template_images_router",
         "templates_router",
@@ -90,6 +92,9 @@ def test_cloud_routes_are_registered_on_app(monkeypatch):
     assert any(path == "/cloud/templates" and "GET" in methods for path, methods in routes)
     assert any(path == "/cloud/templates/images" and "POST" in methods for path, methods in routes)
     assert any(path == "/cloud/vm/templates" and "GET" in methods for path, methods in routes)
+    assert any(
+        path == "/cloud/network/available-ips" and "GET" in methods for path, methods in routes
+    )
 
 
 def _valid_request_payload() -> dict[str, object]:
@@ -129,6 +134,7 @@ def test_cloud_provision_request_accepts_qemu_topology_and_vlan_fields():
             "disk_gb": 200,
             "bridge": "vmbr1",
             "vlan_tag": 23,
+            "enforce_cloud_network": True,
         }
     )
 
@@ -140,6 +146,7 @@ def test_cloud_provision_request_accepts_qemu_topology_and_vlan_fields():
     assert request.disk_gb == 200
     assert request.bridge == "vmbr1"
     assert request.vlan_tag == 23
+    assert request.enforce_cloud_network is True
 
 
 def test_cloud_provision_request_rejects_invalid_vlan_tag():
@@ -215,6 +222,58 @@ async def test_configure_cloud_init_vm_forwards_topology_and_network(monkeypatch
     assert captured["ciuser"] == "root"
     assert captured["ipconfig0"] == "ip=10.0.23.1/24"
     assert captured["net0"] == "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr1,firewall=1,tag=23"
+
+
+@pytest.mark.asyncio
+async def test_enforce_cloud_network_overrides_caller_bridge_vlan_and_ip(monkeypatch):
+    from proxbox_api.services.cloud_network import AllocatedIPAddress, CloudNetworkConfig
+
+    async def _fake_get_netbox_async_session(*, database_session):
+        assert database_session == "db-session"
+        return "netbox-session"
+
+    async def _fake_allocate_ip(prefix_id, *, netbox_session=None, **_kwargs):
+        assert prefix_id == 123
+        assert netbox_session == "netbox-session"
+        return AllocatedIPAddress(id=77, address="168.0.98.10", cidr="168.0.98.10/24")
+
+    monkeypatch.setattr(
+        provision_route,
+        "resolve_cloud_network",
+        lambda: CloudNetworkConfig(
+            lock_enabled=True,
+            prefix_id=123,
+            bridge="vmbr1",
+            vlan_tag=2050,
+            gateway="168.0.98.1",
+        ),
+    )
+    monkeypatch.setattr(provision_route, "get_netbox_async_session", _fake_get_netbox_async_session)
+    monkeypatch.setattr(provision_route, "allocate_ip", _fake_allocate_ip)
+
+    request, lease = await provision_route._prepare_qemu_cloud_network_request(
+        CloudVMProvisionRequest(
+            endpoint_id=1,
+            template_vmid=9000,
+            new_vmid=9100,
+            new_name="tenant-vm-9100",
+            target_node="pve",
+            cloud_init=CloudInitPayload(
+                user="root",
+                network={"ip": "dhcp", "gw": "10.0.0.1"},
+            ),
+            bridge="vmbr0",
+            vlan_tag=7,
+            enforce_cloud_network=True,
+        ),
+        "db-session",
+    )
+
+    assert request.bridge == "vmbr1"
+    assert request.vlan_tag == 2050
+    assert request.cloud_init.network == {"ip": "168.0.98.10/24", "gw": "168.0.98.1"}
+    assert lease is not None
+    assert lease.ip_id == 77
 
 
 @pytest.mark.asyncio

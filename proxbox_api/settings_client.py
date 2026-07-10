@@ -108,6 +108,11 @@ def get_default_settings() -> ProxboxSettingsDict:
         "default_role_qemu_id": None,
         "default_role_lxc_id": None,
         "hardware_discovery_enabled": False,
+        "cloud_network_lock_enabled": False,
+        "cloud_customer_prefix_id": None,
+        "cloud_customer_bridge": "",
+        "cloud_customer_vlan_tag": None,
+        "cloud_customer_gateway": "",
     }
 
 
@@ -297,6 +302,14 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             "default_role_qemu_id": _coerce_role_id(settings.get("default_role_qemu")),
             "default_role_lxc_id": _coerce_role_id(settings.get("default_role_lxc")),
             "hardware_discovery_enabled": bool(settings.get("hardware_discovery_enabled", False)),
+            "cloud_network_lock_enabled": _coerce_bool(
+                settings.get("cloud_network_lock_enabled"),
+                default=False,
+            ),
+            "cloud_customer_prefix_id": _coerce_role_id(settings.get("cloud_customer_prefix_id")),
+            "cloud_customer_bridge": str(settings.get("cloud_customer_bridge", "")).strip(),
+            "cloud_customer_vlan_tag": _coerce_role_id(settings.get("cloud_customer_vlan_tag")),
+            "cloud_customer_gateway": str(settings.get("cloud_customer_gateway", "")).strip(),
         }
 
     except urllib.error.URLError as exc:

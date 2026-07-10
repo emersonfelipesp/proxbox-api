@@ -16,6 +16,8 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 ## Current Modules
 
 - `__init__.py`: service package namespace.
+- `cloud_network.py`: managed customer-network settings resolver plus NetBox
+  available-IP helpers used by Cloud QEMU/LXC provisioning.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue
@@ -36,5 +38,12 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - Prefer idempotent operations so repeated sync runs are safe.
 - Surface predictable errors through `ProxboxException`.
 - Keep response payloads compatible with both JSON and stream transports when a service is reused in SSE or WebSocket paths.
+- Cloud-network helpers must use `proxbox_api.netbox_rest` with an existing
+  NetBox session. `peek_available_ips(prefix_id, limit)` GETs
+  `/api/ipam/prefixes/{id}/available-ips/` and never occupies addresses;
+  `allocate_ip(prefix_id, *, vminterface_id=None, status="active")` POSTs the
+  same NetBox endpoint to atomically occupy one address and can bind it to a
+  `virtualization.vminterface`; `release_ip(ip_id)` deletes the IPAddress
+  best-effort for provisioning rollback.
 - Keep reconciliation seams pure: no HTTP clients, async I/O, database writes,
   retry loops, or stream emission inside queue builders.

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
@@ -20,7 +21,16 @@ from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.routes.cloud.qemu_templates import _endpoint_for_read
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
+from proxbox_api.services.cloud_network import (
+    AllocatedIPAddress,
+    CloudNetworkConfig,
+    allocate_ip,
+    release_ip,
+    resolve_cloud_network,
+    validate_cloud_network_configured,
+)
 from proxbox_api.services.proxmox_helpers import get_node_storage_content, get_node_task_status
+from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox import ProxmoxSession
 
 router = APIRouter()
@@ -47,6 +57,7 @@ class CloudLXCProvisionRequest(BaseModel):
     cores: int | None = Field(default=None, ge=1)
     password: str | None = Field(default=None, max_length=256)
     start_after_provision: bool = True
+    enforce_cloud_network: bool = False
 
 
 class CloudLXCProvisionResponse(BaseModel):
@@ -54,6 +65,12 @@ class CloudLXCProvisionResponse(BaseModel):
     create_upid: str | None = None
     start_upid: str | None = None
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class _CloudNetworkLease:
+    ip_id: int | None
+    netbox_session: object
 
 
 def _extract_upid(response: object) -> str | None:
@@ -222,6 +239,9 @@ async def _list_storage_templates(
 def _build_lxc_create_params(
     req: CloudLXCProvisionRequest,
     new_vmid: int,
+    *,
+    cloud_network: CloudNetworkConfig | None = None,
+    allocated_ip: AllocatedIPAddress | None = None,
 ) -> dict[str, object]:
     params: dict[str, object] = {
         "vmid": new_vmid,
@@ -235,7 +255,56 @@ def _build_lxc_create_params(
         params["cores"] = req.cores
     if req.password is not None:
         params["password"] = req.password
+    if cloud_network is not None and allocated_ip is not None:
+        net0 = [
+            "name=eth0",
+            f"bridge={cloud_network.bridge}",
+        ]
+        if cloud_network.vlan_tag is not None:
+            net0.append(f"tag={cloud_network.vlan_tag}")
+        net0.extend([f"ip={allocated_ip.cidr}", f"gw={cloud_network.gateway}"])
+        params["net0"] = ",".join(net0)
     return params
+
+
+def _cloud_network_http_exception(error: ValueError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=str(error),
+    )
+
+
+async def _prepare_lxc_cloud_network(
+    req: CloudLXCProvisionRequest,
+    session: object,
+) -> tuple[CloudNetworkConfig | None, AllocatedIPAddress | None, _CloudNetworkLease | None]:
+    if not req.enforce_cloud_network:
+        return None, None, None
+
+    cloud_network = resolve_cloud_network()
+    try:
+        validate_cloud_network_configured(cloud_network)
+    except ValueError as error:
+        raise _cloud_network_http_exception(error) from error
+
+    nb = await get_netbox_async_session(database_session=session)
+    if cloud_network.prefix_id is None:
+        raise _cloud_network_http_exception(ValueError("cloud network not configured"))
+    allocated_ip = await allocate_ip(cloud_network.prefix_id, netbox_session=nb)
+    return (
+        cloud_network,
+        allocated_ip,
+        _CloudNetworkLease(
+            ip_id=allocated_ip.id,
+            netbox_session=nb,
+        ),
+    )
+
+
+async def _release_lxc_cloud_network_lease(lease: _CloudNetworkLease | None) -> None:
+    if lease is None or lease.ip_id is None:
+        return
+    await release_ip(lease.ip_id, netbox_session=lease.netbox_session)
 
 
 async def _create_lxc_container(
@@ -275,9 +344,17 @@ async def _provision_lxc_on_proxmox(
     proxmox: ProxmoxSession,
     req: CloudLXCProvisionRequest,
     actor: str | None,
+    *,
+    cloud_network: CloudNetworkConfig | None = None,
+    allocated_ip: AllocatedIPAddress | None = None,
 ) -> CloudLXCProvisionResponse:
     new_vmid = await _get_next_vmid(proxmox)
-    params = _build_lxc_create_params(req, new_vmid)
+    params = _build_lxc_create_params(
+        req,
+        new_vmid,
+        cloud_network=cloud_network,
+        allocated_ip=allocated_ip,
+    )
 
     logger.debug(
         "lxc provision: endpoint=%s vmid=%s node=%s ostemplate=%s rootfs=%s",
@@ -368,12 +445,28 @@ async def provision_lxc(
         return gated
 
     proxmox: ProxmoxSession | None = None
+    cloud_network: CloudNetworkConfig | None = None
+    allocated_ip: AllocatedIPAddress | None = None
+    lease: _CloudNetworkLease | None = None
     try:
+        cloud_network, allocated_ip, lease = await _prepare_lxc_cloud_network(req, session)
         proxmox = await _open_proxmox_session(gated)
-        return await _provision_lxc_on_proxmox(proxmox, req, actor)
+        return await _provision_lxc_on_proxmox(
+            proxmox,
+            req,
+            actor,
+            cloud_network=cloud_network,
+            allocated_ip=allocated_ip,
+        )
     except HTTPException:
+        # The NetBox IP allocation happens before Proxmox creation; release it
+        # when any later validation or Proxmox step aborts the container create.
+        await _release_lxc_cloud_network_lease(lease)
         raise
     except Exception as error:  # noqa: BLE001
+        # Best-effort rollback keeps a failed LXC create from consuming a
+        # customer-network IP when Proxmox rejects the request after allocation.
+        await _release_lxc_cloud_network_lease(lease)
         logger.warning("lxc provision failed endpoint=%s: %s", req.endpoint_id, error)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
