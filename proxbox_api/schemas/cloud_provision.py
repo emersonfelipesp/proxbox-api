@@ -137,6 +137,13 @@ class CloudVMProvisionRequest(BaseModel):
             "NetBox prefix and force the configured bridge, VLAN tag, and gateway."
         ),
     )
+    enable_agent: bool = Field(
+        True,
+        description=(
+            "Enable the QEMU guest agent (agent=enabled=1) on the cloned VM so "
+            "Proxmox can read guest IPs and do graceful shutdowns. Default True."
+        ),
+    )
     full_clone: bool = True
 
 

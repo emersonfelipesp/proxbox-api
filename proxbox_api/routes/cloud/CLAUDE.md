@@ -66,9 +66,16 @@ converts it to QCOW2, and attaches it to a generated Proxmox VM shell.
 
 QEMU VM provisioning (`POST /cloud/vm/provision` and
 `POST /cloud/vm/provision/stream`) accepts optional `sockets`, `bridge`,
-`vlan_tag`, and `disk_gb` overrides. They are applied through the Proxmox API
-after clone and before start, preserving the existing `net0` model/MAC when
-overriding bridge or VLAN tag.
+`vlan_tag`, and `disk_gb` overrides plus `enable_agent` (default `True`). They
+are applied through the Proxmox API after clone and before start, preserving the
+existing `net0` model/MAC when overriding bridge or VLAN tag, and forcing
+`agent=enabled=1` on the clone when `enable_agent` is true. The nested
+`cloud_init` payload accepts an optional `password` that is written as the
+Proxmox `cipassword` cloud-init field, so a cloned VM supports username+password
+SSH when the source template also permits password auth (`ssh_pwauth: true`,
+baked by netbox-packer). `cipassword`/`password` are treated as secrets: they are
+never logged and are redacted by `utils/log_scrubbing.scrub_cloud_init` at the
+journal/write boundary.
 
 QEMU and LXC provisioning also accept `enforce_cloud_network` (default
 `false`). When true, proxbox-api resolves the customer-network settings from

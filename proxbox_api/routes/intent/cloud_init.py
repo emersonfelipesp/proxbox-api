@@ -16,6 +16,7 @@ _DNS_SEARCH_DOMAIN_RE = re.compile(
 
 class CloudInitPayload(BaseModel):
     user: Optional[str] = None
+    password: Optional[str] = None
     ssh_keys: Optional[list[str]] = None
     user_data: Optional[Union[str, dict]] = None
     network: Optional[dict] = None
@@ -91,6 +92,12 @@ def build_proxmox_ci_args(payload: CloudInitPayload) -> dict:
     args: dict[str, object] = {}
     if payload.user is not None:
         args["ciuser"] = payload.user
+    if payload.password is not None:
+        # Proxmox cloud-init password (stored hashed by Proxmox). Enables
+        # username+password SSH when the image also permits password auth
+        # (ssh_pwauth: true, baked by netbox-packer). Treat as a secret:
+        # never log ci_args downstream.
+        args["cipassword"] = payload.password
     if payload.ssh_keys is not None:
         args["sshkeys"] = quote("\n".join(payload.ssh_keys), safe="")
     if payload.user_data is not None:

@@ -36,3 +36,18 @@ def test_build_proxmox_ci_args_passes_through_cicustom_string():
     payload = CloudInitPayload(user_data="user=local:snippets/vm-101.yaml")
 
     assert build_proxmox_ci_args(payload) == {"cicustom": "user=local:snippets/vm-101.yaml"}
+
+
+def test_build_proxmox_ci_args_maps_password_to_cipassword():
+    payload = CloudInitPayload(user="ubuntu", password="s3cret-pw")
+
+    args = build_proxmox_ci_args(payload)
+
+    assert args["ciuser"] == "ubuntu"
+    assert args["cipassword"] == "s3cret-pw"
+
+
+def test_build_proxmox_ci_args_omits_cipassword_when_no_password():
+    payload = CloudInitPayload(user="ubuntu")
+
+    assert "cipassword" not in build_proxmox_ci_args(payload)

@@ -586,6 +586,11 @@ async def _configure_cloud_init_vm(
     net0 = _build_net0_override(existing_config, bridge=req.bridge, vlan_tag=req.vlan_tag)
     if net0 is not None:
         ci_args["net0"] = net0
+    if req.enable_agent:
+        # Force the QEMU guest agent on regardless of what the source template
+        # carried, so every cloud clone reports guest IPs and shuts down
+        # gracefully (templates bake qemu-guest-agent via netbox-packer).
+        ci_args["agent"] = "enabled=1"
     if existing_config is None or not _has_cloudinit_drive(existing_config):
         slot = _pick_unused_ide_slot(existing_config)
         if slot is None:

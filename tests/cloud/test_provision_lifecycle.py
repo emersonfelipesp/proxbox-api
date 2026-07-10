@@ -120,6 +120,54 @@ async def test_cloud_provision_clones_configures_cloudinit_and_starts(
         assert "cloudinit" in str(config.get("ide2"))
         assert config["ciuser"] == "ubuntu"
         assert status_payload["status"] == "running"
+        # enable_agent defaults True → every clone forces the guest agent on.
+        assert "enabled=1" in str(config.get("agent"))
+    finally:
+        reset_mock_state()
+
+
+@pytest.mark.asyncio
+async def test_cloud_provision_sets_cipassword_and_enables_agent(
+    auth_headers,
+    db_session,
+    monkeypatch,
+    sync_async_db_override,
+):
+    monkeypatch.setenv("PROXMOX_API_MODE", "mock")
+    reset_mock_state()
+    endpoint_id = _make_endpoint(db_session, allow_writes=True)
+    await _seed_template()
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers=auth_headers,
+        ) as client:
+            response = await client.post(
+                "/cloud/vm/provision",
+                json={
+                    "endpoint_id": endpoint_id,
+                    "template_vmid": 9000,
+                    "new_vmid": 9100,
+                    "new_name": "tenant-vm-9100",
+                    "target_node": "pve",
+                    "cloud_init": {
+                        "user": "ubuntu",
+                        "password": "s3cret-pw",
+                        "ssh_keys": ["ssh-rsa AAA"],
+                    },
+                    "enable_agent": False,
+                    "start_after_provision": False,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        config, _ = await _read_mock_vm_state()
+        # Req 2: username+password SSH — password reaches Proxmox cipassword.
+        assert config["cipassword"] == "s3cret-pw"
+        # enable_agent=False explicitly opts out, so no agent flag is written.
+        assert "agent" not in config
     finally:
         reset_mock_state()
 
