@@ -32,6 +32,7 @@ from proxbox_api.services.cloud_network import (
 from proxbox_api.services.proxmox_helpers import get_node_storage_content, get_node_task_status
 from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox import ProxmoxSession
+from proxbox_api.utils.log_scrubbing import scrub_cloud_init
 
 router = APIRouter()
 
@@ -467,10 +468,14 @@ async def provision_lxc(
         # Best-effort rollback keeps a failed LXC create from consuming a
         # customer-network IP when Proxmox rejects the request after allocation.
         await _release_lxc_cloud_network_lease(lease)
-        logger.warning("lxc provision failed endpoint=%s: %s", req.endpoint_id, error)
+        # Scrub the cloud-init password (Proxmox `password`) out of the error
+        # text before it reaches the log or the client 502 body — parity with
+        # the QEMU provision path (the LXC create carries `password` too).
+        safe_error = scrub_cloud_init({"error": str(error)}).get("error", str(error))
+        logger.warning("lxc provision failed endpoint=%s: %s", req.endpoint_id, safe_error)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"reason": "lxc_provision_failed", "error": str(error)},
+            detail={"reason": "lxc_provision_failed", "error": safe_error},
         ) from error
     finally:
         if proxmox is not None:

@@ -88,6 +88,40 @@ def test_build_agent_override_merges_existing_options():
         == "enabled=1,fstrim_cloned_disks=1,type=virtio"
     )
     assert _build_agent_override({"agent": "enabled=0,type=virtio"}) == "enabled=1,type=virtio"
+    # #222: normalized through mapping_from_response, so a {"data": ...} envelope
+    # (or a non-dict) is handled defensively instead of raising AttributeError.
+    assert _build_agent_override({"data": {"agent": "type=virtio"}}) == "enabled=1,type=virtio"
+    assert _build_agent_override("not-a-dict") == "enabled=1"  # type: ignore[arg-type]
+
+
+def test_cloud_init_password_is_length_bounded() -> None:
+    """#222: CloudInitPayload.password must be bounded (max 128) so an oversized
+    cipassword is rejected client-side rather than bloating the VM config or
+    producing an opaque Proxmox error."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    CloudInitPayload(password="x" * 128)  # ok at the boundary
+    with _pytest.raises(ValidationError):
+        CloudInitPayload(password="x" * 129)
+
+
+@pytest.mark.asyncio
+async def test_step_rollback_scrubs_cipassword_even_without_lease() -> None:
+    """#222: the default enforce_cloud_network=False path (lease is None) must
+    still route exceptions through _proxmox_step_failed so the cipassword is
+    redacted from the client 502 body — parity with the SSE stream."""
+    from fastapi import HTTPException
+
+    async def _boom() -> None:
+        raise RuntimeError("proxmox rejected cipassword=SuperSecret123 on config.put")
+
+    with pytest.raises(HTTPException) as exc:
+        await provision_route._run_proxmox_step_with_cloud_network_rollback(
+            "configure_cloud_init", _boom(), None
+        )
+    assert exc.value.status_code == 502
+    assert "SuperSecret123" not in repr(exc.value.detail)
 
 
 @pytest.mark.asyncio

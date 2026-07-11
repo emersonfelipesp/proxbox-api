@@ -350,17 +350,16 @@ async def _run_proxmox_step_with_cloud_network_rollback(
     operation: Awaitable[_T],
     lease: _CloudNetworkLease | None,
 ) -> _T:
-    if lease is None:
-        # No cloud-network allocation to roll back: preserve legacy behavior
-        # exactly (the original exception propagates unchanged, same status/body)
-        # so enforce_cloud_network=False stays byte-identical to pre-feature.
-        return await operation
     try:
         return await operation
     except Exception as error:  # noqa: BLE001
         # NetBox allocation happens before Proxmox writes so the guest can
         # receive a stable CIDR; release it if any later Proxmox step fails.
-        await _release_cloud_network_lease(lease)
+        if lease is not None:
+            await _release_cloud_network_lease(lease)
+        # Always route through _proxmox_step_failed so the cipassword is scrubbed
+        # from the log + client body even on the default enforce_cloud_network=
+        # False path — parity with the SSE stream, which scrubs unconditionally.
         raise _proxmox_step_failed(step, error) from error
 
 
@@ -575,7 +574,10 @@ def _build_agent_override(existing_config: dict | None) -> str:
     ``fstrim_cloned_disks`` on clone. Mirror ``_build_net0_override`` and merge:
     keep every non-``enabled`` sub-option and force a single ``enabled=1``.
     """
-    existing = str((existing_config or {}).get("agent") or "").strip()
+    # Normalize through mapping_from_response like the sibling helpers
+    # (_build_net0_override, _has_cloudinit_drive) so a Pydantic model or a
+    # {"data": ...} envelope is handled defensively instead of raising.
+    existing = str(mapping_from_response(existing_config).get("agent") or "").strip()
     if not existing:
         return "enabled=1"
     merged: list[str] = []

@@ -6,7 +6,7 @@ from typing import Optional, Union
 from urllib.parse import quote
 
 import yaml
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 _DNS_SEARCH_DOMAIN_RE = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -16,7 +16,7 @@ _DNS_SEARCH_DOMAIN_RE = re.compile(
 
 class CloudInitPayload(BaseModel):
     user: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, max_length=128)
     ssh_keys: Optional[list[str]] = None
     user_data: Optional[Union[str, dict]] = None
     network: Optional[dict] = None
