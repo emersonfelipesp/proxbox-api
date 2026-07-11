@@ -75,7 +75,12 @@ Proxmox `cipassword` cloud-init field, so a cloned VM supports username+password
 SSH when the source template also permits password auth (`ssh_pwauth: true`,
 baked by netbox-packer). `cipassword`/`password` are treated as secrets: they are
 never logged and are redacted by `utils/log_scrubbing.scrub_cloud_init` at the
-journal/write boundary.
+journal/write boundary. The redaction is applied **on every provisioning error
+surface** (#222): the QEMU REST step-rollback wrapper scrubs even on the default
+`enforce_cloud_network=False` path (parity with the SSE stream, which always
+scrubs), and the LXC `provision_lxc` failure handler scrubs the 502 body + log
+line too (the LXC create carries a `password` field). `CloudInitPayload.password`
+is bounded to `max_length=128`.
 
 QEMU and LXC provisioning also accept `enforce_cloud_network` (default
 `false`). When true, proxbox-api resolves the customer-network settings from

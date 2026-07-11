@@ -122,3 +122,24 @@ def test_build_lxc_create_params_adds_cloud_network_net0() -> None:
     )
 
     assert params["net0"] == "name=eth0,bridge=vmbr1,tag=2050,ip=168.0.98.10/24,gw=168.0.98.1"
+
+
+def test_lxc_provision_error_handler_scrubs_secrets() -> None:
+    """#222: the LXC provision failure path must scrub the cloud-init password
+    out of the log + 502 body (parity with the QEMU path). The LXC create
+    carries a `password` field, so a raw `str(error)` passthrough could leak it.
+    Assert the module imports the scrubber and the handler routes the error
+    through it instead of embedding raw `str(error)` in the client detail."""
+    import inspect
+
+    from proxbox_api.utils.log_scrubbing import scrub_cloud_init
+
+    assert lxc.scrub_cloud_init is scrub_cloud_init
+    # The lxc_provision_failed 502 handler (which carries the create password)
+    # must build its detail from the scrubbed value, not raw str(error).
+    handler_source = inspect.getsource(lxc.provision_lxc)
+    # The error is scrubbed and the client detail is built from the scrubbed value.
+    assert 'scrub_cloud_init({"error": str(error)})' in handler_source
+    assert '"error": safe_error' in handler_source
+    # Both the log line and the 502 detail use safe_error (scrubbed), not raw.
+    assert handler_source.count("safe_error") >= 2
