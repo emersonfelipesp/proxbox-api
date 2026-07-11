@@ -32,6 +32,24 @@ def test_scrub_cloud_init_recurses_and_scrubs_password_lines():
     assert "list-token" not in repr(scrubbed)
 
 
+def test_scrub_cloud_init_redacts_cipassword_in_error_strings():
+    # Regression: provision.py / provision_stream.py stringify the upstream
+    # error BEFORE scrubbing, so only the string path runs. The old
+    # `\bpassword` regex never matched `cipassword` (no boundary between "ci"
+    # and "password"), leaking the Proxmox cipassword into 502 bodies and SSE
+    # frames. Cover the bare, dict-repr, and `=` forms.
+    cases = [
+        "HTTP 400 Bad Request: cipassword: s3cret-pw is not acceptable",
+        "HTTP 400 Bad Request: {'cipassword': 's3cret-pw'}",
+        'proxmox error: "cipassword"="s3cret-pw"',
+        "password: s3cret-pw",
+    ]
+    for text in cases:
+        scrubbed = scrub_cloud_init({"error": text})
+        assert "s3cret-pw" not in scrubbed["error"], text
+        assert "***" in scrubbed["error"], text
+
+
 async def test_write_verb_journal_entry_scrubs_comments_at_write_boundary(monkeypatch):
     captured: dict[str, object] = {}
 

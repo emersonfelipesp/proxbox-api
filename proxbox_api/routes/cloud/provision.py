@@ -567,6 +567,31 @@ async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionReque
     return clone_upid
 
 
+def _build_agent_override(existing_config: dict | None) -> str:
+    """Force the QEMU guest agent on while preserving any existing sub-options.
+
+    A ``config.put(agent=...)`` replaces the whole field, so a source template
+    carrying ``enabled=1,fstrim_cloned_disks=1`` would otherwise lose
+    ``fstrim_cloned_disks`` on clone. Mirror ``_build_net0_override`` and merge:
+    keep every non-``enabled`` sub-option and force a single ``enabled=1``.
+    """
+    existing = str((existing_config or {}).get("agent") or "").strip()
+    if not existing:
+        return "enabled=1"
+    merged: list[str] = []
+    enabled_set = False
+    for part in (p.strip() for p in existing.split(",") if p.strip()):
+        if part in {"0", "1"} or part.startswith("enabled="):
+            if not enabled_set:
+                merged.append("enabled=1")
+                enabled_set = True
+        else:
+            merged.append(part)
+    if not enabled_set:
+        merged.insert(0, "enabled=1")
+    return ",".join(merged)
+
+
 async def _configure_cloud_init_vm(
     proxmox: ProxmoxSession,
     req: CloudVMProvisionRequest,
@@ -586,6 +611,12 @@ async def _configure_cloud_init_vm(
     net0 = _build_net0_override(existing_config, bridge=req.bridge, vlan_tag=req.vlan_tag)
     if net0 is not None:
         ci_args["net0"] = net0
+    if req.enable_agent:
+        # Force the QEMU guest agent on regardless of what the source template
+        # carried, so every cloud clone reports guest IPs and shuts down
+        # gracefully (templates bake qemu-guest-agent via netbox-packer). Merge
+        # rather than clobber so a template's agent sub-options survive.
+        ci_args["agent"] = _build_agent_override(existing_config)
     if existing_config is None or not _has_cloudinit_drive(existing_config):
         slot = _pick_unused_ide_slot(existing_config)
         if slot is None:
