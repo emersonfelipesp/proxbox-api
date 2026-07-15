@@ -9,7 +9,7 @@ Para schemas completos de request e response, use o OpenAPI em tempo de execucao
 - `GET /` - Metadados e links do servico.
 - `GET /version` - Versao do backend para invalidacao externa de cache.
 - `GET /cache` - Inspeciona o cache em memoria.
-- `GET /clear-cache` - Limpa o cache em memoria.
+- `GET /clear-cache` - Limpa caches em memoria, incluindo o cache GET do NetBox e o cache de reconcile de custom fields.
 
 ## Autenticacao (`/auth`)
 
@@ -328,9 +328,16 @@ Headers:
 
 ## Rotas Extras (`/extras`)
 
+- `POST /extras/custom-fields/reconcile`
+- `GET /extras/bootstrap-status`
 - `GET /extras/extras/custom-fields/create`
 
-Esse endpoint cria os custom fields usados pelos metadados de sincronizacao de VMs.
+`POST /extras/custom-fields/reconcile` e a rota suportada de recuperacao para
+custom fields ausentes ou com drift no NetBox. Ela ignora o cache local de
+custom fields, le o NetBox ao vivo e reconcilia o inventario canonico do
+Proxbox. `GET /extras/bootstrap-status` retorna o ultimo status de bootstrap
+do NetBox e seus warnings. A rota GET legada com prefixo duplo continua
+disponivel por compatibilidade.
 
 ## Rotas de configuracao do plugin Proxbox
 

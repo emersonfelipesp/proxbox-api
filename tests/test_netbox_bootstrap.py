@@ -18,11 +18,13 @@ assertion is robust without time-mocking the clock.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
 
 from proxbox_api import netbox_rest
+from proxbox_api.services import custom_fields as custom_field_service
 from proxbox_api.services import netbox_bootstrap
 from proxbox_api.services import netbox_writers as nw
 from proxbox_api.services.netbox_bootstrap import (
@@ -115,6 +117,17 @@ def patch_netbox_version(monkeypatch: pytest.MonkeyPatch):
         return (4, 6, 0)
 
     monkeypatch.setattr(netbox_bootstrap, "detect_netbox_version", _fake_detect)
+
+
+@pytest.fixture
+def proxbox_caplog(caplog: pytest.LogCaptureFixture):
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(caplog.handler)
+    proxbox_logger.setLevel(logging.DEBUG)
+    try:
+        yield caplog
+    finally:
+        proxbox_logger.removeHandler(caplog.handler)
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +275,15 @@ async def test_upsert_vm_type_creates_on_miss(
 # ---------------------------------------------------------------------------
 
 
+def test_custom_field_inventory_is_shared_source_of_truth() -> None:
+    assert netbox_bootstrap.CUSTOM_FIELD_INVENTORY is custom_field_service.CUSTOM_FIELD_INVENTORY
+    assert len(netbox_bootstrap.CUSTOM_FIELD_INVENTORY) == 43
+    names = {str(field["name"]) for field in netbox_bootstrap.CUSTOM_FIELD_INVENTORY}
+    assert "proxmox_last_updated" in names
+    assert "hardware_chassis_serial" in names
+    assert "nic_link" in names
+
+
 @pytest.mark.asyncio
 async def test_run_netbox_bootstrap_skips_when_disabled() -> None:
     status = await run_netbox_bootstrap(object(), enabled=False)
@@ -291,9 +313,9 @@ async def test_run_netbox_bootstrap_creates_full_inventory_on_empty_netbox(
     assert status.unchanged == []
 
     # 1 Proxbox tag + 4 discovery tags + 1 cluster_type + 1 manufacturer +
-    # 1 device_type + 1 device_role + 3 VM roles + 2 VM types + 8 custom fields
-    # = 22 created objects on a fresh NetBox 4.6 install.
-    assert len(status.created) == 22
+    # 1 device_type + 1 device_role + 3 VM roles + 2 VM types + 43 custom fields
+    # = 57 created objects on a fresh NetBox 4.6 install.
+    assert len(status.created) == 57
 
     # Key entries from each category must appear in the created list.
     labels = set(status.created)
@@ -391,6 +413,7 @@ async def test_run_netbox_bootstrap_captures_per_entry_failures(
     freeze_last_updated: None,
     patch_netbox_version: None,
     monkeypatch: pytest.MonkeyPatch,
+    proxbox_caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A 403-style failure on a single tag must not abort the orchestrator.
 
@@ -416,6 +439,7 @@ async def test_run_netbox_bootstrap_captures_per_entry_failures(
     monkeypatch.setattr(netbox_rest, "rest_first_async", _fake_first)
     monkeypatch.setattr(netbox_rest, "rest_create_async", original_create)
 
+    proxbox_caplog.set_level(logging.ERROR)
     status = await run_netbox_bootstrap(object())
 
     assert status.ok is False  # warnings flip ok to False
@@ -424,12 +448,22 @@ async def test_run_netbox_bootstrap_captures_per_entry_failures(
     warning = status.warnings[0]
     assert warning["object"] == "tag:Proxbox"
     assert "403" in warning["error"]
-    # The remaining 21 inventory entries must still have been created.
-    assert len(status.created) == 21
+    # The remaining 56 inventory entries must still have been created.
+    assert len(status.created) == 56
     assert "tag:proxbox-discovered-qemu" in status.created
     assert "tag:proxbox-discovered-lxc" in status.created
     assert "cluster_type:proxmox" in status.created
     assert "custom_field:proxbox_last_run_id" in status.created
+    assert any(
+        record.levelno >= logging.ERROR
+        and "NetBox bootstrap failed for tag:Proxbox" in record.message
+        for record in proxbox_caplog.records
+    )
+    assert any(
+        record.levelno >= logging.ERROR
+        and "NetBox bootstrap completed with 1 warning" in record.message
+        for record in proxbox_caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -542,5 +576,5 @@ async def test_run_netbox_bootstrap_skips_vm_types_on_old_netbox(
 
     assert status.ok is True
     assert not any(label.startswith("vm_type:") for label in status.created)
-    # The other 20 inventory entries must still be created.
-    assert len(status.created) == 20
+    # The other 55 inventory entries must still be created.
+    assert len(status.created) == 55

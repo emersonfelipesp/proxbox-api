@@ -87,9 +87,10 @@ emitido. Códigos:
 
 ## Custom fields no NetBox
 
-Seis custom fields são criados pelo bootstrap em
-`proxbox_api/routes/extras/__init__.py::create_custom_fields()` no grupo já
-existente **Proxmox**:
+Os custom fields de hardware discovery fazem parte do inventario canonico de
+custom fields do Proxbox em `proxbox_api/services/custom_fields.py`. O
+bootstrap de startup e `POST /extras/custom-fields/reconcile` usam esse mesmo
+inventario:
 
 | Campo | Objeto | Tipo |
 |---|---|---|

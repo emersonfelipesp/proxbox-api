@@ -9,7 +9,7 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 - `GET /` - Service metadata and links.
 - `GET /version` - Backend service version for external cache invalidation.
 - `GET /cache` - Inspect the in-memory cache snapshot.
-- `GET /clear-cache` - Clear the in-memory cache.
+- `GET /clear-cache` - Clear in-memory caches, including the NetBox GET cache and the custom-field reconcile cache.
 - `GET /cache/metrics` - JSON snapshot of NetBox GET cache metrics (hit ratio, entries, byte usage).
 - `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same metrics for scrape jobs.
 
@@ -557,9 +557,16 @@ Headers:
 
 ## Extras Routes (`/extras`)
 
+- `POST /extras/custom-fields/reconcile`
+- `GET /extras/bootstrap-status`
 - `GET /extras/extras/custom-fields/create`
 
-This endpoint creates the custom fields used by VM synchronization metadata.
+`POST /extras/custom-fields/reconcile` is the supported operator recovery
+route for missing or drifted NetBox custom fields. It bypasses the
+process-local custom-field cache, re-reads live NetBox, and reconciles the
+canonical Proxbox custom-field inventory. `GET /extras/bootstrap-status`
+returns the last startup NetBox bootstrap status and warnings. The legacy
+double-prefix GET route remains available for backward compatibility.
 
 ## Proxbox Plugin Config Routes
 

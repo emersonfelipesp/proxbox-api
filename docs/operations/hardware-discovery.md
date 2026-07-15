@@ -86,8 +86,10 @@ On failure the orchestrator emits a generic `item_progress` frame with a
 
 ## NetBox custom fields
 
-Six custom fields are bootstrapped under the existing **Proxmox** group_name
-by `proxbox_api/routes/extras/__init__.py::create_custom_fields()`:
+The hardware-discovery custom fields are part of the canonical Proxbox
+custom-field inventory in `proxbox_api/services/custom_fields.py`. Startup
+bootstrap and `POST /extras/custom-fields/reconcile` both consume that same
+inventory:
 
 | Field | Object | Type |
 |---|---|---|

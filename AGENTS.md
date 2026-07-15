@@ -81,6 +81,17 @@ npm run build
 
 Fix failures locally before finishing the task.
 
+## NetBox Custom Field Lifecycle
+
+The canonical Proxbox custom-field inventory lives in
+`proxbox_api/services/custom_fields.py`. Startup bootstrap and the extras route
+must consume that same inventory object; do not add route-local or
+bootstrap-local custom-field literals. Operators can force a live reconcile
+without a service restart through `POST /extras/custom-fields/reconcile`, and
+can inspect startup bootstrap warnings through `GET /extras/bootstrap-status`.
+The legacy `GET /extras/extras/custom-fields/create` route remains for older
+callers.
+
 ## CI/CD Workflows
 
 ### End-to-end release pipeline (Gitea-first)

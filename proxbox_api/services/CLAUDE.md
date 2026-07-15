@@ -16,6 +16,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 ## Current Modules
 
 - `__init__.py`: service package namespace.
+- `custom_fields.py`: canonical NetBox custom-field inventory, reconcile/cache helpers, force-reconcile support, and object-type union preservation.
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
@@ -36,6 +37,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 
 - Keep service functions independent from request objects where possible.
 - Prefer idempotent operations so repeated sync runs are safe.
+- Keep NetBox custom fields declared only in `custom_fields.py`; both startup bootstrap and extras routes import the same inventory object.
 - Surface predictable errors through `ProxboxException`.
 - Keep response payloads compatible with both JSON and stream transports when a service is reused in SSE or WebSocket paths.
 - Cloud-network helpers must use `proxbox_api.netbox_rest` with an existing

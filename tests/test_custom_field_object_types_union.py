@@ -92,7 +92,7 @@ def test_union_preserves_operator_additions(monkeypatch, proxbox_caplog):
         assert query == {"name": "proxmox_last_updated", "limit": 2}
         return _record({"object_types": ["virtualization.virtualmachine", "extras.tag"]})
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {
         "name": "proxmox_last_updated",
@@ -115,7 +115,7 @@ def test_union_handles_dict_shape_object_types(monkeypatch):
     async def _fake_first(_session, _path, query=None):
         return _record({"object_types": [{"app_label": "extras", "model": "tag"}]})
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {
         "name": "proxmox_last_updated",
@@ -132,7 +132,7 @@ def test_union_skips_when_no_existing_record(monkeypatch):
     async def _fake_first(_session, _path, query=None):
         return None
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     desired = ["virtualization.virtualmachine", "dcim.device"]
     field: dict[str, object] = {"name": "proxmox_last_updated", "object_types": list(desired)}
@@ -144,7 +144,7 @@ def test_union_logs_warning_when_prefetch_raises(monkeypatch, proxbox_caplog):
     async def _fake_first(_session, _path, query=None):
         raise RuntimeError("netbox unreachable")
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     desired = ["virtualization.virtualmachine"]
     field: dict[str, object] = {"name": "proxmox_last_updated", "object_types": list(desired)}
@@ -169,7 +169,7 @@ def test_union_skips_when_desired_is_not_list(monkeypatch):
         called["count"] += 1
         return None
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {"name": "proxmox_last_updated", "object_types": None}
     _run(_union_object_types_with_current(object(), field))

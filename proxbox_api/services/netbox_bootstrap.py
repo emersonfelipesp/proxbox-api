@@ -42,14 +42,18 @@ from proxbox_api.constants import (
     VM_TYPE_MAPPINGS,
 )
 from proxbox_api.logger import logger
+from proxbox_api.netbox_rest import ReconcileResult
 from proxbox_api.netbox_version import (
     detect_netbox_version,
     supports_virtual_machine_type,
 )
+from proxbox_api.services.custom_fields import (
+    CUSTOM_FIELD_INVENTORY,
+    reconcile_custom_field_with_status,
+)
 from proxbox_api.services.netbox_writers import (
     UpsertResult,
     upsert_cluster_type,
-    upsert_custom_field,
     upsert_device_role,
     upsert_device_type,
     upsert_manufacturer,
@@ -126,130 +130,6 @@ _DISCOVERY_TAGS: tuple[dict[str, str], ...] = (
         "description": "Proxmox node first discovered by Proxbox (apply-on-create-only).",
     },
 )
-
-
-def _last_run_id_custom_field() -> dict[str, object]:
-    """Custom field that pins a sync run's UUID onto its written objects.
-
-    Required by roadmap items #5 (cloud-init), #6 (discovery tags), #8
-    (role pinning), and #11 (last-run UUID). The orchestrator writes the
-    field; the sync flow stamps it per run.
-    """
-    return {
-        "object_types": [
-            "dcim.device",
-            "virtualization.cluster",
-            "virtualization.virtualmachine",
-        ],
-        "type": "text",
-        "name": "proxbox_last_run_id",
-        "label": "Last Run ID",
-        "description": "UUID of the most recent Proxbox sync run that touched this object.",
-        "ui_visible": "if-set",
-        "ui_editable": "hidden",
-        "weight": 250,
-        "filter_logic": "loose",
-        "search_weight": 1000,
-        "group_name": "Proxbox",
-    }
-
-
-def _custom_field_inventory() -> list[dict[str, object]]:
-    """Hardcoded custom-field inventory mirroring ``create_custom_fields``.
-
-    The orchestrator owns the declarative inventory now; the legacy
-    ``routes/extras/__init__.py::create_custom_fields`` endpoint still
-    exists as a defensive lazy fallback (and shares the same payload
-    surface).
-    """
-    return [
-        {
-            "object_types": ["virtualization.virtualmachine"],
-            "type": "integer",
-            "name": "proxmox_vm_id",
-            "label": "VM ID",
-            "description": "Proxmox Virtual Machine or Container ID",
-            "ui_visible": "always",
-            "weight": 100,
-            "group_name": "Proxmox",
-        },
-        {
-            "object_types": ["virtualization.virtualmachine"],
-            "type": "text",
-            "name": "proxmox_vm_type",
-            "label": "VM Type",
-            "description": "Proxmox VM type (qemu or lxc)",
-            "ui_visible": "always",
-            "weight": 100,
-            "group_name": "Proxmox",
-        },
-        {
-            "object_types": ["virtualization.virtualmachine"],
-            "type": "boolean",
-            "name": "proxmox_start_at_boot",
-            "label": "Start at Boot",
-            "description": "Proxmox Start at Boot Option",
-            "ui_visible": "always",
-            "weight": 100,
-            "group_name": "Proxmox",
-        },
-        {
-            "object_types": ["virtualization.virtualmachine"],
-            "type": "boolean",
-            "name": "proxmox_unprivileged_container",
-            "label": "Unprivileged Container",
-            "description": "Proxmox Unprivileged Container",
-            "ui_visible": "if-set",
-            "weight": 100,
-            "group_name": "Proxmox",
-        },
-        {
-            "object_types": ["virtualization.virtualmachine"],
-            "type": "boolean",
-            "name": "proxmox_qemu_agent",
-            "label": "QEMU Guest Agent",
-            "description": "Proxmox QEMU Guest Agent",
-            "ui_visible": "if-set",
-            "weight": 100,
-            "group_name": "Proxmox",
-        },
-        {
-            "object_types": ["virtualization.vminterface"],
-            "type": "object",
-            "name": "proxbox_bridge",
-            "label": "Proxbox Bridge",
-            "related_object_type": "dcim.interface",
-            "description": "Node-level bridge interface (vmbr) used by this VM interface",
-            "ui_visible": "always",
-            "weight": 100,
-            "group_name": "Proxmox",
-        },
-        {
-            "object_types": [
-                "dcim.device",
-                "dcim.devicerole",
-                "dcim.devicetype",
-                "dcim.interface",
-                "dcim.manufacturer",
-                "dcim.site",
-                "ipam.ipaddress",
-                "ipam.vlan",
-                "virtualization.cluster",
-                "virtualization.clustertype",
-                "virtualization.virtualdisk",
-                "virtualization.virtualmachine",
-                "virtualization.vminterface",
-            ],
-            "type": "datetime",
-            "name": "proxmox_last_updated",
-            "label": "Last Updated",
-            "description": "Proxmox Plugin last modified this object",
-            "ui_visible": "always",
-            "weight": 200,
-            "group_name": "Proxmox",
-        },
-        _last_run_id_custom_field(),
-    ]
 
 
 async def run_netbox_bootstrap(
@@ -399,29 +279,20 @@ async def run_netbox_bootstrap(
             ".".join(str(part) for part in netbox_version),
         )
 
-    for cf in _custom_field_inventory():
+    for cf in CUSTOM_FIELD_INVENTORY:
         await _safe_upsert(
             status,
             f"custom_field:{cf['name']}",
-            lambda cf=cf: upsert_custom_field(
-                nb,
-                name=str(cf["name"]),
-                type=str(cf["type"]),
-                label=str(cf["label"]),
-                object_types=list(cf["object_types"]),  # type: ignore[arg-type]
-                description=cf.get("description"),  # type: ignore[arg-type]
-                group_name=cf.get("group_name"),  # type: ignore[arg-type]
-                ui_visible=str(cf.get("ui_visible", "always")),
-                ui_editable=str(cf.get("ui_editable", "hidden")),
-                weight=int(cf.get("weight", 100)),  # type: ignore[arg-type]
-                filter_logic=str(cf.get("filter_logic", "loose")),
-                search_weight=int(cf.get("search_weight", 1000)),  # type: ignore[arg-type]
-                related_object_type=cf.get("related_object_type"),  # type: ignore[arg-type]
-            ),
+            lambda cf=cf: reconcile_custom_field_with_status(nb, cf),
         )
 
     if status.warnings:
         status.ok = False
+        logger.error(
+            "NetBox bootstrap completed with %d warning(s): %s",
+            len(status.warnings),
+            status.warnings,
+        )
 
     logger.info(
         "NetBox bootstrap finished: created=%d patched=%d unchanged=%d warnings=%d",
@@ -436,8 +307,8 @@ async def run_netbox_bootstrap(
 async def _safe_upsert(
     status: BootstrapStatus,
     label: str,
-    call: Callable[[], Awaitable[UpsertResult]],
-) -> UpsertResult | None:
+    call: Callable[[], Awaitable[UpsertResult | ReconcileResult]],
+) -> UpsertResult | ReconcileResult | None:
     """Run a single upsert, capturing failures into ``status.warnings``.
 
     Returns the :class:`UpsertResult` on success so the caller can chain
@@ -446,7 +317,7 @@ async def _safe_upsert(
     try:
         result = await call()
     except Exception as exc:  # noqa: BLE001 — orchestrator must not abort the run
-        logger.warning("NetBox bootstrap failed for %s: %s", label, exc)
+        logger.error("NetBox bootstrap failed for %s: %s", label, exc)
         status.warnings.append({"object": label, "error": str(exc)})
         return None
 

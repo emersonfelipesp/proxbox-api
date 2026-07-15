@@ -23,7 +23,7 @@ from proxbox_api.main import (
     full_update_sync_stream,
     standalone_info,
 )
-from proxbox_api.routes.extras import create_custom_fields
+from proxbox_api.routes.extras import create_custom_fields, force_reconcile_custom_fields
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
     delete_netbox_endpoint,
@@ -52,6 +52,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_virtual_machine_by_netbox_id,
     create_virtual_machine_by_netbox_id_stream,
 )
+from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.devices import create_proxmox_devices
 
@@ -273,7 +274,7 @@ def test_create_custom_fields_uses_rest_reconcile_with_async_session(monkeypatch
             raise AssertionError((method, path, query, payload, expect_json))
 
     session = SimpleNamespace(client=FakeClient())
-    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
+    invalidate_custom_fields_cache()
 
     result = asyncio.run(create_custom_fields(netbox_session=session))
 
@@ -306,7 +307,7 @@ def test_create_custom_fields_caches_successful_bootstrap(monkeypatch):
                 return ApiResponse(status=201, text=json.dumps(body))
             raise AssertionError((method, path, query, payload, expect_json))
 
-    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
+    invalidate_custom_fields_cache()
     session = SimpleNamespace(client=FakeClient())
 
     first_result = asyncio.run(create_custom_fields(netbox_session=session))
@@ -317,6 +318,38 @@ def test_create_custom_fields_caches_successful_bootstrap(monkeypatch):
     assert len(session.client.calls) == first_call_count
 
 
+def test_force_reconcile_custom_fields_bypasses_success_cache(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
+            if method == "POST" and path == "/api/extras/custom-fields/":
+                body = {"id": len([c for c in self.calls if c[0] == "POST"]), **payload}
+                return ApiResponse(status=201, text=json.dumps(body))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    invalidate_custom_fields_cache()
+    session = SimpleNamespace(client=FakeClient())
+
+    first_result = asyncio.run(create_custom_fields(netbox_session=session))
+    first_call_count = len(session.client.calls)
+
+    second_result = asyncio.run(force_reconcile_custom_fields(netbox_session=session))
+    second_call_count = len(session.client.calls)
+
+    assert second_result != []
+    assert len(second_result) == len(first_result)
+    assert second_call_count > first_call_count
+
+    cached_after_force = asyncio.run(create_custom_fields(netbox_session=session))
+    assert cached_after_force == second_result
+    assert len(session.client.calls) == second_call_count
+
+
 def test_create_custom_fields_reports_netbox_overwhelmed(monkeypatch):
     class FakeClient:
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
@@ -324,7 +357,7 @@ def test_create_custom_fields_reports_netbox_overwhelmed(monkeypatch):
                 return ApiResponse(status=500, text=json.dumps({"detail": "database unavailable"}))
             raise AssertionError((method, path, query, payload, expect_json))
 
-    monkeypatch.setattr("proxbox_api.routes.extras._CUSTOM_FIELDS_CACHE", None)
+    invalidate_custom_fields_cache()
     monkeypatch.setenv("PROXBOX_NETBOX_MAX_RETRIES", "0")
     session = SimpleNamespace(client=FakeClient())
 
@@ -336,6 +369,23 @@ def test_create_custom_fields_reports_netbox_overwhelmed(monkeypatch):
     failed_fields = excinfo.value.detail.get("failed_fields")
     assert isinstance(failed_fields, list)
     assert failed_fields
+
+
+def test_netbox_bootstrap_status_endpoint_surfaces_warnings(auth_test_client):
+    app.state.bootstrap_status = BootstrapStatus(
+        ok=False,
+        skipped=False,
+        warnings=[{"object": "custom_field:proxmox_last_updated", "error": "missing perms"}],
+    )
+
+    response = auth_test_client.get("/extras/bootstrap-status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["warnings"] == [
+        {"object": "custom_field:proxmox_last_updated", "error": "missing perms"}
+    ]
 
 
 def test_proxmox_endpoint_crud_lifecycle(db_session):
