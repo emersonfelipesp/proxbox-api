@@ -33,10 +33,11 @@ curl -fsS -X POST \
   http://localhost:8800/extras/custom-fields/reconcile
 ```
 
-Ela ignora e atualiza o cache local de custom fields, le o NetBox ao vivo,
-cria campos ausentes e aplica patch nos atributos gerenciados com drift. A
-operacao e idempotente: chamadas repetidas nao devem gerar churn no NetBox
-quando os campos ja batem.
+Ela ignora e atualiza o cache local de custom fields, limpa as entradas de
+custom fields do cache GET de baixo nivel do NetBox, le o NetBox ao vivo, cria
+campos ausentes e aplica patch nos atributos gerenciados com drift. A operacao
+e idempotente: chamadas repetidas nao devem gerar churn no NetBox quando os
+campos ja batem.
 
 A rota legada `GET /extras/extras/custom-fields/create` continua disponivel
 para clientes antigos, mas automacoes novas devem usar a rota POST.
@@ -49,9 +50,12 @@ para clientes antigos, mas automacoes novas devem usar a rota POST.
    em `/api/extras/custom-fields/`.
 
 `object_types` adicionados por operadores em custom fields do Proxbox sao
-preservados. O reconcile faz a uniao entre os object types declarados e o
-valor ao vivo do NetBox antes do patch, entao escopos manuais nao sao
-removidos.
+preservados. O reconcile faz uma consulta por campo e usa esse mesmo registro
+ao vivo para unir os object types declarados com o valor atual do NetBox antes
+do patch, entao escopos manuais nao sao removidos. Se a consulta do campo
+falhar, esse campo e reportado como falho em vez de enviar um payload
+`object_types` apenas declarado que poderia reduzir escopos adicionados por
+operadores.
 
 `GET /clear-cache` tambem invalida o cache de custom fields, mas nao faz
 reconcile no NetBox. Use a rota POST quando campos estiverem ausentes ou com

@@ -42,6 +42,13 @@ class ReconcileResult:
     status: ReconcileStatus
 
 
+class _UnsetExistingRecord:
+    pass
+
+
+_EXISTING_RECORD_UNSET = _UnsetExistingRecord()
+
+
 @dataclass(frozen=True)
 class NetBoxRestConfig:
     """Resolved configuration values used by netbox_rest helpers.
@@ -1102,6 +1109,7 @@ async def _rest_reconcile_async_impl(  # noqa: C901
     nullable_fields: set[str] | frozenset[str] | None = None,
     strict_lookup: bool = False,
     lookup_query_field_map: dict[str, str] | None = None,
+    existing_record: RestRecord | None | _UnsetExistingRecord = _EXISTING_RECORD_UNSET,
 ) -> tuple[RestRecord, ReconcileStatus]:
     """Internal: reconcile and return ``(record, status)``.
 
@@ -1225,7 +1233,10 @@ async def _rest_reconcile_async_impl(  # noqa: C901
             return existing_record, "updated"
         return existing_record, "unchanged"
 
-    existing = await _find_existing()
+    if existing_record is _EXISTING_RECORD_UNSET:
+        existing = await _find_existing()
+    else:
+        existing = existing_record
     if existing is None:
         try:
             created = await rest_create_async(nb, path, desired_payload)
@@ -1271,6 +1282,7 @@ async def rest_reconcile_async(
     nullable_fields: set[str] | frozenset[str] | None = None,
     strict_lookup: bool = False,
     lookup_query_field_map: dict[str, str] | None = None,
+    existing_record: RestRecord | None | _UnsetExistingRecord = _EXISTING_RECORD_UNSET,
 ) -> RestRecord:
     """Reconcile a NetBox record with the desired payload.
 
@@ -1309,6 +1321,7 @@ async def rest_reconcile_async(
         nullable_fields=nullable_fields,
         strict_lookup=strict_lookup,
         lookup_query_field_map=lookup_query_field_map,
+        existing_record=existing_record,
     )
     return record
 
@@ -1325,6 +1338,7 @@ async def rest_reconcile_async_with_status(
     nullable_fields: set[str] | frozenset[str] | None = None,
     strict_lookup: bool = False,
     lookup_query_field_map: dict[str, str] | None = None,
+    existing_record: RestRecord | None | _UnsetExistingRecord = _EXISTING_RECORD_UNSET,
 ) -> ReconcileResult:
     """Reconcile a NetBox record and report ``created`` / ``updated`` / ``unchanged``.
 
@@ -1343,6 +1357,7 @@ async def rest_reconcile_async_with_status(
         nullable_fields=nullable_fields,
         strict_lookup=strict_lookup,
         lookup_query_field_map=lookup_query_field_map,
+        existing_record=existing_record,
     )
     return ReconcileResult(record=record, status=status)
 

@@ -14,6 +14,7 @@ from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
 from netbox_sdk.client import ApiResponse
 
+from proxbox_api import netbox_rest
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import ensure_netbox_sync_dependencies
 from proxbox_api.exception import ProxboxException
@@ -348,6 +349,71 @@ def test_force_reconcile_custom_fields_bypasses_success_cache(monkeypatch):
     cached_after_force = asyncio.run(create_custom_fields(netbox_session=session))
     assert cached_after_force == second_result
     assert len(session.client.calls) == second_call_count
+
+
+def test_force_reconcile_custom_fields_recreates_deleted_field_with_stale_get_cache(
+    monkeypatch,
+):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+            self.records_by_name = {}
+            self.next_id = 1
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                name = (query or {}).get("name")
+                record = self.records_by_name.get(name) if isinstance(name, str) else None
+                results = [record] if isinstance(record, dict) else []
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps({"count": len(results), "results": results}),
+                )
+            if method == "POST" and path == "/api/extras/custom-fields/":
+                record = {"id": self.next_id, **payload}
+                self.next_id += 1
+                self.records_by_name[str(payload["name"])] = record
+                return ApiResponse(status=201, text=json.dumps(record))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    monkeypatch.setenv("PROXBOX_NETBOX_GET_CACHE_TTL", "120")
+    invalidate_custom_fields_cache()
+    session = SimpleNamespace(client=FakeClient())
+
+    first_result = asyncio.run(create_custom_fields(netbox_session=session))
+    target_name = "proxmox_vm_id"
+    assert any(field["name"] == target_name for field in first_result)
+
+    cached_record = asyncio.run(
+        netbox_rest.rest_first_async(
+            session,
+            "/api/extras/custom-fields/",
+            query={"name": target_name, "limit": 2},
+        )
+    )
+    assert cached_record is not None
+    del session.client.records_by_name[target_name]
+    post_count_before = len(
+        [
+            call
+            for call in session.client.calls
+            if call[0] == "POST" and call[1] == "/api/extras/custom-fields/"
+        ]
+    )
+
+    force_result = asyncio.run(force_reconcile_custom_fields(netbox_session=session))
+
+    assert any(field["name"] == target_name for field in force_result)
+    assert target_name in session.client.records_by_name
+    post_count_after = len(
+        [
+            call
+            for call in session.client.calls
+            if call[0] == "POST" and call[1] == "/api/extras/custom-fields/"
+        ]
+    )
+    assert post_count_after == post_count_before + 1
 
 
 def test_create_custom_fields_reports_netbox_overwhelmed(monkeypatch):

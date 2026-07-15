@@ -38,6 +38,10 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - Keep service functions independent from request objects where possible.
 - Prefer idempotent operations so repeated sync runs are safe.
 - Keep NetBox custom fields declared only in `custom_fields.py`; both startup bootstrap and extras routes import the same inventory object.
+- Custom-field reconcile must preserve operator-added `object_types`: use the
+  live lookup record for both the object-type union and reconcile diff, and
+  fail the field on lookup errors rather than sending a declared-only
+  `object_types` payload.
 - Surface predictable errors through `ProxboxException`.
 - Keep response payloads compatible with both JSON and stream transports when a service is reused in SSE or WebSocket paths.
 - Cloud-network helpers must use `proxbox_api.netbox_rest` with an existing

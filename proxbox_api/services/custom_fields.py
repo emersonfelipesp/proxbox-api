@@ -650,6 +650,7 @@ CUSTOM_FIELD_INVENTORY: tuple[dict[str, object], ...] = (
 
 _CUSTOM_FIELDS_CACHE: tuple[dict[str, object], ...] | None = None
 _CUSTOM_FIELDS_LOCK = asyncio.Lock()
+_CUSTOM_FIELDS_PATH = "/api/extras/custom-fields/"
 
 
 def _copy_payload(payload: Mapping[str, object]) -> dict[str, object]:
@@ -705,25 +706,29 @@ def _normalize_current_object_types(raw_current: object) -> list[str]:
     return normalized
 
 
-async def _fetch_existing_custom_field(netbox_session: object, name: str) -> object | None:
+async def _fetch_existing_custom_field(
+    netbox_session: object,
+    name: str,
+) -> netbox_rest.RestRecord | None:
+    netbox_rest.clear_rest_get_cache_for_path(netbox_session, _CUSTOM_FIELDS_PATH)
     try:
         return await netbox_rest.rest_first_async(
             netbox_session,
-            "/api/extras/custom-fields/",
+            _CUSTOM_FIELDS_PATH,
             query={"name": name, "limit": 2},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "Could not pre-fetch custom field '%s' for object_types union: %s",
+            "Could not fetch custom field '%s' for failure-safe reconcile: %s",
             name,
             exc,
         )
-        return None
+        raise
 
 
-async def _union_object_types_with_current(
-    netbox_session: object,
+def _union_object_types_from_existing(
     custom_field: dict[str, object],
+    existing: netbox_rest.RestRecord | None,
 ) -> None:
     """Mutate ``custom_field['object_types']`` to be current plus desired.
 
@@ -735,7 +740,6 @@ async def _union_object_types_with_current(
     name = custom_field.get("name")
     if not isinstance(desired, list) or not name:
         return
-    existing = await _fetch_existing_custom_field(netbox_session, str(name))
     if existing is None:
         return
     current = _normalize_current_object_types(existing.serialize().get("object_types"))
@@ -748,6 +752,18 @@ async def _union_object_types_with_current(
             ", ".join(operator_added),
         )
     custom_field["object_types"] = union
+
+
+async def _union_object_types_with_current(
+    netbox_session: object,
+    custom_field: dict[str, object],
+) -> None:
+    """Fetch the current field and merge operator-added object types."""
+    name = custom_field.get("name")
+    if not isinstance(custom_field.get("object_types"), list) or not name:
+        return
+    existing = await _fetch_existing_custom_field(netbox_session, str(name))
+    _union_object_types_from_existing(custom_field, existing)
 
 
 def _resolve_custom_field_delay() -> float:
@@ -764,9 +780,22 @@ async def custom_field_payload_for_reconcile(
     custom_field: Mapping[str, object],
 ) -> dict[str, object]:
     """Return a mutable reconcile payload with operator-added scopes merged."""
-    payload = _copy_payload(custom_field)
-    await _union_object_types_with_current(netbox_session, payload)
+    payload, _ = await _custom_field_payload_and_existing(netbox_session, custom_field)
     return payload
+
+
+async def _custom_field_payload_and_existing(
+    netbox_session: object,
+    custom_field: Mapping[str, object],
+) -> tuple[dict[str, object], netbox_rest.RestRecord | None]:
+    """Return the reconcile payload and the exact record used for its merge."""
+    payload = _copy_payload(custom_field)
+    existing: netbox_rest.RestRecord | None = None
+    name = payload.get("name")
+    if isinstance(name, str) and name:
+        existing = await _fetch_existing_custom_field(netbox_session, name)
+        _union_object_types_from_existing(payload, existing)
+    return payload, existing
 
 
 def _current_custom_field_normalizer(record: dict[str, object]) -> dict[str, object]:
@@ -807,7 +836,7 @@ async def reconcile_custom_field_with_status(
     custom_field: Mapping[str, object],
 ) -> ReconcileResult:
     """Reconcile one declared NetBox custom field and return its status."""
-    payload = await custom_field_payload_for_reconcile(netbox_session, custom_field)
+    payload, existing = await _custom_field_payload_and_existing(netbox_session, custom_field)
     name = payload.get("name")
     if not isinstance(name, str) or not name:
         raise ProxboxException(
@@ -816,11 +845,13 @@ async def reconcile_custom_field_with_status(
         )
     return await netbox_rest.rest_reconcile_async_with_status(
         netbox_session,
-        "/api/extras/custom-fields/",
+        _CUSTOM_FIELDS_PATH,
         lookup={"name": name},
         payload=payload,
         schema=NetBoxCustomFieldSyncState,
         current_normalizer=_current_custom_field_normalizer,
+        patchable_fields=None if existing is not None else set(payload) - {"object_types"},
+        existing_record=existing,
     )
 
 
@@ -911,6 +942,10 @@ async def reconcile_custom_fields(
     async with _CUSTOM_FIELDS_LOCK:
         if force:
             invalidate_custom_fields_cache()
+            netbox_rest.clear_rest_get_cache_for_path(
+                netbox_session,
+                _CUSTOM_FIELDS_PATH,
+            )
         else:
             cached = cached_custom_fields()
             if cached is not None:

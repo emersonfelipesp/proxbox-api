@@ -33,8 +33,9 @@ curl -fsS -X POST \
   http://localhost:8800/extras/custom-fields/reconcile
 ```
 
-This bypasses and refreshes the process-local custom-field cache, re-reads
-live NetBox, creates missing fields, and patches drifted managed attributes.
+This bypasses and refreshes the process-local custom-field cache, clears the
+custom-field entries from the lower-level NetBox GET cache, re-reads live
+NetBox, creates missing fields, and patches drifted managed attributes.
 It is idempotent: repeated calls should not churn NetBox when the fields
 already match.
 
@@ -49,8 +50,11 @@ for older callers, but new automation should use the POST route.
    `/api/extras/custom-fields/`.
 
 Operator-added `object_types` on Proxbox custom fields are preserved. The
-reconcile path unions the declared object types with the live NetBox value
-before patching, so manually added scopes are not removed.
+reconcile path performs one lookup per field and uses that same live record to
+union the declared object types with the current NetBox value before patching,
+so manually added scopes are not removed. If the field lookup fails, that field
+is reported as failed instead of sending a declared-only `object_types` payload
+that could shrink operator-added scopes.
 
 `GET /clear-cache` also invalidates the custom-field cache, but it does not
 reconcile NetBox. Use the POST route when fields are missing or drifted.
