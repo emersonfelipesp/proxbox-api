@@ -49,13 +49,27 @@ para clientes antigos, mas automacoes novas devem usar a rota POST.
 3. Se ainda houver warnings, confirme que o token do NetBox pode ler e escrever
    em `/api/extras/custom-fields/`.
 
-`object_types` adicionados por operadores em custom fields do Proxbox sao
-preservados. O reconcile faz uma consulta por campo e usa esse mesmo registro
-ao vivo para unir os object types declarados com o valor atual do NetBox antes
-do patch, entao escopos manuais nao sao removidos. Se a consulta do campo
-falhar, esse campo e reportado como falho em vez de enviar um payload
-`object_types` apenas declarado que poderia reduzir escopos adicionados por
-operadores.
+Durante o reconcile normal, `object_types` adicionados por operadores em custom
+fields do Proxbox sao preservados. O reconcile faz uma consulta por campo e usa
+esse mesmo registro ao vivo para unir os object types declarados com o valor
+atual do NetBox antes do patch, entao escopos manuais nao sao removidos. Se a
+consulta do campo falhar, esse campo e reportado como falho em vez de enviar um
+payload `object_types` apenas declarado que poderia reduzir escopos adicionados
+por operadores.
+
+## Limitacao conhecida
+
+O reconcile de custom fields le um campo, combina object types e depois grava.
+A API REST do NetBox nao oferece compare-and-swap para essa operacao, entao se
+um operador editar os object types de um campo na UI do NetBox exatamente no
+momento em que o reconcile esta adicionando um object type ausente, a edicao
+concorrente pode ser sobrescrita.
+
+A janela e de milissegundos e so existe quando o reconcile esta realmente
+adicionando um object type declarado ausente. Se o conjunto declarado ja estiver
+presente, `object_types` nao e gravado. Evite editar object types de custom
+fields na UI do NetBox enquanto uma sincronizacao ou reconcile estiver em
+execucao.
 
 `GET /clear-cache` tambem invalida o cache de custom fields, mas nao faz
 reconcile no NetBox. Use a rota POST quando campos estiverem ausentes ou com

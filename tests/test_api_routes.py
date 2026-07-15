@@ -53,6 +53,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_virtual_machine_by_netbox_id,
     create_virtual_machine_by_netbox_id_stream,
 )
+from proxbox_api.services import custom_fields as custom_fields_service
 from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.devices import create_proxmox_devices
@@ -349,6 +350,62 @@ def test_force_reconcile_custom_fields_bypasses_success_cache(monkeypatch):
     cached_after_force = asyncio.run(create_custom_fields(netbox_session=session))
     assert cached_after_force == second_result
     assert len(session.client.calls) == second_call_count
+
+
+def test_create_custom_fields_rejects_unverified_duplicate_refetch_miss(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            self.calls.append((method, path, query, payload, expect_json))
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
+            if method == "POST" and path == "/api/extras/custom-fields/":
+                return ApiResponse(
+                    status=400,
+                    text=json.dumps({"detail": "Custom field with this name already exists."}),
+                )
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    field = next(
+        dict(candidate)
+        for candidate in custom_fields_service.CUSTOM_FIELD_INVENTORY
+        if candidate["name"] == "proxmox_vm_id"
+    )
+    monkeypatch.setattr(custom_fields_service, "CUSTOM_FIELD_INVENTORY", (field,))
+    monkeypatch.setattr(netbox_rest.asyncio, "sleep", _no_sleep)
+
+    invalidate_custom_fields_cache()
+    session = SimpleNamespace(client=FakeClient())
+
+    with pytest.raises(ProxboxException) as excinfo:
+        asyncio.run(create_custom_fields(netbox_session=session))
+
+    assert excinfo.value.detail["reason"] == "custom_field_sync_failed"
+    assert excinfo.value.detail["failed_fields"] == [
+        {
+            "name": "proxmox_vm_id",
+            "error": "NetBox returned an unverified custom-field record without an id.",
+        }
+    ]
+    assert custom_fields_service._CUSTOM_FIELDS_CACHE is None
+
+    first_call_count = len(session.client.calls)
+    with pytest.raises(ProxboxException):
+        asyncio.run(create_custom_fields(netbox_session=session))
+
+    assert len(session.client.calls) > first_call_count
+    post_calls = [
+        call
+        for call in session.client.calls
+        if call[0] == "POST" and call[1] == "/api/extras/custom-fields/"
+    ]
+    assert len(post_calls) == 2
+    assert custom_fields_service._CUSTOM_FIELDS_CACHE is None
 
 
 def test_force_reconcile_custom_fields_recreates_deleted_field_with_stale_get_cache(

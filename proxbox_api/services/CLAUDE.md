@@ -42,6 +42,10 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   live lookup record for both the object-type union and reconcile diff, and
   fail the field on lookup errors rather than sending a declared-only
   `object_types` payload.
+- Custom-field reconcile must only cache records verified from NetBox. If the
+  shared REST reconciler returns an unverified/synthetic record without a
+  NetBox-assigned `id`, report that custom field as failed and leave the
+  process-local custom-field cache empty.
 - Surface predictable errors through `ProxboxException`.
 - Keep response payloads compatible with both JSON and stream transports when a service is reused in SSE or WebSocket paths.
 - Cloud-network helpers must use `proxbox_api.netbox_rest` with an existing

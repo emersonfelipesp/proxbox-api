@@ -49,12 +49,24 @@ for older callers, but new automation should use the POST route.
 3. If warnings remain, verify the NetBox token can read and write
    `/api/extras/custom-fields/`.
 
-Operator-added `object_types` on Proxbox custom fields are preserved. The
-reconcile path performs one lookup per field and uses that same live record to
-union the declared object types with the current NetBox value before patching,
-so manually added scopes are not removed. If the field lookup fails, that field
-is reported as failed instead of sending a declared-only `object_types` payload
-that could shrink operator-added scopes.
+During ordinary reconcile, operator-added `object_types` on Proxbox custom
+fields are preserved. The reconcile path performs one lookup per field and uses
+that same live record to union the declared object types with the current
+NetBox value before patching, so manually added scopes are not removed. If the
+field lookup fails, that field is reported as failed instead of sending a
+declared-only `object_types` payload that could shrink operator-added scopes.
+
+## Known limitation
+
+Custom-field reconcile reads a field, merges object types, then writes. NetBox's
+REST API does not offer compare-and-swap for this operation, so if an operator
+edits a field's object types in the NetBox UI at the exact moment reconcile is
+adding a missing object type, the concurrent edit can be overwritten.
+
+The window is milliseconds and only opens when reconcile is actually adding a
+missing declared object type. If the declared set is already present,
+`object_types` is not written at all. Avoid editing custom-field object types
+in the NetBox UI while a sync or reconcile is running.
 
 `GET /clear-cache` also invalidates the custom-field cache, but it does not
 reconcile NetBox. Use the POST route when fields are missing or drifted.

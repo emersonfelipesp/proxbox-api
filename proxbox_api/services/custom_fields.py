@@ -775,15 +775,6 @@ def _resolve_custom_field_delay() -> float:
     )
 
 
-async def custom_field_payload_for_reconcile(
-    netbox_session: object,
-    custom_field: Mapping[str, object],
-) -> dict[str, object]:
-    """Return a mutable reconcile payload with operator-added scopes merged."""
-    payload, _ = await _custom_field_payload_and_existing(netbox_session, custom_field)
-    return payload
-
-
 async def _custom_field_payload_and_existing(
     netbox_session: object,
     custom_field: Mapping[str, object],
@@ -865,7 +856,23 @@ async def _reconcile_custom_fields_uncached(netbox_session: object) -> list[dict
     for custom_field in CUSTOM_FIELD_INVENTORY:
         try:
             result = await reconcile_custom_field_with_status(netbox_session, custom_field)
-            fields.append(result.record.serialize())
+            serialized = result.record.serialize()
+            if serialized.get("id") is None:
+                had_failures = True
+                error = "NetBox returned an unverified custom-field record without an id."
+                failed_fields.append(
+                    {
+                        "name": str(custom_field.get("name", "unknown")),
+                        "error": error,
+                    }
+                )
+                logger.warning(
+                    "Failed to create/update custom field '%s': %s",
+                    custom_field.get("name", "unknown"),
+                    error,
+                )
+            else:
+                fields.append(serialized)
         except ProxboxException as exc:
             had_failures = True
             failed_fields.append(
