@@ -21,7 +21,7 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 | `bootstrap.py` | Initializes SQLite tables, opens the default NetBox session, and records bootstrap status for health checks. Called once during lifespan startup. |
 | `cors.py` | Builds CORS allowed-origin list from active NetBox endpoint records. |
 | `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
-| `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`). |
+| `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including NetBox GET and custom-field reconcile cache invalidation. |
 | `websockets.py` | WebSocket connection manager — tracks active connections and broadcasts sync progress messages. |
 | `full_update.py` | `POST /full-update` endpoint — orchestrates a full Proxmox-to-NetBox sync run with SSE or WebSocket streaming. Each handler registers its `operation_id` via `sync_state` so `GET /sync/active` reflects in-flight work. |
 | `sync_state.py` | Process-local registry of in-flight sync runs. Exposes `register_active_sync` (async context manager), `acquire_active_sync` / `release_active_sync` (for non-`with` call sites), and `get_active_sync` / `is_active` for the `/sync/active` probe. |
@@ -34,9 +34,10 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 1. `create_app()` is called (imported by `proxbox_api.main`).
 2. Lifespan starts: `bootstrap.py` initializes the database and default NetBox session.
 3. Generated Proxmox routes are loaded and registered from `proxbox_api/generated/`.
-4. Middleware (CORS, logging) and exception handlers are attached.
-5. All routers from `proxbox_api/routes/` are mounted.
-6. App is ready to serve.
+4. The NetBox bootstrap pass records `app.state.bootstrap_status`, which is exposed by `GET /extras/bootstrap-status`.
+5. Middleware (CORS, logging) and exception handlers are attached.
+6. All routers from `proxbox_api/routes/` are mounted.
+7. App is ready to serve.
 
 ## Key Rules
 

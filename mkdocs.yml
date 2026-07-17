@@ -75,6 +75,7 @@ nav:
       - Overwrite Flags: sync/overwrite-flags.md
       - Scheduler Container: sync/scheduler-container.md
   - Operations:
+      - Custom Field Recovery: operations/custom-fields.md
       - Hardware Discovery: operations/hardware-discovery.md
       - Firecracker Host-Agent Provisioning: operations/firecracker.md
   - Development:

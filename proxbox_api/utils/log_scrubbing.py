@@ -13,9 +13,7 @@ SENSITIVE_KEY_RE = re.compile(r"^(password|cipassword|secret|token)$", re.IGNORE
 # "password", so ``cipassword`` would never be matched — the exact gap that
 # leaked the Proxmox cipassword into 502 bodies / SSE frames. Over-matching a
 # compound key (``mypassword``) only over-redacts, which is safe.
-PASSWORD_LINE_RE = re.compile(
-    r"(?im)(['\"]?(?:ci)?password['\"]?\s*[:=]\s*['\"]?)[^\r\n,}\]\"']+"
-)
+PASSWORD_LINE_RE = re.compile(r"(?im)(['\"]?(?:ci)?password['\"]?\s*[:=]\s*['\"]?)[^\r\n,}\]\"']+")
 
 
 def _scrub_value(value: object) -> object:

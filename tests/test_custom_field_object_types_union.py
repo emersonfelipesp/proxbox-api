@@ -10,15 +10,22 @@ pre-merges current ∪ desired before reconcile, so the diff is one-sided
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from types import SimpleNamespace
 
 import pytest
+from netbox_sdk.client import ApiResponse
 
+from proxbox_api.exception import ProxboxException
 from proxbox_api.routes.extras import (
     _coerce_object_type_entry,
     _normalize_current_object_types,
     _union_object_types_with_current,
+)
+from proxbox_api.services.custom_fields import (
+    CUSTOM_FIELD_INVENTORY,
+    reconcile_custom_field_with_status,
 )
 
 
@@ -92,7 +99,7 @@ def test_union_preserves_operator_additions(monkeypatch, proxbox_caplog):
         assert query == {"name": "proxmox_last_updated", "limit": 2}
         return _record({"object_types": ["virtualization.virtualmachine", "extras.tag"]})
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {
         "name": "proxmox_last_updated",
@@ -115,7 +122,7 @@ def test_union_handles_dict_shape_object_types(monkeypatch):
     async def _fake_first(_session, _path, query=None):
         return _record({"object_types": [{"app_label": "extras", "model": "tag"}]})
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {
         "name": "proxmox_last_updated",
@@ -132,7 +139,7 @@ def test_union_skips_when_no_existing_record(monkeypatch):
     async def _fake_first(_session, _path, query=None):
         return None
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     desired = ["virtualization.virtualmachine", "dcim.device"]
     field: dict[str, object] = {"name": "proxmox_last_updated", "object_types": list(desired)}
@@ -140,23 +147,110 @@ def test_union_skips_when_no_existing_record(monkeypatch):
     assert field["object_types"] == desired  # untouched, no shrink
 
 
-def test_union_logs_warning_when_prefetch_raises(monkeypatch, proxbox_caplog):
+def test_union_raises_when_prefetch_raises(monkeypatch, proxbox_caplog):
     async def _fake_first(_session, _path, query=None):
         raise RuntimeError("netbox unreachable")
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     desired = ["virtualization.virtualmachine"]
     field: dict[str, object] = {"name": "proxmox_last_updated", "object_types": list(desired)}
 
     proxbox_caplog.set_level(logging.WARNING)
-    _run(_union_object_types_with_current(object(), field))
+    with pytest.raises(RuntimeError, match="netbox unreachable"):
+        _run(_union_object_types_with_current(object(), field))
 
     assert field["object_types"] == desired  # never shrunk on error
     assert any(
-        "netbox unreachable" in r.message or "Could not pre-fetch" in r.message
+        "netbox unreachable" in r.message or "Could not fetch" in r.message
         for r in proxbox_caplog.records
     )
+
+
+def test_reconcile_fails_field_when_lookup_errors_before_object_types_patch(monkeypatch):
+    class FakeClient:
+        def __init__(self, existing: dict[str, object]) -> None:
+            self.existing = dict(existing)
+            self.get_calls = 0
+            self.patch_payloads: list[dict[str, object]] = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                self.get_calls += 1
+                if self.get_calls == 1:
+                    raise RuntimeError("transient lookup failure")
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps({"count": 1, "results": [self.existing]}),
+                )
+            if method == "PATCH" and path == "/api/extras/custom-fields/7/":
+                self.patch_payloads.append(dict(payload or {}))
+                self.existing.update(payload or {})
+                return ApiResponse(status=200, text=json.dumps(self.existing))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    field = next(
+        dict(candidate)
+        for candidate in CUSTOM_FIELD_INVENTORY
+        if candidate["name"] == "proxmox_last_updated"
+    )
+    existing = {
+        "id": 7,
+        **field,
+        "object_types": [*field["object_types"], "extras.tag"],
+    }
+    session = SimpleNamespace(client=FakeClient(existing))
+    monkeypatch.setenv("PROXBOX_NETBOX_MAX_RETRIES", "0")
+
+    with pytest.raises(ProxboxException):
+        _run(reconcile_custom_field_with_status(session, field))
+
+    assert session.client.patch_payloads == []
+
+
+def test_reconcile_duplicate_refetch_does_not_shrink_object_types(monkeypatch):
+    class FakeClient:
+        def __init__(self, existing: dict[str, object]) -> None:
+            self.existing = dict(existing)
+            self.get_calls = 0
+            self.patch_payloads: list[dict[str, object]] = []
+
+        async def request(self, method, path, *, query=None, payload=None, expect_json=True):
+            if method == "GET" and path == "/api/extras/custom-fields/":
+                self.get_calls += 1
+                results = [] if self.get_calls == 1 else [self.existing]
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps({"count": len(results), "results": results}),
+                )
+            if method == "POST" and path == "/api/extras/custom-fields/":
+                return ApiResponse(
+                    status=400,
+                    text=json.dumps({"detail": "Custom field with this name already exists."}),
+                )
+            if method == "PATCH" and path == "/api/extras/custom-fields/7/":
+                self.patch_payloads.append(dict(payload or {}))
+                self.existing.update(payload or {})
+                return ApiResponse(status=200, text=json.dumps(self.existing))
+            raise AssertionError((method, path, query, payload, expect_json))
+
+    field = next(
+        dict(candidate)
+        for candidate in CUSTOM_FIELD_INVENTORY
+        if candidate["name"] == "proxmox_last_updated"
+    )
+    existing = {
+        "id": 7,
+        **field,
+        "object_types": [*field["object_types"], "extras.tag"],
+    }
+    session = SimpleNamespace(client=FakeClient(existing))
+    monkeypatch.setenv("PROXBOX_NETBOX_MAX_RETRIES", "0")
+
+    result = _run(reconcile_custom_field_with_status(session, field))
+
+    assert result.status == "unchanged"
+    assert session.client.patch_payloads == []
 
 
 def test_union_skips_when_desired_is_not_list(monkeypatch):
@@ -169,7 +263,7 @@ def test_union_skips_when_desired_is_not_list(monkeypatch):
         called["count"] += 1
         return None
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {"name": "proxmox_last_updated", "object_types": None}
     _run(_union_object_types_with_current(object(), field))

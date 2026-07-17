@@ -36,6 +36,7 @@ docs/
 │   ├── overwrite-flags.md
 │   └── scheduler-container.md
 ├── operations/                 # Operational guides
+│   ├── custom-fields.md        # Custom-field reconcile and recovery procedure
 │   ├── firecracker.md          # Firecracker host-agent provisioning
 │   └── hardware-discovery.md   # Hardware discovery and DCIM sync
 └── pt-BR/                      # Brazilian Portuguese translations

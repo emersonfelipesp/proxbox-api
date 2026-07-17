@@ -85,7 +85,7 @@ def test_union_preserves_operator_additions_across_supported_netbox_versions(
         assert query == {"name": "proxmox_last_updated", "limit": 2}
         return _record({"object_types": list(current)})
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {
         "name": "proxmox_last_updated",
@@ -112,7 +112,7 @@ def test_union_handles_dict_shape_defensively_across_versions(monkeypatch, netbo
     async def _fake_first(_session, _path, query=None):
         return _record({"object_types": [{"app_label": "extras", "model": "tag"}]})
 
-    monkeypatch.setattr("proxbox_api.routes.extras.rest_first_async", _fake_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_first)
 
     field: dict[str, object] = {
         "name": "proxmox_last_updated",
