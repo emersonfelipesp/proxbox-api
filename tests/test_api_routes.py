@@ -15,8 +15,10 @@ from httpx import ASGITransport, AsyncClient
 from netbox_sdk.client import ApiResponse
 
 from proxbox_api import netbox_rest
+from proxbox_api.app.full_update import full_update_router
+from proxbox_api.constants import DISCOVERY_TAG_NODE
 from proxbox_api.database import NetBoxEndpoint
-from proxbox_api.dependencies import ensure_netbox_sync_dependencies
+from proxbox_api.dependencies import ensure_netbox_sync_dependencies, proxbox_tag
 from proxbox_api.exception import ProxboxException
 from proxbox_api.main import (
     app,
@@ -57,6 +59,7 @@ from proxbox_api.services import custom_fields as custom_fields_service
 from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.devices import create_proxmox_devices
+from proxbox_api.session.proxmox_providers import proxmox_sessions_dep
 
 
 def test_root_route_returns_service_metadata():
@@ -97,6 +100,89 @@ def test_vm_create_routes_run_netbox_dependency_bootstrap():
             dependency.dependency is ensure_netbox_sync_dependencies
             for dependency in route.dependencies
         ), f"{path} does not bootstrap NetBox sync dependencies"
+
+
+def test_full_update_routes_run_netbox_dependency_bootstrap():
+    """Both full-update entrypoints must run the live NetBox bootstrap dependency."""
+    target_paths = {"/full-update", "/full-update/stream"}
+    routes = {
+        route.path: route
+        for route in full_update_router.routes
+        if isinstance(route, APIRoute)
+        and route.path in target_paths
+        and "GET" in (route.methods or set())
+    }
+
+    assert set(routes) == target_paths
+    for path, route in routes.items():
+        assert any(
+            dependency.name == "_sync_deps" and dependency.call is ensure_netbox_sync_dependencies
+            for dependency in route.dependant.dependencies
+        ), f"{path} does not bootstrap NetBox sync dependencies"
+
+
+def test_full_update_route_bootstrap_runs_before_vm_creation(auth_test_client, monkeypatch):
+    """Regression: discovery tags must exist before full-update enters the VM stage."""
+    events: list[str] = []
+    tag_slugs: set[str] = set()
+
+    async def _fake_bootstrap():
+        events.append("bootstrap")
+        tag_slugs.add(DISCOVERY_TAG_NODE)
+        return BootstrapStatus(created=[f"tag:{DISCOVERY_TAG_NODE}"])
+
+    async def _fake_devices(**kwargs):
+        events.append("devices")
+        return []
+
+    async def _fake_storage(**kwargs):
+        events.append("storage")
+        return []
+
+    async def _fake_vms(**kwargs):
+        events.append("virtual-machines")
+        assert DISCOVERY_TAG_NODE in tag_slugs
+        return []
+
+    async def _empty_list(**kwargs):
+        return []
+
+    async def _empty_count(**kwargs):
+        return {"count": 0, "created": 0, "updated": 0, "skipped": 0}
+
+    async def _empty_updates(**kwargs):
+        return {"created": 0, "updated": 0, "errors": 0}
+
+    app.dependency_overrides[ensure_netbox_sync_dependencies] = _fake_bootstrap
+    app.dependency_overrides[proxmox_sessions_dep] = lambda: []
+    app.dependency_overrides[create_custom_fields] = lambda: []
+    app.dependency_overrides[proxbox_tag] = lambda: SimpleNamespace(
+        id=1, name="Proxbox", slug="proxbox", color="ff5722"
+    )
+
+    monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fake_devices)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_storages", _fake_storage)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_disks", _empty_count)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_backups", _empty_list
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_snapshots", _empty_count
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories", _empty_count
+    )
+    monkeypatch.setattr("proxbox_api.app.full_update.create_all_device_interfaces", _empty_list)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_only_vm_interfaces", _empty_list)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_only_vm_ip_addresses", _empty_list)
+    monkeypatch.setattr("proxbox_api.app.full_update.sync_all_replications", _empty_updates)
+    monkeypatch.setattr("proxbox_api.app.full_update.sync_all_backup_routines", _empty_updates)
+
+    response = auth_test_client.get("/full-update")
+
+    assert response.status_code == 200
+    assert events.index("bootstrap") < events.index("virtual-machines")
 
 
 def test_create_proxmox_devices_uses_request_scoped_rest_session():

@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 from unittest.mock import AsyncMock
 
+from proxbox_api.constants import DISCOVERY_TAG_NODE
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,10 @@ class _RecordingSession:
 
     def record_call(self) -> None:
         self.calls.append((self._active is not None, self._active))
+
+
+def _sync_dependency_status() -> BootstrapStatus:
+    return BootstrapStatus(created=[f"tag:{DISCOVERY_TAG_NODE}"])
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +141,7 @@ def test_full_update_sync_does_not_call_activate_branch_without_schema_id(monkey
     asyncio.run(
         full_update_sync(
             netbox_session=session,
-            _sync_deps=BootstrapStatus(),
+            _sync_deps=_sync_dependency_status(),
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
@@ -164,7 +169,7 @@ def test_full_update_sync_invokes_activate_branch_with_schema_id(monkeypatch):
     asyncio.run(
         full_update_sync(
             netbox_session=session,
-            _sync_deps=BootstrapStatus(),
+            _sync_deps=_sync_dependency_status(),
             pxs=[],
             cluster_status=[],
             cluster_resources=[],

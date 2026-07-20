@@ -16,12 +16,17 @@ and snapshots, so the stub list and call signature differ from the
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 
+from proxbox_api.constants import DISCOVERY_TAG_NODE
+from proxbox_api.dependencies import ensure_netbox_sync_dependencies, proxbox_tag
+from proxbox_api.routes.extras import create_custom_fields
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
+from proxbox_api.session.proxmox_providers import proxmox_sessions_dep
 
 
 def _stub_dependencies(monkeypatch):
@@ -72,6 +77,21 @@ async def _drain_stream(response) -> None:
         pass
 
 
+def _decode_sse_events(payload: str) -> list[tuple[str, dict[str, object]]]:
+    events: list[tuple[str, dict[str, object]]] = []
+    for frame in payload.split("\n\n"):
+        event_name: str | None = None
+        data: str | None = None
+        for line in frame.splitlines():
+            if line.startswith("event: "):
+                event_name = line.removeprefix("event: ")
+            if line.startswith("data: "):
+                data = line.removeprefix("data: ")
+        if event_name and data:
+            events.append((event_name, json.loads(data)))
+    return events
+
+
 def test_stream_does_not_activate_branch_when_schema_id_missing(monkeypatch):
     _stub_dependencies(monkeypatch)
 
@@ -93,6 +113,39 @@ def test_stream_does_not_activate_branch_when_schema_id_missing(monkeypatch):
     asyncio.run(_drain_stream(response))
 
     session.activate_branch.assert_not_called()
+
+
+def test_stream_bootstrap_done_uses_live_dependency_payload(auth_test_client, monkeypatch):
+    _stub_dependencies(monkeypatch)
+
+    from proxbox_api.main import app
+
+    app.state.bootstrap_status = BootstrapStatus(created=["tag:startup-stale"])
+    live_status = BootstrapStatus(
+        created=[f"tag:{DISCOVERY_TAG_NODE}"],
+        patched=["device-role:Proxmox Node"],
+    )
+
+    async def _fake_bootstrap():
+        return live_status
+
+    app.dependency_overrides[ensure_netbox_sync_dependencies] = _fake_bootstrap
+    app.dependency_overrides[proxmox_sessions_dep] = lambda: []
+    app.dependency_overrides[create_custom_fields] = lambda: []
+    app.dependency_overrides[proxbox_tag] = lambda: SimpleNamespace(
+        id=1, name="Proxbox", slug="proxbox", color="ff5722"
+    )
+
+    with auth_test_client.stream("GET", "/full-update/stream") as response:
+        assert response.status_code == 200
+        payload = "".join(response.iter_text())
+
+    events = _decode_sse_events(payload)
+    bootstrap_payload = next(data for event, data in events if event == "bootstrap_done")
+
+    assert bootstrap_payload["created"] == [f"tag:{DISCOVERY_TAG_NODE}"]
+    assert bootstrap_payload["patched"] == ["device-role:Proxmox Node"]
+    assert "tag:startup-stale" not in bootstrap_payload["created"]
 
 
 def test_stream_activates_branch_with_schema_id(monkeypatch):
