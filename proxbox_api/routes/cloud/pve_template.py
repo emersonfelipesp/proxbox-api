@@ -25,10 +25,12 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
+from proxbox_api.routes.cloud.display import qemu_display_create_kwargs
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
 from proxbox_api.routes.cloud.pve_cloudinit_payload import render_all
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.schemas.cloud_provision import (
+    ProxmoxProductType,
     PVETemplateBuildRequest,
     PVETemplateBuildResponse,
 )
@@ -271,11 +273,10 @@ async def build_pve_template(
             "scsi0": f"{req.vm_storage}:0,import-from={image_volid},discard=on",
             "ide2": f"{req.vm_storage}:cloudinit",
             "boot": "order=scsi0",
-            "serial0": "socket",
-            "vga": "serial0",
             "net0": f"virtio,bridge={req.bridge}",
             "cicustom": cicustom,
         }
+        create_kwargs.update(qemu_display_create_kwargs(ProxmoxProductType.pve))
         create_result = await _maybe_await(
             proxmox.session.nodes(req.target_node).qemu.post(**create_kwargs)
         )

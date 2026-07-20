@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import yaml
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.routes.cloud.catalog import catalog_payload, find_product_version
@@ -40,6 +41,19 @@ def test_catalog_exposes_firewall_appliance_products():
     assert "opnsense" in catalog
     assert catalog["pfsense"][0]["default_provider"] == "release_image"
     assert "source_tree" in catalog["opnsense"][0]["supported_providers"]
+
+
+def test_pve_catalog_selects_proxmox_iso_provider():
+    catalog = catalog_payload()
+    entry = find_product_version(CloudImageProductType.PVE, "9.1.11")
+
+    assert catalog["pve"][0]["default_provider"] == "proxmox_iso"
+    assert catalog["pve"][0]["supported_providers"] == ["proxmox_iso"]
+    assert entry.default_provider == CloudImageBuildProvider.PROXMOX_ISO
+    assert CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE not in entry.supported_providers
+    assert entry.image_url is not None
+    assert entry.image_url.endswith(".iso")
+    assert "cloud.debian.org" not in entry.image_url
 
 
 def test_find_product_version_defaults_to_first_entry():
@@ -132,61 +146,47 @@ def test_pfsense_release_pipeline_returns_first_boot_script_and_qm_commands():
     assert response.status == "planned"
     assert response.first_boot_script is not None
     assert 'PRODUCT="pfsense"' in response.first_boot_script
+    assert response.image_url is not None
+    assert "pfSense-CE" in response.image_url
     assert "qm create 9100" in response.build_script
+    assert "qm set 9100 --serial0 socket --vga serial0" in response.build_script
     assert "qm set 9100 --agent enabled=1" in response.build_script
     assert "qm template 9100" in response.build_script
 
 
-def test_pve_version_pin_keeps_cloud_init_top_level_keys_unindented():
-    response = build_pipeline_response(
+def test_pve_rejects_debian_cloud_image_provider_fast():
+    with pytest.raises(ValidationError) as exc:
         CloudImageTemplateBuildRequest(
             product_type=CloudImageProductType.PVE,
             product_version="9.1.11",
             provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
             vmid=9300,
             name="pve-template",
-            pve_version_pin="9.1.11",
+        )
+
+    assert "PVE products must use provider=proxmox_iso" in str(exc.value)
+
+
+def test_pve_iso_pipeline_uses_graphical_display_and_catalog_iso():
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            product_type=CloudImageProductType.PVE,
+            product_version="9.1.11",
+            provider=CloudImageBuildProvider.PROXMOX_ISO,
+            vmid=9300,
+            name="pve-template",
         )
     )
 
-    assert response.generated_userdata is not None
-    userdata = response.generated_userdata
-    parsed = yaml.safe_load(userdata)
-
-    assert "\nwrite_files:\n  - path:" in userdata
-    assert "\nruncmd:\n  - curl -fsSL -o /etc/apt/trusted.gpg.d/" in userdata
-    assert parsed["resolv_conf"]["nameservers"] == ["1.1.1.1", "8.8.8.8"]
-    assert parsed["write_files"] == [
-        {
-            "path": "/etc/apt/sources.list.d/pve-install-repo.list",
-            "content": (
-                "deb [arch=amd64] http://download.proxmox.com/debian/pve "
-                "bookworm pve-no-subscription\n"
-            ),
-        },
-        {
-            "path": "/etc/apt/preferences.d/nmulticloud-pve-pin",
-            "content": ("Package: proxmox-ve\nPin: version 9.1.11*\nPin-Priority: 1001\n"),
-        },
-    ]
-    assert parsed["runcmd"] == [
-        (
-            "curl -fsSL -o /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg "
-            "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg"
-        ),
-        (
-            "rm -f /etc/apt/sources.list.d/pve-enterprise.list "
-            "/etc/apt/sources.list.d/pbs-enterprise.list"
-        ),
-        "DEBIAN_FRONTEND=noninteractive apt-get update",
-        "DEBIAN_FRONTEND=noninteractive apt-get install -y proxmox-ve",
-        "systemctl enable pveproxy",
-    ]
-    assert userdata.index("proxmox-release-bookworm.gpg") < userdata.index(
-        "rm -f /etc/apt/sources.list.d/"
-    )
-    assert "grub-pc/install_devices multiselect /dev/sda" not in userdata
-    assert "pve-enterprise.sources" not in userdata
+    assert response.provider == CloudImageBuildProvider.PROXMOX_ISO
+    assert response.generated_userdata is None
+    assert response.image_url is not None
+    assert response.image_url.endswith(".iso")
+    assert "cloud.debian.org" not in response.image_url
+    assert "qm set 9300 --ide2 local:iso/" in response.build_script
+    assert "qm set 9300 --vga std" in response.build_script
+    assert "--serial0 socket --vga serial0" not in response.build_script
+    assert "--vga serial0" not in response.build_script
 
 
 def test_opnsense_source_tree_pipeline_uses_catalog_source_path():

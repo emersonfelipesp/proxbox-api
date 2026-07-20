@@ -15,6 +15,7 @@ import subprocess
 from fastapi import HTTPException
 
 from proxbox_api.routes.cloud.catalog import find_product_version
+from proxbox_api.routes.cloud.display import display_config_for_product
 from proxbox_api.schemas.cloud_provision import (
     CloudImageBuildProvider,
     CloudImageTemplateBuildRequest,
@@ -38,6 +39,15 @@ def _target_node(request: CloudImageTemplateBuildRequest) -> str:
 def _artifact_from_url(url: str) -> str:
     name = url.rstrip("/").rsplit("/", 1)[-1]
     return name or "cloud-image-artifact"
+
+
+def _catalog_image_url(
+    request: CloudImageTemplateBuildRequest,
+    entry: CloudImageVersionEntry,
+) -> str | None:
+    if "image_url" in request.model_fields_set and request.image_url:
+        return request.image_url
+    return entry.image_url
 
 
 def _decompressed_name(filename: str, compression: str | None) -> str:
@@ -309,11 +319,17 @@ def _append_template_import_commands(
             'test -n "${IMPORTED_VOLID}"',
             f"qm set {_q(request.vmid)} --scsihw virtio-scsi-pci --scsi0 " + '"${IMPORTED_VOLID}"',
             f"qm set {_q(request.vmid)} --ide2 {_q(request.image_storage + ':cloudinit')}",
-            f"qm set {_q(request.vmid)} --serial0 socket --vga serial0",
             f"qm set {_q(request.vmid)} --boot order=scsi0",
             f"qm set {_q(request.vmid)} --agent enabled=1",
         ]
     )
+    display = display_config_for_product(entry.product_type)
+    if display.serial0:
+        commands.append(
+            f"qm set {_q(request.vmid)} --serial0 {_q(display.serial0)} --vga {_q(display.vga)}"
+        )
+    else:
+        commands.append(f"qm set {_q(request.vmid)} --vga {_q(display.vga)}")
     if request.disk_size_gb:
         commands.append(f"qm resize {_q(request.vmid)} scsi0 {_q(str(request.disk_size_gb) + 'G')}")
 
@@ -350,7 +366,7 @@ def _release_image_script(
     first_boot_script: str | None,
     user_data: str | None,
 ) -> tuple[str, list[str], str]:
-    image_url = request.image_url or entry.image_url
+    image_url = _catalog_image_url(request, entry)
     if not image_url:
         raise HTTPException(
             status_code=422, detail="image_url is required for release image builds."
@@ -374,6 +390,55 @@ def _release_image_script(
     commands.append(f"qemu-img convert -O qcow2 {_q(raw_path)} {_q(qcow_path)}")
     _append_template_import_commands(
         commands, request, entry, qcow_path, first_boot_script, user_data
+    )
+    return "\n".join(commands) + "\n", commands, image_url
+
+
+def _proxmox_iso_script(
+    request: CloudImageTemplateBuildRequest,
+    entry: CloudImageVersionEntry,
+) -> tuple[str, list[str], str]:
+    image_url = _catalog_image_url(request, entry)
+    if not image_url:
+        raise HTTPException(status_code=422, detail="image_url is required for Proxmox ISO builds.")
+    if not image_url.lower().split("?", 1)[0].endswith(".iso"):
+        raise HTTPException(
+            status_code=422,
+            detail="provider=proxmox_iso requires a Proxmox installer .iso image_url.",
+        )
+
+    filename = _artifact_from_url(image_url)
+    iso_path = f"/var/lib/vz/template/iso/{filename}"
+    storage = _storage(request)
+    display = display_config_for_product(entry.product_type)
+    commands = [
+        "set -euo pipefail",
+        "install -d /var/lib/vz/template/iso",
+        f"curl -fL --retry 3 -o {_q(iso_path)} {_q(image_url)}",
+        (
+            f"qm create {_q(request.vmid)} --name {_q(request.name)} "
+            f"--memory {_q(request.memory_mb)} --cores {_q(request.cores)} "
+            f"--net0 {_q('virtio,bridge=' + request.bridge)}"
+        ),
+        f"qm set {_q(request.vmid)} --ostype {_q(request.os_type)}",
+        f"qm set {_q(request.vmid)} --scsihw virtio-scsi-pci --scsi0 {_q(storage + ':0')}",
+        f"qm set {_q(request.vmid)} --ide2 {_q(request.image_storage + ':iso/' + filename + ',media=cdrom')}",
+        f"qm set {_q(request.vmid)} --boot {_q('order=ide2;scsi0')}",
+        f"qm set {_q(request.vmid)} --agent enabled=1",
+    ]
+    if request.cpu:
+        commands.append(f"qm set {_q(request.vmid)} --cpu {_q(request.cpu)}")
+    if display.serial0:
+        commands.append(
+            f"qm set {_q(request.vmid)} --serial0 {_q(display.serial0)} --vga {_q(display.vga)}"
+        )
+    else:
+        commands.append(f"qm set {_q(request.vmid)} --vga {_q(display.vga)}")
+    if request.disk_size_gb:
+        commands.append(f"qm resize {_q(request.vmid)} scsi0 {_q(str(request.disk_size_gb) + 'G')}")
+    commands.append(
+        f"qm set {_q(request.vmid)} --description "
+        f"{_q('Proxmox VE installer VM built by Cloud Image Build Pipeline')}"
     )
     return "\n".join(commands) + "\n", commands, image_url
 
@@ -445,6 +510,14 @@ def _catalog_pipeline_inputs(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     provider = request.provider or entry.default_provider
+    if entry.product_type.value == "pve" and provider == CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "PVE products must use provider=proxmox_iso; "
+                "debian_cloud_image builds are not supported for Proxmox VE."
+            ),
+        )
     if provider not in entry.supported_providers:
         raise HTTPException(
             status_code=422,
@@ -462,7 +535,7 @@ def _catalog_pipeline_inputs(
             os_family=entry.os_family,
             os_codename=entry.os_codename or entry.debian_codename or request.debian_release,
         )
-    elif entry.product_type.value in {"pve", "pbs", "pdm"}:
+    elif entry.product_type.value in {"pbs", "pdm"}:
         user_data = generate_cloud_init_userdata(entry, request)
     else:
         first_boot_script = generate_appliance_first_boot_script(entry, request)
@@ -487,9 +560,11 @@ def build_pipeline_response(
 ) -> CloudImageTemplateBuildResponse:
     entry, provider, user_data, first_boot_script = _resolve_pipeline_inputs(request)
 
-    image_url = request.image_url or entry.image_url
     if provider == CloudImageBuildProvider.SOURCE_TREE:
         build_script, commands = _source_tree_script(request, entry, first_boot_script)
+        image_url = _catalog_image_url(request, entry)
+    elif provider == CloudImageBuildProvider.PROXMOX_ISO:
+        build_script, commands, image_url = _proxmox_iso_script(request, entry)
     else:
         build_script, commands, image_url = _release_image_script(
             request,

@@ -302,6 +302,13 @@ optional `sockets`, `bridge`, `vlan_tag`, and `disk_gb` fields. These are
 applied through the Proxmox API during the clone configuration flow; no direct
 `qm` shell path is used for VM provisioning.
 
+Cloud-image catalog invariant: Proxmox VE products must use the
+`proxmox_iso` provider with official Proxmox VE installer ISO media. Do not
+offer or accept `debian_cloud_image` for PVE catalog builds. Generated PVE
+installer/template setup must use a graphical VGA display for noVNC; reserve
+`serial0` + `vga serial0` for products that intentionally ship serial appliance
+images, currently pfSense and OPNsense.
+
 The Cloud Image Build Pipeline's SSH execution path sets `qm ... --agent
 enabled=1` before converting the VM to a template, so clones inherit the
 Proxmox-side QEMU guest agent setting.

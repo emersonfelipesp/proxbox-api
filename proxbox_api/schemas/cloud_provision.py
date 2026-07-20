@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from proxbox_api.routes.intent.cloud_init import CloudInitPayload
 from proxbox_api.settings_client import get_settings
@@ -50,10 +50,12 @@ class ProxmoxProductType(str, Enum):
 class CloudImageBuildProvider(str, Enum):
     debian_cloud_image = "debian_cloud_image"
     ubuntu_cloud_image = "ubuntu_cloud_image"
+    proxmox_iso = "proxmox_iso"
     release_image = "release_image"
     source_tree = "source_tree"
     DEBIAN_CLOUD_IMAGE = "debian_cloud_image"
     UBUNTU_CLOUD_IMAGE = "ubuntu_cloud_image"
+    PROXMOX_ISO = "proxmox_iso"
     RELEASE_IMAGE = "release_image"
     SOURCE_TREE = "source_tree"
 
@@ -298,6 +300,18 @@ class CloudImageTemplateBuildRequest(BaseModel):
     ssh_port: int = Field(22, ge=1, le=65535)
     ssh_identity_file: str | None = None
     ssh_authorized_keys: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_product_provider_contract(self) -> "CloudImageTemplateBuildRequest":
+        if (
+            self.product_type == ProxmoxProductType.pve
+            and self.provider == CloudImageBuildProvider.debian_cloud_image
+        ):
+            raise ValueError(
+                "PVE products must use provider=proxmox_iso; "
+                "debian_cloud_image builds are not supported for Proxmox VE."
+            )
+        return self
 
     @field_validator("image_url")
     @classmethod

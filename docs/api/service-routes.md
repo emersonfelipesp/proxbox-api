@@ -144,6 +144,11 @@ by VM operational verbs.
 Cloud routes power the NMS Cloud portal. Most routes that touch Proxmox writes
 require `ProxmoxEndpoint.allow_writes=true`; remote SSH execution for the cloud
 image build pipeline also requires `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`.
+PVE product builds in the catalog use `provider="proxmox_iso"` with official
+Proxmox VE installer ISO media; `debian_cloud_image` is rejected for PVE.
+Generated PVE setup uses graphical VGA for noVNC, while serial-only
+`serial0`/`vga serial0` remains limited to serial appliance products such as
+pfSense and OPNsense.
 
 | Method | Path | Purpose |
 |---|---|---|

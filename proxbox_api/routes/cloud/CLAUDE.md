@@ -113,6 +113,16 @@ install `proxmox-backup-server`, `qemu-guest-agent`, and `zabbix-agent2`.
 Operators can override DNS search domain, nameservers, QGA, Zabbix Agent 2, and
 Zabbix server through `CloudImageTemplateBuildRequest`.
 
+For Proxmox VE images, the mounted catalog must use
+`provider="proxmox_iso"` and official Proxmox VE installer ISO media. Reject
+`provider="debian_cloud_image"` for PVE products; do not return to the older
+pattern of installing `proxmox-ve` on a Debian generic cloud image. Generated
+PVE installer/template setup must use a graphical VGA display (`std` unless
+there is a product-specific reason to change it) so the Proxmox UI opens a
+usable noVNC console. Keep `serial0` + `vga serial0` only for serial appliance
+images that intentionally require it, currently pfSense and OPNsense serial
+release/source builds.
+
 ### `cicustom` cloud-init snippet (why this exists)
 
 A Proxmox `cicustom` user-data snippet is the **only** mechanism that runs a full

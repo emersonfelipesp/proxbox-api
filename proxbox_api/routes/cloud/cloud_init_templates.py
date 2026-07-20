@@ -1,10 +1,13 @@
-"""Proxmox product version catalog and cloud-init user-data generator.
+"""Proxmox cloud-init user-data generator for Debian-backed product builds.
 
-Supports three Proxmox products that can be installed from a Debian cloud image via
+Supports Proxmox products that can be installed from a Debian cloud image via
 cloud-init at first boot:
-  - Proxmox VE  (pve)
   - Proxmox Backup Server  (pbs)
   - Proxmox Datacenter Manager  (pdm)
+
+Proxmox VE catalog builds intentionally do not use this path; the mounted Cloud
+Image Build Pipeline catalog requires the ``proxmox_iso`` provider and official
+PVE installer ISO media.
 
 Adding a new release requires only one extra ``ProxmoxProductVersion`` entry in
 ``PRODUCT_CATALOG`` — no other code changes are needed.
@@ -45,40 +48,6 @@ class ProxmoxProductVersion:
 
 
 PRODUCT_CATALOG: dict[ProxmoxProductType, list[ProxmoxProductVersion]] = {
-    ProxmoxProductType.pve: [
-        ProxmoxProductVersion(
-            version="9.2",
-            debian_codename="bookworm",
-            package_name="proxmox-ve",
-            repo_component="pve-no-subscription",
-            repo_suite="pve",
-            extra_services=["pve-cluster", "pvedaemon", "pvestatd"],
-        ),
-        ProxmoxProductVersion(
-            version="8.4",
-            debian_codename="bookworm",
-            package_name="proxmox-ve",
-            repo_component="pve-no-subscription",
-            repo_suite="pve",
-            extra_services=["pve-cluster", "pvedaemon", "pvestatd"],
-        ),
-        ProxmoxProductVersion(
-            version="8.3",
-            debian_codename="bookworm",
-            package_name="proxmox-ve",
-            repo_component="pve-no-subscription",
-            repo_suite="pve",
-            extra_services=["pve-cluster", "pvedaemon", "pvestatd"],
-        ),
-        ProxmoxProductVersion(
-            version="7.4",
-            debian_codename="bullseye",
-            package_name="proxmox-ve",
-            repo_component="pve-no-subscription",
-            repo_suite="pve",
-            extra_services=["pve-cluster", "pvedaemon", "pvestatd"],
-        ),
-    ],
     ProxmoxProductType.pbs: [
         ProxmoxProductVersion(
             version="4.2",

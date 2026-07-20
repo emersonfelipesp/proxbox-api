@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from proxbox_api.routes.cloud import pve_template
 from proxbox_api.routes.cloud.pve_cloudinit_payload import render_all
+from proxbox_api.schemas.cloud_provision import PVETemplateBuildRequest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,6 +32,75 @@ def test_cloud_pve_template_build_route_source_shape() -> None:
         "_gate",
     ):
         assert token in src, f"missing token in pve_template.py: {token!r}"
+    assert '"serial0": "socket"' not in src
+    assert '"vga": "serial0"' not in src
+
+
+@pytest.mark.asyncio
+async def test_pve_template_direct_create_uses_graphical_display(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Config:
+        async def get(self):
+            raise RuntimeError("missing vm")
+
+    class _QemuVm:
+        config = _Config()
+
+    class _Qemu:
+        def __call__(self, _vmid):
+            return _QemuVm()
+
+        async def post(self, **kwargs):
+            captured.update(kwargs)
+            return {"data": "UPID:pve:create"}
+
+    class _Content:
+        async def get(self, **_kwargs):
+            return []
+
+    class _Storage:
+        content = _Content()
+
+        async def post(self, **_kwargs):
+            return {"data": "UPID:pve:download"}
+
+    class _Node:
+        qemu = _Qemu()
+
+        def storage(self, _storage):
+            return _Storage()
+
+    class _Session:
+        def nodes(self, _node):
+            return _Node()
+
+    class _Proxmox:
+        session = _Session()
+
+        async def aclose(self):
+            return None
+
+    async def _fake_gate(_session, _endpoint_id):
+        return object()
+
+    async def _fake_open(_endpoint):
+        return _Proxmox()
+
+    async def _fake_wait(_proxmox, *, node, response):
+        return f"UPID:{node}:ok"
+
+    monkeypatch.setattr(pve_template, "_gate", _fake_gate)
+    monkeypatch.setattr(pve_template, "_open_proxmox_session", _fake_open)
+    monkeypatch.setattr(pve_template, "_wait_for_task", _fake_wait)
+
+    await pve_template.build_pve_template(
+        req=PVETemplateBuildRequest(endpoint_id=1, target_node="pve", vmid=9302),
+        session=object(),
+    )
+
+    assert captured["vga"] == "std"
+    assert "serial0" not in captured
 
 
 def test_pve_cloudinit_payload_renders_required_fields() -> None:

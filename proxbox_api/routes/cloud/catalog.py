@@ -17,39 +17,31 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
     CloudImageProductType.PVE: [
         CloudImageVersionEntry(
             version="9.1.11",
-            label="Proxmox VE 9.1.11 on Debian Bookworm",
+            label="Proxmox VE 9.1 installer ISO",
             product_type=CloudImageProductType.PVE,
-            default_provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
-            supported_providers=[CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE],
+            default_provider=CloudImageBuildProvider.PROXMOX_ISO,
+            supported_providers=[CloudImageBuildProvider.PROXMOX_ISO],
             os_family="proxmox-pve",
-            os_release="bookworm",
-            image_url=(
-                "https://cloud.debian.org/images/cloud/bookworm/latest/"
-                "debian-12-genericcloud-amd64.qcow2"
+            os_release="9",
+            image_url="https://enterprise.proxmox.com/iso/proxmox-ve_9.1-1.iso",
+            notes=(
+                "Proxmox VE must be installed from the official installer ISO; "
+                "do not build PVE by installing proxmox-ve on a Debian cloud image."
             ),
-            debian_codename="bookworm",
-            package_name="proxmox-ve",
-            repo_component="pve-no-subscription",
-            repo_suite="pve",
-            service_name="pveproxy",
         ),
         CloudImageVersionEntry(
             version="8.4",
-            label="Proxmox VE 8.4 on Debian Bookworm",
+            label="Proxmox VE 8.4 installer ISO",
             product_type=CloudImageProductType.PVE,
-            default_provider=CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE,
-            supported_providers=[CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE],
+            default_provider=CloudImageBuildProvider.PROXMOX_ISO,
+            supported_providers=[CloudImageBuildProvider.PROXMOX_ISO],
             os_family="proxmox-pve",
-            os_release="bookworm",
-            image_url=(
-                "https://cloud.debian.org/images/cloud/bookworm/latest/"
-                "debian-12-genericcloud-amd64.qcow2"
+            os_release="8",
+            image_url="https://enterprise.proxmox.com/iso/proxmox-ve_8.4-1.iso",
+            notes=(
+                "Proxmox VE must be installed from the official installer ISO; "
+                "do not build PVE by installing proxmox-ve on a Debian cloud image."
             ),
-            debian_codename="bookworm",
-            package_name="proxmox-ve",
-            repo_component="pve-no-subscription",
-            repo_suite="pve",
-            service_name="pveproxy",
         ),
     ],
     CloudImageProductType.PBS: [

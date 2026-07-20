@@ -15,6 +15,7 @@ from proxbox_api.routes.cloud.cloud_init_templates import (
     generate_cloud_init_userdata,
     generate_firecracker_userdata,
 )
+from proxbox_api.routes.cloud.display import qemu_display_create_kwargs
 from proxbox_api.routes.cloud.pipeline_scripts import build_pipeline_response
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
 from proxbox_api.routes.proxmox.access_gate import gate_ssh_access
@@ -31,6 +32,9 @@ from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 router = APIRouter()
 
 _IMAGE_EXTENSIONS = {".qcow2", ".raw", ".vmdk", ".vma"}
+_PIPELINE_PRODUCT_TYPES = frozenset(
+    {ProxmoxProductType.pve, ProxmoxProductType.pfsense, ProxmoxProductType.opnsense}
+)
 
 
 def _filename_from_request(req: CloudImageTemplateBuildRequest) -> str:
@@ -118,7 +122,7 @@ async def build_cloud_image_template(
         req.execute is not None
         or req.provider is not None
         or req.user_data_yaml is not None
-        or req.product_type in {ProxmoxProductType.pfsense, ProxmoxProductType.opnsense}
+        or req.product_type in _PIPELINE_PRODUCT_TYPES
     ):
         if req.execute:
             if req.endpoint_id is None:
@@ -242,12 +246,11 @@ async def build_cloud_image_template(
             "scsi0": f"{req.vm_storage}:0,import-from={image_volid},discard=on",
             "ide2": f"{req.vm_storage}:cloudinit",
             "boot": "order=scsi0",
-            "serial0": "socket",
-            "vga": "serial0",
             "net0": f"virtio,bridge={req.bridge}",
             "ciuser": req.ciuser,
             "ipconfig0": "ip=dhcp",
         }
+        create_kwargs.update(qemu_display_create_kwargs(req.product_type))
         if req.cpu:
             create_kwargs["cpu"] = req.cpu
         description_parts = [req.description] if req.description else []
