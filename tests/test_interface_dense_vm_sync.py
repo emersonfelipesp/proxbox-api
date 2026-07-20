@@ -340,21 +340,66 @@ class TestBulkFailureSurfacing:
             )
 
     @pytest.mark.asyncio
-    async def test_partial_failure_surfaces(self, monkeypatch):
-        # A reconcile that "succeeds" overall but reports failed > 0 must raise,
-        # not silently return a partial success.
+    async def test_partial_failure_logs_and_returns_successes(self, monkeypatch):
+        # A reconcile that "succeeds" overall but reports failed > 0 must return
+        # the accepted records while surfacing the partial failure as a warning.
+        from types import SimpleNamespace
+
+        from proxbox_api.services.sync import network as network_module
+
+        warning_messages: list[str] = []
+
+        def _capture_warning(message, *args, **_kwargs):
+            warning_messages.append(message % args if args else message)
+
+        async def _partial(*args, **kwargs):
+            return SimpleNamespace(
+                records=[{"id": 10, "name": "net0", "virtual_machine": 1}],
+                created=1,
+                updated=0,
+                unchanged=0,
+                failed=1,
+            )
+
+        monkeypatch.setattr(network_module, "rest_bulk_reconcile_async", _partial)
+        monkeypatch.setattr(network_module.logger, "warning", _capture_warning)
+        records, mapping = await network_module.bulk_reconcile_vm_interfaces(
+            object(),
+            [
+                {"name": "net0", "virtual_machine": 1},
+                {"name": "bad0", "virtual_machine": 2},
+            ],
+        )
+
+        assert records == [{"id": 10, "name": "net0", "virtual_machine": 1}]
+        assert mapping == {("net0", 1): 10}
+        assert any("partial failures" in message for message in warning_messages)
+        assert any("vm_id=2 interface=bad0" in message for message in warning_messages)
+
+    @pytest.mark.asyncio
+    async def test_all_failed_result_raises(self, monkeypatch):
         from types import SimpleNamespace
 
         from proxbox_api.exception import ProxboxException
         from proxbox_api.services.sync import network as network_module
 
-        async def _partial(*args, **kwargs):
-            return SimpleNamespace(records=[], created=0, updated=0, unchanged=0, failed=2)
+        async def _all_failed(*args, **kwargs):
+            return SimpleNamespace(
+                records=[],
+                created=0,
+                updated=0,
+                unchanged=0,
+                failed=2,
+            )
 
-        monkeypatch.setattr(network_module, "rest_bulk_reconcile_async", _partial)
-        with pytest.raises(ProxboxException, match="2 failed record"):
+        monkeypatch.setattr(network_module, "rest_bulk_reconcile_async", _all_failed)
+        with pytest.raises(ProxboxException, match="failed for every payload"):
             await network_module.bulk_reconcile_vm_interfaces(
-                object(), [{"name": "net0", "virtual_machine": 1}]
+                object(),
+                [
+                    {"name": "net0", "virtual_machine": 1},
+                    {"name": "net1", "virtual_machine": 1},
+                ],
             )
 
 

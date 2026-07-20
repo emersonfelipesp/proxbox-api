@@ -24,6 +24,7 @@ from proxbox_api.services.sync.individual.helpers import (
     get_serialized_first_record,
     resolve_guest_interface,
 )
+from proxbox_api.services.sync.network import normalize_vm_interface_name
 from proxbox_api.services.sync.sync_state_writer import write_vm_interface_sync_state
 from proxbox_api.services.sync.vm_helpers import record_id
 
@@ -131,6 +132,11 @@ async def sync_interface_individual(  # noqa: C901
         guest_interfaces,
         interface_name,
         mac_address,
+    )
+    resolved_name = normalize_vm_interface_name(
+        resolved_name,
+        fallback=interface_name,
+        vm_name=f"vmid={vmid}",
     )
 
     proxmox_resource: dict[str, object] = {

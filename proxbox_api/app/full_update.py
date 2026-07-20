@@ -78,6 +78,13 @@ def _result_count(value) -> int:
     return 0
 
 
+def _result_warnings(value) -> list[dict[str, object]]:
+    warnings = getattr(value, "warnings", None)
+    if isinstance(warnings, list):
+        return [item for item in warnings if isinstance(item, dict)]
+    return []
+
+
 @full_update_router.get(
     "/full-update",
     dependencies=[Depends(reset_sidecar_availability_cache)],
@@ -167,6 +174,7 @@ async def _full_update_sync_impl(  # noqa: C901
     sync_node_interfaces: list = []
     sync_vm_interfaces: list = []
     sync_vm_ip_addresses: list = []
+    sync_warnings: list[dict[str, object]] = []
     orphan_sweep_result: dict[str, object] | None = None
 
     tag_refs = [
@@ -350,6 +358,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 use_websocket=False,
                 overwrite_flags=overwrite_flags,
             )
+            sync_warnings.extend(_result_warnings(sync_vm_interfaces))
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -460,6 +469,8 @@ async def _full_update_sync_impl(  # noqa: C901
         }
         if orphan_sweep_result is not None:
             result["orphan_sweep"] = orphan_sweep_result
+        if sync_warnings:
+            result["warnings"] = sync_warnings
         return result
     finally:
         await release_active_sync(_active_entry)
@@ -513,6 +524,7 @@ async def full_update_sync_stream(  # noqa: C901
         sync_vm_ip_addresses: list = []
         sync_replications: dict = {}
         sync_backup_routines: dict = {}
+        sync_warnings: list[dict[str, object]] = []
         orphan_sweep_result: dict[str, object] | None = None
         devices_bridge = WebSocketSSEBridge()
         storage_bridge = WebSocketSSEBridge()
@@ -945,6 +957,7 @@ async def full_update_sync_stream(  # noqa: C901
                 async for frame in vm_interfaces_bridge.iter_sse():
                     yield frame
                 sync_vm_interfaces = await vm_interfaces_task
+                sync_warnings.extend(_result_warnings(sync_vm_interfaces))
 
                 yield sse_event(
                     "step",
@@ -1164,6 +1177,8 @@ async def full_update_sync_stream(  # noqa: C901
                 }
                 if orphan_sweep_result is not None:
                     final_result["orphan_sweep"] = orphan_sweep_result
+                if sync_warnings:
+                    final_result["warnings"] = sync_warnings
 
                 yield sse_event(
                     "complete",

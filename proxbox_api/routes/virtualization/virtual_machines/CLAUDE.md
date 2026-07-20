@@ -164,10 +164,13 @@ Main synchronization endpoints for virtual machines and related resources.
   normalization (`_normalize_guest_agent_interfaces`) so genuine distinct
   interfaces that share a MAC (real VRRP virtual MACs) are never conflated;
   alias addresses are merged into the parent and deduped. A VM-interface
-  **bulk** reconciliation that fails *or* returns partial failures
-  (`result.failed > 0`) now raises (`ProxboxException`) and emits a failed/end
-  frame on the stream instead of returning a silent empty/partial success.
-  Regression coverage: `tests/test_interface_dense_vm_sync.py`.
+  **bulk** reconciliation that fails systemically still raises, but per-record
+  partial failures (`result.failed > 0`) log failed VM/interface payloads,
+  return successful records, and emit warning summaries so full-update can
+  continue into VM IP sync. Guest-agent-derived core VMInterface names are
+  sanitized and capped to NetBox's 64-character name field before write.
+  Regression coverage: `tests/test_interface_dense_vm_sync.py` and
+  `tests/test_vm_sync.py`.
 
 - **Sparse Proxmox network config keys.** QEMU config payloads can legitimately
   expose `net1`, `net2`, or higher `net<N>` keys without a `net0` entry. VM

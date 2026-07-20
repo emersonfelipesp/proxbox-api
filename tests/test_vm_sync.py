@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
 
+from proxbox_api.app.full_update import full_update_sync
 from proxbox_api.proxmox_to_netbox.errors import ProxmoxToNetBoxError
 from proxbox_api.proxmox_to_netbox.mappers.virtual_machine import (
     map_proxmox_vm_to_netbox_vm_body,
@@ -16,9 +18,14 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
 )
 from proxbox_api.proxmox_to_netbox.normalize import build_virtual_machine_transform
-from proxbox_api.routes.virtualization.virtual_machines import sync_vm
-from proxbox_api.routes.virtualization.virtual_machines.sync_vm import create_only_vm_interfaces
+from proxbox_api.routes.virtualization.virtual_machines import read_vm, sync_vm
+from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
+    SyncResultList,
+    create_only_vm_interfaces,
+    create_only_vm_ip_addresses,
+)
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
@@ -348,6 +355,484 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_custom_field_gate
 
     assert patch_calls == []
     assert sidecar_calls == []
+
+
+def test_create_only_vm_interfaces_reports_partial_bulk_warning(monkeypatch):
+    phase_summaries: list[dict[str, object]] = []
+    warning_messages: list[str] = []
+
+    class _Bridge:
+        async def send_json(self, _payload):
+            return None
+
+        async def emit_phase_summary(self, **kwargs):
+            phase_summaries.append(kwargs)
+
+    def _capture_warning(message, *args, **_kwargs):
+        warning_messages.append(message % args if args else message)
+
+    cluster_status = [SimpleNamespace(name="lab")]
+    cluster_resources = [
+        {
+            "lab": [
+                {"type": "qemu", "name": "vm01", "node": "pve01", "vmid": 101},
+                {"type": "qemu", "name": "vm02", "node": "pve01", "vmid": 102},
+            ]
+        }
+    ]
+
+    def _fake_get_vm_config(**_kwargs):
+        return {"net0": "virtio=aa:bb:cc:dd:ee:ff"}
+
+    async def _fake_load_snapshot(_nb):
+        return [
+            {"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}},
+            {"id": 56, "name": "vm02", "custom_fields": {"proxmox_vm_id": 102}},
+        ]
+
+    async def _fake_resolve_cluster_id(*_args, **_kwargs):
+        return None
+
+    async def _fake_bulk_reconcile(_nb, payloads, **_kwargs):
+        assert [payload["name"] for payload in payloads] == ["net0", "net0"]
+        return ([{"id": 66, "name": "net0", "virtual_machine": 55}], {("net0", 55): 66})
+
+    async def _fake_guest_sidecars(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 1)
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_load_snapshot)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_cluster_id_by_name", _fake_resolve_cluster_id)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
+        _fake_bulk_reconcile,
+    )
+    monkeypatch.setattr(sync_vm, "reconcile_guest_vm_interfaces", _fake_guest_sidecars)
+    monkeypatch.setattr(sync_vm.logger, "warning", _capture_warning)
+
+    result = asyncio.run(
+        create_only_vm_interfaces(
+            netbox_session=SimpleNamespace(client=object()),
+            pxs=[SimpleNamespace(name="lab")],
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=[],
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            websocket=_Bridge(),
+            use_websocket=True,
+            sync_mac=False,
+        )
+    )
+
+    assert list(result) == [
+        {
+            "id": 66,
+            "mac_address": None,
+            "interface": {"id": 66, "name": "net0", "virtual_machine": 55},
+        }
+    ]
+    assert result.warnings == [
+        {
+            "phase": "vm-interfaces",
+            "succeeded": 1,
+            "failed": 1,
+            "requested": 2,
+            "message": (
+                "VM interface reconciliation completed with partial failures: "
+                "1 succeeded, 1 failed."
+            ),
+        }
+    ]
+    assert phase_summaries == [
+        {
+            "phase": "vm-interfaces",
+            "created": 1,
+            "failed": 1,
+            "message": (
+                "VM interface reconciliation completed with partial failures: "
+                "1 succeeded, 1 failed."
+            ),
+        }
+    ]
+    assert any("partial failures" in message for message in warning_messages)
+
+
+def test_create_only_vm_interfaces_truncates_guest_interface_name(monkeypatch):
+    captured_payloads: list[dict[str, object]] = []
+    warning_messages: list[str] = []
+    long_guest_name = "veth" + ("x" * 80)
+
+    from proxbox_api.services.sync import network as network_module
+
+    def _capture_warning(message, *args, **_kwargs):
+        warning_messages.append(message % args if args else message)
+
+    cluster_status = [SimpleNamespace(name="lab")]
+    cluster_resources = [
+        {
+            "lab": [
+                {"type": "qemu", "name": "vm01", "node": "pve01", "vmid": 101},
+            ]
+        }
+    ]
+
+    def _fake_get_vm_config(**_kwargs):
+        return {"agent": "1", "net0": "virtio=aa:bb:cc:dd:ee:ff"}
+
+    async def _fake_guest_interfaces(*_args, **_kwargs):
+        return [{"name": long_guest_name, "mac_address": "aa:bb:cc:dd:ee:ff"}]
+
+    async def _fake_load_snapshot(_nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    async def _fake_resolve_cluster_id(*_args, **_kwargs):
+        return None
+
+    async def _fake_bulk_reconcile(_nb, payloads, **_kwargs):
+        captured_payloads.extend(payloads)
+        name = payloads[0]["name"]
+        return ([{"id": 66, "name": name, "virtual_machine": 55}], {(name, 55): 66})
+
+    async def _fake_guest_sidecars(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(
+        sync_vm,
+        "get_qemu_guest_agent_network_interfaces",
+        _fake_guest_interfaces,
+    )
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 1)
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_load_snapshot)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_cluster_id_by_name", _fake_resolve_cluster_id)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
+        _fake_bulk_reconcile,
+    )
+    monkeypatch.setattr(sync_vm, "reconcile_guest_vm_interfaces", _fake_guest_sidecars)
+    monkeypatch.setattr(network_module.logger, "warning", _capture_warning)
+
+    result = asyncio.run(
+        create_only_vm_interfaces(
+            netbox_session=SimpleNamespace(client=object()),
+            pxs=[SimpleNamespace(name="lab")],
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=[],
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_mac=False,
+            vm_interface_sync_strategy="legacy_rename",
+        )
+    )
+
+    assert len(captured_payloads) == 1
+    assert len(captured_payloads[0]["name"]) == 64
+    assert captured_payloads[0]["name"] == long_guest_name[:64]
+    assert result[0]["interface"]["name"] == long_guest_name[:64]
+    assert any("Truncated VM interface name" in message for message in warning_messages)
+
+
+def test_normalize_vm_interface_name_strips_control_characters():
+    from proxbox_api.services.sync.network import normalize_vm_interface_name
+
+    assert normalize_vm_interface_name("\x00ens\x1f18\x7f", fallback="net0") == "ens18"
+
+
+def test_normalize_vm_interface_name_uses_fallback_when_empty_after_stripping():
+    from proxbox_api.services.sync.network import normalize_vm_interface_name
+
+    assert normalize_vm_interface_name("\x00\n\x7f", fallback="net9") == "net9"
+
+
+def test_create_only_vm_ip_addresses_uses_normalized_interface_name(monkeypatch):
+    captured_payloads: list[dict[str, object]] = []
+    long_guest_name = "veth" + ("x" * 80)
+    normalized_guest_name = long_guest_name[:64]
+
+    cluster_status = [SimpleNamespace(name="lab")]
+    cluster_resources = [
+        {
+            "lab": [
+                {"type": "qemu", "name": "vm01", "node": "pve01", "vmid": 101},
+            ]
+        }
+    ]
+
+    def _fake_get_vm_config(**_kwargs):
+        return {"agent": "1", "net0": "virtio=aa:bb:cc:dd:ee:ff"}
+
+    async def _fake_guest_interfaces(*_args, **_kwargs):
+        return [
+            {
+                "name": long_guest_name,
+                "mac_address": "aa:bb:cc:dd:ee:ff",
+                "ip_addresses": [{"ip_address": "192.0.2.10", "prefix": 24}],
+            }
+        ]
+
+    async def _fake_load_snapshot(_nb):
+        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+
+    async def _fake_resolve_cluster_id(*_args, **_kwargs):
+        return None
+
+    async def _fake_rest_list(_nb, path, query=None):
+        if path == "/api/virtualization/interfaces/":
+            assert query == {"virtual_machine_id": 55, "limit": 500}
+            return [{"id": 66, "name": normalized_guest_name}]
+        return []
+
+    async def _fake_bulk_reconcile_ips(_nb, payloads, **_kwargs):
+        captured_payloads.extend(payloads)
+        return [
+            {
+                "id": 10,
+                "address": "192.0.2.10/24",
+                "assigned_object_id": 66,
+            }
+        ]
+
+    async def _fake_rest_first(*_args, **_kwargs):
+        return None
+
+    async def _fake_resolve_vm_dns_name(**_kwargs):
+        return None
+
+    async def _fake_guest_sidecars(*_args, **_kwargs):
+        return None
+
+    async def _fake_cleanup_stale_ips(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(
+        sync_vm,
+        "get_qemu_guest_agent_network_interfaces",
+        _fake_guest_interfaces,
+    )
+    monkeypatch.setattr(sync_vm, "_resolve_vm_dns_name", _fake_resolve_vm_dns_name)
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 1)
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_load_snapshot)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_cluster_id_by_name", _fake_resolve_cluster_id)
+    monkeypatch.setattr(sync_vm, "reconcile_guest_vm_interfaces", _fake_guest_sidecars)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _fake_rest_list)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_rest_first)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile_ips,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.cleanup_stale_ips_for_interface",
+        _fake_cleanup_stale_ips,
+    )
+
+    result = asyncio.run(
+        create_only_vm_ip_addresses(
+            netbox_session=SimpleNamespace(client=object()),
+            pxs=[SimpleNamespace(name="lab")],
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            custom_fields=[],
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            vm_interface_sync_strategy="legacy_rename",
+        )
+    )
+
+    assert len(captured_payloads) == 1
+    payload = captured_payloads[0]
+    last_updated = payload["custom_fields"]["proxmox_last_updated"]
+    assert isinstance(last_updated, str)
+    assert payload == {
+        "address": "192.0.2.10/24",
+        "assigned_object_type": "virtualization.vminterface",
+        "assigned_object_id": 66,
+        "status": "active",
+        "dns_name": "",
+        "tags": [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+        "custom_fields": {"proxmox_last_updated": last_updated},
+    }
+    assert result == [{"ip_id": 10, "address": "192.0.2.10/24"}]
+
+
+def test_standalone_vm_interfaces_response_surfaces_warnings(monkeypatch):
+    warning = {
+        "phase": "vm-interfaces",
+        "succeeded": 1,
+        "failed": 1,
+        "requested": 2,
+        "message": "VM interface reconciliation completed with partial failures.",
+    }
+
+    async def _fake_create_only_vm_interfaces(**_kwargs):
+        return SyncResultList([{"id": 66}], warnings=[warning])
+
+    monkeypatch.setattr(sync_vm, "create_only_vm_interfaces", _fake_create_only_vm_interfaces)
+
+    body = asyncio.run(
+        read_vm.create_virtual_machines_interfaces(
+            netbox_session=SimpleNamespace(client=object()),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            use_guest_agent_interface_name=True,
+            vm_interface_sync_strategy="guest_os_model",
+            ignore_ipv6_link_local_addresses=True,
+            primary_ip_preference="ipv4",
+            sync_vm_interface_macs=False,
+            overwrite_flags=SyncOverwriteFlags(),
+        )
+    )
+
+    assert body == {"vm_interfaces": [{"id": 66}], "count": 1, "warnings": [warning]}
+
+
+def test_standalone_vm_interfaces_stream_complete_surfaces_warnings(monkeypatch):
+    warning = {
+        "phase": "vm-interfaces",
+        "succeeded": 1,
+        "failed": 1,
+        "requested": 2,
+        "message": "VM interface reconciliation completed with partial failures.",
+    }
+
+    async def _fake_create_only_vm_interfaces(**_kwargs):
+        return SyncResultList([{"id": 66}], warnings=[warning])
+
+    monkeypatch.setattr(sync_vm, "create_only_vm_interfaces", _fake_create_only_vm_interfaces)
+
+    response = asyncio.run(
+        read_vm.create_virtual_machines_interfaces_stream(
+            netbox_session=SimpleNamespace(client=object()),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            use_guest_agent_interface_name=True,
+            vm_interface_sync_strategy="guest_os_model",
+            ignore_ipv6_link_local_addresses=True,
+            primary_ip_preference="ipv4",
+            sync_vm_interface_macs=False,
+            overwrite_flags=SyncOverwriteFlags(),
+        )
+    )
+
+    async def _collect_body() -> str:
+        chunks: list[str] = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(chunks)
+
+    stream_body = asyncio.run(_collect_body())
+    complete_payloads = []
+    for frame in stream_body.strip().split("\n\n"):
+        lines = frame.splitlines()
+        if "event: complete" not in lines:
+            continue
+        data_line = next(line for line in lines if line.startswith("data: "))
+        complete_payloads.append(json.loads(data_line.removeprefix("data: ")))
+
+    assert complete_payloads[-1]["result"] == {"count": 1, "warnings": [warning]}
+
+
+def test_full_update_continues_to_ip_stage_after_vm_interface_warning(monkeypatch):
+    ip_stage_called = False
+
+    async def _fake_devices(**kwargs):
+        return []
+
+    async def _fake_vms(**kwargs):
+        return []
+
+    async def _fake_storage(**kwargs):
+        return []
+
+    async def _fake_disks(**kwargs):
+        return {"count": 0, "created": 0, "updated": 0, "skipped": 0}
+
+    async def _fake_backups(**kwargs):
+        return []
+
+    async def _fake_snapshots(**kwargs):
+        return {"count": 0, "created": 0, "skipped": 0}
+
+    async def _fake_task_history(**kwargs):
+        return {"count": 0, "created": 0, "skipped": 0}
+
+    async def _fake_node_interfaces(**kwargs):
+        return []
+
+    async def _fake_vm_interfaces(**kwargs):
+        return SyncResultList(
+            [{"id": 66}],
+            warnings=[
+                {
+                    "phase": "vm-interfaces",
+                    "succeeded": 1,
+                    "failed": 1,
+                    "requested": 2,
+                    "message": "VM interface reconciliation completed with partial failures.",
+                }
+            ],
+        )
+
+    async def _fake_vm_ip_addresses(**kwargs):
+        nonlocal ip_stage_called
+        ip_stage_called = True
+        return [{"ip_id": 10, "address": "192.0.2.10/24"}]
+
+    async def _fake_replications(**kwargs):
+        return {"created": 0, "updated": 0, "errors": 0}
+
+    async def _fake_backup_routines(**kwargs):
+        return {"created": 0, "updated": 0, "errors": 0}
+
+    monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fake_devices)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_storages", _fake_storage)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_disks", _fake_disks)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_backups", _fake_backups
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_virtual_machine_snapshots", _fake_snapshots
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories", _fake_task_history
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_all_device_interfaces", _fake_node_interfaces
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_only_vm_interfaces", _fake_vm_interfaces
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.create_only_vm_ip_addresses", _fake_vm_ip_addresses
+    )
+    monkeypatch.setattr("proxbox_api.app.full_update.sync_all_replications", _fake_replications)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_backup_routines", _fake_backup_routines
+    )
+
+    body = asyncio.run(
+        full_update_sync(
+            netbox_session=object(),
+            _sync_deps=BootstrapStatus(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=type("Tag", (), {"id": 1})(),
+        )
+    )
+
+    assert ip_stage_called is True
+    assert body["vm_interfaces_count"] == 1
+    assert body["vm_ip_addresses"] == [{"ip_id": 10, "address": "192.0.2.10/24"}]
+    assert body["warnings"][0]["phase"] == "vm-interfaces"
 
 
 def test_build_payload_applies_description_metadata_when_enabled(monkeypatch):

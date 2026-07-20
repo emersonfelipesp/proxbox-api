@@ -24,7 +24,10 @@ from proxbox_api.services.sync.guest_vm_interface import (
     reconcile_guest_vm_interfaces,
     warn_legacy_vm_interface_strategy,
 )
-from proxbox_api.services.sync.network import _resolve_vm_interface_ips
+from proxbox_api.services.sync.network import (
+    _resolve_vm_interface_ips,
+    normalize_vm_interface_name,
+)
 from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
 from proxbox_api.services.sync.sync_state_writer import (
     write_virtual_disk_sync_state,
@@ -129,6 +132,11 @@ async def sync_vm_interfaces(  # noqa: C901
                 guest_agent_interfaces,
                 use_guest_agent_interface_name,
                 strategy,
+            )
+            resolved_interface_name = normalize_vm_interface_name(
+                resolved_interface_name,
+                fallback=config_interface_name,
+                vm_name=str(virtual_machine.get("name") or ""),
             )
 
             # Create node-level dcim bridge and per-VM bridge VMInterface if needed

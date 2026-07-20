@@ -30,6 +30,24 @@ from proxbox_api.session.proxmox import ProxmoxSessionsDep
 router = APIRouter()
 
 
+def _response_with_sync_warnings(
+    result: list[dict],
+    *,
+    result_key: str,
+) -> list[dict] | dict[str, object]:
+    warnings = getattr(result, "warnings", None)
+    if not isinstance(warnings, list) or not warnings:
+        return result
+    warning_payloads = [warning for warning in warnings if isinstance(warning, dict)]
+    if not warning_payloads:
+        return result
+    return {
+        result_key: list(result),
+        "count": len(result),
+        "warnings": warning_payloads,
+    }
+
+
 @router.get(
     "/",
     response_model=list[dict[str, object]],
@@ -40,7 +58,7 @@ async def get_virtual_machines(netbox_session: NetBoxSessionDep):
     results = []
     async for item in netbox_session.virtualization.virtual_machines.all():
         results.append(to_dict(item))
-    return results
+    return _response_with_sync_warnings(results, result_key="vm_interfaces")
 
 
 @router.get(
@@ -221,7 +239,7 @@ async def create_virtual_machines_interfaces(
         overwrite_flags=overwrite_flags,
         sync_mac=sync_vm_interface_macs,
     )
-    return results
+    return _response_with_sync_warnings(results, result_key="vm_interfaces")
 
 
 @router.get("/interfaces/create/stream", response_model=None)

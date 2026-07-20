@@ -8,7 +8,16 @@ from types import SimpleNamespace
 from proxbox_api.exception import ProxboxException
 from proxbox_api.services.sync.individual import interface_sync
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+from proxbox_api.services.sync.network import normalize_vm_interface_name
 from proxbox_api.services.sync.vm_network import ensure_ip_assigned_to_vm, set_primary_ip
+
+
+def test_normalize_vm_interface_name_strips_control_characters():
+    assert normalize_vm_interface_name("en\x00s\n18\t") == "ens18"
+
+
+def test_normalize_vm_interface_name_uses_fallback_when_only_control_characters():
+    assert normalize_vm_interface_name("\x00\n\t", fallback="net9") == "net9"
 
 
 def test_set_primary_ip_retries_with_disk_aggregate_on_validation_error(monkeypatch):

@@ -85,6 +85,7 @@ from proxbox_api.services.sync.guest_vm_interface import (
 )
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
+    normalize_vm_interface_name,
 )
 from proxbox_api.services.sync.reconciliation.types import (
     NetBoxVMOperation as _NetBoxVMOperation,
@@ -155,6 +156,19 @@ from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
 router = APIRouter()
+
+
+class SyncResultList(list[dict]):
+    """List result with optional sync warnings for callers that can surface them."""
+
+    def __init__(
+        self,
+        values: list[dict] | None = None,
+        *,
+        warnings: list[dict[str, object]] | None = None,
+    ) -> None:
+        super().__init__(values or [])
+        self.warnings = warnings or []
 
 
 @dataclass(slots=True)
@@ -1304,6 +1318,11 @@ async def _create_vm_interface_parallel(
         guest_iface,
         use_guest_agent_interface_name,
         vm_interface_sync_strategy,
+    )
+    resolved_name = normalize_vm_interface_name(
+        resolved_name,
+        fallback=interface_name,
+        vm_name=str(virtual_machine.get("name") or ""),
     )
 
     payload: dict = {
@@ -3166,6 +3185,7 @@ async def create_only_vm_interfaces(  # noqa: C901
     tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
     now = datetime.now(timezone.utc)
     results: list[dict] = []
+    sync_warnings: list[dict[str, object]] = []
     normalized_interface_strategy = normalize_vm_interface_sync_strategy(vm_interface_sync_strategy)
     if normalized_interface_strategy == "legacy_rename":
         warn_legacy_vm_interface_strategy()
@@ -3292,6 +3312,11 @@ async def create_only_vm_interfaces(  # noqa: C901
                     guest_name = str(guest_iface.get("name") or "").strip()
                     if guest_name:
                         resolved_name = guest_name
+                resolved_name = normalize_vm_interface_name(
+                    resolved_name,
+                    fallback=config_interface_name,
+                    vm_name=vm_name,
+                )
 
                 if use_websocket and websocket:
                     await websocket.send_json(
@@ -3487,10 +3512,36 @@ async def create_only_vm_interfaces(  # noqa: C901
             created_interfaces, interface_name_vm_to_id = await bulk_reconcile_vm_interfaces(
                 nb, all_interface_payloads, overwrite_flags=overwrite_flags
             )
+            successful_interface_count = len(created_interfaces)
+            failed_interface_count = max(
+                len(all_interface_payloads) - successful_interface_count,
+                0,
+            )
             logger.info(
                 "Bulk interface reconciliation completed: %d interfaces processed",
                 len(all_interface_payloads),
             )
+            if failed_interface_count:
+                warning_message = (
+                    "VM interface reconciliation completed with partial failures: "
+                    f"{successful_interface_count} succeeded, {failed_interface_count} failed."
+                )
+                warning_payload = {
+                    "phase": "vm-interfaces",
+                    "succeeded": successful_interface_count,
+                    "failed": failed_interface_count,
+                    "requested": len(all_interface_payloads),
+                    "message": warning_message,
+                }
+                sync_warnings.append(warning_payload)
+                logger.warning(warning_message)
+                if use_websocket and websocket and hasattr(websocket, "emit_phase_summary"):
+                    await websocket.emit_phase_summary(
+                        phase="vm-interfaces",
+                        created=successful_interface_count,
+                        failed=failed_interface_count,
+                        message=warning_message,
+                    )
 
             # Per-interface MAC reconcile: NetBox 4.2+ stores MACs as a separate
             # dcim.MACAddress row referenced by VMInterface.primary_mac_address.
@@ -3737,7 +3788,7 @@ async def create_only_vm_interfaces(  # noqa: C901
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_interface", "end": True})
 
-    return results
+    return SyncResultList(results, warnings=sync_warnings)
 
 
 async def create_only_vm_ip_addresses(  # noqa: C901
@@ -3897,9 +3948,11 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             "/api/virtualization/interfaces/",
             query={"virtual_machine_id": netbox_vm.get("id"), "limit": 500},
         )
-        interface_name_to_id = {
-            iface.get("name"): iface.get("id") for iface in (vm_interfaces or [])
-        }
+        interface_name_to_id = {}
+        for iface in vm_interfaces or []:
+            raw_name = str(iface.get("name") or "").strip()
+            normalized_name = normalize_vm_interface_name(raw_name)
+            interface_name_to_id[normalized_name] = iface.get("id")
 
         for network in vm_networks:
             for iface_name, config_dict in network.items():
@@ -3924,7 +3977,11 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                     guest_name = str(guest_iface.get("name") or "").strip()
                     if guest_name:
                         resolved_name = guest_name
-
+                resolved_name = normalize_vm_interface_name(
+                    resolved_name,
+                    fallback=config_interface_name,
+                    vm_name=vm_name,
+                )
                 interface_id = interface_name_to_id.get(resolved_name)
                 if not interface_id:
                     # The IP stage can only attach an IP to a VM interface that

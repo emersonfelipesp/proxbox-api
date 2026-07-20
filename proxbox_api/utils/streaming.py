@@ -436,7 +436,13 @@ async def sse_stream_generator(  # noqa: C901
 
     def _default_extract(result: object) -> dict[str, object]:
         if isinstance(result, list):
-            return {"count": len(result)}
+            result_data: dict[str, object] = {"count": len(result)}
+            warnings = getattr(result, "warnings", None)
+            if isinstance(warnings, list) and warnings:
+                warning_payloads = [warning for warning in warnings if isinstance(warning, dict)]
+                if warning_payloads:
+                    result_data["warnings"] = warning_payloads
+            return result_data
         if isinstance(result, dict):
             return result
         return {}

@@ -37,6 +37,8 @@ from proxbox_api.services.sync.vm_helpers import (
     preferred_primary_ip_order,
 )
 
+NETBOX_VM_INTERFACE_NAME_MAX_LENGTH = 64
+
 
 def _relation_id_or_none(value: object) -> int | None:
     if isinstance(value, dict):
@@ -45,6 +47,44 @@ def _relation_id_or_none(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def normalize_vm_interface_name(
+    interface_name: object,
+    *,
+    fallback: str = "net0",
+    vm_name: str | None = None,
+) -> str:
+    """Normalize VMInterface.name before NetBox validation."""
+
+    def _sanitize(value: object) -> str:
+        text = str(value or "").strip()
+        return "".join(char for char in text if ord(char) >= 32 and ord(char) != 127).strip()
+
+    raw_name = str(interface_name or "").strip() or str(fallback or "").strip()
+    # Sanitize the primary candidate; if it collapses to empty, fall back to the
+    # sanitized fallback, and finally to a guaranteed-safe hard default. This
+    # ensures control characters can never reach VMInterface.name via the
+    # fallback path (callers pass guest/caller-derived names as fallback).
+    sanitized_name = _sanitize(interface_name) or _sanitize(fallback) or "net0"
+    if sanitized_name != raw_name:
+        logger.warning(
+            "Sanitized VM interface name for VM %s: %r -> %r",
+            vm_name or "unknown",
+            raw_name,
+            sanitized_name,
+        )
+    normalized_name = sanitized_name[:NETBOX_VM_INTERFACE_NAME_MAX_LENGTH]
+    if normalized_name != sanitized_name:
+        logger.warning(
+            "Truncated VM interface name from %d to %d chars for VM %s: %r -> %r",
+            len(sanitized_name),
+            NETBOX_VM_INTERFACE_NAME_MAX_LENGTH,
+            vm_name or "unknown",
+            sanitized_name,
+            normalized_name,
+        )
+    return normalized_name
 
 
 async def sync_node_interface_and_ip(
@@ -227,8 +267,9 @@ def build_vm_interface_payload(
     separately. See ``proxbox_api.services.sync.mac_address``.
     """
     _ = mac_address  # kept in the signature for source-call compatibility
+    normalized_name = normalize_vm_interface_name(resolved_name)
     payload: dict = {
-        "name": resolved_name,
+        "name": normalized_name,
         "enabled": True,
         "untagged_vlan": vlan_id,
         "mode": "access" if vlan_id is not None else None,
@@ -241,6 +282,68 @@ def build_vm_interface_payload(
     if vm_id is not None:
         payload["virtual_machine"] = vm_id
     return payload
+
+
+def _vm_interface_result_summary(result: object | None) -> tuple[int, int, int, int]:
+    if result is None:
+        return 0, 0, 0, 0
+    return (
+        int(getattr(result, "created", 0) or 0),
+        int(getattr(result, "updated", 0) or 0),
+        int(getattr(result, "unchanged", 0) or 0),
+        int(getattr(result, "failed", 0) or 0),
+    )
+
+
+def _log_vm_interface_partial_failures(
+    *,
+    interface_payloads: list[dict],
+    records: list[dict],
+    failed_count: int,
+) -> None:
+    succeeded_keys: set[tuple[object, object]] = set()
+    for record in records:
+        vm_obj = record.get("virtual_machine")
+        vm_id = vm_obj.get("id") if isinstance(vm_obj, dict) else vm_obj
+        succeeded_keys.add((record.get("name"), vm_id))
+
+    failed_payloads = [
+        payload
+        for payload in interface_payloads
+        if (payload.get("name"), payload.get("virtual_machine")) not in succeeded_keys
+    ]
+    logger.warning(
+        "Bulk VM interface reconciliation completed with partial failures: "
+        "succeeded=%d failed=%d requested=%d. See preceding per-item NetBox errors "
+        "for the transport response detail.",
+        max(len(interface_payloads) - failed_count, 0),
+        failed_count,
+        len(interface_payloads),
+    )
+    for payload in failed_payloads[:failed_count]:
+        logger.warning(
+            "VM interface reconcile record failed: vm_id=%s interface=%s payload=%s",
+            payload.get("virtual_machine"),
+            payload.get("name"),
+            payload,
+        )
+
+
+def _vm_interface_bulk_failure_is_systemic(
+    result: object,
+    *,
+    requested_count: int,
+    failed_count: int,
+) -> bool:
+    if (
+        bool(getattr(result, "systemic_failure", False))
+        or bool(getattr(result, "transport_failure", False))
+        or bool(getattr(result, "transport_error", False))
+    ):
+        return True
+    if failed_count <= 0:
+        return False
+    return requested_count > 0 and not getattr(result, "records", None)
 
 
 def build_vm_interface_ip_payload(
@@ -377,6 +480,11 @@ async def _reconcile_vm_interface_record(
         guest_iface,
         use_guest_agent_interface_name,
         vm_interface_sync_strategy,
+    )
+    resolved_name = normalize_vm_interface_name(
+        resolved_name,
+        fallback=interface_name,
+        vm_name=str(virtual_machine.get("name") or ""),
     )
 
     payload: dict = {
@@ -631,21 +739,29 @@ async def bulk_reconcile_vm_interfaces(
             sidecar_payload_by_key=sidecar_payload_by_key,
             overwrite_flags=overwrite_flags,
         )
-        # Surface partial failures: rest_bulk_reconcile_async can succeed overall
-        # while individual records fail (result.failed > 0). Treating that as a
-        # clean success would silently leave interfaces missing in NetBox.
-        failed_count = int(getattr(result, "failed", 0) or 0)
+        failed_count = _vm_interface_result_summary(result)[3]
         if failed_count:
-            raise ProxboxException(
-                message=(
-                    f"Bulk VM interface reconciliation completed with {failed_count} "
-                    "failed record(s); interface sync is incomplete for this pass."
-                ),
-                python_exception=f"failed={failed_count}",
+            if _vm_interface_bulk_failure_is_systemic(
+                result,
+                requested_count=len(interface_payloads),
+                failed_count=failed_count,
+            ):
+                raise ProxboxException(
+                    message=(
+                        "VM interface bulk reconciliation failed for every payload or "
+                        "systemically; interface sync is incomplete for this pass."
+                    ),
+                    detail=(
+                        f"{failed_count} of {len(interface_payloads)} VM interface "
+                        "payload(s) failed."
+                    ),
+                )
+            _log_vm_interface_partial_failures(
+                interface_payloads=interface_payloads,
+                records=result.records,
+                failed_count=failed_count,
             )
     except Exception as e:
-        # Re-raise so the calling stage reports the failure instead of treating
-        # an empty (or partial) result as a successful sync with zero interfaces.
         logger.error("Error during bulk VM interface reconciliation: %s", e)
         raise
     return result.records if result and hasattr(result, "records") else [], interface_name_vm_to_id
