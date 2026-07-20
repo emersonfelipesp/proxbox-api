@@ -7,7 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROXBOX_API_VERSION = "0.0.19.post5"
-PROXMOX_SDK_VERSION = "0.0.12"
+PROXMOX_SDK_VERSION = "0.0.13"
 NETBOX_SDK_VERSION = "0.0.10"
 
 

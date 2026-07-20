@@ -13,7 +13,7 @@ Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code 
 
 ## Certified Stack Pairing
 
-Current pairing: `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.12 ... netbox-sdk 0.0.10`.
+Current pairing: `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
 `proxbox-api 0.0.19` ships the Proxmox SDN sync collectors, NetBox
 L2VPN/RouteTarget/Prefix reconcile, plugin inventory reconciliation, and
 VM-interface reconcile idempotency hardening.
@@ -59,7 +59,7 @@ PROXBOX_RECONCILIATION_ENGINE=compare \
   uv run pytest tests/reconciliation -q
 ```
 
-If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.12`); there is no local `proxmox-sdk/` subdirectory in this repo.
+If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.13`); there is no local `proxmox-sdk/` subdirectory in this repo.
 
 SDN support lives in `proxbox_api/routes/proxmox/sdn.py` and
 `proxbox_api/services/sync/sdn.py`. Keep it read-only against Proxmox: the
