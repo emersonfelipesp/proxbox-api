@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 from typing import TypeVar
 
 from proxmox_sdk.sdk.exceptions import (
@@ -88,9 +89,15 @@ async def get_cluster_resources(
     """Get cluster resources from Proxmox."""
     try:
         if resource_type:
-            result = await resolve_async(
-                session.session("cluster/resources").get(type=resource_type)
+            # ``ClusterResourcesType`` is a ``(str, Enum)``. Passing the enum
+            # member straight through urlencodes it as ``ClusterResourcesType.vm``
+            # (str(member) -> "ClusterResourcesType.vm"), which Proxmox rejects
+            # with ``HTTP 400 Parameter verification failed``. Send the plain
+            # value ("vm"/"node"/...) instead.
+            type_param = (
+                resource_type.value if isinstance(resource_type, Enum) else str(resource_type)
             )
+            result = await resolve_async(session.session("cluster/resources").get(type=type_param))
         else:
             result = await resolve_async(session.session("cluster/resources").get())
         validated = generated_models.GetClusterResourcesResponse.model_validate(result)
