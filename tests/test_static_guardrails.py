@@ -63,6 +63,34 @@ def test_agents_md_forbids_autonomous_allow_writes_change():
     )
 
 
+def test_agents_md_anchors_invariants_to_enforcement_symbols():
+    content = _read("AGENTS.md")
+    required_anchors = [
+        "proxbox_api/database.py::ProxmoxEndpoint.allow_writes",
+        "proxbox_api/routes/proxmox_actions.py::_gate",
+        "proxbox_api/routes/proxmox_actions.py::delete_qemu",
+        "delete_lxc",
+        "delete_snapshot_qemu",
+        "delete_snapshot_lxc",
+        "LIFECYCLE_WRITES_DISABLED_REASON",
+    ]
+    for anchor in required_anchors:
+        assert anchor in content, f"AGENTS.md must anchor guardrails to {anchor}"
+
+
+# ---------------------------------------------------------------------------
+# README.md first-read pointer
+# ---------------------------------------------------------------------------
+
+
+def test_readme_contains_llm_agent_safety_pointer():
+    content = _read("README.md")
+    assert "## LLM Agent Safety" in content, "README.md must expose the safety pointer"
+    assert "AGENTS.md" in content and "LLM Agent Safety Guardrails" in content, (
+        "README.md safety subsection must point agents to AGENTS.md guardrails"
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLAUDE.md safety blockquote
 # ---------------------------------------------------------------------------
@@ -92,6 +120,22 @@ def test_allow_writes_defaults_false_in_database_model():
     assert "allow_writes: bool = Field(default=False)" in content, (
         "ProxmoxEndpoint.allow_writes must default to False in the database model"
     )
+
+
+def test_allow_writes_field_has_why_comment():
+    content = _read("proxbox_api/database.py")
+    assert (
+        'WHY: deliberate safety invariant; agents must not flip this True autonomously. See AGENTS.md section "LLM Agent Safety Guardrails".\n'
+        "    allow_writes: bool = Field(default=False)" in content
+    ), "ProxmoxEndpoint.allow_writes must keep its WHY safety comment"
+
+
+def test_proxmox_actions_gate_has_why_comment():
+    content = _read("proxbox_api/routes/proxmox_actions.py")
+    assert (
+        'WHY: write verbs can destroy Proxmox resources, so _gate enforces ProxmoxEndpoint.allow_writes per AGENTS.md section "LLM Agent Safety Guardrails".\n'
+        "    if not endpoint.allow_writes:" in content
+    ), "proxmox_actions._gate must keep its WHY safety comment"
 
 
 # ---------------------------------------------------------------------------

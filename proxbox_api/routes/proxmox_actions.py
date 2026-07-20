@@ -121,7 +121,8 @@ async def _gate(
             },
         )
 
-    if not endpoint.allow_writes:  # AGENTS.md §"LLM Agent Safety Guardrails" — this is the enforcement point for ProxmoxEndpoint.allow_writes
+    # WHY: write verbs can destroy Proxmox resources, so _gate enforces ProxmoxEndpoint.allow_writes per AGENTS.md section "LLM Agent Safety Guardrails".
+    if not endpoint.allow_writes:
         return JSONResponse(
             status_code=status.HTTP_403_FORBIDDEN,
             content={

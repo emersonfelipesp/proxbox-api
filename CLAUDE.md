@@ -15,7 +15,8 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 > autonomously.** Every write verb requires `ProxmoxEndpoint.allow_writes=True`
 > (default: `False`) and an `X-Proxbox-Actor` header. Stop/reboot require user
 > notification before invocation. See `AGENTS.md` §"LLM Agent Safety Guardrails"
-> for the full protocol.
+> for the full protocol. Enforcement anchors: `proxbox_api/database.py::ProxmoxEndpoint.allow_writes`,
+> `proxbox_api/routes/proxmox_actions.py::_gate`, and `tests/test_static_guardrails.py`.
 
 ---
 

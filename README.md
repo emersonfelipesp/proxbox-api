@@ -545,7 +545,7 @@ Ensure the user running uvicorn can read the key (often `root` owns `/etc/letsen
 
 > **Before calling any destructive verb, read `AGENTS.md` §"LLM Agent Safety Guardrails".**
 
-All write verbs (`start`, `stop`, `snapshot`, `migrate`, `delete`) require `ProxmoxEndpoint.allow_writes=True` (database default: `False`) and an `X-Proxbox-Actor` attribution header. A `403 writes_disabled_for_endpoint` response is a hard stop.
+README is intentionally the short first-read pointer for agents. All write verbs (`start`, `stop`, `snapshot`, `migrate`, `delete`) require `ProxmoxEndpoint.allow_writes=True` (database default: `False`) and an `X-Proxbox-Actor` attribution header. A `403 writes_disabled_for_endpoint` response is a hard stop; the full protocol lives in `AGENTS.md` §"LLM Agent Safety Guardrails".
 
 **LLM agents MUST NOT:**
 - Autonomously set `allow_writes=True` on any endpoint

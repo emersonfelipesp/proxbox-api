@@ -104,7 +104,7 @@ class ProxmoxEndpoint(SQLModel, table=True):
     username: str = Field(index=True)
     password: str | None = Field(default=None)
     verify_ssl: bool = Field(default=True)
-    # Safety invariant: False by default — all destructive Proxmox verbs are gated here; see AGENTS.md §"LLM Agent Safety Guardrails" and proxbox_api/routes/proxmox_actions.py::_gate.
+    # WHY: deliberate safety invariant; agents must not flip this True autonomously. See AGENTS.md section "LLM Agent Safety Guardrails".
     allow_writes: bool = Field(default=False)
     # Transport access method (orthogonal to allow_writes). Values: "api"
     # (Read+Write over API only) or "api_ssh" (Read+Write over API + SSH). SSH is
