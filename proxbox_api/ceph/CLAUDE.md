@@ -13,13 +13,21 @@ Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Ceph integration surface for `proxbox-api`. Two layers:
 
 - **v1 (`/ceph`)** — read-only reflected inventory of Proxmox-managed Ceph
-  (`routes.py`, `schemas.py`, `client.py`). Status + sync endpoints; every sync
-  route accepts `netbox_branch_schema_id`.
+  (`routes.py`, `schemas.py`, `client.py`, `inventory.py`). Status + sync
+  endpoints; every sync route accepts `netbox_branch_schema_id`.
 - **v2 (`/ceph/v2`)** — the NetBox-driven control plane (issue #95). Lets NetBox
   fully configure Ceph desired-state without direct operator access to Proxmox
   or external Ceph tooling.
 
 Both routers are mounted in `proxbox_api/app/factory.py` (`/ceph` and `/ceph/v2`).
+
+## v1 Files
+
+| File | Role |
+|------|------|
+| `routes.py` | FastAPI router for `/ceph/status` and `/ceph/sync/{status,daemons,osds,pools,filesystems,crush,flags,rgw,rbd,full}`. RGW/RBD routes preserve the `CephSyncResponse` summary envelope and include reflected inventory in `raw`. |
+| `client.py` | Internal read-only Proxmox VE Ceph facade used when the installed `proxmox-sdk` lacks or changes the read namespace. |
+| `inventory.py` | RGW/RBD v1 inventory normalization. Uses optional client/provider helpers when present and the same PVE Ceph pool reads as the existing sync routes for RGW/RBD pool discovery. Redacts RGW credential fields before returning raw inventory. |
 
 ## v2 Files
 

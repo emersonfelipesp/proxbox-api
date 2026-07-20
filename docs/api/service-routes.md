@@ -78,7 +78,8 @@ write contract.
 ## Ceph (`/ceph` and `/ceph/v2`)
 
 The v1 `/ceph` routes read Proxmox-managed Ceph state through resolved Proxmox
-sessions. They are status and summary endpoints only.
+sessions. They return the standard `CephSyncResponse` summary envelope. RGW and
+RBD syncs also include reflected inventory in `raw` for `netbox-ceph`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -91,6 +92,8 @@ sessions. They are status and summary endpoints only.
 | `GET` | `/ceph/sync/filesystems` | Fetch filesystem summaries |
 | `GET` | `/ceph/sync/crush` | Fetch CRUSH map and rule summaries |
 | `GET` | `/ceph/sync/flags` | Fetch cluster flag summaries |
+| `GET` | `/ceph/sync/rgw` | Fetch RGW realm, zonegroup, zone, placement target, user, bucket, and RGW-pool inventory |
+| `GET` | `/ceph/sync/rbd` | Fetch RBD pool, image, and snapshot inventory |
 
 The v2 `/ceph/v2` routes are the desired-state orchestration surface. They can
 validate payloads, build plans, apply approved operations, stream operation

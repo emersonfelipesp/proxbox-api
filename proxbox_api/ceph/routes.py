@@ -11,6 +11,11 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+from proxbox_api.ceph.inventory import (
+    fetch_rbd_inventory,
+    fetch_rgw_inventory,
+    inventory_count,
+)
 from proxbox_api.ceph.schemas import (
     CephStatusItem,
     CephStatusResponse,
@@ -25,6 +30,17 @@ if TYPE_CHECKING:
     from proxbox_api.session.proxmox import ProxmoxSession
 
 router = APIRouter()
+
+_RGW_INVENTORY_KEYS = (
+    "realms",
+    "zonegroups",
+    "zones",
+    "placement_targets",
+    "users",
+    "buckets",
+    "pools",
+)
+_RBD_INVENTORY_KEYS = ("pools", "images", "snapshots", "clones")
 
 
 def _session_name(px: ProxmoxSession) -> str:
@@ -190,12 +206,172 @@ async def _sync_all(
     return CephSyncResponse(items=items)
 
 
+def _empty_inventory(resource: CephSyncResource) -> dict[str, Any]:
+    if resource == "rgw":
+        return {
+            "realms": [],
+            "zonegroups": [],
+            "zones": [],
+            "placement_targets": [],
+            "users": [],
+            "buckets": [],
+            "pools": [],
+        }
+    if resource == "rbd":
+        return {"pools": [], "images": [], "snapshots": [], "clones": []}
+    return {}
+
+
+async def _sync_one_inventory(
+    px: ProxmoxSession,
+    resource: CephSyncResource,
+    netbox_branch_schema_id: str | None,
+) -> tuple[CephSyncSummary, dict[str, Any]]:
+    nodes = _node_names(px)
+    summary = CephSyncSummary(
+        name=_session_name(px),
+        host=_session_host(px),
+        resource=resource,
+        nodes=nodes,
+        netbox_branch_schema_id=netbox_branch_schema_id,
+    )
+    raw_item: dict[str, Any] = {
+        "name": summary.name,
+        "host": summary.host,
+        "resource": resource,
+        "nodes": nodes,
+        "netbox_branch_schema_id": netbox_branch_schema_id,
+        "inventory": _empty_inventory(resource),
+        "errors": summary.errors,
+    }
+
+    try:
+        client = _client_for(px)
+    except HTTPException as http_exc:
+        summary.errors.append(str(http_exc.detail))
+        return summary, raw_item
+
+    try:
+        if resource == "rgw":
+            inventory = await fetch_rgw_inventory(client, nodes)
+            summary.fetched = inventory_count(inventory, _RGW_INVENTORY_KEYS)
+        elif resource == "rbd":
+            inventory = await fetch_rbd_inventory(client, nodes)
+            summary.fetched = inventory_count(inventory, _RBD_INVENTORY_KEYS)
+        else:  # pragma: no cover - only rgw/rbd call this helper
+            inventory = {}
+        raw_item["inventory"] = inventory
+    except Exception as exc:  # noqa: BLE001
+        summary.errors.append(f"{type(exc).__name__}: {exc}")
+
+    return summary, raw_item
+
+
+def _extend_inventory_aggregate(
+    aggregate: dict[str, Any],
+    inventory: dict[str, Any],
+) -> None:
+    for key, values in inventory.items():
+        if isinstance(values, list):
+            aggregate.setdefault(key, []).extend(values)
+
+
+async def _sync_all_inventory(
+    pxs: list[ProxmoxSession],
+    resource: CephSyncResource,
+    netbox_branch_schema_id: str | None,
+) -> CephSyncResponse:
+    pairs = [await _sync_one_inventory(px, resource, netbox_branch_schema_id) for px in pxs]
+    items = [summary for summary, _raw in pairs]
+    clusters = [raw for _summary, raw in pairs]
+    aggregate = _empty_inventory(resource)
+    for cluster in clusters:
+        inventory = cluster.get("inventory")
+        if not isinstance(inventory, dict):
+            continue
+        _extend_inventory_aggregate(aggregate, inventory)
+    raw: dict[str, Any] = {
+        "resource": resource,
+        "clusters": clusters,
+        str(resource): aggregate,
+    }
+    return CephSyncResponse(items=items, raw=raw)
+
+
+async def _sync_one_full(
+    px: ProxmoxSession,
+    netbox_branch_schema_id: str | None,
+) -> tuple[CephSyncSummary, dict[str, Any]]:
+    summary = await _sync_one(px, "full", netbox_branch_schema_id)
+    raw_item: dict[str, Any] = {
+        "name": summary.name,
+        "host": summary.host,
+        "resource": "full",
+        "nodes": summary.nodes,
+        "netbox_branch_schema_id": netbox_branch_schema_id,
+        "inventory": {
+            "rgw": _empty_inventory("rgw"),
+            "rbd": _empty_inventory("rbd"),
+        },
+        "errors": summary.errors,
+    }
+
+    try:
+        client = _client_for(px)
+    except HTTPException:
+        return summary, raw_item
+
+    try:
+        rgw_inventory = await fetch_rgw_inventory(client, summary.nodes)
+        raw_item["inventory"]["rgw"] = rgw_inventory
+        summary.fetched += inventory_count(rgw_inventory, _RGW_INVENTORY_KEYS)
+    except Exception as exc:  # noqa: BLE001
+        summary.errors.append(f"rgw inventory: {type(exc).__name__}: {exc}")
+
+    try:
+        rbd_inventory = await fetch_rbd_inventory(client, summary.nodes)
+        raw_item["inventory"]["rbd"] = rbd_inventory
+        summary.fetched += inventory_count(rbd_inventory, _RBD_INVENTORY_KEYS)
+    except Exception as exc:  # noqa: BLE001
+        summary.errors.append(f"rbd inventory: {type(exc).__name__}: {exc}")
+
+    return summary, raw_item
+
+
+async def _sync_all_full(
+    pxs: list[ProxmoxSession],
+    netbox_branch_schema_id: str | None,
+) -> CephSyncResponse:
+    pairs = [await _sync_one_full(px, netbox_branch_schema_id) for px in pxs]
+    items = [summary for summary, _raw in pairs]
+    clusters = [raw for _summary, raw in pairs]
+    rgw_aggregate = _empty_inventory("rgw")
+    rbd_aggregate = _empty_inventory("rbd")
+    for cluster in clusters:
+        inventory = cluster.get("inventory")
+        if not isinstance(inventory, dict):
+            continue
+        rgw_inventory = inventory.get("rgw")
+        if isinstance(rgw_inventory, dict):
+            _extend_inventory_aggregate(rgw_aggregate, rgw_inventory)
+        rbd_inventory = inventory.get("rbd")
+        if isinstance(rbd_inventory, dict):
+            _extend_inventory_aggregate(rbd_aggregate, rbd_inventory)
+    raw: dict[str, Any] = {
+        "resource": "full",
+        "clusters": clusters,
+        "rgw": rgw_aggregate,
+        "rbd": rbd_aggregate,
+    }
+    return CephSyncResponse(items=items, raw=raw)
+
+
 @router.get("/sync/full", response_model=CephSyncResponse)
 async def ceph_sync_full(
     pxs: ProxmoxSessionsDep,
     netbox_branch_schema_id: Annotated[str | None, Query()] = None,
 ) -> CephSyncResponse:
-    return await _sync_all(pxs, "full", netbox_branch_schema_id)
+    return await _sync_all_full(pxs, netbox_branch_schema_id)
 
 
 @router.get("/sync/status", response_model=CephSyncResponse)
@@ -252,6 +428,22 @@ async def ceph_sync_flags(
     netbox_branch_schema_id: Annotated[str | None, Query()] = None,
 ) -> CephSyncResponse:
     return await _sync_all(pxs, "flags", netbox_branch_schema_id)
+
+
+@router.get("/sync/rgw", response_model=CephSyncResponse)
+async def ceph_sync_rgw(
+    pxs: ProxmoxSessionsDep,
+    netbox_branch_schema_id: Annotated[str | None, Query()] = None,
+) -> CephSyncResponse:
+    return await _sync_all_inventory(pxs, "rgw", netbox_branch_schema_id)
+
+
+@router.get("/sync/rbd", response_model=CephSyncResponse)
+async def ceph_sync_rbd(
+    pxs: ProxmoxSessionsDep,
+    netbox_branch_schema_id: Annotated[str | None, Query()] = None,
+) -> CephSyncResponse:
+    return await _sync_all_inventory(pxs, "rbd", netbox_branch_schema_id)
 
 
 __all__ = ["router"]

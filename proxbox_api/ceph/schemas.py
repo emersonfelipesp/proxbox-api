@@ -14,6 +14,8 @@ CephSyncResource = Literal[
     "filesystems",
     "crush",
     "flags",
+    "rgw",
+    "rbd",
     "full",
 ]
 

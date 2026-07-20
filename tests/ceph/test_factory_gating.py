@@ -41,6 +41,8 @@ def test_default_app_mounts_ceph_alongside_existing_surfaces():
     paths = _registered_paths(app)
     assert "/ceph/status" in paths
     assert "/ceph/sync/full" in paths
+    assert "/ceph/sync/rgw" in paths
+    assert "/ceph/sync/rbd" in paths
     assert "/pbs/status" in paths
     assert "/proxmox/endpoints" in paths
     assert "/full-update" in paths
@@ -54,6 +56,8 @@ def test_ceph_only_feature_flag_hides_other_feature_and_core_routers(monkeypatch
     paths = _registered_paths(app)
     assert "/ceph/status" in paths
     assert "/ceph/sync/full" in paths
+    assert "/ceph/sync/rgw" in paths
+    assert "/ceph/sync/rbd" in paths
     assert "/pbs/status" not in paths
     assert "/proxmox/endpoints" not in paths
     assert "/full-update" not in paths
@@ -71,5 +75,7 @@ def test_pbs_ceph_feature_flag_mounts_only_sidecar_routers(monkeypatch):
     assert "/pbs/endpoints" in paths
     assert "/ceph/status" in paths
     assert "/ceph/sync/full" in paths
+    assert "/ceph/sync/rgw" in paths
+    assert "/ceph/sync/rbd" in paths
     assert "/proxmox/endpoints" not in paths
     assert "/full-update" not in paths
