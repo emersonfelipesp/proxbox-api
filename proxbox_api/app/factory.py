@@ -61,6 +61,7 @@ from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 from proxbox_api.routes.proxmox.sdn import router as px_sdn_router
+from proxbox_api.routes.proxmox.services import router as px_services_router
 from proxbox_api.routes.proxmox_actions import router as proxmox_actions_router
 from proxbox_api.routes.ssh_terminal import router as ssh_terminal_router
 from proxbox_api.routes.sync.active import router as sync_active_router
@@ -447,6 +448,7 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(px_sdn_router, prefix="/proxmox", tags=["proxmox / sdn"])
         app.include_router(px_datacenter_router, prefix="/proxmox", tags=["proxmox / datacenter"])
         app.include_router(px_access_router, prefix="/proxmox", tags=["proxmox / access"])
+        app.include_router(px_services_router, prefix="/proxmox", tags=["proxmox / services"])
         app.include_router(
             proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
         )

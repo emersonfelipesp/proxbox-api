@@ -41,6 +41,23 @@ class TerminalCredentialError(TerminalSessionError):
     """Raised when SSH credential material cannot be resolved."""
 
 
+class SSHCommandError(TerminalSessionError):
+    """Raised when a one-shot SSH command could not reach or run on the host.
+
+    Distinct from :class:`TerminalCredentialError`, which covers failure to
+    resolve *which* credential to use (a caller/config problem). This class
+    covers failures actually reaching or authenticating to the target host
+    (connect timeout, connection refused, auth rejected, protocol error) --
+    the class of failure callers should treat as "host unreachable" (e.g.
+    surfaced as ``reachable=false`` in a monitoring response) rather than a
+    request-validation error.
+    """
+
+
+class SSHCommandTimeoutError(SSHCommandError):
+    """Raised when a one-shot SSH command exceeds its bounded runtime."""
+
+
 @dataclass
 class OneShotTerminalCredential:
     """Inline, unstored SSH credential attached to a single terminal session.
@@ -100,6 +117,16 @@ class TerminalCredential:
     password: str | None = None
     private_key: str | None = None
     display: str = ""
+
+
+@dataclass(frozen=True)
+class CompletedCommand:
+    """Result of a single one-shot command executed over an SSH connection."""
+
+    command: str
+    stdout: str
+    stderr: str
+    exit_status: int
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -793,3 +820,78 @@ async def connect_and_relay(
                 raise error
         status = await _close_process(process)
         await _send_json_safe(websocket, {"type": "exit", "status": status})
+
+
+async def run_endpoint_command(
+    credential: TerminalCredential,
+    command: str,
+    *,
+    timeout: float = 10.0,
+) -> CompletedCommand:
+    """Run a single fixed command over SSH using a resolved endpoint credential.
+
+    Reuses the same pinned-host-key posture as :func:`connect_and_relay`
+    (``known_hosts=b""`` plus fingerprint-pinned ``validate_host_public_key``)
+    but opens a one-shot connection instead of a PTY relay: it runs
+    ``command`` via a bounded ``conn.run(command, check=False)`` call and returns its
+    captured stdout/stderr/exit status. ``check=False`` means a non-zero exit
+    status never raises here -- callers inspect ``CompletedCommand.exit_status``
+    themselves.
+
+    Raises:
+        TerminalCredentialError: the credential itself is unusable (no
+            password/private key, or the private key could not be loaded).
+            This is a caller/config problem, not a host-reachability one.
+        SSHCommandError: the SSH connection could not be established or the
+            command could not be run (connect timeout, connection refused,
+            authentication rejected, protocol error). Callers should treat
+            this as "host unreachable" rather than a request-validation error.
+        SSHCommandTimeoutError: the SSH connection succeeded, but the remote
+            command did not complete within ``timeout`` seconds.
+    """
+    if not (credential.password or credential.private_key):
+        raise TerminalCredentialError("SSH credential has no password or private key")
+
+    asyncssh = _load_asyncssh()
+    client_keys = None
+    if credential.private_key:
+        try:
+            client_keys = [asyncssh.import_private_key(credential.private_key)]
+        except Exception as exc:  # noqa: BLE001
+            raise TerminalCredentialError("SSH private key could not be loaded") from exc
+
+    try:
+        conn = await asyncssh.connect(
+            credential.host,
+            port=credential.port,
+            username=credential.username,
+            password=credential.password or None,
+            client_keys=client_keys,
+            known_hosts=b"",
+            server_host_key_algs="default",
+            client_factory=_pinned_client_factory(
+                asyncssh,
+                credential.known_host_fingerprint,
+            ),
+            connect_timeout=timeout,
+        )
+    except (OSError, asyncio.TimeoutError, asyncssh.Error) as exc:
+        raise SSHCommandError(f"Could not reach {credential.display}: {exc}") from exc
+
+    try:
+        async with conn:
+            result = await asyncio.wait_for(conn.run(command, check=False), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise SSHCommandTimeoutError(
+            f"SSH command timed out on {credential.display} after {timeout:.1f}s"
+        ) from exc
+    except (OSError, asyncssh.Error) as exc:
+        raise SSHCommandError(f"SSH command failed on {credential.display}: {exc}") from exc
+
+    exit_status = result.exit_status
+    return CompletedCommand(
+        command=command,
+        stdout=str(result.stdout or ""),
+        stderr=str(result.stderr or ""),
+        exit_status=int(exit_status) if exit_status is not None else -1,
+    )
