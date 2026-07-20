@@ -134,8 +134,20 @@ The `publish-pypi` job checks the PyPI API before uploading. If `proxbox-api==${
 All changes to proxbox-api MUST conform to these quality gates before PR review:
 
 ### Code Coverage
-- Maintain ≥85% coverage: `uv run pytest tests --cov=proxbox_api --cov-report=term-missing`
-- Coverage is enforced in CI; failing coverage blocks merge
+- The required non-E2E core suite enforces a branch-inclusive coverage ratchet of
+  at least 65.40%. The measured baseline was 65.51% on 2026-07-17; 85% remains the
+  long-term target, not the current gate.
+- Run the same scope locally: `uv run pytest tests/ -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --cov=proxbox_api --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml`
+- Coverage omits only generated schema output and the E2E support package, which
+  is exercised by the separate Docker matrix. Database, code-generation, and
+  other first-party code remain measured.
+- Raise the ratchet when sustained coverage improves; never lower it to admit a
+  regression.
+- Gitea feature pushes and pull requests run this gate without repository
+  secrets on the dedicated `ci-untrusted-python312` runner. That label must
+  remain unschedulable until N-MultiCloud/nmulticloud-context#204 provisions
+  the isolated runner; mirrored GitHub CI repeats
+  the gate for `main`, `testing`, and `v*`.
 - Document uncovered code with a rationale comment (e.g., "# pragma: no cover - network outage only")
 
 ### Regression Testing

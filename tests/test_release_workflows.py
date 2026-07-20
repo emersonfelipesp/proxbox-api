@@ -7,12 +7,17 @@ TestPyPI -> PyPI release process without running a publishing workflow.
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+GITEA_CI_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "ci.yml"
 PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "publish-testpypi.yml"
 NETBOX_VERSIONS_PATH = REPO_ROOT / ".github" / "netbox-versions.json"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
 
 def _read(path: Path) -> str:
@@ -34,6 +39,85 @@ def test_ci_e2e_uses_http_mock_for_container_path_and_backend_mock_separately():
     assert 'uv run pytest tests/e2e/ -m "mock_http" --tb=short -v' in workflow
     assert "Run E2E tests with in-process MockBackend" in workflow
     assert 'uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v' in workflow
+
+
+def test_primary_ci_enforces_repository_coverage_ratchet():
+    workflow = yaml.safe_load(_read(CI_WORKFLOW_PATH))
+    test_steps = {
+        step["name"]: step for step in workflow["jobs"]["test"]["steps"] if "name" in step
+    }
+    config = tomllib.loads(_read(PYPROJECT_PATH))
+    coverage_run = config["tool"]["coverage"]["run"]
+    coverage_report = config["tool"]["coverage"]["report"]
+    expected_omits = {
+        "proxbox_api/e2e/*",
+        "proxbox_api/generated/*",
+    }
+
+    assert coverage_run["source"] == ["proxbox_api"]
+    assert coverage_run["branch"] is True
+    assert set(coverage_run["omit"]) == expected_omits
+    assert set(coverage_report["omit"]) == expected_omits
+    assert coverage_report["fail_under"] >= 65.40
+    assert coverage_report["precision"] == 2
+
+    coverage_step = test_steps["Core tests with coverage"]
+    coverage_command = coverage_step["run"]
+    assert "--ignore=tests/e2e" in coverage_command
+    assert "--ignore=tests/test_generated_proxmox_routes.py" in coverage_command
+    assert "--cov=proxbox_api" in coverage_command
+    assert "--cov-branch" in coverage_command
+    assert "--cov-report=term-missing" in coverage_command
+    assert "--cov-report=xml:coverage.xml" in coverage_command
+
+    upload_step = test_steps["Upload coverage report"]
+    assert upload_step["if"] == "${{ always() }}"
+    assert upload_step["uses"] == (
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    )
+    assert upload_step["with"] == {
+        "name": "coverage-py312",
+        "path": "coverage.xml",
+        "if-no-files-found": "error",
+        "retention-days": 14,
+    }
+
+
+def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
+    workflow_source = _read(GITEA_CI_WORKFLOW_PATH)
+    workflow = yaml.safe_load(workflow_source)
+    quality_job = workflow["jobs"]["quality"]
+    steps = {step["name"]: step for step in quality_job["steps"] if "name" in step}
+
+    assert quality_job["runs-on"] == "ci-untrusted-python312"
+    assert "${{ secrets." not in workflow_source
+    assert "prod-deploy" not in workflow_source
+    assert "mirror-host" not in workflow_source
+    assert "curl " not in workflow_source
+
+    checkout_step = steps["Checkout"]
+    assert checkout_step["uses"] == ("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd")
+    assert checkout_step["with"]["persist-credentials"] is False
+
+    coverage_command = steps["Core tests with coverage"]["run"]
+    assert "--ignore=tests/e2e" in coverage_command
+    assert "--ignore=tests/test_generated_proxmox_routes.py" in coverage_command
+    assert "--cov=proxbox_api" in coverage_command
+    assert "--cov-branch" in coverage_command
+    assert "--cov-report=term-missing" in coverage_command
+    assert "--cov-report=xml:coverage.xml" in coverage_command
+
+    upload_step = steps["Upload coverage report"]
+    assert upload_step["if"] == "${{ always() }}"
+    assert upload_step["uses"] == (
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    )
+    assert upload_step["with"] == {
+        "name": "coverage-py312-gitea",
+        "path": "coverage.xml",
+        "if-no-files-found": "error",
+        "retention-days": 14,
+    }
 
 
 def test_netbox_e2e_readiness_is_long_enough_for_migrations_and_api_status():

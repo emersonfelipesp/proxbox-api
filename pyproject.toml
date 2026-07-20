@@ -85,10 +85,26 @@ markers = [
 [tool.coverage.run]
 source = ["proxbox_api"]
 branch = true
+omit = [
+    # Generated schema declarations execute during import and would inflate the
+    # measured coverage without exercising generated behavior.
+    "proxbox_api/generated/*",
+    # E2E support code is exercised by the separate Docker E2E matrix, while
+    # the required coverage gate intentionally runs the non-E2E core suite.
+    "proxbox_api/e2e/*",
+]
 
 [tool.coverage.report]
 skip_covered = true
 show_missing = true
+# Branch-inclusive core-suite baseline for this ratchet was 65.51%; 85%
+# remains the target, not the enforced gate, until first-party tests close the gap.
+fail_under = 65.40
+precision = 2
+omit = [
+    "proxbox_api/generated/*",
+    "proxbox_api/e2e/*",
+]
 
 [tool.uv]
 default-groups = ["dev"]

@@ -57,8 +57,25 @@ jobs:
           uv run python -c "import proxmox_sdk.mock_main"
           uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 
-      - name: Core tests  # includes TestClient HTTP integration tests (test_endpoint_crud, test_stub_routes, test_sse_stream_output, test_proxmox_actions_gate)
-        run: uv run pytest tests/ -v -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --tb=short
+      - name: Core tests with coverage  # includes TestClient HTTP integration tests (test_endpoint_crud, test_stub_routes, test_sse_stream_output, test_proxmox_actions_gate)
+        run: |
+          uv run pytest tests/ -v -n auto \
+            --ignore=tests/e2e \
+            --ignore=tests/test_generated_proxmox_routes.py \
+            --tb=short \
+            --cov=proxbox_api \
+            --cov-branch \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-py312
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 14
 
   test-free-threaded:
     runs-on: ubuntu-latest

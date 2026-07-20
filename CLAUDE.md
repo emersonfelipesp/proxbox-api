@@ -546,12 +546,21 @@ Changes to routes, services, or schemas MUST include an updated architecture not
 
 ### Code Coverage and Quality Metrics
 
-**Coverage Target:** Maintain ≥85% code coverage for the `proxbox_api/` package. Coverage is measured by `pytest-cov` and reported in CI.
+**Enforced Coverage Ratchet:** The required non-E2E core suite enforces at least
+65.40% branch-inclusive coverage for the measured `proxbox_api/` source. The
+reproducible baseline was 65.51% on 2026-07-17. Coverage must not fall below the
+ratchet; 85% remains the long-term target rather than the current gate.
 
 **Coverage Reporting:**
-- Local: `uv run pytest tests --cov=proxbox_api --cov-report=term-missing`
-- CI: GitHub Actions enforces coverage thresholds; failing coverage blocks merge
-- Exclusions: `proxbox_api/generated/` (auto-generated), database layer (SQLAlchemy), test fixtures
+- Local: `uv run pytest tests/ -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --cov=proxbox_api --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml`
+- CI: the isolated `ci-untrusted-python312` Gitea Python 3.12 job gates feature
+  pushes and pull requests only after N-MultiCloud/nmulticloud-context#204
+  provisions that runner. Mirrored GitHub CI repeats the threshold on protected branches,
+  reports missing lines, and retains `coverage.xml`; a regression blocks merge.
+- Exclusions: only `proxbox_api/generated/` (machine-generated schema output) and
+  `proxbox_api/e2e/` (support code exercised by the separate Docker E2E matrix).
+- Included: database, code-generation, testing helpers used by the core suite,
+  and all other first-party source remain measured.
 
 **Uncovered Code:** If code cannot be easily covered, document the rationale with an inline comment:
 ```python
@@ -570,7 +579,7 @@ except ConnectionError:  # pragma: no cover - occurs only on network outage
 
 **Regression Testing:** Before release, run:
 ```bash
-uv run pytest tests/ --timeout=60 -v --cov=proxbox_api --cov-report=term-missing
+uv run pytest tests/ --timeout=60 -v --cov=proxbox_api --cov-branch --cov-report=term-missing
 uv run pytest tests/reconciliation -q  # if you changed sync reconciliation
 ```
 This verifies that no previously passing test was broken by the change.
@@ -638,7 +647,8 @@ All checks MUST pass before committing.
 
 - [ ] All requirements are implemented and verified in code
 - [ ] Code passes pre-commit checklist (syntax, lint, type-check, tests)
-- [ ] Coverage is ≥85% (`pytest-cov --cov-report=term-missing`)
+- [ ] Branch-inclusive core-suite coverage meets the enforced 65.40% ratchet
+      (`pytest-cov --cov-branch --cov-report=term-missing`); 85% remains the long-term target
 - [ ] Regression testing passes (`pytest tests/ --timeout=60 -v`)
 - [ ] E2E Docker stack validation is green (if touching sync/Firecracker/NetBox paths)
 - [ ] Changelog (`docs/release-notes/version-X.Y.Z.md`) is complete

@@ -1,0 +1,99 @@
+name: CI
+
+# Authoritative pre-merge gate for Gitea feature branches. The dedicated label
+# is intentionally unschedulable until N-MultiCloud/nmulticloud-context#204
+# provisions an ephemeral, unprivileged runner with no production credentials.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: proxbox-api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, smoke, and core coverage
+    runs-on: ci-untrusted-python312
+    timeout-minutes: 30
+    env:
+      HOME: ${{ github.workspace }}
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify runner toolchain
+        shell: bash
+        run: |
+          set -eo pipefail
+          export HOME="${GITHUB_WORKSPACE:-$PWD}"
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v uv >/dev/null 2>&1
+          uv --version
+          uv python find 3.12
+
+      - name: Sync locked dependencies
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          uv sync --frozen --extra test --group dev --python 3.12
+
+      - name: Ruff lint and format
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Ty type check
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run ty check \
+            proxbox_api/types \
+            proxbox_api/utils/retry.py \
+            proxbox_api/schemas/sync.py
+
+      - name: Compile and import smoke checks
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run python -m compileall proxbox_api scripts tests
+          uv run python -c "import proxbox_api.main"
+          uv run python -c "import proxmox_sdk.mock_main"
+          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+
+      - name: Core tests with coverage
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run pytest tests/ -v -n auto \
+            --ignore=tests/e2e \
+            --ignore=tests/test_generated_proxmox_routes.py \
+            --tb=short \
+            --cov=proxbox_api \
+            --cov-branch \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-py312-gitea
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 14

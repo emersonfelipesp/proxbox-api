@@ -34,6 +34,27 @@ For the current route and docs contract surface:
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
 ```
 
+## Coverage gate
+
+The required non-E2E core suite measures branch coverage for `proxbox_api` and
+enforces a 65.40% ratchet from a 65.51% measured baseline. The 85% coverage
+level is the long-term target, not the current gate.
+
+```bash
+uv run pytest tests/ -n auto \
+  --ignore=tests/e2e \
+  --ignore=tests/test_generated_proxmox_routes.py \
+  --cov=proxbox_api \
+  --cov-branch \
+  --cov-report=term-missing \
+  --cov-report=xml:coverage.xml
+```
+
+Generated schema output (`proxbox_api/generated/`) and E2E support code
+(`proxbox_api/e2e/`) are excluded from the core metric. The E2E support package
+is covered by the separate Docker E2E matrix, while generated declarations would
+inflate the metric without testing generated behavior.
+
 ## Rust reconciliation tests
 
 The optional Rust reconciliation package lives in `proxbox-reconcile-rs/`.

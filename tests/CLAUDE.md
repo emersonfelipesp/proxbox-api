@@ -25,6 +25,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_bridge_interfaces.py` | VM bridge interface mapping and reconciliation |
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
+| `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
 | `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
 | `test_ensure_device_overwrite_flags.py` | `_ensure_device` overwrite-flag plumbing for cluster/storage/node-interface/IP tag groups |
 | `test_error_handling.py` | Exception hierarchy and HTTP error response shaping |
@@ -99,7 +100,13 @@ uv run pytest tests
 uv run pytest tests/test_vm_sync.py
 
 # With coverage
-uv run pytest --cov=proxbox_api --cov-report=xml tests
+uv run pytest tests/ -n auto \
+  --ignore=tests/e2e \
+  --ignore=tests/test_generated_proxmox_routes.py \
+  --cov=proxbox_api \
+  --cov-branch \
+  --cov-report=term-missing \
+  --cov-report=xml:coverage.xml
 
 # E2E tests against in-process MockBackend
 uv run pytest tests/e2e -m mock_backend
@@ -113,6 +120,14 @@ PROXBOX_RECONCILIATION_ENGINE=compare \
   PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
   uv run pytest tests/reconciliation -q
 ```
+
+The non-E2E core suite enforces a 65.40% branch-inclusive ratchet from a 65.51%
+measured baseline (2026-07-17). Generated schema output and `proxbox_api/e2e/`
+support code are excluded from this core metric; the latter is exercised by the
+separate Docker E2E matrix. Gitea feature pushes and pull requests run the core
+gate on the isolated `ci-untrusted-python312` runner after
+N-MultiCloud/nmulticloud-context#204 provisions it, and mirrored GitHub CI repeats it
+on protected branches. The long-term target is 85%.
 
 ## Conventions
 
