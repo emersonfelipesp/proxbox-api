@@ -24,6 +24,7 @@ from proxbox_api.services.sync.individual.helpers import (
     get_serialized_first_record,
     resolve_guest_interface,
 )
+from proxbox_api.services.sync.sync_state_writer import write_vm_interface_sync_state
 from proxbox_api.services.sync.vm_helpers import record_id
 
 
@@ -300,6 +301,12 @@ async def sync_interface_individual(  # noqa: C901
             interface_record.get("id")
             if isinstance(interface_record, dict)
             else getattr(interface_record, "id", None)
+        )
+        await write_vm_interface_sync_state(
+            nb,
+            vm_interface_id=interface_id,
+            proxbox_bridge_id=bridge_id,
+            overwrite_custom_fields=True,
         )
         if interface_id is not None and mac_address:
             from proxbox_api.services.sync.mac_address import (

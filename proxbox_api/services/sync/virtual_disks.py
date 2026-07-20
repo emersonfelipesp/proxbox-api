@@ -21,6 +21,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.sync_state_writer import write_virtual_disk_sync_state
 from proxbox_api.services.sync.vm_helpers import relation_id, relation_name, to_mapping
 from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_endpoint_id,
@@ -575,6 +576,33 @@ async def _sync_virtual_disks_for_vm(
             )
             disks_created = bulk_result.created
             disks_updated = bulk_result.updated
+            sidecar_payload_by_key = {
+                (
+                    relation_id(payload.get("virtual_machine")),
+                    str(payload.get("name") or ""),
+                ): payload
+                for payload in disk_payloads
+            }
+            for record in bulk_result.records:
+                record_vm_id = relation_id(record.get("virtual_machine"))
+                sidecar_payload = sidecar_payload_by_key.get(
+                    (record_vm_id, str(record.get("name") or ""))
+                )
+                custom_fields = (
+                    sidecar_payload.get("custom_fields")
+                    if isinstance(sidecar_payload, dict)
+                    else None
+                )
+                await write_virtual_disk_sync_state(
+                    nb,
+                    virtual_disk_id=record.get("id"),
+                    proxbox_storage_id=(
+                        custom_fields.get("proxbox_storage_id")
+                        if isinstance(custom_fields, dict)
+                        else None
+                    ),
+                    overwrite_custom_fields=True,
+                )
 
         vm_id_int = relation_id(vm_id)
         if vm_id_int is not None:

@@ -58,6 +58,24 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
 
 ## Core Data Models
 
+### NetBox sync-state sidecars
+
+The NetBox plugin owns typed Proxbox sync-state sidecars under
+`/api/plugins/proxbox/sync-state/*`. `proxbox-api` writes these rows
+additively during sync while continuing to write the legacy custom fields:
+
+- `ProxboxVirtualMachineSyncState` extends `virtualization.VirtualMachine`.
+- `ProxboxDeviceSyncState` extends `dcim.Device`.
+- `ProxboxClusterSyncState` extends `virtualization.Cluster`.
+- `ProxboxVirtualDiskSyncState` extends `virtualization.VirtualDisk`.
+- `ProxboxVMInterfaceSyncState` extends `virtualization.VMInterface`.
+
+The sidecars carry the same synchronized data that historically lived only in
+custom fields, including VM Proxmox identity, device/cluster timestamps,
+VM-interface bridge links, virtual-disk storage links, and VM last-run ids.
+Writes use the existing NetBox session and degrade gracefully when an older
+plugin does not expose the sidecar API.
+
 ### `NetBoxEndpoint`
 
 - Fields: `name`, `ip_address`, `domain`, `port`, `token_version`, `token_key`, `token`, `verify_ssl`

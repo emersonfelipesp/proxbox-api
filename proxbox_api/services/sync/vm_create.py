@@ -32,6 +32,7 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
+from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
@@ -93,6 +94,7 @@ async def ensure_vm_dependencies(
             tag_refs=tag_refs,
             site_id=getattr(site, "id", None),
             tenant_id=getattr(tenant, "id", None),
+            overwrite_flags=overwrite_flags,
         )
         site_id = _effective_cluster_site_id(
             cluster,
@@ -342,6 +344,15 @@ async def create_or_update_virtual_machine(
         else getattr(virtual_machine, "id", None)
     )
     if vm_id is not None:
+        custom_fields = payload.get("custom_fields")
+        await write_virtual_machine_sync_state(
+            netbox_session,
+            virtual_machine_id=vm_id,
+            custom_fields=custom_fields if isinstance(custom_fields, dict) else None,
+            overwrite_custom_fields=(
+                overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
+            ),
+        )
         try:
             await sync_vm_cloudinit(
                 netbox_session,

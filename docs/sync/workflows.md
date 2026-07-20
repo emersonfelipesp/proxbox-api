@@ -205,6 +205,31 @@ parsing logic is centralized in
 logged but do not fail the sync — the sync falls back to the raw description
 string.
 
+### Proxbox sync-state sidecars
+
+During the additive migration away from custom-field-only state, sync writes the
+legacy Proxbox custom fields and also mirrors selected values into
+netbox-proxbox typed sidecars under `/api/plugins/proxbox/sync-state/*`.
+
+Mirrored write sites:
+
+- VM identity/reflection fields (`proxmox_vm_id`, type, status, node, cluster,
+  endpoint raw id, link, agent/start flags, and `proxmox_last_updated`) are
+  written to `ProxboxVirtualMachineSyncState`.
+- `proxbox_last_run_id` is mirrored to the VM sidecar `last_run_id`.
+- Device and cluster `proxmox_last_updated` stamps are mirrored to
+  `ProxboxDeviceSyncState` and `ProxboxClusterSyncState`.
+- VM interface `proxbox_bridge` is mirrored to
+  `ProxboxVMInterfaceSyncState.proxbox_bridge`.
+- Virtual disk `proxbox_storage_id` is mirrored to
+  `ProxboxVirtualDiskSyncState.proxbox_storage`.
+
+Each sidecar payload is built from the same live Proxmox-derived values already
+computed for the custom-field payload. Sidecar writes are gated by the matching
+`overwrite_*_custom_fields` flag and are best-effort: older netbox-proxbox
+builds that return 404/501, or transient plugin API failures, are logged and do
+not abort the sync stage.
+
 ## Backup Sync Flow
 
 Endpoints:

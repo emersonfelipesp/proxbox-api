@@ -602,3 +602,11 @@ async def stamp_vm_last_run_id(
             record.get("name"),
             error,
         )
+
+    from proxbox_api.services.sync.sync_state_writer import write_vm_last_run_sync_state
+
+    await write_vm_last_run_sync_state(
+        nb,
+        virtual_machine_id=record_id,
+        run_id=run_id,
+    )

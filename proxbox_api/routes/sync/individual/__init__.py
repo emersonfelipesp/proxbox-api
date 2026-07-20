@@ -1,6 +1,6 @@
 """Individual sync route handlers."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from proxbox_api.routes.sync.individual import (
     backup,
@@ -16,8 +16,9 @@ from proxbox_api.routes.sync.individual import (
     task_history,
     vm,
 )
+from proxbox_api.services.sync.sync_state_writer import reset_sidecar_availability_cache
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(reset_sidecar_availability_cache)])
 
 router.include_router(backup.router, tags=["sync / individual / backup"])
 router.include_router(backup_routine.router, tags=["sync / individual / backup-routine"])

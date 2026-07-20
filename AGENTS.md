@@ -92,6 +92,14 @@ can inspect startup bootstrap warnings through `GET /extras/bootstrap-status`.
 The legacy `GET /extras/extras/custom-fields/create` route remains for older
 callers.
 
+During sync, `proxbox_api/services/sync/sync_state_writer.py` additively mirrors
+selected legacy custom-field payloads into the netbox-proxbox typed
+`/api/plugins/proxbox/sync-state/*` sidecar API. VM identity, run ids,
+device/cluster timestamps, VM-interface bridge FKs, and virtual-disk storage
+FKs must be built from the same live payloads already used for custom-field
+writes. Keep these sidecar writes best-effort: 404/501 from older plugin builds
+and transient NetBox errors are logged and skipped without aborting sync.
+
 ## CI/CD Workflows
 
 ### End-to-end release pipeline (Gitea-first)

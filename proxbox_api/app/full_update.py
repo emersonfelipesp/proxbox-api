@@ -8,7 +8,7 @@ import uuid
 from contextlib import nullcontext
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.app.sync_state import (
@@ -54,6 +54,7 @@ from proxbox_api.services.sync.orphan_sweep import (
 )
 from proxbox_api.services.sync.replications import sync_all_replications
 from proxbox_api.services.sync.storages import create_storages
+from proxbox_api.services.sync.sync_state_writer import reset_sidecar_availability_cache
 from proxbox_api.services.sync.task_history import (
     sync_all_virtual_machine_task_histories,
 )
@@ -77,7 +78,10 @@ def _result_count(value) -> int:
     return 0
 
 
-@full_update_router.get("/full-update")
+@full_update_router.get(
+    "/full-update",
+    dependencies=[Depends(reset_sidecar_availability_cache)],
+)
 async def full_update_sync(
     netbox_session: NetBoxSessionDep,
     _sync_deps: NetBoxSyncDependenciesDep,
@@ -461,7 +465,11 @@ async def _full_update_sync_impl(  # noqa: C901
         await release_active_sync(_active_entry)
 
 
-@full_update_router.get("/full-update/stream", response_model=None)
+@full_update_router.get(
+    "/full-update/stream",
+    response_model=None,
+    dependencies=[Depends(reset_sidecar_availability_cache)],
+)
 async def full_update_sync_stream(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     _sync_deps: NetBoxSyncDependenciesDep,

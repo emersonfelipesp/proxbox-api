@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.services.sync.individual import interface_sync
+from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
 from proxbox_api.services.sync.vm_network import ensure_ip_assigned_to_vm, set_primary_ip
 
 
@@ -313,3 +316,73 @@ def test_ensure_ip_assigned_already_on_this_vm(monkeypatch):
     assert assigned is True
     assert reason == "already_assigned"
     assert patch_calls == []
+
+
+def test_sync_interface_individual_mirrors_bridge_sidecar(monkeypatch):
+    sidecar_calls: list[dict[str, object]] = []
+
+    async def _fake_get_vm_config(*_args, **_kwargs):
+        return {"net0": "bridge=vmbr0"}
+
+    def _fake_guest_interfaces(*_args, **_kwargs):
+        return []
+
+    async def _fake_ensure_vm_record(*_args, **_kwargs):
+        return {"id": 55, "name": "vm01"}, None
+
+    async def _fake_rest_first(_nb, path, *, query=None):
+        if path == "/api/dcim/devices/":
+            return {"id": 12, "name": query["name"]}
+        return None
+
+    async def _fake_ensure_bridge(*_args, **_kwargs):
+        return 400
+
+    async def _fake_get_first_record(*_args, **_kwargs):
+        return None
+
+    async def _fake_reconcile(_nb, path, lookup, payload, **_kwargs):
+        assert path == "/api/virtualization/interfaces/"
+        assert lookup == {"name": "net0", "virtual_machine_id": 55}
+        assert payload["custom_fields"]["proxbox_bridge"] == 400
+        return {"id": 66, **payload}
+
+    async def _fake_sidecar(_nb, **kwargs):
+        sidecar_calls.append(kwargs)
+
+    monkeypatch.setattr(interface_sync, "get_vm_config_individual", _fake_get_vm_config)
+    monkeypatch.setattr(
+        interface_sync,
+        "get_qemu_guest_agent_network_interfaces",
+        _fake_guest_interfaces,
+    )
+    monkeypatch.setattr(interface_sync, "ensure_vm_record", _fake_ensure_vm_record)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_rest_first)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.bridge_interfaces.ensure_bridge_interfaces",
+        _fake_ensure_bridge,
+    )
+    monkeypatch.setattr(interface_sync, "get_first_record", _fake_get_first_record)
+    monkeypatch.setattr(interface_sync, "rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(interface_sync, "write_vm_interface_sync_state", _fake_sidecar)
+
+    result = asyncio.run(
+        sync_interface_individual(
+            nb=object(),
+            px=SimpleNamespace(name="lab"),
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            node="pve01",
+            vm_type="qemu",
+            vmid=101,
+            interface_name="net0",
+        )
+    )
+
+    assert result["action"] == "created"
+    assert sidecar_calls == [
+        {
+            "vm_interface_id": 66,
+            "proxbox_bridge_id": 400,
+            "overwrite_custom_fields": True,
+        }
+    ]

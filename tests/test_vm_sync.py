@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 from proxbox_api.proxmox_to_netbox.errors import ProxmoxToNetBoxError
@@ -13,6 +16,9 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
 )
 from proxbox_api.proxmox_to_netbox.normalize import build_virtual_machine_transform
+from proxbox_api.routes.virtualization.virtual_machines import sync_vm
+from proxbox_api.routes.virtualization.virtual_machines.sync_vm import create_only_vm_interfaces
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
@@ -221,6 +227,127 @@ def test_virtual_machine_interface_state_accepts_choice_object_type():
     )
 
     assert state.type == "bridge"
+
+
+def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_custom_field_gate(monkeypatch):
+    patch_calls: list[dict[str, object]] = []
+    sidecar_calls: list[dict[str, object]] = []
+
+    cluster_status = [SimpleNamespace(name="lab")]
+    cluster_resources = [
+        {
+            "lab": [
+                {
+                    "type": "qemu",
+                    "name": "vm01",
+                    "node": "pve01",
+                    "vmid": 101,
+                }
+            ]
+        }
+    ]
+
+    def _fake_get_vm_config(**_kwargs):
+        return {"net0": "bridge=vmbr0"}
+
+    async def _fake_load_snapshot(_nb):
+        return [
+            {
+                "id": 55,
+                "name": "vm01",
+                "custom_fields": {"proxmox_vm_id": 101},
+            }
+        ]
+
+    async def _fake_resolve_cluster_id(*_args, **_kwargs):
+        return None
+
+    async def _fake_bulk_reconcile(_nb, _payloads, **_kwargs):
+        return ([{"id": 66, "name": "net0", "virtual_machine": 55}], {("net0", 55): 66})
+
+    async def _fake_ensure_bridge(*_args, **_kwargs):
+        return 400
+
+    async def _fake_rest_first(_nb, path, *, query=None):
+        if path == "/api/dcim/devices/":
+            return {"id": 12}
+        if path == "/api/virtualization/interfaces/":
+            return {"id": 66, "name": query["name"], "virtual_machine": query["virtual_machine_id"]}
+        return None
+
+    async def _fake_rest_patch(_nb, path, record_id, payload):
+        patch_calls.append({"path": path, "record_id": record_id, "payload": payload})
+        return {"id": record_id, **payload}
+
+    async def _fake_sidecar(_nb, **kwargs):
+        sidecar_calls.append(kwargs)
+
+    async def _fake_guest_sidecars(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 1)
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_load_snapshot)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_cluster_id_by_name", _fake_resolve_cluster_id)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
+        _fake_bulk_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.bridge_interfaces.ensure_bridge_interfaces",
+        _fake_ensure_bridge,
+    )
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_rest_first)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_rest_patch)
+    monkeypatch.setattr(sync_vm, "write_vm_interface_sync_state", _fake_sidecar)
+    monkeypatch.setattr(sync_vm, "reconcile_guest_vm_interfaces", _fake_guest_sidecars)
+
+    common_kwargs = {
+        "netbox_session": SimpleNamespace(client=object()),
+        "pxs": [SimpleNamespace(name="lab")],
+        "cluster_status": cluster_status,
+        "cluster_resources": cluster_resources,
+        "custom_fields": [],
+        "tag": SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+        "sync_mac": False,
+    }
+
+    result = asyncio.run(create_only_vm_interfaces(**common_kwargs))
+
+    assert result == [
+        {
+            "id": 66,
+            "mac_address": None,
+            "interface": {"id": 66, "name": "net0", "virtual_machine": 55},
+        }
+    ]
+    assert patch_calls == [
+        {
+            "path": "/api/virtualization/interfaces/",
+            "record_id": 66,
+            "payload": {"custom_fields": {"proxbox_bridge": 400}},
+        }
+    ]
+    assert sidecar_calls == [
+        {
+            "vm_interface_id": 66,
+            "proxbox_bridge_id": 400,
+            "overwrite_custom_fields": True,
+        }
+    ]
+
+    patch_calls.clear()
+    sidecar_calls.clear()
+
+    asyncio.run(
+        create_only_vm_interfaces(
+            **common_kwargs,
+            overwrite_flags=SyncOverwriteFlags(overwrite_vm_interface_custom_fields=False),
+        )
+    )
+
+    assert patch_calls == []
+    assert sidecar_calls == []
 
 
 def test_build_payload_applies_description_metadata_when_enabled(monkeypatch):

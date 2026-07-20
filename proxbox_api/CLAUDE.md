@@ -54,8 +54,13 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 4. Full VM sync prepares Proxmox VM state plus a NetBox snapshot, then calls
    `proxbox_api.services.sync.reconciliation.build_vm_operation_queue()` to
    classify `CREATE`, `GET`, and `UPDATE` operations before dispatch.
-5. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
-6. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
+5. Sync write sites additively mirror selected legacy custom-field state into
+   netbox-proxbox typed sync-state sidecars through
+   `services/sync/sync_state_writer.py`. The sidecar payloads come from the same
+   live VM/device/cluster/interface/disk values as the custom-field writes and
+   remain best-effort for older plugin builds.
+6. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
+7. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
 
 ## Extension Guidance
 
@@ -65,6 +70,9 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - Preserve ASCII-only documentation and source text unless a file already requires otherwise.
 - Prefer `ProxboxException` for expected API failures and `logger` for operational messages.
 - When adding new sync behavior, keep WebSocket and SSE payload shapes aligned.
+- When mirroring custom-field state to netbox-proxbox sidecars, keep the
+  custom-field write unchanged, gate the sidecar with the same overwrite flag,
+  and treat sidecar API 404/501 or transient failures as non-fatal.
 - Keep deterministic reconciliation logic in `services/sync/reconciliation/`.
   Do not re-grow operation-queue diffing inside VM route modules.
 - For new runtime tunables, prefer a `ProxboxPluginSettings` field on the

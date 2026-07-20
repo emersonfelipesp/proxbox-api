@@ -112,6 +112,7 @@ class BaseIndividualSyncService:
             tag_refs=self.tag_refs,
             site_id=getattr(site, "id", None),
             tenant_id=getattr(tenant, "id", None),
+            overwrite_flags=self.overwrite_flags,
         )
         return cluster
 

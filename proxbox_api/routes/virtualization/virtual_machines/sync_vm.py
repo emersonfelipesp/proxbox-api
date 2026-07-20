@@ -112,6 +112,12 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.sync_state_writer import (
+    reset_sidecar_availability_cache,
+    write_virtual_disk_sync_state,
+    write_virtual_machine_sync_state,
+    write_vm_interface_sync_state,
+)
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.task_history import (
     sync_virtual_machine_task_history,
@@ -1352,6 +1358,17 @@ async def _create_vm_interface_parallel(
     result["interface_id"] = interface_id
     result["mac_address"] = mac_address
     result["interface_name"] = resolved_name
+    custom_fields = payload.get("custom_fields")
+    await write_vm_interface_sync_state(
+        nb,
+        vm_interface_id=interface_id,
+        proxbox_bridge_id=(
+            custom_fields.get("proxbox_bridge") if isinstance(custom_fields, dict) else None
+        ),
+        overwrite_custom_fields=(
+            overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields
+        ),
+    )
 
     if interface_id is not None and mac_address and sync_mac:
         from proxbox_api.services.sync.mac_address import (
@@ -1416,6 +1433,7 @@ async def _create_vm_disk_parallel(
         cluster_name=cluster_name,
         storage_name=storage_name,
     )
+    storage_id = storage_record.get("id") if storage_record else None
     try:
         disk = await rest_reconcile_async(
             nb,
@@ -1428,7 +1446,7 @@ async def _create_vm_disk_parallel(
                 "virtual_machine": virtual_machine.get("id"),
                 "name": disk_entry.name,
                 "size": disk_entry.size_mb,
-                "storage": storage_record.get("id") if storage_record else None,
+                "storage": storage_id,
                 "description": disk_entry.description,
                 "tags": tag_refs,
                 "custom_fields": {"proxmox_last_updated": now.isoformat()},
@@ -1445,6 +1463,13 @@ async def _create_vm_disk_parallel(
             },
             strict_lookup=True,
             nullable_fields={"storage"},
+        )
+        disk_id = disk.get("id") if isinstance(disk, dict) else getattr(disk, "id", None)
+        await write_virtual_disk_sync_state(
+            nb,
+            virtual_disk_id=disk_id,
+            proxbox_storage_id=storage_id,
+            overwrite_custom_fields=True,
         )
         return disk
     except Exception as exc:
@@ -1625,7 +1650,13 @@ async def create_test():
     return virtual_machine
 
 
-@router.get("/create", dependencies=[Depends(ensure_netbox_sync_dependencies)])
+@router.get(
+    "/create",
+    dependencies=[
+        Depends(ensure_netbox_sync_dependencies),
+        Depends(reset_sidecar_availability_cache),
+    ],
+)
 async def create_virtual_machines(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
@@ -2017,6 +2048,7 @@ async def create_virtual_machines(  # noqa: C901
                 tag_refs=tag_refs,
                 site_id=getattr(site, "id", None),
                 tenant_id=getattr(tenant, "id", None),
+                overwrite_flags=overwrite_flags,
             )
             site_id = _effective_cluster_site_id(
                 cluster,
@@ -2301,6 +2333,15 @@ async def create_virtual_machines(  # noqa: C901
                 failed_vms += 1
                 continue
             await stamp_vm_last_run_id(nb, vm_record, effective_run_id)
+            desired_custom_fields = operation.prepared.desired_payload.get("custom_fields")
+            await write_virtual_machine_sync_state(
+                nb,
+                virtual_machine_id=vm_record.get("id"),
+                custom_fields=(
+                    desired_custom_fields if isinstance(desired_custom_fields, dict) else None
+                ),
+                overwrite_custom_fields=overwrite_vm_custom_fields,
+            )
             results.append(vm_record)
 
             vm_id = _relation_id(vm_record.get("id"))
@@ -2588,6 +2629,20 @@ async def create_virtual_machines(  # noqa: C901
         )
 
         await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
+        virtual_machine_id = (
+            virtual_machine.get("id")
+            if isinstance(virtual_machine, dict)
+            else getattr(virtual_machine, "id", None)
+        )
+        desired_custom_fields = netbox_vm_payload.get("custom_fields")
+        await write_virtual_machine_sync_state(
+            nb,
+            virtual_machine_id=virtual_machine_id,
+            custom_fields=desired_custom_fields
+            if isinstance(desired_custom_fields, dict)
+            else None,
+            overwrite_custom_fields=overwrite_vm_custom_fields,
+        )
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)
         if bridge:
@@ -3638,19 +3693,38 @@ async def create_only_vm_interfaces(  # noqa: C901
                                     if isinstance(existing_iface, dict)
                                     else getattr(existing_iface, "id", None)
                                 )
-                                if iface_id:
-                                    await rest_patch_async(
+                                overwrite_bridge_custom_fields = (
+                                    overwrite_flags is None
+                                    or overwrite_flags.overwrite_vm_interface_custom_fields
+                                )
+                                if iface_id and overwrite_bridge_custom_fields:
+                                    try:
+                                        await rest_patch_async(
+                                            nb,
+                                            "/api/virtualization/interfaces/",
+                                            iface_id,
+                                            {"custom_fields": {"proxbox_bridge": vm_bridge_id}},
+                                        )
+                                    except Exception as patch_exc:
+                                        logger.warning(
+                                            "Failed to set proxbox_bridge on interface %s "
+                                            "(VM %s): %s",
+                                            resolved_name,
+                                            vm_id_val,
+                                            patch_exc,
+                                        )
+                                    await write_vm_interface_sync_state(
                                         nb,
-                                        "/api/virtualization/interfaces/",
-                                        iface_id,
-                                        {"custom_fields": {"proxbox_bridge": vm_bridge_id}},
+                                        vm_interface_id=iface_id,
+                                        proxbox_bridge_id=vm_bridge_id,
+                                        overwrite_custom_fields=overwrite_bridge_custom_fields,
                                     )
-                        except Exception as patch_exc:
+                        except Exception as lookup_exc:
                             logger.warning(
-                                "Failed to set proxbox_bridge on interface %s (VM %s): %s",
+                                "Failed to resolve interface %s (VM %s) for proxbox_bridge: %s",
                                 resolved_name,
                                 vm_id_val,
-                                patch_exc,
+                                lookup_exc,
                             )
             except Exception as bridge_exc:
                 logger.warning(
@@ -4265,7 +4339,13 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     return results
 
 
-@router.get("/{netbox_vm_id}/create", dependencies=[Depends(ensure_netbox_sync_dependencies)])
+@router.get(
+    "/{netbox_vm_id}/create",
+    dependencies=[
+        Depends(ensure_netbox_sync_dependencies),
+        Depends(reset_sidecar_availability_cache),
+    ],
+)
 async def create_virtual_machine_by_netbox_id(
     netbox_vm_id: int,
     netbox_session: NetBoxSessionDep,
@@ -4335,7 +4415,10 @@ async def create_virtual_machine_by_netbox_id(
 @router.get(
     "/create/stream",
     response_model=None,
-    dependencies=[Depends(ensure_netbox_sync_dependencies)],
+    dependencies=[
+        Depends(ensure_netbox_sync_dependencies),
+        Depends(reset_sidecar_availability_cache),
+    ],
 )
 async def create_virtual_machines_stream(
     netbox_session: NetBoxSessionDep,
@@ -4644,7 +4727,10 @@ async def create_virtual_machines_stream(
 @router.get(
     "/{netbox_vm_id}/create/stream",
     response_model=None,
-    dependencies=[Depends(ensure_netbox_sync_dependencies)],
+    dependencies=[
+        Depends(ensure_netbox_sync_dependencies),
+        Depends(reset_sidecar_availability_cache),
+    ],
 )
 async def create_virtual_machine_by_netbox_id_stream(
     netbox_vm_id: int,

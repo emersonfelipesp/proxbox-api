@@ -32,6 +32,7 @@ from proxbox_api.services.sync.discovery_tags import (
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
@@ -494,6 +495,20 @@ async def sync_vm_individual(
             strict_lookup=True,
         )
 
+        virtual_machine_id = (
+            virtual_machine.get("id")
+            if isinstance(virtual_machine, dict)
+            else getattr(virtual_machine, "id", None)
+        )
+        custom_fields = netbox_vm_payload.get("custom_fields")
+        await write_virtual_machine_sync_state(
+            nb,
+            virtual_machine_id=virtual_machine_id,
+            custom_fields=custom_fields if isinstance(custom_fields, dict) else None,
+            overwrite_custom_fields=(
+                overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
+            ),
+        )
         await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
 
         netbox_object = (

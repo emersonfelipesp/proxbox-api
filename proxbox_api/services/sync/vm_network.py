@@ -26,6 +26,10 @@ from proxbox_api.services.sync.guest_vm_interface import (
 )
 from proxbox_api.services.sync.network import _resolve_vm_interface_ips
 from proxbox_api.services.sync.storage_links import find_storage_record, storage_name_from_volume_id
+from proxbox_api.services.sync.sync_state_writer import (
+    write_virtual_disk_sync_state,
+    write_vm_interface_sync_state,
+)
 from proxbox_api.services.sync.vm_filter import get_interface_name_from_config_and_agent
 from proxbox_api.services.sync.vm_helpers import (
     build_guest_mac_index,
@@ -224,6 +228,12 @@ async def sync_vm_interfaces(  # noqa: C901
             netbox_vm_interfaces.append(vm_interface)
 
             interface_id_for_ip = vm_interface.get("id")
+            await write_vm_interface_sync_state(
+                nb,
+                vm_interface_id=interface_id_for_ip,
+                proxbox_bridge_id=bridge_id,
+                overwrite_custom_fields=True,
+            )
             if interface_id_for_ip is not None and iface_mac:
                 try:
                     core_interface_id_by_mac[str(iface_mac)] = int(interface_id_for_ip)
@@ -328,8 +338,9 @@ async def sync_vm_disks(
             cluster_name=cluster_name,
             storage_name=storage_name,
         )
+        storage_id = storage_record.get("id") if storage_record else None
         try:
-            await rest_reconcile_async(
+            disk = await rest_reconcile_async(
                 nb,
                 "/api/virtualization/virtual-disks/",
                 lookup={
@@ -340,7 +351,7 @@ async def sync_vm_disks(
                     "virtual_machine": vm_id,
                     "name": disk_entry.name,
                     "size": disk_entry.size_mb,
-                    "storage": storage_record.get("id") if storage_record else None,
+                    "storage": storage_id,
                     "description": disk_entry.description,
                     "tags": tag_refs,
                     "custom_fields": {"proxmox_last_updated": now.isoformat()},
@@ -357,6 +368,13 @@ async def sync_vm_disks(
                 },
                 strict_lookup=True,
                 nullable_fields={"storage"},
+            )
+            disk_id = disk.get("id") if isinstance(disk, dict) else getattr(disk, "id", None)
+            await write_virtual_disk_sync_state(
+                nb,
+                virtual_disk_id=disk_id,
+                proxbox_storage_id=storage_id,
+                overwrite_custom_fields=True,
             )
             disk_count += 1
         except Exception as e:

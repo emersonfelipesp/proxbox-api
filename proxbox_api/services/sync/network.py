@@ -29,6 +29,7 @@ from proxbox_api.services.sync.ip_ownership import (
     _ip_address_current_normalizer,
     _reconcile_interface_ip,
 )
+from proxbox_api.services.sync.sync_state_writer import write_vm_interface_sync_state
 from proxbox_api.services.sync.vm_helpers import (
     _is_skippable_ip,
     all_guest_agent_ips,
@@ -425,6 +426,15 @@ async def _reconcile_vm_interface_record(
         if isinstance(vm_interface, dict)
         else getattr(vm_interface, "id", None)
     )
+    custom_fields = payload.get("custom_fields")
+    await write_vm_interface_sync_state(
+        nb,
+        vm_interface_id=interface_id,
+        proxbox_bridge_id=(
+            custom_fields.get("proxbox_bridge") if isinstance(custom_fields, dict) else None
+        ),
+        overwrite_custom_fields=True,
+    )
 
     # Write the MAC to dcim.MACAddress and link primary_mac_address. The
     # legacy inline field on VMInterface is read-only at NetBox 4.5/4.6, so
@@ -504,6 +514,47 @@ async def bulk_reconcile_vlans(
     return vlan_vid_to_id
 
 
+def _vm_interface_sidecar_payloads_by_key(
+    interface_payloads: list[dict],
+) -> dict[tuple[object, object], dict]:
+    sidecar_payload_by_key: dict[tuple[object, object], dict] = {}
+    for payload in interface_payloads:
+        custom_fields = payload.get("custom_fields")
+        if isinstance(custom_fields, dict) and custom_fields.get("proxbox_bridge") is not None:
+            sidecar_payload_by_key[(payload.get("name"), payload.get("virtual_machine"))] = payload
+    return sidecar_payload_by_key
+
+
+async def _write_vm_interface_sidecars_for_bulk_result(
+    nb: object,
+    *,
+    records: list[dict],
+    sidecar_payload_by_key: dict[tuple[object, object], dict],
+    overwrite_flags: SyncOverwriteFlags | None,
+) -> None:
+    for record in records:
+        name = record.get("name")
+        vm_obj = record.get("virtual_machine")
+        vm_id = vm_obj.get("id") if isinstance(vm_obj, dict) else vm_obj
+        iface_id = record.get("id")
+        if not (name and vm_id and iface_id):
+            continue
+        sidecar_payload = sidecar_payload_by_key.get((name, vm_id))
+        if sidecar_payload is None:
+            continue
+        custom_fields = sidecar_payload.get("custom_fields")
+        await write_vm_interface_sync_state(
+            nb,
+            vm_interface_id=iface_id,
+            proxbox_bridge_id=(
+                custom_fields.get("proxbox_bridge") if isinstance(custom_fields, dict) else None
+            ),
+            overwrite_custom_fields=(
+                overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields
+            ),
+        )
+
+
 async def bulk_reconcile_vm_interfaces(
     nb,
     interface_payloads: list[dict],
@@ -541,6 +592,7 @@ async def bulk_reconcile_vm_interfaces(
     interface_name_vm_to_id = {}
     result = None
     try:
+        sidecar_payload_by_key = _vm_interface_sidecar_payloads_by_key(interface_payloads)
         result = await rest_bulk_reconcile_async(
             nb,
             "/api/virtualization/interfaces/",
@@ -573,6 +625,12 @@ async def bulk_reconcile_vm_interfaces(
             iface_id = record.get("id")
             if name and vm_id and iface_id:
                 interface_name_vm_to_id[(name, vm_id)] = iface_id
+        await _write_vm_interface_sidecars_for_bulk_result(
+            nb,
+            records=result.records,
+            sidecar_payload_by_key=sidecar_payload_by_key,
+            overwrite_flags=overwrite_flags,
+        )
         # Surface partial failures: rest_bulk_reconcile_async can succeed overall
         # while individual records fail (result.failed > 0). Treating that as a
         # clean success would silently leave interfaces missing in NetBox.
