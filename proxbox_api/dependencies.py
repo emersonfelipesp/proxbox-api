@@ -28,13 +28,22 @@ async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep) -> RestRecord:
             description="Proxbox Identifier (used to identify the items the plugin created)",
         )
     except ProxboxException as error:
+        # Preserve the real underlying status and detail instead of flattening
+        # every upstream failure to a bare HTTP 400. A NetBox 5xx during tag
+        # ensure must surface as 5xx with its detail, so the plugin logs the
+        # true cause rather than the opaque "Error ensuring Proxbox tag" 400.
         raise ProxboxException(
             message="Error ensuring Proxbox tag",
-            python_exception=str(error),
+            detail=getattr(error, "detail", None),
+            python_exception=error.python_exception or str(error),
+            http_status_code=error.http_status_code,
         ) from error
     except Exception as error:
+        # Arbitrary (non-Proxbox) error: no reliable status to preserve, but
+        # still expose the real cause in the detail so it is not swallowed.
         raise ProxboxException(
             message="Error ensuring Proxbox tag",
+            detail=str(error),
             python_exception=str(error),
         ) from error
 

@@ -635,9 +635,16 @@ def _extract_payload(response: ApiResponse) -> object:
                     parts.append(str(item))
             if parts:
                 detail = "; ".join(parts)
+        # Preserve a real upstream server failure (NetBox 5xx) instead of
+        # letting it collapse to the ProxboxException class default 400. A
+        # gateway must not mask an upstream 502/503 as a client 400; callers
+        # (e.g. proxbox_tag) can then surface the true status. Client-side 4xx
+        # keep the default so existing validation/duplicate flows are unchanged.
+        upstream_status = response.status if response.status >= 500 else None
         raise ProxboxException(
             message="NetBox REST request failed",
             detail=detail,
+            http_status_code=upstream_status,
         )
     if not response.text:
         return None
@@ -703,7 +710,19 @@ def _is_duplicate_error(detail: object) -> bool:
     if isinstance(detail, list):
         return any(_is_duplicate_error(value) for value in detail)
     text = str(detail).lower()
-    return "already exists" in text or "must be unique" in text
+    # Keep these strictly to uniqueness/duplicate signatures. This helper is
+    # shared by the generic rest_reconcile_async path, so an over-broad phrase
+    # (e.g. "already in use") could swallow a genuine non-duplicate conflict as
+    # a duplicate-success. DRF UniqueValidator -> "already exists"/"must be
+    # unique"/"make a unique set"; Postgres IntegrityError -> "duplicate key
+    # value"/"unique constraint".
+    return (
+        "already exists" in text
+        or "must be unique" in text
+        or "make a unique set" in text
+        or "duplicate key value" in text
+        or "unique constraint" in text
+    )
 
 
 def _candidate_reuse_lookups(
@@ -2081,6 +2100,21 @@ def nested_tag_payload(tag: object) -> list[dict[str, object]]:
     return [payload]
 
 
+def _normalize_tag_color(color: str) -> str:
+    """Normalize a tag color to the bare lowercase 6-hex form NetBox expects.
+
+    NetBox validates the tag ``color`` as a 6-digit hex string without a
+    leading ``#``. Accept common operator/UI inputs (``#FF5722``, ``FF5722``,
+    ``f52``) so a formatting difference never becomes a 4.6 validation
+    rejection. If the value is not recognizable hex it is returned stripped and
+    lowercased and left for NetBox to validate.
+    """
+    normalized = (color or "").strip().lstrip("#").lower()
+    if len(normalized) == 3 and all(ch in "0123456789abcdef" for ch in normalized):
+        normalized = "".join(ch * 2 for ch in normalized)
+    return normalized
+
+
 async def ensure_tag_async(
     nb: object,
     *,
@@ -2089,6 +2123,7 @@ async def ensure_tag_async(
     color: str,
     description: str,
 ) -> RestRecord:
+    color = _normalize_tag_color(color)
     try:
         return await rest_reconcile_async(
             nb,

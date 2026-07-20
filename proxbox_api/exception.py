@@ -17,11 +17,18 @@ class ProxboxException(Exception):
         message: str,
         detail: str | dict[str, object] | None = None,
         python_exception: str | None = None,
+        *,
+        http_status_code: int | None = None,
     ):
         super().__init__(message)
         self.message = message
         self.detail = detail
         self.python_exception = python_exception
+        # When a caller re-wraps an upstream failure it can preserve the real
+        # status code here so the exception handler does not flatten, e.g., a
+        # NetBox 502 down to the class default 400. Omitted -> class default.
+        if http_status_code is not None:
+            self.http_status_code = http_status_code
 
         log_message = f"ProxboxException: {self.message}"
 

@@ -15,7 +15,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from proxbox_api.exception import ProxboxException
-from proxbox_api.netbox_rest import ensure_tag_async
+from proxbox_api.netbox_rest import (
+    _is_duplicate_error,
+    _normalize_tag_color,
+    ensure_tag_async,
+)
 
 _SLUG = "production"
 _NAME = "production"
@@ -129,3 +133,63 @@ async def test_ensure_tag_does_not_swallow_non_duplicate_exception() -> None:
 
     assert exc_info.value is non_dup_exc
     mock_first.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        {"name": ["tag with this name already exists."]},
+        {"slug": ["tag with this slug already exists."]},
+        "duplicate key value violates unique constraint",
+        "Key (slug)=(proxbox) already exists.",
+        {"detail": "The fields slug must make a unique set."},
+    ],
+)
+def test_is_duplicate_error_matches_netbox_46_variants(detail: object) -> None:
+    """NetBox 4.6 / Postgres uniqueness phrasings are still recognized."""
+    assert _is_duplicate_error(detail) is True
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "Request timeout",
+        {"error": "Bad Gateway"},
+        "permission denied",
+        # "already in use" is deliberately NOT treated as a duplicate: it is a
+        # genuine conflict (e.g. an IP/assigned object in use) that must surface,
+        # not be swallowed as a duplicate-success by the shared reconcile helper.
+        {"address": ["Duplicate IP address found; this address is already in use."]},
+        "assigned object already in use",
+    ],
+)
+def test_is_duplicate_error_ignores_non_duplicate(detail: object) -> None:
+    assert _is_duplicate_error(detail) is False
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("ff5722", "ff5722"),
+        ("#FF5722", "ff5722"),
+        ("  #4CAF50 ", "4caf50"),
+        ("f52", "ff5522"),  # 3-digit shorthand expands to 6
+    ],
+)
+def test_normalize_tag_color(raw: str, expected: str) -> None:
+    assert _normalize_tag_color(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_ensure_tag_normalizes_color_before_post() -> None:
+    """A '#'-prefixed / uppercase color is normalized before it reaches NetBox."""
+    nb = object()
+    with patch(
+        "proxbox_api.netbox_rest.rest_reconcile_async",
+        new_callable=AsyncMock,
+        return_value=_FAKE_TAG,
+    ) as mock_reconcile:
+        await ensure_tag_async(nb, name=_NAME, slug=_SLUG, color="#4CAF50", description=_DESC)
+
+    payload = mock_reconcile.await_args.kwargs["payload"]
+    assert payload["color"] == "4caf50"
