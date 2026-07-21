@@ -298,9 +298,7 @@ async def create_virtual_machine_snapshots_by_id_stream(
     ] = None,
 ):
     """Sync snapshots for a single NetBox VM identified by its primary key."""
-    vm_record = await asyncio.to_thread(
-        lambda: netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
-    )
+    vm_record = await netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
     if vm_record is None:
         raise HTTPException(
             status_code=404,

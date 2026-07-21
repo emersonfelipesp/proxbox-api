@@ -1136,10 +1136,15 @@ def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypat
             "custom_fields": {"proxmox_vm_id": 9248},
         }
     )
+
+    # netbox-sdk's ``virtual_machines.get()`` is ``async def``; the fake must be
+    # a coroutine function too, otherwise a caller that forgets to await it looks
+    # correct here while failing in production (netbox-proxbox issue #616).
+    async def _fake_get(id):
+        return vm_record if id == 248 else None
+
     fake_nb = SimpleNamespace(
-        virtualization=SimpleNamespace(
-            virtual_machines=SimpleNamespace(get=lambda id: vm_record if id == 248 else None)
-        )
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
     cluster_resources = [
         {"cluster-a": [{"type": "qemu", "name": "vm-248", "vmid": 9248}]},
@@ -1316,8 +1321,11 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
 
 
 def test_create_virtual_machine_by_netbox_id_raises_404_when_missing():
+    async def _fake_get(id):
+        return None
+
     fake_nb = SimpleNamespace(
-        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=lambda id: None))
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
     with pytest.raises(HTTPException, match="was not found in NetBox") as excinfo:
         asyncio.run(
@@ -1343,8 +1351,12 @@ def test_create_virtual_machine_by_netbox_id_raises_404_when_not_in_proxmox():
             "custom_fields": {"proxmox_vm_id": 9248},
         }
     )
+
+    async def _fake_get(id):
+        return vm_record
+
     fake_nb = SimpleNamespace(
-        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=lambda id: vm_record))
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
     with pytest.raises(HTTPException, match="No matching Proxmox VM") as excinfo:
         asyncio.run(

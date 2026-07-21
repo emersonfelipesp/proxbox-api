@@ -1693,7 +1693,7 @@ async def _create_virtual_machine_by_netbox_id(
     Raises:
         HTTPException: If VM not found, missing name, or no matching Proxmox resource.
     """
-    vm_record = netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
+    vm_record = await netbox_session.virtualization.virtual_machines.get(id=netbox_vm_id)
     if vm_record is None:
         raise HTTPException(
             status_code=404,

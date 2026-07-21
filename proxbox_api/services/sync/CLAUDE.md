@@ -38,7 +38,10 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `vm_coordinator.py`: VM sync orchestration.
 - `vm_create.py`: VM create path helpers.
 - `vm_filter.py`: VM filtering helpers.
-- `vm_helpers.py`: shared VM helper functions, including `record_id()` (extracts
+- `vm_helpers.py`: shared VM helper functions, including `to_mapping()` (coerces
+  a NetBox record-ish value to a dict: plain dicts, netbox-sdk `Record`
+  `serialize()`, Pydantic v2 `model_dump()`, Pydantic v1 `dict()`, and
+  `RootModel.root`), `record_id()` (extracts
   a NetBox record id from dict/serialized/object values) and
   `resolve_netbox_cluster_id_by_name()` (read-only cluster-id lookup by name,
   with optional caching; returns `None` when the cluster does not exist). These
@@ -114,9 +117,20 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   compatibility mode and is the only strategy that may rename core VMInterfaces
   to guest OS names.
 
+- **`to_mapping()` failure is loud, not silent.** Returning `{}` means "this
+  record could not be read", and callers go on to read `name`/`custom_fields`
+  off it — so an empty result makes a populated record look blank. Every
+  give-up path logs (WARNING for an uncoercible type, ERROR for an un-awaited
+  coroutine, which is always a caller bug). Do not reintroduce a quiet
+  `return {}`; a silent one is what hid netbox-proxbox issue #616 for two
+  releases.
+
 ## Extension Guidance
 
 - Keep sync routines idempotent where possible.
+- Every netbox-sdk accessor is `async def`. `await` it directly — never
+  `asyncio.to_thread(lambda: <async call>)`, which yields an un-awaited
+  coroutine. Make test fakes for SDK accessors coroutine functions too.
 - Emit structured errors with `ProxboxException` for route-level handling.
 - Keep progress reporting compatible with both WebSocket and SSE transport.
 - Prefer small helper functions for object-specific concerns instead of growing a single coordinator module.
