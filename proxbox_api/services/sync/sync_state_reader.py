@@ -477,6 +477,40 @@ async def resolve_vm_sidecar_by_parent_id(nb: object, vm_id: int) -> dict[str, o
     return _record_to_dict(sidecar) if sidecar is not None else None
 
 
+async def load_vm_last_synced_names(
+    nb: object,
+    *,
+    page_size: int = 500,
+) -> dict[int, str]:
+    """Map NetBox VM id -> the Proxmox name recorded at the last successful sync.
+
+    Fetched once per sync pass rather than per VM. The name resolver needs this
+    for every VM it examines, and a per-VM lookup would add an N+1 REST round
+    trip to a pass that already runs over the whole fleet.
+
+    Returns an empty mapping when the sidecar API is unavailable or the field is
+    not populated, which callers must treat as "no evidence" and fall back to
+    their previous behaviour -- every row is blank until it has been re-synced
+    at least once after the field was introduced.
+    """
+    rows = await _list_sidecars(nb, query={}, page_size=page_size)
+    if not rows:
+        return {}
+
+    names: dict[int, str] = {}
+    for row in rows:
+        sidecar = _record_to_dict(row)
+        if not sidecar:
+            continue
+        parent_id = _relation_id_from_field(sidecar, "virtual_machine")
+        if parent_id is None:
+            continue
+        name = _sidecar_text(sidecar.get("proxmox_vm_name"))
+        if name:
+            names[parent_id] = name
+    return names
+
+
 async def resolve_vm_last_run_id(
     nb: object,
     *,

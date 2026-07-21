@@ -337,15 +337,29 @@ async def write_virtual_machine_sync_state(
     virtual_machine_id: object,
     custom_fields: Mapping[str, object] | None,
     overwrite_custom_fields: bool,
+    proxmox_vm_name: object = None,
 ) -> dict[str, object] | None:
+    """Mirror VM state into the typed sidecar.
+
+    ``proxmox_vm_name`` must be the name **Proxmox** reported for this guest --
+    read it from the live Proxmox resource, never from the desired NetBox
+    payload. The name-collision resolver may have rewritten that payload to
+    preserve an operator's NetBox-side rename, so writing it back here would
+    record the NetBox name as "what Proxmox last said" and permanently cement a
+    stale value as ground truth (netbox-proxbox issue #617).
+    """
     if not overwrite_custom_fields or custom_fields is None:
         return None
+    payload = vm_sidecar_payload_from_custom_fields(custom_fields)
+    name = _text_or_blank(proxmox_vm_name)
+    if name:
+        payload["proxmox_vm_name"] = name
     return await _upsert_parent_sidecar(
         nb,
         path=VM_SYNC_STATE_PATH,
         parent_field="virtual_machine",
         parent_id=virtual_machine_id,
-        payload=vm_sidecar_payload_from_custom_fields(custom_fields),
+        payload=payload,
     )
 
 

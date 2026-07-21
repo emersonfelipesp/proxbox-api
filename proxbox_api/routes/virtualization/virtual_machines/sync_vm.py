@@ -119,6 +119,7 @@ from proxbox_api.services.sync.storage_links import (
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.sync_state_reader import (
+    load_vm_last_synced_names,
     resolve_virtual_machine_by_sync_state,
 )
 from proxbox_api.services.sync.sync_state_writer import (
@@ -145,6 +146,9 @@ from proxbox_api.services.sync.vm_helpers import (
     preferred_primary_ip_order,
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
+)
+from proxbox_api.services.sync.vm_helpers import (
+    record_id as _record_id,
 )
 from proxbox_api.services.sync.vm_helpers import (
     relation_id as _relation_id,
@@ -731,6 +735,7 @@ async def _resolve_vm_names_pre_pass(
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
     bridge: WebSocketSSEBridge | None,
+    nb: object | None = None,
 ) -> list[NameResolution]:
     """Apply deterministic name-collision resolution to ``prepared_vms``.
 
@@ -750,6 +755,14 @@ async def _resolve_vm_names_pre_pass(
         cluster_typed_vm_index,
         cluster_untyped_vm_candidates,
     ) = _build_vm_snapshot_identity_indexes(netbox_snapshot)
+    # One fetch for the whole pass. The resolver needs the last-synced Proxmox
+    # name for every VM it examines; looking it up per VM would add an N+1 REST
+    # round trip across the fleet. Empty when the sidecar API is unavailable or
+    # nothing has been re-synced yet, which the resolver treats as "no evidence".
+    last_synced_names: dict[int, str] = {}
+    if nb is not None:
+        last_synced_names = await load_vm_last_synced_names(nb)
+
     cluster_used_names: dict[int, set[str]] = {}
     cluster_no_id_used_names: set[str] = set()
     for record in netbox_snapshot:
@@ -836,6 +849,9 @@ async def _resolve_vm_names_pre_pass(
                 proxmox_vmid=vmid,
                 used_names_in_cluster=used,
                 existing_vm_by_vmid={vmid: existing} if existing is not None else {},
+                last_synced_proxmox_name=(
+                    last_synced_names.get(_record_id(existing)) if existing is not None else None
+                ),
             )
 
             if resolution.operator_renamed:
@@ -2507,7 +2523,7 @@ async def create_virtual_machines(  # noqa: C901
             netbox_snapshot=netbox_snapshot,
             custom_fields_enabled_flag=behavior_flags.custom_fields_enabled,
         )
-        await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
+        await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge, nb)
         reconciliation_t0 = time.perf_counter()
         operation_queue = _build_vm_operation_queue(
             prepared_vms,
@@ -2565,6 +2581,11 @@ async def create_virtual_machines(  # noqa: C901
                     desired_custom_fields if isinstance(desired_custom_fields, dict) else None
                 ),
                 overwrite_custom_fields=overwrite_vm_custom_fields,
+                # The live Proxmox name, NOT desired_payload["name"] -- the name
+                # resolver may have rewritten that to preserve an operator's
+                # NetBox-side rename, and recording it here would cement the
+                # stale name as "what Proxmox last said".
+                proxmox_vm_name=operation.prepared.resource.get("name"),
             )
             results.append(vm_record)
 
