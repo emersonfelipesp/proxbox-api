@@ -132,7 +132,18 @@ Open the nearest scoped guide for the code you are changing.
 - `.gitea/workflows/deploy-production.yml`: Gitea Actions branch-tier deploy.
   Pushes to `develop` deploy `proxbox-api-staging`; pushes to `main` deploy
   `proxbox-api` through the `prod-deploy` runner on the Gitea server
-  (`10.0.30.96`).
+  (`10.0.30.96`). **Gated on CI**: a `verify-ci` job runs first and the deploy
+  job `needs` it, so a commit cannot reach staging or production unless the
+  `CI / Lint, smoke, and core coverage (push)` context is `success` for that
+  **exact SHA**. Previously CI and deploy were sibling workflows on the same
+  push -- they raced, and deploy never consulted CI
+  (N-MultiCloud/nmulticloud-context#204 requirement 6). The gate lives in
+  `.gitea/scripts/require_ci_status.py`, polls the commit-status API, and
+  **fails closed**: a missing context, an unreadable response, or a timeout all
+  block the deploy. The only bypass is the explicit, logged `skip_ci_gate`
+  dispatch input, kept so an incident rollback to a known-good older SHA is not
+  locked out. A dispatch `ref` that is not a full 40-character SHA is refused
+  rather than verified imprecisely. Contracts: `tests/test_deploy_ci_gate.py`.
 - `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
   committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
   events: builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes
