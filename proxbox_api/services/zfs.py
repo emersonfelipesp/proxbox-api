@@ -67,7 +67,7 @@ _SENSITIVE_JSON_VALUE_PATTERN = re.compile(
     r"""
     (?P<prefix>
         "
-        (?:password|token_value|token|api_key|client_secret|secret|csrfpreventiontoken|cookie|authorization)
+        (?:password|token_value|token|api_key|apikey|client_secret|secret|csrfpreventiontoken|cookie|authorization)
         "
         \s*:\s*
     )
@@ -83,10 +83,16 @@ _SENSITIVE_JSON_VALUE_PATTERN = re.compile(
 )
 _SENSITIVE_KEY_VALUE_PATTERN = re.compile(
     r"""
-    \b(?P<key>
+    (?<![-\w])
+    (?P<key>
+        (?P<key_quote>["'])?
+        (?P<key_name>
         password|passwd|pass|token(?:_value)?|api[_-]?key|csrfpreventiontoken|
         cookie|secret|client[_-]?secret|authorization|ticket
-    )\b
+        )
+        (?(key_quote)(?P=key_quote))
+    )
+    (?![-\w])
     (?P<separator>\s*[=:]\s*)
     (?P<value>
         "(?:\\.|[^"\\])*"
@@ -124,7 +130,9 @@ def _redact_sensitive_key_value(match: re.Match[str]) -> str:
     value = match.group("value")
     quote = value[0] if value[:1] in {"'", '"'} and value.endswith(value[0]) else ""
     unquoted_value = value[1:-1] if quote else value
-    if match.group("key").lower() == "authorization":
+    if unquoted_value == "[REDACTED]":
+        return match.group(0)
+    if match.group("key_name").lower() == "authorization":
         scheme_match = _AUTH_SCHEME_PREFIX_PATTERN.match(unquoted_value)
         if scheme_match:
             redacted = f"{scheme_match.group('scheme')}[REDACTED]"
