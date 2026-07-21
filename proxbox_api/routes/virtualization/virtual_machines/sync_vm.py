@@ -52,6 +52,11 @@ from proxbox_api.routes.virtualization.virtual_machines.helpers import (
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
+from proxbox_api.services.custom_fields import (
+    include_custom_fields_in_payload,
+    legacy_custom_field_fallback_query,
+    legacy_custom_fields_payload,
+)
 from proxbox_api.services.name_collision import (
     NameResolution,
     resolve_unique_vm_name,
@@ -486,6 +491,7 @@ async def _hydrate_vm_snapshot_with_sidecar_identity(
     *,
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
+    custom_fields_enabled_flag: bool | None = None,
 ) -> int:
     """Overlay sidecar VM identity onto snapshot records that lack legacy CFs.
 
@@ -543,7 +549,10 @@ async def _hydrate_vm_snapshot_with_sidecar_identity(
             proxmox_vm_id=proxmox_vmid,
             endpoint_id=endpoint_id,
             cluster_id=cluster_id,
-            fallback_query=prepared.lookup,
+            fallback_query=legacy_custom_field_fallback_query(
+                prepared.lookup,
+                enabled=custom_fields_enabled_flag,
+            ),
         )
         if resolution is None or resolution.source != "sidecar":
             continue
@@ -954,6 +963,9 @@ async def _patch_vm_with_disk_aggregate_retry(
 async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
+    *,
+    overwrite_vm_custom_fields: bool = True,
+    custom_fields_enabled_flag: bool | None = None,
 ) -> tuple[dict[tuple[str, int, str], dict[str, object]], set[tuple[str, int, str]]]:
     """Dispatch queued VM operations concurrently, bounded by the write semaphore.
 
@@ -988,15 +1000,24 @@ async def _dispatch_vm_operation_queue(
                         proxmox_vm_id=vmid,
                         endpoint_id=extract_proxmox_endpoint_id(operation.prepared.desired_payload),
                         cluster_id=_relation_id(operation.prepared.desired_payload.get("cluster")),
-                        fallback_query=operation.prepared.lookup,
+                        fallback_query=legacy_custom_field_fallback_query(
+                            operation.prepared.lookup,
+                            enabled=custom_fields_enabled_flag,
+                        ),
                         fail_on_ambiguous=True,
+                    )
+                    netbox_create_payload = legacy_custom_fields_payload(
+                        operation.prepared.desired_payload,
+                        overwrite=overwrite_vm_custom_fields,
+                        enabled=custom_fields_enabled_flag,
+                        context="legacy VM custom-field payload",
                     )
                     if existing_resolution is not None:
                         reconciled = await rest_reconcile_async(
                             nb,
                             "/api/virtualization/virtual-machines/",
                             lookup=operation.prepared.lookup,
-                            payload=operation.prepared.desired_payload,
+                            payload=netbox_create_payload,
                             schema=NetBoxVirtualMachineCreateBody,
                             current_normalizer=lambda record: (
                                 _normalize_current_virtual_machine_payload(
@@ -1013,15 +1034,21 @@ async def _dispatch_vm_operation_queue(
                         created = await rest_create_async(
                             nb,
                             "/api/virtualization/virtual-machines/",
-                            operation.prepared.desired_payload,
+                            netbox_create_payload,
                             lookup=operation.prepared.lookup,
                         )
                         resolved_records[key] = _to_mapping(created)
                     except ProxboxException:
+                        fallback_lookup = legacy_custom_field_fallback_query(
+                            operation.prepared.lookup,
+                            enabled=custom_fields_enabled_flag,
+                        )
+                        if fallback_lookup is None:
+                            raise
                         existing = await rest_first_async(
                             nb,
                             "/api/virtualization/virtual-machines/",
-                            query={**operation.prepared.lookup, "limit": 2},
+                            query={**fallback_lookup, "limit": 2},
                         )
                         if existing is None:
                             raise
@@ -1041,10 +1068,20 @@ async def _dispatch_vm_operation_queue(
                         python_exception=f"cluster={operation.prepared.cluster_name} vmid={vmid}",
                     )
 
+                patch_payload = legacy_custom_fields_payload(
+                    operation.patch_payload,
+                    overwrite=overwrite_vm_custom_fields,
+                    enabled=custom_fields_enabled_flag,
+                    context="legacy VM custom-field payload",
+                )
+                if not patch_payload:
+                    resolved_records[key] = dict(operation.existing_record)
+                    return
+
                 patched = await _patch_vm_with_disk_aggregate_retry(
                     nb,
                     record_id=record_id,
-                    payload=operation.patch_payload,
+                    payload=patch_payload,
                     cluster_name=operation.prepared.cluster_name,
                     vmid=vmid,
                 )
@@ -1052,7 +1089,7 @@ async def _dispatch_vm_operation_queue(
                     resolved_records[key] = patched
                 else:
                     merged = dict(operation.existing_record)
-                    merged.update(operation.patch_payload)
+                    merged.update(patch_payload)
                     merged["id"] = record_id
                     resolved_records[key] = merged
             except Exception as operation_error:
@@ -1345,7 +1382,7 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
             proxmox_vm_id=vmid,
             endpoint_id=resolved_endpoint_id,
             cluster_id=resolved_cluster_id,
-            fallback_query=query,
+            fallback_query=legacy_custom_field_fallback_query(query),
         )
     except Exception as exc:
         error_detail = getattr(exc, "detail", str(exc))
@@ -1423,13 +1460,17 @@ async def _create_vm_interface_parallel(
                 nb,
                 "/api/ipam/vlans/",
                 lookup={"vid": vlan_tag},
-                payload={
-                    "vid": vlan_tag,
-                    "name": f"VLAN {vlan_tag}",
-                    "status": "active",
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
+                payload=legacy_custom_fields_payload(
+                    {
+                        "vid": vlan_tag,
+                        "name": f"VLAN {vlan_tag}",
+                        "status": "active",
+                        "tags": tag_refs,
+                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                    },
+                    overwrite=True,
+                    context="legacy VLAN custom-field payload",
+                ),
                 schema=NetBoxVlanSyncState,
                 current_normalizer=lambda record: {
                     "vid": record.get("vid"),
@@ -1488,7 +1529,13 @@ async def _create_vm_interface_parallel(
         nb,
         "/api/virtualization/interfaces/",
         lookup=lookup,
-        payload=payload,
+        payload=legacy_custom_fields_payload(
+            payload,
+            overwrite=(
+                overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields
+            ),
+            context="legacy VM-interface custom-field payload",
+        ),
         schema=NetBoxVirtualMachineInterfaceSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -1601,15 +1648,19 @@ async def _create_vm_disk_parallel(
                 "virtual_machine_id": virtual_machine.get("id"),
                 "name": disk_entry.name,
             },
-            payload={
-                "virtual_machine": virtual_machine.get("id"),
-                "name": disk_entry.name,
-                "size": disk_entry.size_mb,
-                "storage": storage_id,
-                "description": disk_entry.description,
-                "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-            },
+            payload=legacy_custom_fields_payload(
+                {
+                    "virtual_machine": virtual_machine.get("id"),
+                    "name": disk_entry.name,
+                    "size": disk_entry.size_mb,
+                    "storage": storage_id,
+                    "description": disk_entry.description,
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                overwrite=True,
+                context="legacy virtual-disk custom-field payload",
+            ),
             schema=NetBoxVirtualDiskSyncState,
             current_normalizer=lambda record: {
                 "virtual_machine": record.get("virtual_machine"),
@@ -2018,12 +2069,17 @@ async def create_virtual_machines(  # noqa: C901
     nb = netbox_session
     netbox_version = await detect_netbox_version(nb)
     supports_vm_type = supports_virtual_machine_type(netbox_version)
-    vm_patchable_fields = frozenset(
-        _compute_vm_patchable_fields(
-            effective_vm_overwrite_flags,
-            supports_virtual_machine_type_field=supports_vm_type,
-        )
+    vm_patchable_set = _compute_vm_patchable_fields(
+        effective_vm_overwrite_flags,
+        supports_virtual_machine_type_field=supports_vm_type,
     )
+    if not include_custom_fields_in_payload(
+        overwrite_vm_custom_fields,
+        enabled=behavior_flags.custom_fields_enabled,
+        context="legacy VM custom-field payload",
+    ):
+        vm_patchable_set.discard("custom_fields")
+    vm_patchable_fields = frozenset(vm_patchable_set)
     effective_run_id = run_id if isinstance(run_id, str) and run_id else str(uuid.uuid4())
 
     filtered_cluster_resources = cluster_resources
@@ -2449,6 +2505,7 @@ async def create_virtual_machines(  # noqa: C901
             nb,
             prepared_vms=prepared_vms,
             netbox_snapshot=netbox_snapshot,
+            custom_fields_enabled_flag=behavior_flags.custom_fields_enabled,
         )
         await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
         reconciliation_t0 = time.perf_counter()
@@ -2472,7 +2529,10 @@ async def create_virtual_machines(  # noqa: C901
         )
 
         resolved_records, failed_operation_keys = await _dispatch_vm_operation_queue(
-            nb, operation_queue
+            nb,
+            operation_queue,
+            overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+            custom_fields_enabled_flag=behavior_flags.custom_fields_enabled,
         )
 
         results: list[dict[str, object]] = []
@@ -2784,14 +2844,22 @@ async def create_virtual_machines(  # noqa: C901
             proxmox_vm_id=resource.get("vmid"),
             endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
             cluster_id=int(getattr(cluster, "id", 0) or 0) or None,
-            fallback_query=vm_lookup,
+            fallback_query=legacy_custom_field_fallback_query(
+                vm_lookup,
+                enabled=behavior_flags.custom_fields_enabled,
+            ),
             fail_on_ambiguous=True,
         )
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
             lookup=vm_lookup,
-            payload=netbox_vm_payload,
+            payload=legacy_custom_fields_payload(
+                netbox_vm_payload,
+                overwrite=overwrite_vm_custom_fields,
+                enabled=behavior_flags.custom_fields_enabled,
+                context="legacy VM custom-field payload",
+            ),
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=vm_patchable_fields,
             current_normalizer=lambda record: _normalize_current_virtual_machine_payload(
@@ -3905,7 +3973,10 @@ async def create_only_vm_interfaces(  # noqa: C901
                                     overwrite_flags is None
                                     or overwrite_flags.overwrite_vm_interface_custom_fields
                                 )
-                                if iface_id and overwrite_bridge_custom_fields:
+                                if iface_id and include_custom_fields_in_payload(
+                                    overwrite_bridge_custom_fields,
+                                    context="legacy VM-interface bridge custom-field patch",
+                                ):
                                     try:
                                         await rest_patch_async(
                                             nb,
@@ -3921,6 +3992,13 @@ async def create_only_vm_interfaces(  # noqa: C901
                                             vm_id_val,
                                             patch_exc,
                                         )
+                                    await write_vm_interface_sync_state(
+                                        nb,
+                                        vm_interface_id=iface_id,
+                                        proxbox_bridge_id=vm_bridge_id,
+                                        overwrite_custom_fields=overwrite_bridge_custom_fields,
+                                    )
+                                elif iface_id:
                                     await write_vm_interface_sync_state(
                                         nb,
                                         vm_interface_id=iface_id,

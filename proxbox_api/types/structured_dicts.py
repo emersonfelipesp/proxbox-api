@@ -36,6 +36,7 @@ class ProxboxSettingsDict(TypedDict):
     reconciliation_engine: NotRequired[str]
     reconciliation_compare_strict: NotRequired[bool]
     custom_fields_request_delay: float
+    custom_fields_enabled: bool
     ensure_netbox_objects: NotRequired[bool]
     delete_orphans: NotRequired[bool]
     debug_cache: NotRequired[bool]

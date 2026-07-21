@@ -5,12 +5,33 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
+from proxbox_api.schemas.sync import SyncBehaviorFlags
 from proxbox_api.services.proxmox_helpers import GuestAgentFetchResult
+from proxbox_api.services.sync import sync_state_reader
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
+    kwdefaults = getattr(create_virtual_machines, "__kwdefaults__", None)
+    if isinstance(kwdefaults, dict):
+        monkeypatch.setitem(
+            kwdefaults,
+            "behavior_flags",
+            SyncBehaviorFlags(custom_fields_enabled=True),
+        )
 
 
 def _vm_sync_inputs(vm_config: dict):
@@ -161,6 +182,11 @@ def _install_common_sync_patches(  # noqa: C901
         _fake_rest_list,
     )
     monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
+        _fake_rest_list,
+    )
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+    monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_first_async",
         _fake_rest_first,
     )
@@ -227,8 +253,13 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
         resolved_color_maps.append(color_map)
         return [201]
 
-    async def _fake_rest_create(_nb, _path, payload, **_kwargs):
-        vmid = int(payload["custom_fields"]["proxmox_vm_id"])
+    async def _fake_rest_create(_nb, _path, payload, **kwargs):
+        custom_fields = payload.get("custom_fields") if isinstance(payload, dict) else None
+        lookup = kwargs.get("lookup") or {}
+        vmid = int(
+            (custom_fields.get("proxmox_vm_id") if isinstance(custom_fields, dict) else None)
+            or lookup["cf_proxmox_vm_id"]
+        )
         return {"id": 1000 + vmid, **payload}
 
     async def _fake_task_history(**_kwargs):

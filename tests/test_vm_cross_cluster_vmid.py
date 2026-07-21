@@ -16,6 +16,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     _build_vm_index_by_proxmox_id,
     _resolve_netbox_virtual_machine_by_proxmox_id,
 )
+from proxbox_api.services import custom_fields
 from proxbox_api.services.sync.individual.helpers import ensure_vm_record
 from proxbox_api.services.sync.vm_helpers import resolve_netbox_cluster_id_by_name
 
@@ -46,6 +47,16 @@ VM_IN_BETA = {
 }
 
 _CLUSTER_NAME_TO_ID = {"alpha": CLUSTER_ALPHA_ID, "beta": CLUSTER_BETA_ID}
+
+
+def _enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        custom_fields,
+        "get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
 
 
 def _fake_vm_list_by_cluster(_nb, _endpoint, query):
@@ -106,6 +117,7 @@ async def test_resolve_netbox_cluster_id_by_name_matches_and_caches(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_ensure_vm_record_resolves_correct_cluster(monkeypatch):
+    _enable_legacy_custom_fields(monkeypatch)
     captured_queries: list[dict[str, object]] = []
 
     async def _fake_rest_list_async(_nb, _endpoint, query):
@@ -117,6 +129,10 @@ async def test_ensure_vm_record_resolves_correct_cluster(monkeypatch):
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
@@ -153,9 +169,9 @@ async def test_ensure_vm_record_resolves_correct_cluster(monkeypatch):
     assert record_beta is VM_IN_BETA
 
     # Every NetBox VM lookup must have been endpoint-scoped.
-    assert captured_queries, "expected at least one NetBox VM lookup"
-    assert all("cf_proxmox_endpoint_id" in q for q in captured_queries)
-    assert {q["cf_proxmox_endpoint_id"] for q in captured_queries} == {
+    cf_queries = [query for query in captured_queries if "cf_proxmox_endpoint_id" in query]
+    assert cf_queries, "expected at least one legacy NetBox VM lookup"
+    assert {q["cf_proxmox_endpoint_id"] for q in cf_queries} == {
         ENDPOINT_ALPHA_ID,
         ENDPOINT_BETA_ID,
     }
@@ -163,6 +179,7 @@ async def test_ensure_vm_record_resolves_correct_cluster(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resolve_netbox_virtual_machine_by_proxmox_id_scopes_by_endpoint(monkeypatch):
+    _enable_legacy_custom_fields(monkeypatch)
     captured_queries: list[dict[str, object]] = []
 
     async def _fake_rest_list_async(_nb, _endpoint, query):
@@ -174,6 +191,10 @@ async def test_resolve_netbox_virtual_machine_by_proxmox_id_scopes_by_endpoint(m
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
@@ -191,7 +212,8 @@ async def test_resolve_netbox_virtual_machine_by_proxmox_id_scopes_by_endpoint(m
 
     assert resolved_alpha == VM_IN_ALPHA
     assert resolved_beta == VM_IN_BETA
-    assert {q.get("cf_proxmox_endpoint_id") for q in captured_queries} == {
+    cf_queries = [query for query in captured_queries if "cf_proxmox_endpoint_id" in query]
+    assert {q["cf_proxmox_endpoint_id"] for q in cf_queries} == {
         ENDPOINT_ALPHA_ID,
         ENDPOINT_BETA_ID,
     }

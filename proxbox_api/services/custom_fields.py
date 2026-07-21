@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import warnings
 from collections.abc import Mapping
 
 from proxbox_api import netbox_rest
@@ -10,8 +11,14 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import ReconcileResult
 from proxbox_api.proxmox_to_netbox.models import NetBoxCustomFieldSyncState
-from proxbox_api.runtime_settings import get_float
+from proxbox_api.runtime_settings import get_float, get_plugin_bool
 from proxbox_api.utils.retry import is_netbox_overwhelmed_error
+
+CUSTOM_FIELDS_DEPRECATION_MESSAGE = (
+    "Legacy Proxbox reflection custom fields are deprecated and disabled by default; "
+    "use the netbox-proxbox Proxbox*SyncState typed sync-state models instead. "
+    "Set custom_fields_enabled=true only for transition."
+)
 
 CUSTOM_FIELD_INVENTORY: tuple[dict[str, object], ...] = (
     {
@@ -775,6 +782,65 @@ def _resolve_custom_field_delay() -> float:
     )
 
 
+def custom_fields_enabled(enabled: bool | None = None) -> bool:
+    """Return whether legacy reflection custom fields are enabled."""
+    if enabled is not None:
+        return bool(enabled)
+    return get_plugin_bool(settings_key="custom_fields_enabled", default=False)
+
+
+def warn_legacy_custom_fields(context: str) -> None:
+    """Emit the required Python and logging deprecation warnings."""
+    message = f"{context}: {CUSTOM_FIELDS_DEPRECATION_MESSAGE}"
+    warnings.warn(message, DeprecationWarning, stacklevel=2)
+    logger.warning(message)
+
+
+def include_custom_fields_in_payload(
+    overwrite: bool,
+    *,
+    enabled: bool | None = None,
+    context: str = "legacy custom-field reflection payload",
+) -> bool:
+    """Return whether a legacy custom-fields key may be sent to NetBox."""
+    if not overwrite:
+        return False
+    if not custom_fields_enabled(enabled):
+        return False
+    warn_legacy_custom_fields(context)
+    return True
+
+
+def legacy_custom_fields_payload(
+    payload: Mapping[str, object],
+    *,
+    overwrite: bool,
+    enabled: bool | None = None,
+    context: str = "legacy custom-field reflection payload",
+) -> dict[str, object]:
+    """Return a NetBox payload copy with legacy custom fields gated."""
+    netbox_payload = dict(payload)
+    if "custom_fields" not in netbox_payload:
+        return netbox_payload
+    if include_custom_fields_in_payload(overwrite, enabled=enabled, context=context):
+        return netbox_payload
+    netbox_payload.pop("custom_fields", None)
+    return netbox_payload
+
+
+def legacy_custom_field_fallback_query(
+    query: Mapping[str, object],
+    *,
+    enabled: bool | None = None,
+    context: str = "legacy custom-field read fallback",
+) -> dict[str, object] | None:
+    """Return a legacy ``cf_*`` fallback query only when the transition flag is on."""
+    if custom_fields_enabled(enabled):
+        warn_legacy_custom_fields(context)
+        return dict(query)
+    return None
+
+
 async def _custom_field_payload_and_existing(
     netbox_session: object,
     custom_field: Mapping[str, object],
@@ -825,8 +891,12 @@ def _current_custom_field_normalizer(record: dict[str, object]) -> dict[str, obj
 async def reconcile_custom_field_with_status(
     netbox_session: object,
     custom_field: Mapping[str, object],
+    *,
+    warn: bool = True,
 ) -> ReconcileResult:
     """Reconcile one declared NetBox custom field and return its status."""
+    if warn:
+        warn_legacy_custom_fields("legacy custom-field definition reconcile")
     payload, existing = await _custom_field_payload_and_existing(netbox_session, custom_field)
     name = payload.get("name")
     if not isinstance(name, str) or not name:
@@ -846,7 +916,19 @@ async def reconcile_custom_field_with_status(
     )
 
 
-async def _reconcile_custom_fields_uncached(netbox_session: object) -> list[dict[str, object]]:
+async def _reconcile_custom_fields_uncached(  # noqa: C901
+    netbox_session: object,
+    *,
+    warn: bool = True,
+) -> list[dict[str, object]]:
+    if not custom_fields_enabled():
+        logger.info(
+            "Skipping NetBox custom-field definition reconcile: custom_fields_enabled=false"
+        )
+        return []
+
+    if warn:
+        warn_legacy_custom_fields("legacy custom-field definition reconcile")
     fields: list[dict[str, object]] = []
     had_failures = False
     overloaded = False
@@ -855,7 +937,11 @@ async def _reconcile_custom_fields_uncached(netbox_session: object) -> list[dict
 
     for custom_field in CUSTOM_FIELD_INVENTORY:
         try:
-            result = await reconcile_custom_field_with_status(netbox_session, custom_field)
+            result = await reconcile_custom_field_with_status(
+                netbox_session,
+                custom_field,
+                warn=False,
+            )
             serialized = result.record.serialize()
             if serialized.get("id") is None:
                 had_failures = True
@@ -941,6 +1027,14 @@ async def reconcile_custom_fields(
     """Reconcile all declared custom fields, optionally bypassing the cache."""
     global _CUSTOM_FIELDS_CACHE
 
+    if not custom_fields_enabled():
+        logger.info(
+            "Skipping NetBox custom-field definition reconcile: custom_fields_enabled=false"
+        )
+        return []
+
+    warn_legacy_custom_fields("legacy custom-field definition reconcile")
+
     if not force:
         cached = cached_custom_fields()
         if cached is not None:
@@ -958,6 +1052,6 @@ async def reconcile_custom_fields(
             if cached is not None:
                 return cached
 
-        fields = await _reconcile_custom_fields_uncached(netbox_session)
+        fields = await _reconcile_custom_fields_uncached(netbox_session, warn=False)
         _CUSTOM_FIELDS_CACHE = tuple(_copy_payload(field) for field in fields)
         return [_copy_payload(field) for field in fields]

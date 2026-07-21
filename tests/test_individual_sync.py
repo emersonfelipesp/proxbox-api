@@ -301,6 +301,10 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
         "proxbox_api.services.sync.individual.vm_sync.rest_reconcile_async",
         _fake_rest_reconcile_async,
     )
@@ -428,6 +432,12 @@ async def test_sync_vm_with_related_gathers_interfaces_and_task_history(monkeypa
 
 @pytest.mark.asyncio
 async def test_sync_snapshot_individual_links_storage(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     recorded_payload: dict[str, object] = {}
 
     async def _fake_rest_list_async(*args, **kwargs):
@@ -466,6 +476,10 @@ async def test_sync_snapshot_individual_links_storage(monkeypatch):
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
@@ -558,6 +572,13 @@ async def test_sync_cluster_individual_reports_real_drift_status(monkeypatch):
 async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeypatch):
     from proxbox_api.services.sync.individual.backup_sync import sync_backup_individual
 
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
+
     async def _fake_rest_list_async(_nb, path, query=None):
         if path == "/api/virtualization/virtual-machines/":
             return [SimpleNamespace(id=44)]
@@ -586,6 +607,10 @@ async def test_sync_backup_individual_reports_updated_when_backup_exists(monkeyp
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
@@ -806,6 +831,13 @@ async def test_individual_task_history_route_requires_cluster_for_multi_session(
 
 @pytest.mark.asyncio
 async def test_sync_task_history_individual_accepts_cluster_name_and_reports_updated(monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
+
     async def _fake_rest_list_async(_nb, path, query=None):
         if path == "/api/virtualization/virtual-machines/":
             return [SimpleNamespace(id=44)]
@@ -829,6 +861,10 @@ async def test_sync_task_history_individual_accepts_cluster_name_and_reports_upd
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(

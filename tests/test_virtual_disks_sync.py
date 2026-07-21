@@ -4,7 +4,19 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from proxbox_api.services.sync.virtual_disks import create_virtual_disks
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
 
 
 def _run_virtual_disk_sync_for_vm(monkeypatch, *, vm, cluster_resources):

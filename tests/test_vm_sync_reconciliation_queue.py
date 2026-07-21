@@ -9,6 +9,16 @@ import pytest
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
+from proxbox_api.services import custom_fields as custom_fields_service
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        custom_fields_service,
+        "get_plugin_bool",
+        lambda *, settings_key, default: True,
+    )
 
 
 def _prepared_vm(

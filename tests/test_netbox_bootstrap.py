@@ -43,6 +43,15 @@ from proxbox_api.services.netbox_writers import (
 _FROZEN_TS = "2026-04-29T00:00:00+00:00"
 
 
+@pytest.fixture(autouse=True)
+def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        custom_field_service,
+        "get_plugin_bool",
+        lambda *, settings_key, default: True,
+    )
+
+
 class _FakeRecord:
     """Stand-in for a NetBox record returned by ``rest_first_async``."""
 

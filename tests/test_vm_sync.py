@@ -328,13 +328,7 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_custom_field_gate
             "interface": {"id": 66, "name": "net0", "virtual_machine": 55},
         }
     ]
-    assert patch_calls == [
-        {
-            "path": "/api/virtualization/interfaces/",
-            "record_id": 66,
-            "payload": {"custom_fields": {"proxbox_bridge": 400}},
-        }
-    ]
+    assert patch_calls == []
     assert sidecar_calls == [
         {
             "vm_interface_id": 66,
@@ -354,7 +348,13 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_custom_field_gate
     )
 
     assert patch_calls == []
-    assert sidecar_calls == []
+    assert sidecar_calls == [
+        {
+            "vm_interface_id": 66,
+            "proxbox_bridge_id": 400,
+            "overwrite_custom_fields": False,
+        }
+    ]
 
 
 def test_create_only_vm_interfaces_reports_partial_bulk_warning(monkeypatch):

@@ -42,6 +42,10 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineTypeSyncState,
 )
 from proxbox_api.schemas.netbox.extras import TagSchema
+from proxbox_api.services.custom_fields import (
+    legacy_custom_fields_payload,
+    warn_legacy_custom_fields,
+)
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
@@ -111,13 +115,17 @@ async def upsert_cluster_type(
         nb,
         "/api/virtualization/cluster-types/",
         lookup={"slug": mode},
-        payload={
-            "name": mode.capitalize(),
-            "slug": mode,
-            "description": f"Proxmox {mode} mode",
-            "tags": tag_refs,
-            "custom_fields": _last_updated_cf(),
-        },
+        payload=legacy_custom_fields_payload(
+            {
+                "name": mode.capitalize(),
+                "slug": mode,
+                "description": f"Proxmox {mode} mode",
+                "tags": tag_refs,
+                "custom_fields": _last_updated_cf(),
+            },
+            overwrite=True,
+            context="legacy cluster-type custom-field payload",
+        ),
         schema=NetBoxClusterTypeSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -157,7 +165,11 @@ async def upsert_cluster(
         nb,
         "/api/virtualization/clusters/",
         lookup={"name": cluster_name},
-        payload=payload,
+        payload=legacy_custom_fields_payload(
+            payload,
+            overwrite=True,
+            context="legacy cluster custom-field payload",
+        ),
         schema=NetBoxClusterSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -182,12 +194,16 @@ async def upsert_manufacturer(
         nb,
         "/api/dcim/manufacturers/",
         lookup={"slug": slug},
-        payload={
-            "name": name,
-            "slug": slug,
-            "tags": tag_refs or [],
-            "custom_fields": _last_updated_cf(),
-        },
+        payload=legacy_custom_fields_payload(
+            {
+                "name": name,
+                "slug": slug,
+                "tags": tag_refs or [],
+                "custom_fields": _last_updated_cf(),
+            },
+            overwrite=True,
+            context="legacy manufacturer custom-field payload",
+        ),
         schema=NetBoxManufacturerSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -212,13 +228,17 @@ async def upsert_device_type(
         nb,
         "/api/dcim/device-types/",
         lookup={"model": model},
-        payload={
-            "model": model,
-            "slug": slug,
-            "manufacturer": manufacturer_id,
-            "tags": tag_refs or [],
-            "custom_fields": _last_updated_cf(),
-        },
+        payload=legacy_custom_fields_payload(
+            {
+                "model": model,
+                "slug": slug,
+                "manufacturer": manufacturer_id,
+                "tags": tag_refs or [],
+                "custom_fields": _last_updated_cf(),
+            },
+            overwrite=True,
+            context="legacy device-type custom-field payload",
+        ),
         schema=NetBoxDeviceTypeSyncState,
         current_normalizer=lambda record: {
             "model": record.get("model"),
@@ -261,7 +281,11 @@ async def upsert_device_role(
         nb,
         "/api/dcim/device-roles/",
         lookup={"slug": slug},
-        payload=payload,
+        payload=legacy_custom_fields_payload(
+            payload,
+            overwrite=True,
+            context="legacy device-role custom-field payload",
+        ),
         schema=NetBoxDeviceRoleSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -359,6 +383,7 @@ async def upsert_custom_field(
     when called either from the bootstrap orchestrator or the legacy lazy
     code path.
     """
+    warn_legacy_custom_fields("legacy custom-field definition reconcile")
     payload: dict[str, object] = {
         "name": name,
         "type": type,

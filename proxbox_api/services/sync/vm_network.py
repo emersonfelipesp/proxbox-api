@@ -19,6 +19,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
+from proxbox_api.services.custom_fields import legacy_custom_fields_payload
 from proxbox_api.services.sync.guest_vm_interface import (
     normalize_vm_interface_sync_strategy,
     reconcile_guest_vm_interfaces,
@@ -164,13 +165,17 @@ async def sync_vm_interfaces(  # noqa: C901
                         nb,
                         "/api/ipam/vlans/",
                         lookup={"vid": vlan_tag},
-                        payload={
-                            "vid": vlan_tag,
-                            "name": f"VLAN {vlan_tag}",
-                            "status": "active",
-                            "tags": tag_refs,
-                            "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                        },
+                        payload=legacy_custom_fields_payload(
+                            {
+                                "vid": vlan_tag,
+                                "name": f"VLAN {vlan_tag}",
+                                "status": "active",
+                                "tags": tag_refs,
+                                "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                            },
+                            overwrite=True,
+                            context="legacy VLAN custom-field payload",
+                        ),
                         schema=NetBoxVlanSyncState,
                         current_normalizer=lambda record: {
                             "vid": record.get("vid"),
@@ -202,19 +207,23 @@ async def sync_vm_interfaces(  # noqa: C901
                     "virtual_machine_id": vm_id,
                     "name": resolved_interface_name,
                 },
-                payload={
-                    "virtual_machine": vm_id,
-                    "name": resolved_interface_name,
-                    "enabled": True,
-                    "bridge": None,
-                    "untagged_vlan": vlan_nb_id,
-                    "mode": "access" if vlan_nb_id is not None else None,
-                    "tags": tag_refs,
-                    "custom_fields": {
-                        "proxmox_last_updated": now.isoformat(),
-                        **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+                payload=legacy_custom_fields_payload(
+                    {
+                        "virtual_machine": vm_id,
+                        "name": resolved_interface_name,
+                        "enabled": True,
+                        "bridge": None,
+                        "untagged_vlan": vlan_nb_id,
+                        "mode": "access" if vlan_nb_id is not None else None,
+                        "tags": tag_refs,
+                        "custom_fields": {
+                            "proxmox_last_updated": now.isoformat(),
+                            **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
+                        },
                     },
-                },
+                    overwrite=True,
+                    context="legacy VM-interface custom-field payload",
+                ),
                 schema=NetBoxVirtualMachineInterfaceSyncState,
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
@@ -355,15 +364,19 @@ async def sync_vm_disks(
                     "virtual_machine_id": vm_id,
                     "name": disk_entry.name,
                 },
-                payload={
-                    "virtual_machine": vm_id,
-                    "name": disk_entry.name,
-                    "size": disk_entry.size_mb,
-                    "storage": storage_id,
-                    "description": disk_entry.description,
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
+                payload=legacy_custom_fields_payload(
+                    {
+                        "virtual_machine": vm_id,
+                        "name": disk_entry.name,
+                        "size": disk_entry.size_mb,
+                        "storage": storage_id,
+                        "description": disk_entry.description,
+                        "tags": tag_refs,
+                        "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                    },
+                    overwrite=True,
+                    context="legacy virtual-disk custom-field payload",
+                ),
                 schema=NetBoxVirtualDiskSyncState,
                 current_normalizer=lambda record: {
                     "virtual_machine": record.get("virtual_machine"),

@@ -39,6 +39,15 @@ def _vm(
     }
 
 
+def _enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
+
+
 class _Bridge:
     def __init__(self) -> None:
         self.item_progress: list[dict[str, Any]] = []
@@ -60,6 +69,7 @@ async def test_find_orphan_vms_uses_vm_discovery_slugs_and_stamp_filters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Candidates are selected by VM discovery tag and stale/missing run ID."""
+    _enable_legacy_custom_fields(monkeypatch)
     calls: list[dict[str, object]] = []
 
     async def _fake_list(_nb: object, _path: str, *, base_query: dict[str, object], **_: Any):
@@ -162,6 +172,7 @@ async def test_find_orphan_vms_treats_sidecar_503_scan_as_transient_failure(
 async def test_find_orphan_vms_treats_sidecar_404_scan_as_old_plugin_legacy_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _enable_legacy_custom_fields(monkeypatch)
     stale_vm = _vm(8, "legacy-stale")
 
     async def _missing_sidecar_route(*_args: Any, **_kwargs: Any):
@@ -217,6 +228,7 @@ async def test_find_orphan_vms_skips_legacy_candidates_when_sidecar_scan_transie
 async def test_find_orphan_vms_uses_legacy_candidates_when_sidecar_route_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _enable_legacy_custom_fields(monkeypatch)
     stale_vm = _vm(8, "legacy-stale")
 
     async def _fake_sidecar_scan(*_args: Any, **_kwargs: Any) -> SidecarVMOrphanScan:

@@ -13,6 +13,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import _extract_payload
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
+from proxbox_api.services import custom_fields as custom_fields_service
 from proxbox_api.services.sync import orphan_sweep, sync_state_reader
 from proxbox_api.services.sync.sync_state_reader import (
     VIRTUAL_MACHINES_PATH,
@@ -32,6 +33,15 @@ class _FakeResponse:
 
     def json(self) -> object:
         return _json.loads(self.text)
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        custom_fields_service,
+        "get_plugin_bool",
+        lambda *, settings_key, default: True,
+    )
 
 
 def test_sidecar_unavailable_detection_is_limited_to_absent_route_statuses() -> None:

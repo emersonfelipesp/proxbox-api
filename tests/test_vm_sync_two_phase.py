@@ -10,6 +10,7 @@ import pytest
 from proxbox_api.exception import ProxboxException
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
+from proxbox_api.services.sync import sync_state_reader
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
@@ -87,6 +88,11 @@ def _install_full_update_stubs(monkeypatch, *, payload_side_effect=None) -> list
 
     monkeypatch.setattr(sync_vm, "detect_netbox_version", _fake_detect_netbox_version)
     monkeypatch.setattr(sync_vm, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
+        _fake_rest_list,
+    )
+    sync_state_reader.reset_sidecar_reader_availability_cache()
     monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 4)
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 4)

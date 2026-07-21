@@ -20,6 +20,10 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.custom_fields import (
+    include_custom_fields_in_payload,
+    legacy_custom_fields_payload,
+)
 
 
 def _normalize_node_interface_record(record: dict[str, object]) -> dict[str, object]:
@@ -54,7 +58,15 @@ async def _reconcile_existing_node_bridge(
     payload: dict[str, object],
     overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
-    desired_model = NetBoxInterfaceSyncState.model_validate(payload)
+    desired_model = NetBoxInterfaceSyncState.model_validate(
+        legacy_custom_fields_payload(
+            payload,
+            overwrite=(
+                overwrite_flags is None or overwrite_flags.overwrite_node_interface_custom_fields
+            ),
+            context="legacy node-interface custom-field payload",
+        )
+    )
     desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
 
     current_payload = NetBoxInterfaceSyncState.model_validate(
@@ -70,7 +82,10 @@ async def _reconcile_existing_node_bridge(
     if overwrite_flags is not None:
         if not overwrite_flags.overwrite_node_interface_tags:
             patch_payload.pop("tags", None)
-        if not overwrite_flags.overwrite_node_interface_custom_fields:
+        if not include_custom_fields_in_payload(
+            overwrite_flags.overwrite_node_interface_custom_fields,
+            context="legacy node-interface custom-field payload",
+        ):
             patch_payload.pop("custom_fields", None)
     if patch_payload and hasattr(record, "save"):
         for field, value in patch_payload.items():
@@ -115,7 +130,18 @@ async def ensure_node_bridge_interface(  # noqa: C901
 
         if existing is None:
             try:
-                record = await rest_create_async(nb, "/api/dcim/interfaces/", payload)
+                record = await rest_create_async(
+                    nb,
+                    "/api/dcim/interfaces/",
+                    legacy_custom_fields_payload(
+                        payload,
+                        overwrite=(
+                            overwrite_flags is None
+                            or overwrite_flags.overwrite_node_interface_custom_fields
+                        ),
+                        context="legacy node-interface custom-field payload",
+                    ),
+                )
             except ProxboxException:
                 # Another worker may have created it; invalidate the GET cache so the
                 # retry actually hits NetBox instead of returning the stale miss.
@@ -140,13 +166,23 @@ async def ensure_node_bridge_interface(  # noqa: C901
             fallback_patchable: set[str] = {"name", "type", "status"}
             if overwrite_flags is None or overwrite_flags.overwrite_node_interface_tags:
                 fallback_patchable.add("tags")
-            if overwrite_flags is None or overwrite_flags.overwrite_node_interface_custom_fields:
+            if include_custom_fields_in_payload(
+                overwrite_flags is None or overwrite_flags.overwrite_node_interface_custom_fields,
+                context="legacy node-interface custom-field payload",
+            ):
                 fallback_patchable.add("custom_fields")
             record = await rest_reconcile_async(
                 nb,
                 "/api/dcim/interfaces/",
                 lookup={"device_id": device_id, "name": bridge_name},
-                payload=payload,
+                payload=legacy_custom_fields_payload(
+                    payload,
+                    overwrite=(
+                        overwrite_flags is None
+                        or overwrite_flags.overwrite_node_interface_custom_fields
+                    ),
+                    context="legacy node-interface custom-field payload",
+                ),
                 schema=NetBoxInterfaceSyncState,
                 current_normalizer=_normalize_node_interface_record,
                 patchable_fields=fallback_patchable,

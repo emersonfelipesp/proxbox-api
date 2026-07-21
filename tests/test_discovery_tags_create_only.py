@@ -170,6 +170,12 @@ def test_discovery_tag_slug_inventory_covers_all_four_kinds() -> None:
 def empty_netbox(monkeypatch: pytest.MonkeyPatch):
     """NetBox with no cluster yet. Records POST traffic and asserts the
     create payload carries the discovery slug."""
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     posts: list[dict[str, Any]] = []
 
     async def _fake_first(_nb: object, path: str, *, query: dict[str, Any]) -> Any:
@@ -253,6 +259,12 @@ def cluster_with_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     cluster (the baseline matches by-slug after merge) and must keep the
     discovery slug in place.
     """
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     cluster_type_record = _FakeRecord(
         {
             "name": "Cluster",
@@ -359,6 +371,12 @@ def cluster_without_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     """NetBox where the cluster exists from a *previous* proxbox-api version
     that pre-dates the discovery-tag scheme. The contract: an operator-style
     "apply on create only" tag must NOT be retroactively added on resync."""
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     cluster_type_record = _FakeRecord(
         {
             "name": "Cluster",
@@ -456,6 +474,12 @@ async def test_first_cluster_sync_skips_discovery_tag_when_absent(
     """When bootstrap has NOT created the discovery tag, the first cluster sync
     must still create the cluster — just without stamping the (missing) slug,
     rather than failing with NetBox 'Related object not found'."""
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     posts: list[dict[str, Any]] = []
 
     async def _miss_first(_nb: object, _path: str, *, query: dict[str, Any]) -> Any:

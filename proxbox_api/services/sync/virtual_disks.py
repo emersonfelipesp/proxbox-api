@@ -15,6 +15,7 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
 from proxbox_api.runtime_settings import get_int
+from proxbox_api.services.custom_fields import legacy_custom_fields_payload
 from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -557,7 +558,14 @@ async def _sync_virtual_disks_for_vm(
             bulk_result = await rest_bulk_reconcile_async(
                 nb,
                 "/api/virtualization/virtual-disks/",
-                payloads=disk_payloads,
+                payloads=[
+                    legacy_custom_fields_payload(
+                        payload,
+                        overwrite=True,
+                        context="legacy virtual-disk custom-field payload",
+                    )
+                    for payload in disk_payloads
+                ],
                 lookup_fields=["virtual_machine", "name"],
                 schema=NetBoxVirtualDiskSyncState,
                 current_normalizer=lambda record: {

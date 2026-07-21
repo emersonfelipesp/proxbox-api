@@ -86,6 +86,12 @@ def patch_rest(monkeypatch: pytest.MonkeyPatch):
     Returns a small handle exposing the captured POST traffic and the existing
     record holder so each test can configure the GET response.
     """
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     holder: dict[str, _FakeRecord | None] = {"existing": None}
     posts: list[dict[str, Any]] = []
 

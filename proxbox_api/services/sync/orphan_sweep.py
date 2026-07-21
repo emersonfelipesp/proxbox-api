@@ -10,6 +10,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_bulk_delete_async, rest_list_paginated_async
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
+from proxbox_api.services.custom_fields import custom_fields_enabled, warn_legacy_custom_fields
 from proxbox_api.services.sync.sync_state_reader import (
     SidecarVMOrphanScan,
     resolve_vm_last_run_id,
@@ -161,6 +162,9 @@ async def _add_legacy_orphan_candidates(
     current_sidecar_vm_ids: set[int] | None,
     candidates_by_id: dict[int, dict[str, object]],
 ) -> None:
+    if not custom_fields_enabled():
+        return
+    warn_legacy_custom_fields("legacy orphan-sweep custom-field fallback")
     run_filter = f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie"
     empty_filter = f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__empty"
     for slug in vm_slugs:
