@@ -13,6 +13,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.schemas._coerce import normalize_bool
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session_for_request
+from proxbox_api.services.sync.network import load_proxmox_node_network
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -118,7 +119,8 @@ async def get_node_network(
         ),
     ] = None,
     type: Annotated[
-        InterfaceTypeChoices, Query(title="Network Type", description="Network Type (ex. 'eth0').")
+        InterfaceTypeChoices | None,
+        Query(title="Network Type", description="Network Type (ex. 'eth0')."),
     ] = None,
 ) -> ProxmoxNodeInterfaceSchemaList:
     px = resolve_proxmox_session_for_request(
@@ -127,30 +129,8 @@ async def get_node_network(
         resource_name="node network",
     )
 
-    interfaces = []
-    try:
-        if type:
-            node_networks = await resolve_async(px.session(f"/nodes/{node}/network").get(type=type))
-        else:
-            node_networks = await resolve_async(px.session(f"/nodes/{node}/network").get())
-    except ResourceException as error:
-        raise ProxboxException(
-            message="Error getting node network interfaces from Proxmox",
-            python_exception=str(error),
-        )
-
-    for interface in node_networks:
-        vlan_id = interface.get("vlan-id")
-        if vlan_id:
-            interface.pop("vlan-id")
-            interface["vlan_id"] = vlan_id
-
-        vlan_raw_device = interface.get("vlan-raw-device")
-        if vlan_raw_device:
-            interface.pop("vlan-raw-device")
-            interface["vlan_raw_device"] = vlan_raw_device
-
-        interfaces.append(ProxmoxNodeInterfaceSchema(**interface))
+    node_networks = await load_proxmox_node_network(px, node, network_type=type)
+    interfaces = [ProxmoxNodeInterfaceSchema(**interface) for interface in node_networks]
 
     return ProxmoxNodeInterfaceSchemaList(interfaces)
 

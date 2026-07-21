@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from ipaddress import ip_interface as _ip_interface
 
+from proxmox_sdk.sdk.exceptions import ResourceException
+
 from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -15,6 +17,7 @@ from proxbox_api.netbox_rest import (
     rest_list_async,
     rest_reconcile_async,
 )
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxInterfaceSyncState,
     NetBoxIpAddressSyncState,
@@ -38,6 +41,51 @@ from proxbox_api.services.sync.vm_helpers import (
 )
 
 NETBOX_VM_INTERFACE_NAME_MAX_LENGTH = 64
+
+
+def _proxmox_node_interface_payload(interface: object) -> dict[str, object]:
+    """Return a normalized dict for one Proxmox node network row."""
+    if hasattr(interface, "model_dump"):
+        data = interface.model_dump(mode="python", by_alias=True, exclude_none=True)
+    elif isinstance(interface, dict):
+        data = dict(interface)
+    else:
+        data = dict(getattr(interface, "__dict__", {}) or {})
+
+    if "vlan-id" in data:
+        data["vlan_id"] = data.pop("vlan-id")
+    if "vlan-raw-device" in data:
+        data["vlan_raw_device"] = data.pop("vlan-raw-device")
+    return data
+
+
+async def load_proxmox_node_network(
+    proxmox_session: object,
+    node: str,
+    *,
+    network_type: object | None = None,
+) -> list[dict[str, object]]:
+    """Fetch and normalize ``GET /nodes/{node}/network`` for one Proxmox node."""
+    try:
+        accessor = proxmox_session.session(f"/nodes/{node}/network")
+        if network_type is not None:
+            raw_networks = await resolve_async(accessor.get(type=network_type))
+        else:
+            raw_networks = await resolve_async(accessor.get())
+    except ResourceException as error:
+        raise ProxboxException(
+            message="Error getting node network interfaces from Proxmox",
+            python_exception=str(error),
+        ) from error
+
+    if raw_networks is None:
+        return []
+    if not isinstance(raw_networks, list):
+        raise ProxboxException(
+            message="Unexpected Proxmox node network response",
+            detail=f"Expected list for node {node}, got {type(raw_networks).__name__}.",
+        )
+    return [_proxmox_node_interface_payload(interface) for interface in raw_networks]
 
 
 def _relation_id_or_none(value: object) -> int | None:
@@ -138,7 +186,7 @@ async def sync_node_interface_and_ip(
         nb,
         "/api/dcim/interfaces/",
         lookup={
-            "device_id": device.get("id", 0),
+            "device": device.get("id", 0),
             "name": interface_name,
         },
         payload={
@@ -160,6 +208,8 @@ async def sync_node_interface_and_ip(
             "mode": record.get("mode"),
             "tags": record.get("tags"),
         },
+        lookup_query_field_map={"device": "device_id"},
+        strict_lookup=True,
     )
     interface_id = getattr(interface, "id", None) or (
         interface.get("id") if isinstance(interface, dict) else None

@@ -22,6 +22,15 @@ Endpoints that synchronize and expose DCIM entities in NetBox.
 - Route handlers consume Proxmox-derived dependencies and sync services to create or update NetBox DCIM objects.
 - They depend on NetBox reconciliation helpers and `WebSocketSSEBridge` for streamed progress responses.
 - The route layer should stay thin and defer the object-specific workflow to `services/sync`.
+- Batch node-interface sync (`/dcim/devices/interfaces/create` and stream)
+  fetches live `GET /nodes/{node}/network` data for each node through the
+  shared `services.sync.network.load_proxmox_node_network()` helper, resolving
+  the Proxmox session per cluster. It maps interfaces to the NetBox
+  `dcim.Device` found by exact device name within the owning cluster's NetBox
+  site scope, not by name alone and not by the Proxmox cluster-status node id.
+  The single-node route accepts the same `cluster_name` query used by the
+  Proxmox node-network route so same-name nodes in different clusters/sites are
+  resolved to the correct device.
 
 ## Extension Guidance
 

@@ -336,6 +336,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 netbox_session=netbox_session,
                 tag=tag,
                 clusters_status=cluster_status,
+                pxs=pxs,
                 use_websocket=False,
             )
         except ProxboxException:
@@ -904,6 +905,7 @@ async def full_update_sync_stream(  # noqa: C901
                             netbox_session=netbox_session,
                             tag=tag,
                             clusters_status=cluster_status,
+                            pxs=pxs,
                             websocket=node_interfaces_bridge,
                             use_websocket=True,
                         )
