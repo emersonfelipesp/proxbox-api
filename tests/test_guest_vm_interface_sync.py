@@ -27,8 +27,9 @@ def _install_sync_vm_interfaces_patches(
             }
         )
         if path == "/api/virtualization/interfaces/":
+            interface_id_by_name = {"net0": 66, "net1": 67, "ens18": 66}
             return {
-                "id": 66,
+                "id": interface_id_by_name.get(str(payload.get("name")), 66),
                 "name": payload.get("name"),
                 "virtual_machine": payload.get("virtual_machine"),
             }
@@ -93,6 +94,10 @@ def _install_sync_vm_interfaces_patches(
         calls.append({"kind": "mac", **kwargs})
         return None
 
+    async def _fake_ensure_bridge_interfaces(*args, **kwargs):
+        calls.append({"kind": "bridge", "args": args, "kwargs": kwargs})
+        return 700
+
     monkeypatch.setattr(
         "proxbox_api.services.sync.vm_network.rest_reconcile_async",
         _fake_rest_reconcile,
@@ -119,6 +124,10 @@ def _install_sync_vm_interfaces_patches(
         "proxbox_api.services.sync.mac_address.reconcile_mac_for_vm_interface",
         _fake_reconcile_mac,
     )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.bridge_interfaces.ensure_bridge_interfaces",
+        _fake_ensure_bridge_interfaces,
+    )
 
 
 def _run_sync(
@@ -126,6 +135,7 @@ def _run_sync(
     monkeypatch,
     calls: list[dict[str, object]],
     guest_interfaces: list[dict[str, object]],
+    network_configs: list[dict[str, dict[str, str]]] | None = None,
     plugin_unavailable: bool = False,
     strategy: str = "guest_os_model",
 ) -> tuple[list[dict[str, object]], int | None]:
@@ -140,7 +150,8 @@ def _run_sync(
             virtual_machine={"id": 55, "name": "vm01"},
             vm_config={},
             guest_agent_interfaces=guest_interfaces,
-            network_configs=[
+            network_configs=network_configs
+            or [
                 {
                     "net0": {
                         "name": "net0",
@@ -240,6 +251,81 @@ def test_guest_os_model_keeps_core_net_name_and_links_guest_to_core_ip(monkeypat
         }
     ]
     assert guest_address_payloads == [{"guest_interface": 901, "ip_address": 77}]
+
+
+def test_guest_os_model_aggregates_ips_from_guest_interfaces_sharing_config_mac(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    interfaces, first_ip_id = _run_sync(
+        monkeypatch=monkeypatch,
+        calls=calls,
+        network_configs=[
+            {
+                "net0": {
+                    "name": "net0",
+                    "virtio": "BC:24:11:20:99:1E",
+                    "bridge": "vmbr219",
+                    "ip": "10.85.0.52/22",
+                }
+            },
+            {
+                "net1": {
+                    "name": "net1",
+                    "virtio": "BC:24:11:9B:AB:78",
+                    "bridge": "vmbr215",
+                }
+            },
+        ],
+        guest_interfaces=[
+            {
+                "name": "eth0",
+                "mac_address": "bc:24:11:20:99:1e",
+                "ip_addresses": [
+                    {"ip_address": "10.85.0.52", "prefix": 22, "ip_address_type": "ipv4"},
+                    {
+                        "ip_address": "fe80::bc24:11ff:fe20:991e",
+                        "prefix": 64,
+                        "ip_address_type": "ipv6",
+                    },
+                ],
+            },
+            {
+                "name": "ens19",
+                "mac_address": "bc:24:11:9b:ab:78",
+                "ip_addresses": [
+                    {"ip_address": "10.81.0.13", "prefix": 22, "ip_address_type": "ipv4"}
+                ],
+            },
+            {
+                "name": "ens18",
+                "mac_address": "bc:24:11:20:99:1e",
+                "ip_addresses": [
+                    {"ip_address": "10.83.4.100", "prefix": 23, "ip_address_type": "ipv4"}
+                ],
+            },
+        ],
+    )
+
+    assert interfaces[0] == {"id": 66, "name": "net0", "virtual_machine": 55}
+    assert first_ip_id == 77
+
+    core_ip_payloads = [
+        c["payload"]
+        for c in calls
+        if c["kind"] == "reconcile" and c["path"] == "/api/ipam/ip-addresses/"
+    ]
+    net0_ip_payloads = [
+        payload for payload in core_ip_payloads if payload["assigned_object_id"] == 66
+    ]
+
+    assert [payload["address"] for payload in net0_ip_payloads] == [
+        "10.85.0.52/22",
+        "10.83.4.100/23",
+    ]
+    assert {payload["assigned_object_id"] for payload in net0_ip_payloads} == {66}
+    assert len(net0_ip_payloads) == 2
 
 
 def test_legacy_rename_preserves_guest_name_and_logs_deprecation(monkeypatch):

@@ -26,7 +26,38 @@ from proxbox_api.services.sync.individual.helpers import (
 )
 from proxbox_api.services.sync.network import normalize_vm_interface_name
 from proxbox_api.services.sync.sync_state_writer import write_vm_interface_sync_state
-from proxbox_api.services.sync.vm_helpers import record_id
+from proxbox_api.services.sync.vm_helpers import (
+    build_guest_mac_index,
+    merged_guest_iface_from_mac_index,
+    normalized_mac,
+    record_id,
+)
+from proxbox_api.utils.async_compat import maybe_await
+
+
+async def _fetch_qemu_guest_interfaces(
+    px: object,
+    node: str,
+    vmid: int,
+) -> list[dict[str, object]]:
+    try:
+        result = get_qemu_guest_agent_network_interfaces(px, node, vmid)
+        guest_interfaces = await maybe_await(result)
+    except Exception:
+        return []
+    if not isinstance(guest_interfaces, list):
+        return []
+    return [iface for iface in guest_interfaces if isinstance(iface, dict)]
+
+
+def _has_config_mac_guest_match(
+    guest_interfaces: list[dict[str, object]],
+    mac_address: object | None,
+) -> bool:
+    if not normalized_mac(mac_address):
+        return False
+    guest_by_mac = build_guest_mac_index(guest_interfaces)
+    return merged_guest_iface_from_mac_index(guest_by_mac, mac_address) is not None
 
 
 async def _resolve_vlan_id(
@@ -114,25 +145,24 @@ async def sync_interface_individual(  # noqa: C901
     except Exception:
         vm_config = {}
 
-    guest_interfaces: list[dict] = []
+    guest_interfaces: list[dict[str, object]] = []
     if vm_type == "qemu":
-        try:
-            guest_interfaces = get_qemu_guest_agent_network_interfaces(px, node, vmid)
-        except Exception:
-            pass
+        guest_interfaces = await _fetch_qemu_guest_interfaces(px, node, vmid)
 
     net_config = extract_net_interface_config(vm_config)
 
     target_config = net_config.get(interface_name, {})
     mac_address = target_config.get("virtio") or target_config.get("hwaddr")
+    has_config_mac_guest_match = _has_config_mac_guest_match(guest_interfaces, mac_address)
     bridge = target_config.get("bridge")
     vlan_tag_raw = target_config.get("tag")
 
-    guest_iface, resolved_name, mac_address = resolve_guest_interface(
+    guest_iface, resolved_guest_name, mac_address = resolve_guest_interface(
         guest_interfaces,
         interface_name,
         mac_address,
     )
+    resolved_name = interface_name if has_config_mac_guest_match else resolved_guest_name
     resolved_name = normalize_vm_interface_name(
         resolved_name,
         fallback=interface_name,

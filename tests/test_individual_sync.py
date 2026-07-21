@@ -14,6 +14,7 @@ from proxbox_api.services.sync.individual.helpers import (
     parse_disk_config_entry,
     resolve_proxmox_session,
 )
+from proxbox_api.services.sync.individual.ip_sync import sync_ip_individual
 from proxbox_api.services.sync.individual.snapshot_sync import sync_snapshot_individual
 from proxbox_api.services.sync.individual.task_history_sync import sync_task_history_individual
 from proxbox_api.services.sync.individual.vm_sync import (
@@ -116,6 +117,130 @@ async def test_individual_ip_route_requires_cluster_name(test_api_key):
 
     assert response.status_code == 422
     assert any(error["loc"][-1] == "cluster_name" for error in response.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_sync_ip_individual_maps_shared_mac_guest_ip_to_config_interface(
+    monkeypatch,
+):
+    ip_reconcile_calls: list[dict[str, object]] = []
+    interface_create_calls: list[str] = []
+
+    guest_interfaces = [
+        {
+            "name": "eth0",
+            "mac_address": "bc:24:11:20:99:1e",
+            "ip_addresses": [{"ip_address": "10.85.0.52", "prefix": 22}],
+        },
+        {
+            "name": "ens18",
+            "mac_address": "bc:24:11:20:99:1e",
+            "ip_addresses": [{"ip_address": "10.83.4.100", "prefix": 23}],
+        },
+    ]
+
+    async def _fake_ensure_vm_record(*_args, **_kwargs):
+        return {"id": 55, "name": "vm-shared-mac"}, None
+
+    async def _fake_get_vm_config(*_args, **_kwargs):
+        return {"net0": "virtio=BC:24:11:20:99:1E,bridge=vmbr0"}
+
+    def _fake_guest_interfaces(*_args, **_kwargs):
+        return guest_interfaces
+
+    async def _fake_rest_list(_nb, path, query=None):
+        if path == "/api/virtualization/interfaces/":
+            if query == {"virtual_machine_id": 55, "name": "net0"}:
+                return [{"id": 66, "name": "net0", "virtual_machine": 55}]
+            if query == {"virtual_machine_id": 55, "name": "ens18"}:
+                return []
+        if path == "/api/ipam/ip-addresses/":
+            return []
+        return []
+
+    async def _fake_ip_reconcile(_nb, path, *, lookup, payload, **kwargs):
+        assert path == "/api/ipam/ip-addresses/"
+        ip_reconcile_calls.append({"lookup": lookup, "payload": payload, "kwargs": kwargs})
+        return FakeRecord(payload, record_id=77)
+
+    async def _fake_rest_first(_nb, path, query=None):
+        assert path == "/api/ipam/ip-addresses/"
+        assert query == {"id": 77, "limit": 1}
+        return {
+            "id": 77,
+            "address": "10.83.4.100/23",
+            "assigned_object_type": "virtualization.vminterface",
+            "assigned_object_id": 66,
+            "status": "active",
+        }
+
+    async def _fake_sync_interface(
+        _nb,
+        _px,
+        _tag,
+        _node,
+        _vm_type,
+        _vmid,
+        interface_name,
+        **_kwargs,
+    ):
+        interface_create_calls.append(interface_name)
+        return {"netbox_object": {"id": 67, "name": interface_name}}
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.ip_sync.ensure_vm_record",
+        _fake_ensure_vm_record,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.ip_sync.get_vm_config_individual",
+        _fake_get_vm_config,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.ip_sync.get_qemu_guest_agent_network_interfaces",
+        _fake_guest_interfaces,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.ip_sync._resolve_dns_name",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.ip_sync.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.ip_sync.rest_first_async",
+        _fake_rest_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.ip_ownership.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.ip_ownership.rest_reconcile_async",
+        _fake_ip_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.interface_sync.sync_interface_individual",
+        _fake_sync_interface,
+    )
+
+    result = await sync_ip_individual(
+        nb=object(),
+        px=SimpleNamespace(name="lab"),
+        tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+        node="pve01",
+        vm_type="qemu",
+        vmid=101,
+        ip_address="10.83.4.100/23",
+        interface_name=None,
+    )
+
+    assert result["error"] is None
+    assert result["proxmox_resource"]["interface_name"] == "net0"
+    assert interface_create_calls == []
+    assert len(ip_reconcile_calls) == 1
+    assert ip_reconcile_calls[0]["payload"]["assigned_object_id"] == 66
 
 
 @pytest.mark.asyncio

@@ -134,7 +134,10 @@ def get_interface_name_from_config_and_agent(
     from proxbox_api.services.sync.guest_vm_interface import (
         should_use_guest_agent_core_interface_name,
     )
-    from proxbox_api.services.sync.vm_helpers import normalized_mac
+    from proxbox_api.services.sync.vm_helpers import (
+        build_guest_mac_index,
+        merged_guest_iface_from_mac_index,
+    )
 
     if not should_use_guest_agent_core_interface_name(
         use_guest_agent_name,
@@ -145,11 +148,14 @@ def get_interface_name_from_config_and_agent(
     # Try to match by MAC address first
     interface_mac = config_dict.get("virtio") or config_dict.get("hwaddr")
     if interface_mac:
-        for guest_iface in guest_agent_interfaces:
-            if normalized_mac(guest_iface.get("mac_address")) == normalized_mac(interface_mac):
-                guest_name = str(guest_iface.get("name") or "").strip()
-                if guest_name:
-                    return guest_name
+        guest_iface = merged_guest_iface_from_mac_index(
+            build_guest_mac_index(guest_agent_interfaces),
+            interface_mac,
+        )
+        if guest_iface:
+            guest_name = str(guest_iface.get("name") or "").strip()
+            if guest_name:
+                return guest_name
 
     # Try to match by name
     for guest_iface in guest_agent_interfaces:
