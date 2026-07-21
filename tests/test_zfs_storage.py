@@ -23,47 +23,79 @@ class _Endpoint:
 
 
 class _ZfsAccessor:
-    def __init__(self, calls: list[str], pools: object, details: dict[str, object]) -> None:
+    def __init__(
+        self,
+        calls: list[str],
+        pools: object,
+        details: dict[str, object],
+        node_name: str,
+    ) -> None:
         self._calls = calls
         self._pools = pools
         self._details = details
+        self._node_name = node_name
 
     def get(self) -> object:
-        self._calls.append("nodes/pve1/disks/zfs")
+        self._calls.append(f"nodes/{self._node_name}/disks/zfs")
         return self._pools
 
     def __call__(self, name: str) -> _Endpoint:
         return _Endpoint(
             self._details[name],
             self._calls,
-            f"nodes/pve1/disks/zfs/{name}",
+            f"nodes/{self._node_name}/disks/zfs/{name}",
         )
 
 
 class _DisksAccessor:
-    def __init__(self, calls: list[str], pools: object, details: dict[str, object]) -> None:
-        self.zfs = _ZfsAccessor(calls, pools, details)
+    def __init__(
+        self,
+        calls: list[str],
+        pools: object,
+        details: dict[str, object],
+        node_name: str,
+    ) -> None:
+        self.zfs = _ZfsAccessor(calls, pools, details, node_name)
 
 
 class _NodeAccessor:
-    def __init__(self, calls: list[str], pools: object, details: dict[str, object]) -> None:
-        self.disks = _DisksAccessor(calls, pools, details)
+    def __init__(
+        self,
+        calls: list[str],
+        pools: object,
+        details: dict[str, object],
+        node_name: str,
+    ) -> None:
+        self.disks = _DisksAccessor(calls, pools, details, node_name)
 
 
 class _NodesAccessor:
-    def __init__(self, calls: list[str], pools: object, details: dict[str, object]) -> None:
+    def __init__(
+        self,
+        calls: list[str],
+        pools: object,
+        details: dict[str, object],
+        node_name: str,
+    ) -> None:
         self._calls = calls
         self._pools = pools
         self._details = details
+        self._node_name = node_name
 
     def __call__(self, node: str) -> _NodeAccessor:
-        assert node == "pve1"
-        return _NodeAccessor(self._calls, self._pools, self._details)
+        assert node == self._node_name
+        return _NodeAccessor(self._calls, self._pools, self._details, self._node_name)
 
 
 class _Sdk:
-    def __init__(self, calls: list[str], pools: object, details: dict[str, object]) -> None:
-        self.nodes = _NodesAccessor(calls, pools, details)
+    def __init__(
+        self,
+        calls: list[str],
+        pools: object,
+        details: dict[str, object],
+        node_name: str = "pve1",
+    ) -> None:
+        self.nodes = _NodesAccessor(calls, pools, details, node_name)
 
 
 class _FailingNodesDiscovery:
@@ -90,14 +122,23 @@ class _Session:
         *,
         cluster_status: list[object] | None = None,
         name: str = "lab",
+        node_name: str = "pve1",
+        db_endpoint_id: int | None = None,
+        domain: str | None = None,
+        ip_address: str | None = None,
+        http_port: int = 8006,
         sdk: object | None = None,
     ) -> None:
         self.calls: list[str] = []
-        self.session = sdk or _Sdk(self.calls, pools, details or {})
+        self.session = sdk or _Sdk(self.calls, pools, details or {}, node_name)
         self.cluster_status = (
-            [{"type": "node", "name": "pve1"}] if cluster_status is None else cluster_status
+            [{"type": "node", "name": node_name}] if cluster_status is None else cluster_status
         )
         self.name = name
+        self.db_endpoint_id = db_endpoint_id
+        self.domain = domain
+        self.ip_address = ip_address
+        self.http_port = http_port
 
 
 def test_tier1_zfs_helpers_validate_generated_list_and_detail_models() -> None:
@@ -149,7 +190,9 @@ def test_zfs_error_detail_redacts_credentials() -> None:
     error = RuntimeError(
         "request failed token=abc123 token_value=secret-token api_key=secret-api-key "
         "CSRFPreventionToken=secret-csrf password:supersecret "
-        '{"client_secret": "json-secret"} https://user:pass@example.test/path'
+        '{"client_secret": "json-secret"} https://user:pass@example.test/path '
+        "Authorization: Bearer SEKRET Basic BASICSEKRET token TOKENSEKRET "
+        "http://:empty-user-secret@example.test/path"
     )
 
     detail = zfs_service._safe_error_detail(error)
@@ -161,12 +204,20 @@ def test_zfs_error_detail_redacts_credentials() -> None:
     assert "supersecret" not in detail
     assert "json-secret" not in detail
     assert "user:pass" not in detail
+    assert "SEKRET" not in detail
+    assert "BASICSEKRET" not in detail
+    assert "TOKENSEKRET" not in detail
+    assert "empty-user-secret" not in detail
     assert "token=[REDACTED]" in detail
     assert "token_value=[REDACTED]" in detail
     assert "api_key=[REDACTED]" in detail
     assert "CSRFPreventionToken=[REDACTED]" in detail
     assert '"client_secret": "[REDACTED]"' in detail
     assert "https://[REDACTED]@example.test/path" in detail
+    assert "Authorization: Bearer [REDACTED]" in detail
+    assert "Basic [REDACTED]" in detail
+    assert "token [REDACTED]" in detail
+    assert "http://[REDACTED]@example.test/path" in detail
 
 
 def test_zfs_vdev_tree_rejects_adversarial_depth() -> None:
@@ -298,6 +349,55 @@ async def test_zfs_proxmox_api_dedupes_same_cluster_sessions() -> None:
     ]
     assert first.calls == ["nodes/pve1/disks/zfs"]
     assert second.calls == []
+
+
+@pytest.mark.asyncio
+async def test_zfs_proxmox_api_keeps_distinct_standalone_endpoints_with_same_node_name() -> None:
+    first = _Session(
+        pools=[{"name": "tank-a", "health": "ONLINE"}],
+        cluster_status=[{"type": "node", "name": "pve"}],
+        name="pve",
+        node_name="pve",
+        db_endpoint_id=101,
+    )
+    second = _Session(
+        pools=[{"name": "tank-b", "health": "ONLINE"}],
+        cluster_status=[{"type": "node", "name": "pve"}],
+        name="pve",
+        node_name="pve",
+        db_endpoint_id=202,
+    )
+
+    response = await list_zfs_pools([first, second], tiers=("proxmox_api",))
+
+    assert [(pool.cluster_name, pool.node, pool.name) for pool in response.pools] == [
+        ("pve", "pve", "tank-a"),
+        ("pve", "pve", "tank-b"),
+    ]
+    assert first.calls == ["nodes/pve/disks/zfs"]
+    assert second.calls == ["nodes/pve/disks/zfs"]
+
+
+@pytest.mark.asyncio
+async def test_zfs_proxmox_api_keeps_unknown_identity_standalone_sessions_separate() -> None:
+    first = _Session(
+        pools=[{"name": "tank-a", "health": "ONLINE"}],
+        cluster_status=[{"type": "node", "name": "pve"}],
+        name="pve",
+        node_name="pve",
+    )
+    second = _Session(
+        pools=[{"name": "tank-b", "health": "ONLINE"}],
+        cluster_status=[{"type": "node", "name": "pve"}],
+        name="pve",
+        node_name="pve",
+    )
+
+    response = await list_zfs_pools([first, second], tiers=("proxmox_api",))
+
+    assert [pool.name for pool in response.pools] == ["tank-a", "tank-b"]
+    assert first.calls == ["nodes/pve/disks/zfs"]
+    assert second.calls == ["nodes/pve/disks/zfs"]
 
 
 @pytest.mark.asyncio

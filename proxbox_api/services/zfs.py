@@ -23,7 +23,15 @@ from proxbox_api.session.proxmox import ProxmoxSession
 _DEFAULT_TIER_ORDER: tuple[ZfsTierName, ...] = ("proxmox_api", "influxdb", "ssh_cli")
 _MAX_VDEV_TREE_DEPTH = 64
 _CREDENTIAL_URL_PATTERN = re.compile(
-    r"(?P<scheme>[a-z][a-z0-9+.-]*://)(?P<userinfo>[^/\s:@]+(?::[^/\s@]*)?@)",
+    r"(?P<scheme>[a-z][a-z0-9+.-]*://)(?P<userinfo>[^/\s@]*:[^/\s@]*@)",
+    re.IGNORECASE,
+)
+_AUTHORIZATION_VALUE_PATTERN = re.compile(
+    r"\b(authorization\s*[:=]\s*)(?:(bearer|basic|token)\s+)?([^\s&;,}]+)",
+    re.IGNORECASE,
+)
+_AUTH_SCHEME_TOKEN_PATTERN = re.compile(
+    r"(?<![-\w])((?:bearer|basic|token)\s+)([^\s&;,}]+)",
     re.IGNORECASE,
 )
 _SENSITIVE_JSON_PATTERN = re.compile(
@@ -33,13 +41,22 @@ _SENSITIVE_JSON_PATTERN = re.compile(
 )
 _SENSITIVE_KEY_VALUE_PATTERN = re.compile(
     r"(?i)\b(password|passwd|pass|token(?:_value)?|api[_-]?key|csrfpreventiontoken|"
-    r"authorization|secret|client[_-]?secret|ticket)\b(\s*[=:]\s*)([^\s&;,}]+)"
+    r"secret|client[_-]?secret|ticket)\b(\s*[=:]\s*)([^\s&;,}]+)"
 )
 
 
 def _safe_error_detail(error: BaseException) -> str:
     detail = str(error) or error.__class__.__name__
     detail = _CREDENTIAL_URL_PATTERN.sub(r"\g<scheme>[REDACTED]@", detail)
+    detail = _AUTHORIZATION_VALUE_PATTERN.sub(
+        lambda match: (
+            f"{match.group(1)}{match.group(2)} [REDACTED]"
+            if match.group(2)
+            else f"{match.group(1)}[REDACTED]"
+        ),
+        detail,
+    )
+    detail = _AUTH_SCHEME_TOKEN_PATTERN.sub(r"\1[REDACTED]", detail)
     detail = _SENSITIVE_JSON_PATTERN.sub(r"\1\2[REDACTED]\4", detail)
     return _SENSITIVE_KEY_VALUE_PATTERN.sub(r"\1\2[REDACTED]", detail)
 
@@ -135,12 +152,51 @@ def _cluster_name_for_session(session: ProxmoxSession) -> str:
     return "unknown"
 
 
+def _real_cluster_name_for_dedupe(session: ProxmoxSession) -> str | None:
+    cluster_name = getattr(session, "cluster_name", None)
+    if cluster_name:
+        return str(cluster_name)
+
+    for item in getattr(session, "cluster_status", None) or []:
+        row = item if isinstance(item, dict) else {}
+        if row.get("type") == "cluster" and isinstance(row.get("name"), str):
+            return str(row["name"])
+
+    return None
+
+
+def _endpoint_identity_for_dedupe(session: ProxmoxSession) -> str:
+    for attr in ("db_endpoint_id", "endpoint_id", "id"):
+        value = getattr(session, attr, None)
+        if value is not None:
+            return f"{attr}:{value}"
+
+    for attr in ("base_url", "url", "host"):
+        value = getattr(session, attr, None)
+        if value:
+            return f"{attr}:{value}"
+
+    host = getattr(session, "domain", None) or getattr(session, "ip_address", None)
+    if host:
+        scheme = "https" if getattr(session, "ssl", True) else "http"
+        port = getattr(session, "http_port", None) or 8006
+        return f"endpoint:{scheme}://{host}:{port}"
+
+    return f"unknown-endpoint:{id(session)}"
+
+
+def _session_dedupe_key(session: ProxmoxSession) -> str:
+    cluster_name = _real_cluster_name_for_dedupe(session)
+    if cluster_name is not None:
+        return f"cluster:{cluster_name}"
+    return _endpoint_identity_for_dedupe(session)
+
+
 def _dedupe_sessions_by_cluster(sessions: Sequence[ProxmoxSession]) -> list[ProxmoxSession]:
     deduped: list[ProxmoxSession] = []
     seen: set[str] = set()
     for session in sessions:
-        cluster_name = _cluster_name_for_session(session)
-        key = cluster_name if cluster_name != "unknown" else f"unknown:{id(session)}"
+        key = _session_dedupe_key(session)
         if key in seen:
             continue
         seen.add(key)
