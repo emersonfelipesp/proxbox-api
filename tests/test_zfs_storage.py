@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from proxmox_sdk.sdk.exceptions import ResourceException
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.services import zfs as zfs_service
@@ -65,12 +66,38 @@ class _Sdk:
         self.nodes = _NodesAccessor(calls, pools, details)
 
 
+class _FailingNodesDiscovery:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def get(self) -> object:
+        async def _raise() -> object:
+            raise self._error
+
+        return _raise()
+
+
+class _FailingDiscoverySdk:
+    def __init__(self, error: Exception) -> None:
+        self.nodes = _FailingNodesDiscovery(error)
+
+
 class _Session:
-    def __init__(self, pools: object, details: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        pools: object,
+        details: dict[str, object] | None = None,
+        *,
+        cluster_status: list[object] | None = None,
+        name: str = "lab",
+        sdk: object | None = None,
+    ) -> None:
         self.calls: list[str] = []
-        self.session = _Sdk(self.calls, pools, details or {})
-        self.cluster_status = [{"type": "node", "name": "pve1"}]
-        self.name = "lab"
+        self.session = sdk or _Sdk(self.calls, pools, details or {})
+        self.cluster_status = (
+            [{"type": "node", "name": "pve1"}] if cluster_status is None else cluster_status
+        )
+        self.name = name
 
 
 def test_tier1_zfs_helpers_validate_generated_list_and_detail_models() -> None:
@@ -119,11 +146,39 @@ def test_tier1_zfs_helpers_validate_generated_list_and_detail_models() -> None:
 
 
 def test_zfs_error_detail_redacts_credentials() -> None:
-    error = RuntimeError("request failed token=abc123 password:supersecret")
-
-    assert zfs_service._safe_error_detail(error) == (
-        "request failed token=[REDACTED] password:[REDACTED]"
+    error = RuntimeError(
+        "request failed token=abc123 token_value=secret-token api_key=secret-api-key "
+        "CSRFPreventionToken=secret-csrf password:supersecret "
+        '{"client_secret": "json-secret"} https://user:pass@example.test/path'
     )
+
+    detail = zfs_service._safe_error_detail(error)
+
+    assert "abc123" not in detail
+    assert "secret-token" not in detail
+    assert "secret-api-key" not in detail
+    assert "secret-csrf" not in detail
+    assert "supersecret" not in detail
+    assert "json-secret" not in detail
+    assert "user:pass" not in detail
+    assert "token=[REDACTED]" in detail
+    assert "token_value=[REDACTED]" in detail
+    assert "api_key=[REDACTED]" in detail
+    assert "CSRFPreventionToken=[REDACTED]" in detail
+    assert '"client_secret": "[REDACTED]"' in detail
+    assert "https://[REDACTED]@example.test/path" in detail
+
+
+def test_zfs_vdev_tree_rejects_adversarial_depth() -> None:
+    root: list[dict[str, object]] = [{"name": "root"}]
+    current = root[0]
+    for index in range(zfs_service._MAX_VDEV_TREE_DEPTH + 1):
+        child: dict[str, object] = {"name": f"child-{index}"}
+        current["children"] = [child]
+        current = child
+
+    with pytest.raises(ProxboxException, match="ZFS vdev tree exceeds maximum depth"):
+        zfs_service._parse_vdev_tree(root)
 
 
 @pytest.mark.asyncio
@@ -190,6 +245,59 @@ async def test_zfs_tier_selection_falls_back_in_order_when_tier1_fails(
         ("influxdb", "skipped", "not_configured"),
         ("ssh_cli", "skipped", "not_implemented"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_zfs_node_discovery_failure_degrades_to_failed_source() -> None:
+    error = ResourceException(
+        status_code=403,
+        status_message="Forbidden",
+        content="api_key=secret-api-key denied",
+    )
+    session = _Session(
+        pools=[],
+        cluster_status=[],
+        sdk=_FailingDiscoverySdk(error),
+    )
+
+    response = await list_zfs_pools([session], tiers=("proxmox_api",))
+
+    assert response.source is None
+    assert response.pools == []
+    assert len(response.attempted_sources) == 1
+    attempt = response.attempted_sources[0]
+    assert attempt.tier == "proxmox_api"
+    assert attempt.status == "failed"
+    assert attempt.reason is not None
+    assert "node discovery" in attempt.reason
+    assert "secret-api-key" not in attempt.reason
+    assert "api_key=[REDACTED]" in attempt.reason
+
+
+@pytest.mark.asyncio
+async def test_zfs_proxmox_api_dedupes_same_cluster_sessions() -> None:
+    cluster_status = [
+        {"type": "cluster", "name": "lab"},
+        {"type": "node", "name": "pve1"},
+    ]
+    first = _Session(
+        pools=[{"name": "tank", "health": "ONLINE"}],
+        cluster_status=cluster_status,
+        name="endpoint-a",
+    )
+    second = _Session(
+        pools=[{"name": "tank", "health": "ONLINE"}],
+        cluster_status=cluster_status,
+        name="endpoint-b",
+    )
+
+    response = await list_zfs_pools([first, second], tiers=("proxmox_api",))
+
+    assert [(pool.cluster_name, pool.node, pool.name) for pool in response.pools] == [
+        ("lab", "pve1", "tank")
+    ]
+    assert first.calls == ["nodes/pve1/disks/zfs"]
+    assert second.calls == []
 
 
 @pytest.mark.asyncio

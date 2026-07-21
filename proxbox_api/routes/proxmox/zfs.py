@@ -25,14 +25,14 @@ async def zfs_pools(
     return await list_zfs_pools(pxs, node=node)
 
 
-@router.get("/storage/zfs/pools/{name}", response_model=ZfsPoolDetailResponse)
+@router.get("/storage/zfs/pools/{pool_name}", response_model=ZfsPoolDetailResponse)
 async def zfs_pool_detail(
     pxs: ProxmoxSessionsDep,
-    name: Annotated[str, Path(description="ZFS pool name.")],
+    pool_name: Annotated[str, Path(description="ZFS pool name.")],
     node: Annotated[
         str | None,
         Query(description="Optional Proxmox node name to scope the ZFS pool detail query."),
     ] = None,
 ) -> ZfsPoolDetailResponse:
     """Get ZFS pool detail, scrub status, errors, and vdev topology."""
-    return await get_zfs_pool_detail(pxs, name=name, node=node)
+    return await get_zfs_pool_detail(pxs, name=pool_name, node=node)

@@ -21,14 +21,27 @@ from proxbox_api.services.proxmox_helpers import get_node_zfs_pool_detail, get_n
 from proxbox_api.session.proxmox import ProxmoxSession
 
 _DEFAULT_TIER_ORDER: tuple[ZfsTierName, ...] = ("proxmox_api", "influxdb", "ssh_cli")
-_SENSITIVE_ERROR_PATTERN = re.compile(
-    r"(?i)\b(password|token|ticket|authorization|secret)(\s*[=:]\s*)([^\s&;,]+)"
+_MAX_VDEV_TREE_DEPTH = 64
+_CREDENTIAL_URL_PATTERN = re.compile(
+    r"(?P<scheme>[a-z][a-z0-9+.-]*://)(?P<userinfo>[^/\s:@]+(?::[^/\s@]*)?@)",
+    re.IGNORECASE,
+)
+_SENSITIVE_JSON_PATTERN = re.compile(
+    r"(?i)([\"']?(?:password|passwd|pass|token(?:_value)?|api[_-]?key|"
+    r"csrfpreventiontoken|authorization|secret|client[_-]?secret|ticket)[\"']?\s*:\s*)"
+    r"([\"'])(.*?)(\2)"
+)
+_SENSITIVE_KEY_VALUE_PATTERN = re.compile(
+    r"(?i)\b(password|passwd|pass|token(?:_value)?|api[_-]?key|csrfpreventiontoken|"
+    r"authorization|secret|client[_-]?secret|ticket)\b(\s*[=:]\s*)([^\s&;,}]+)"
 )
 
 
 def _safe_error_detail(error: BaseException) -> str:
     detail = str(error) or error.__class__.__name__
-    return _SENSITIVE_ERROR_PATTERN.sub(r"\1\2[REDACTED]", detail)
+    detail = _CREDENTIAL_URL_PATTERN.sub(r"\g<scheme>[REDACTED]@", detail)
+    detail = _SENSITIVE_JSON_PATTERN.sub(r"\1\2[REDACTED]\4", detail)
+    return _SENSITIVE_KEY_VALUE_PATTERN.sub(r"\1\2[REDACTED]", detail)
 
 
 def _dump_model_or_mapping(value: object) -> dict[str, object]:
@@ -71,13 +84,26 @@ def _coerce_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _parse_vdev_tree(items: object) -> list[ZfsVdevNode]:
+def _parse_vdev_tree(items: object, *, depth: int = 0) -> list[ZfsVdevNode]:
     if not isinstance(items, list):
         return []
+    if depth > _MAX_VDEV_TREE_DEPTH:
+        raise ProxboxException(
+            message="ZFS vdev tree exceeds maximum depth",
+            detail={"max_depth": _MAX_VDEV_TREE_DEPTH},
+            http_status_code=502,
+        )
 
     nodes: list[ZfsVdevNode] = []
     for item in items:
         row = item if isinstance(item, dict) else {}
+        children = row.get("children")
+        if isinstance(children, list) and children and depth >= _MAX_VDEV_TREE_DEPTH:
+            raise ProxboxException(
+                message="ZFS vdev tree exceeds maximum depth",
+                detail={"max_depth": _MAX_VDEV_TREE_DEPTH},
+                http_status_code=502,
+            )
         nodes.append(
             ZfsVdevNode(
                 name=_coerce_str(row.get("name")),
@@ -86,10 +112,40 @@ def _parse_vdev_tree(items: object) -> list[ZfsVdevNode]:
                 write=_coerce_int(row.get("write")),
                 cksum=_coerce_int(row.get("cksum")),
                 msg=_coerce_str(row.get("msg")),
-                children=_parse_vdev_tree(row.get("children")),
+                children=_parse_vdev_tree(children, depth=depth + 1),
             )
         )
     return nodes
+
+
+def _cluster_name_for_session(session: ProxmoxSession) -> str:
+    cluster_name = getattr(session, "cluster_name", None)
+    if cluster_name:
+        return str(cluster_name)
+
+    for item in getattr(session, "cluster_status", None) or []:
+        row = item if isinstance(item, dict) else {}
+        if row.get("type") == "cluster" and isinstance(row.get("name"), str):
+            return str(row["name"])
+
+    session_name = getattr(session, "name", None)
+    if session_name:
+        return str(session_name)
+
+    return "unknown"
+
+
+def _dedupe_sessions_by_cluster(sessions: Sequence[ProxmoxSession]) -> list[ProxmoxSession]:
+    deduped: list[ProxmoxSession] = []
+    seen: set[str] = set()
+    for session in sessions:
+        cluster_name = _cluster_name_for_session(session)
+        key = cluster_name if cluster_name != "unknown" else f"unknown:{id(session)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(session)
+    return deduped
 
 
 async def _node_names_for_session(session: ProxmoxSession, requested_node: str | None) -> list[str]:
@@ -116,6 +172,31 @@ async def _node_names_for_session(session: ProxmoxSession, requested_node: str |
         if isinstance(row, dict) and isinstance(row.get("node"), str):
             names.append(str(row["node"]))
     return list(dict.fromkeys(names))
+
+
+async def _safe_node_names_for_fetch(
+    *,
+    session: ProxmoxSession,
+    requested_node: str | None,
+    cluster_name: str,
+    operation: str,
+    errors: list[str],
+    pool_name: str | None = None,
+) -> list[str]:
+    try:
+        return await _node_names_for_session(session, requested_node)
+    except Exception as error:  # noqa: BLE001
+        safe_error = _safe_error_detail(error)
+        pool_context = f" pool={pool_name}" if pool_name is not None else ""
+        logger.warning(
+            "Unable to discover Proxmox nodes for ZFS %s cluster=%s%s: %s",
+            operation,
+            cluster_name,
+            pool_context,
+            safe_error,
+        )
+        errors.append(f"{cluster_name}: node discovery: {safe_error}")
+        return []
 
 
 def _summary_from_api(
@@ -179,9 +260,17 @@ async def _fetch_pools_from_proxmox_api(
     pools: list[ZfsPoolSummary] = []
     errors: list[str] = []
 
-    for session in sessions:
-        cluster_name = str(getattr(session, "name", None) or "unknown")
-        for node_name in await _node_names_for_session(session, node):
+    for session in _dedupe_sessions_by_cluster(sessions):
+        cluster_name = _cluster_name_for_session(session)
+        node_names = await _safe_node_names_for_fetch(
+            session=session,
+            requested_node=node,
+            cluster_name=cluster_name,
+            operation="pool list",
+            errors=errors,
+        )
+
+        for node_name in node_names:
             try:
                 rows = await get_node_zfs_pools(session, node_name)
             except Exception as error:  # noqa: BLE001
@@ -218,9 +307,18 @@ async def _fetch_pool_details_from_proxmox_api(
     details: list[ZfsPoolDetail] = []
     errors: list[str] = []
 
-    for session in sessions:
-        cluster_name = str(getattr(session, "name", None) or "unknown")
-        for node_name in await _node_names_for_session(session, node):
+    for session in _dedupe_sessions_by_cluster(sessions):
+        cluster_name = _cluster_name_for_session(session)
+        node_names = await _safe_node_names_for_fetch(
+            session=session,
+            requested_node=node,
+            cluster_name=cluster_name,
+            operation="pool detail",
+            errors=errors,
+            pool_name=name,
+        )
+
+        for node_name in node_names:
             summaries_by_name: dict[str, ZfsPoolSummary] = {}
             try:
                 rows = await get_node_zfs_pools(session, node_name)
