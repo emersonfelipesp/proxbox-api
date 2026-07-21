@@ -230,6 +230,18 @@ computed for the custom-field payload. Sidecar writes are gated by the matching
 builds that return 404/501, or transient plugin API failures, are logged and do
 not abort the sync stage.
 
+Reads are migrated in the same additive style. VM identity lookups first query
+`/api/plugins/proxbox/sync-state/virtual-machines/` by `proxmox_vm_id` and
+endpoint, then fall back to the legacy `cf_proxmox_vm_id` plus endpoint/cluster
+query when no sidecar row exists. Orphan sweep reads `last_run_id` from the VM
+sidecar before trusting `proxbox_last_run_id`, so a VM touched by the current
+run is not deleted just because the legacy custom field is stale or absent.
+Role-ownership snapshots remain legacy-CF-only through
+`proxmox_last_synced_role_id`; the current VM sidecar model has no role
+ownership field. If the sidecar API is missing or errors, sync falls back to
+custom fields and continues. Removing the legacy custom fields is a separate
+retirement step.
+
 ## Backup Sync Flow
 
 Endpoints:

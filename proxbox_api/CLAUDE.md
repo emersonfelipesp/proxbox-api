@@ -58,7 +58,11 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
    netbox-proxbox typed sync-state sidecars through
    `services/sync/sync_state_writer.py`. The sidecar payloads come from the same
    live VM/device/cluster/interface/disk values as the custom-field writes and
-   remain best-effort for older plugin builds.
+   remain best-effort for older plugin builds. Sync reads for VM identity and
+   orphan last-run state go through `services/sync/sync_state_reader.py`:
+   sidecar first, then legacy `cf_*` fallback when the sidecar row or API is
+   absent. Role-ownership snapshots remain legacy-CF-only because the VM
+   sidecar model has no role ownership field.
 6. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
 7. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
 
@@ -73,6 +77,9 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - When mirroring custom-field state to netbox-proxbox sidecars, keep the
   custom-field write unchanged, gate the sidecar with the same overwrite flag,
   and treat sidecar API 404/501 or transient failures as non-fatal.
+- When reading state that now has a sync-state sidecar, use
+  `sync_state_reader.py` so deleting legacy custom fields does not force VM
+  duplicates. Keep CF fallback until the separate custom-field retirement item.
 - Keep deterministic reconciliation logic in `services/sync/reconciliation/`.
   Do not re-grow operation-queue diffing inside VM route modules.
 - For new runtime tunables, prefer a `ProxboxPluginSettings` field on the

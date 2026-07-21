@@ -32,6 +32,7 @@ from proxbox_api.services.sync.discovery_tags import (
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.vm_helpers import (
@@ -40,8 +41,12 @@ from proxbox_api.services.sync.vm_helpers import (
     normalize_current_virtual_machine_payload,
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
+    to_mapping,
 )
-from proxbox_api.services.sync.vmid_helpers import extract_proxmox_session_endpoint_id
+from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_endpoint_id,
+    extract_proxmox_session_endpoint_id,
+)
 
 
 def _mb_from_bytes(value: object) -> int:
@@ -112,21 +117,18 @@ async def _apply_name_collision_resolution(
         "/api/virtualization/virtual-machines/",
         query={"cluster_id": cluster_id, "limit": 0},
     )
-    used_names_in_cluster: set[str] = set()
-    existing_vm_by_vmid: dict[int, dict] = {}
-    for vm in cluster_vms or []:
-        vm_dict = vm if isinstance(vm, dict) else getattr(vm, "__dict__", {})
-        vm_name = vm_dict.get("name") if isinstance(vm_dict, dict) else None
-        if isinstance(vm_name, str) and vm_name:
-            used_names_in_cluster.add(vm_name)
-        cf = vm_dict.get("custom_fields") if isinstance(vm_dict, dict) else None
-        if isinstance(cf, dict):
-            try:
-                raw_vmid = int(str(cf.get("proxmox_vm_id") or 0).strip())
-            except (TypeError, ValueError):
-                raw_vmid = 0
-            if raw_vmid:
-                existing_vm_by_vmid[raw_vmid] = vm_dict
+    used_names_in_cluster, existing_vm_by_vmid = _build_cluster_vm_name_state(cluster_vms)
+
+    sidecar_existing = await _resolve_sidecar_existing_vm_for_name_collision(
+        nb,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        vmid=vmid,
+        netbox_vm_payload=netbox_vm_payload,
+    )
+    if sidecar_existing:
+        existing_vm_by_vmid[vmid] = sidecar_existing
+
     if existing_vm_by_vmid.get(vmid):
         current_name = existing_vm_by_vmid[vmid].get("name")
         if isinstance(current_name, str):
@@ -157,6 +159,66 @@ async def _apply_name_collision_resolution(
         netbox_vm_payload["name"] = resolution.resolved_name
 
 
+def _build_cluster_vm_name_state(
+    cluster_vms: object,
+) -> tuple[set[str], dict[int, dict[str, object]]]:
+    used_names_in_cluster: set[str] = set()
+    existing_vm_by_vmid: dict[int, dict[str, object]] = {}
+    for vm in cluster_vms or []:
+        vm_dict = to_mapping(vm)
+        vm_name = vm_dict.get("name")
+        if isinstance(vm_name, str) and vm_name:
+            used_names_in_cluster.add(vm_name)
+        cf = vm_dict.get("custom_fields")
+        if not isinstance(cf, dict):
+            continue
+        try:
+            raw_vmid = int(str(cf.get("proxmox_vm_id") or 0).strip())
+        except (TypeError, ValueError):
+            raw_vmid = 0
+        if raw_vmid:
+            existing_vm_by_vmid[raw_vmid] = vm_dict
+    return used_names_in_cluster, existing_vm_by_vmid
+
+
+async def _resolve_sidecar_existing_vm_for_name_collision(
+    nb: object,
+    *,
+    cluster_id: int,
+    cluster_name: str,
+    vmid: int,
+    netbox_vm_payload: dict,
+) -> dict[str, object] | None:
+    endpoint_id = extract_proxmox_endpoint_id(netbox_vm_payload)
+    vm_query: dict[str, object] = {"cf_proxmox_vm_id": vmid}
+    if endpoint_id is not None:
+        vm_query["cf_proxmox_endpoint_id"] = endpoint_id
+    else:
+        vm_query["cluster_id"] = cluster_id
+    try:
+        existing_resolution = await resolve_virtual_machine_by_sync_state(
+            nb,
+            proxmox_vm_id=vmid,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id if endpoint_id is None else None,
+            fallback_query=vm_query,
+        )
+    except Exception as exc:  # noqa: BLE001 - collision handling can fall back to CF snapshot
+        logger.debug(
+            "Sidecar VM lookup for individual name collision failed: "
+            "cluster=%s vmid=%s endpoint_id=%s error=%s",
+            cluster_name,
+            vmid,
+            endpoint_id,
+            exc,
+        )
+        return None
+    if existing_resolution is None:
+        return None
+    resolved_existing = to_mapping(existing_resolution.record)
+    return resolved_existing or None
+
+
 async def _lookup_existing_vm_for_dry_run(
     nb: object,
     *,
@@ -171,22 +233,14 @@ async def _lookup_existing_vm_for_dry_run(
         vm_query["cf_proxmox_endpoint_id"] = endpoint_id
     elif cluster_id is not None:
         vm_query["cluster_id"] = cluster_id
-    existing = await rest_list_async(
+    existing = await resolve_virtual_machine_by_sync_state(
         nb,
-        "/api/virtualization/virtual-machines/",
-        query=vm_query,
+        proxmox_vm_id=vmid,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+        fallback_query=vm_query,
     )
-    if cluster_id is None and len(existing) > 1:
-        logger.warning(
-            "ambiguous vmid across endpoints/clusters: dry-run cluster=%s vmid=%s matched %s NetBox VMs",
-            cluster_name,
-            vmid,
-            len(existing),
-        )
-        return None
-    if existing:
-        return existing[0]
-    return None
+    return existing.record if existing is not None else None
 
 
 def _build_netbox_vm_payload(
@@ -400,19 +454,24 @@ async def sync_vm_individual(
         px_url = f"https://{px_domain}:{px_port}" if px_domain else None
 
         clear_rest_get_cache_for_path(nb, "/api/virtualization/virtual-machines/")
-        existing_vms = await rest_list_async(
+        vm_lookup = {
+            key: value
+            for key, value in {
+                "cf_proxmox_vm_id": vmid,
+                "cf_proxmox_endpoint_id": endpoint_id,
+                "cluster_id": cluster_id if endpoint_id is None else None,
+            }.items()
+            if value is not None
+        }
+        existing_resolution = await resolve_virtual_machine_by_sync_state(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={
-                key: value
-                for key, value in {
-                    "cf_proxmox_vm_id": vmid,
-                    "cf_proxmox_endpoint_id": endpoint_id,
-                    "cluster_id": cluster_id if endpoint_id is None else None,
-                }.items()
-                if value is not None
-            },
+            proxmox_vm_id=vmid,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id,
+            fallback_query=vm_lookup,
+            fail_on_ambiguous=True,
         )
+        existing_vms = [existing_resolution.record] if existing_resolution is not None else []
 
         # Merge proxbox tag with any existing user tags so sync never erases them.
         existing_tag_ids: list[int] = []
@@ -471,15 +530,7 @@ async def sync_vm_individual(
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            lookup={
-                key: value
-                for key, value in {
-                    "cf_proxmox_vm_id": vmid,
-                    "cf_proxmox_endpoint_id": endpoint_id,
-                    "cluster_id": cluster_id if endpoint_id is None else None,
-                }.items()
-                if value is not None
-            },
+            lookup=vm_lookup,
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=frozenset(
@@ -493,6 +544,9 @@ async def sync_vm_individual(
                 supports_virtual_machine_type_field=supports_vm_type,
             ),
             strict_lookup=True,
+            existing_record=(
+                existing_resolution.record if existing_resolution is not None else None
+            ),
         )
 
         virtual_machine_id = (

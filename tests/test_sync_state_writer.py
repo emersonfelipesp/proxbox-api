@@ -281,8 +281,10 @@ async def test_each_sidecar_writer_posts_expected_contract(
 @pytest.mark.parametrize(
     "error",
     [
-        ProxboxException(message="Not found", detail="HTTP 404"),
-        ProxboxException(message="Not implemented", detail="HTTP 501"),
+        ProxboxException(message="Not found", detail="Not found.", http_status_code=404),
+        ProxboxException(
+            message="Not implemented", detail="Not implemented.", http_status_code=501
+        ),
     ],
 )
 async def test_sidecar_writer_skips_older_plugin_without_failing(
@@ -321,7 +323,9 @@ async def test_sidecar_writer_skips_older_plugin_without_failing(
 async def test_sidecar_unavailable_memo_is_cleared_between_sync_runs(
     recorder: _Recorder,
 ) -> None:
-    recorder.first_error = ProxboxException(message="Not found", detail="HTTP 404")
+    recorder.first_error = ProxboxException(
+        message="Not found", detail="Not found.", http_status_code=404
+    )
 
     first_result = await writer.write_cluster_sync_state(
         object(),
@@ -433,6 +437,9 @@ async def test_create_or_update_vm_writes_sidecar_from_live_payload_without_reco
     async def _fake_cloudinit(*_args, **_kwargs) -> None:
         return None
 
+    async def _fake_sync_state_resolver(*_args, **_kwargs):
+        return None
+
     async def _fake_sidecar(_nb: object, **kwargs) -> None:
         captured.update(kwargs)
 
@@ -441,6 +448,10 @@ async def test_create_or_update_vm_writes_sidecar_from_live_payload_without_reco
     )
     monkeypatch.setattr("proxbox_api.services.sync.vm_create.rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr("proxbox_api.services.sync.vm_create.sync_vm_cloudinit", _fake_cloudinit)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.resolve_virtual_machine_by_sync_state",
+        _fake_sync_state_resolver,
+    )
     monkeypatch.setattr(
         "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
         _fake_sidecar,

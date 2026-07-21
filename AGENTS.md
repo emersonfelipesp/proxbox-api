@@ -99,6 +99,13 @@ device/cluster timestamps, VM-interface bridge FKs, and virtual-disk storage
 FKs must be built from the same live payloads already used for custom-field
 writes. Keep these sidecar writes best-effort: 404/501 from older plugin builds
 and transient NetBox errors are logged and skipped without aborting sync.
+Sync reads that historically depended on Proxbox custom fields must resolve via
+`proxbox_api/services/sync/sync_state_reader.py` first, then fall back to the
+legacy `cf_*` query when no sidecar row exists or the plugin sidecar API is
+unavailable. This includes VM identity lookup and orphan-sweep last-run checks.
+Role-ownership snapshots remain legacy-CF-only because the VM sidecar model has
+no role ownership field. Complete custom-field retirement is a separate
+follow-up; do not remove legacy CF fallback in this item.
 
 ## CI/CD Workflows
 

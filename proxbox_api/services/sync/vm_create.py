@@ -32,6 +32,7 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
+from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
 from proxbox_api.services.sync.vm_helpers import (
@@ -309,18 +310,28 @@ async def create_or_update_virtual_machine(
         endpoint_id=endpoint_id,
     )
 
+    vm_lookup = {
+        key: value
+        for key, value in {
+            "cf_proxmox_vm_id": vmid_int,
+            "cf_proxmox_endpoint_id": endpoint_lookup_id,
+            "cluster_id": cluster_id if endpoint_lookup_id is None else None,
+        }.items()
+        if value is not None
+    }
+    existing_resolution = await resolve_virtual_machine_by_sync_state(
+        netbox_session,
+        proxmox_vm_id=vmid_int,
+        endpoint_id=endpoint_lookup_id,
+        cluster_id=cluster_id,
+        fallback_query=vm_lookup,
+        fail_on_ambiguous=True,
+    )
+
     virtual_machine = await rest_reconcile_async(
         netbox_session,
         "/api/virtualization/virtual-machines/",
-        lookup={
-            key: value
-            for key, value in {
-                "cf_proxmox_vm_id": vmid_int,
-                "cf_proxmox_endpoint_id": endpoint_lookup_id,
-                "cluster_id": cluster_id if endpoint_lookup_id is None else None,
-            }.items()
-            if value is not None
-        },
+        lookup=vm_lookup,
         payload=payload,
         schema=NetBoxVirtualMachineCreateBody,
         patchable_fields=frozenset(
@@ -334,6 +345,7 @@ async def create_or_update_virtual_machine(
             supports_virtual_machine_type_field=supports_vm_type,
         ),
         strict_lookup=True,
+        existing_record=existing_resolution.record if existing_resolution is not None else None,
     )
 
     logger.debug("Created/updated virtual machine: %s", virtual_machine)

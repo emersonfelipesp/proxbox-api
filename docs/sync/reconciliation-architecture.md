@@ -43,7 +43,8 @@ For each VM candidate, sync prepares an in-memory state object containing:
 - Proxmox VM resource record
 - Proxmox VM config
 - Normalized desired NetBox VM payload
-- NetBox lookup keys (cluster + `cf_proxmox_vm_id`)
+- NetBox lookup keys (`cf_proxmox_vm_id` plus endpoint when available, with
+  cluster as the legacy fallback scope)
 
 Preparation runs with bounded concurrency using `asyncio.gather` + semaphore.
 
@@ -54,6 +55,12 @@ The sync reads all NetBox VMs in paginated batches (`limit/offset`) and builds a
 - `(cluster_id, proxmox_vm_id, proxmox_vm_type)`
 
 This avoids repeated NetBox list/filter calls during per-VM comparison.
+When the snapshot lacks Proxbox custom fields, dispatch performs a sidecar-first
+identity read through `/api/plugins/proxbox/sync-state/virtual-machines/` before
+creating a VM. A sidecar match is reconciled as the existing NetBox VM, so
+custom-field deletion does not produce duplicates. If no sidecar row exists or
+the plugin API is unavailable, dispatch falls back to the legacy `cf_*` lookup
+and finally creates only when both sources are absent.
 The VM type segment prevents QEMU VM 100 and LXC CT 100 in the same cluster from colliding.
 Legacy records that do not yet have `custom_fields.proxmox_vm_type` are matched only when the
 `(cluster_id, proxmox_vm_id)` identity is unambiguous.

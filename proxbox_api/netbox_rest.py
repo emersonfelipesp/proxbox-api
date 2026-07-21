@@ -635,12 +635,12 @@ def _extract_payload(response: ApiResponse) -> object:
                     parts.append(str(item))
             if parts:
                 detail = "; ".join(parts)
-        # Preserve a real upstream server failure (NetBox 5xx) instead of
-        # letting it collapse to the ProxboxException class default 400. A
-        # gateway must not mask an upstream 502/503 as a client 400; callers
-        # (e.g. proxbox_tag) can then surface the true status. Client-side 4xx
-        # keep the default so existing validation/duplicate flows are unchanged.
-        upstream_status = response.status if response.status >= 500 else None
+        # Preserve real upstream server failures and the optional sidecar
+        # route-absent statuses. Other client-side 4xx keep the default so
+        # existing validation/duplicate flows are unchanged.
+        upstream_status = (
+            response.status if response.status >= 500 or response.status in {404, 501} else None
+        )
         raise ProxboxException(
             message="NetBox REST request failed",
             detail=detail,

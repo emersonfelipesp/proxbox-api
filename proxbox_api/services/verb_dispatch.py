@@ -27,8 +27,11 @@ from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import NetBoxAPIError, ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_create_async, rest_first_async
+from proxbox_api.netbox_rest import rest_create_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
+from proxbox_api.services.sync.sync_state_reader import (
+    resolve_virtual_machine_by_sync_state,
+)
 from proxbox_api.utils.log_scrubbing import scrub_cloud_init
 
 Verb = Literal[
@@ -91,35 +94,72 @@ async def resolve_proxmox_node(
     )
 
 
-async def resolve_netbox_vm_id(nb: object, vmid: int) -> int | None:
-    """Return the NetBox ``VirtualMachine.id`` linked to a Proxmox ``vmid``.
+async def resolve_netbox_vm_id(
+    nb: object,
+    vmid: int,
+    *,
+    endpoint_id: int | None = None,
+    cluster_id: int | None = None,
+    fail_closed: bool = False,
+) -> int | None:
+    """Return the scoped NetBox ``VirtualMachine.id`` linked to a Proxmox VMID.
 
-    Returns ``None`` if no NetBox VM carries the matching
-    ``proxmox_vm_id`` custom field. The verb route still proceeds — the
-    journal entry simply cannot be anchored — and surfaces this case in
-    the response so the operator can investigate.
+    ``endpoint_id`` is the proxbox-api ``ProxmoxEndpoint`` id mirrored into
+    VM sync-state sidecars and legacy custom fields. When ``fail_closed`` is
+    true, ambiguous, unverifiable, or absent identities raise before the caller
+    can dispatch a Proxmox write that cannot be durably journaled.
     """
     try:
-        record = await rest_first_async(
+        resolution = await resolve_virtual_machine_by_sync_state(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid, "limit": 2},
+            proxmox_vm_id=vmid,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id,
+            fail_on_ambiguous=fail_closed,
         )
-    except ProxboxException:
+    except ProxboxException as error:
+        if fail_closed:
+            raise ProxboxException(
+                message="Refusing to dispatch operational verb without a verifiable NetBox VM audit target.",
+                detail={
+                    "reason": "netbox_vm_identity_unverifiable_for_audit",
+                    "vmid": vmid,
+                    "endpoint_id": endpoint_id,
+                    "cluster_id": cluster_id,
+                    "resolver_detail": error.detail or error.message,
+                },
+                http_status_code=status.HTTP_409_CONFLICT,
+            ) from error
         raise
     except Exception as error:  # noqa: BLE001
         logger.warning("Failed to resolve NetBox VM for vmid=%s: %s", vmid, error)
+        if fail_closed:
+            raise ProxboxException(
+                message="Refusing to dispatch operational verb without a verifiable NetBox VM audit target.",
+                detail={
+                    "reason": "netbox_vm_identity_unverifiable_for_audit",
+                    "vmid": vmid,
+                    "endpoint_id": endpoint_id,
+                    "cluster_id": cluster_id,
+                },
+                http_status_code=status.HTTP_409_CONFLICT,
+            ) from error
         return None
 
-    if record is None:
+    if resolution is None:
+        if fail_closed:
+            raise ProxboxException(
+                message="Refusing to dispatch operational verb without a NetBox VM audit target.",
+                detail={
+                    "reason": "netbox_vm_identity_required_for_audit",
+                    "vmid": vmid,
+                    "endpoint_id": endpoint_id,
+                    "cluster_id": cluster_id,
+                },
+                http_status_code=status.HTTP_409_CONFLICT,
+            )
         return None
-    netbox_id = record.get("id") if isinstance(record, dict) else None
-    if netbox_id is None and hasattr(record, "__getitem__"):
-        try:
-            netbox_id = record["id"]
-        except (KeyError, TypeError):
-            netbox_id = None
-    return int(netbox_id) if netbox_id is not None else None
+    return resolution.record_id
 
 
 def build_journal_comments(

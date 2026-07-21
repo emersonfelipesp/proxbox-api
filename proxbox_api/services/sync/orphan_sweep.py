@@ -10,6 +10,11 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_bulk_delete_async, rest_list_paginated_async
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
+from proxbox_api.services.sync.sync_state_reader import (
+    SidecarVMOrphanScan,
+    resolve_vm_last_run_id,
+    scan_vm_sidecar_orphan_candidates,
+)
 from proxbox_api.services.sync.vm_helpers import LAST_RUN_ID_CUSTOM_FIELD
 
 VIRTUAL_MACHINES_PATH = "/api/virtualization/virtual-machines/"
@@ -91,21 +96,74 @@ def extract_touched_vm_ids(value: object) -> set[int]:
     return touched
 
 
-async def find_orphan_vms(
-    nb: object,
-    run_id: str,
-    *,
-    vm_slugs: Iterable[str] = VM_DISCOVERY_TAG_SLUGS,
-) -> list[dict[str, object]]:
-    """Find Proxbox-discovered VMs not touched by the current run."""
-    if not run_id:
-        raise ValueError("run_id is required for orphan VM discovery")
+def _normalized_vm_slugs(vm_slugs: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(str(slug) for slug in vm_slugs if str(slug).strip()))
 
-    candidates_by_id: dict[int, dict[str, object]] = {}
+
+async def _add_sidecar_orphan_candidates(
+    nb: object,
+    *,
+    run_id: str,
+    vm_slugs: tuple[str, ...],
+    candidates_by_id: dict[int, dict[str, object]],
+) -> SidecarVMOrphanScan:
+    scan = await scan_vm_sidecar_orphan_candidates(
+        nb,
+        run_id=run_id,
+        vm_slugs=vm_slugs,
+    )
+    if scan is None:
+        return SidecarVMOrphanScan(
+            stale_candidates=[],
+            current_vm_ids=set(),
+            sidecar_unavailable=True,
+        )
+    if scan.sidecar_read_failed:
+        logger.warning(
+            "Skipping orphan VM legacy custom-field sweep for run_id=%s because "
+            "the VM sidecar scan failed transiently; refusing to delete VMs whose "
+            "current sidecar state cannot be verified",
+            run_id,
+        )
+        return scan
+    for candidate in scan.stale_candidates:
+        record_id = _coerce_int(candidate.get("id"))
+        if record_id is not None:
+            candidates_by_id.setdefault(record_id, candidate)
+    return scan
+
+
+async def _sidecar_marks_current_run(
+    nb: object,
+    *,
+    candidate: dict[str, object],
+    run_id: str,
+    current_sidecar_vm_ids: set[int] | None,
+) -> bool:
+    if current_sidecar_vm_ids is None:
+        return False
+    candidate_id = _coerce_int(candidate.get("id"))
+    if candidate_id is not None and candidate_id in current_sidecar_vm_ids:
+        return True
+    last_run_id = await resolve_vm_last_run_id(
+        nb,
+        vm_record=candidate,
+        custom_field_name=LAST_RUN_ID_CUSTOM_FIELD,
+    )
+    return last_run_id == run_id
+
+
+async def _add_legacy_orphan_candidates(
+    nb: object,
+    *,
+    run_id: str,
+    vm_slugs: tuple[str, ...],
+    current_sidecar_vm_ids: set[int] | None,
+    candidates_by_id: dict[int, dict[str, object]],
+) -> None:
     run_filter = f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie"
     empty_filter = f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__empty"
-
-    for slug in dict.fromkeys(str(slug) for slug in vm_slugs if str(slug).strip()):
+    for slug in vm_slugs:
         queries: tuple[dict[str, object], dict[str, object]] = (
             {"tag": slug, run_filter: run_id},
             {"tag": slug, empty_filter: True},
@@ -124,7 +182,48 @@ async def find_orphan_vms(
                 record_id = _coerce_int(data.get("id"))
                 if record_id is None:
                     continue
+                if current_sidecar_vm_ids is not None and record_id in current_sidecar_vm_ids:
+                    continue
+                if await _sidecar_marks_current_run(
+                    nb,
+                    candidate=data,
+                    run_id=run_id,
+                    current_sidecar_vm_ids=current_sidecar_vm_ids,
+                ):
+                    continue
                 candidates_by_id.setdefault(record_id, data)
+
+
+async def find_orphan_vms(
+    nb: object,
+    run_id: str,
+    *,
+    vm_slugs: Iterable[str] = VM_DISCOVERY_TAG_SLUGS,
+) -> list[dict[str, object]]:
+    """Find Proxbox-discovered VMs not touched by the current run."""
+    if not run_id:
+        raise ValueError("run_id is required for orphan VM discovery")
+
+    candidates_by_id: dict[int, dict[str, object]] = {}
+    normalized_slugs = _normalized_vm_slugs(vm_slugs)
+    sidecar_scan = await _add_sidecar_orphan_candidates(
+        nb,
+        run_id=run_id,
+        vm_slugs=normalized_slugs,
+        candidates_by_id=candidates_by_id,
+    )
+    if sidecar_scan.sidecar_read_failed:
+        return list(candidates_by_id.values())
+    current_sidecar_vm_ids = (
+        None if sidecar_scan.sidecar_unavailable else sidecar_scan.current_vm_ids
+    )
+    await _add_legacy_orphan_candidates(
+        nb,
+        run_id=run_id,
+        vm_slugs=normalized_slugs,
+        current_sidecar_vm_ids=current_sidecar_vm_ids,
+        candidates_by_id=candidates_by_id,
+    )
 
     return list(candidates_by_id.values())
 

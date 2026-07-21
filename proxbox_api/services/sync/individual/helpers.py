@@ -5,6 +5,10 @@ from __future__ import annotations
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
+from proxbox_api.services.sync.sync_state_reader import (
+    resolve_unique_virtual_machine_by_sync_state,
+    resolve_virtual_machine_by_sync_state,
+)
 from proxbox_api.services.sync.vm_helpers import (
     build_guest_mac_index,
     iter_proxmox_net_config_items,
@@ -267,6 +271,19 @@ async def _lookup_unique_vm_by_vmid(
     cluster_name: str,
 ) -> tuple[object | None, bool]:
     """Return a vmid-only match only when it is globally unambiguous."""
+    sidecar_match, sidecar_ambiguous = await resolve_unique_virtual_machine_by_sync_state(
+        nb,
+        proxmox_vm_id=vmid,
+    )
+    if sidecar_match is not None:
+        return sidecar_match.record, False
+    if sidecar_ambiguous:
+        logger.warning(
+            "ambiguous vmid across clusters: cluster=%s vmid=%s matched multiple sidecar VMs",
+            cluster_name or "unknown",
+            vmid,
+        )
+        return None, True
     existing_vms = await rest_list_async(
         nb,
         "/api/virtualization/virtual-machines/",
@@ -295,22 +312,24 @@ async def _lookup_vm_by_scope_or_unique_vmid(
 ) -> tuple[object | None, bool]:
     """Resolve by scoped VMID when possible, otherwise by unique vmid-only fallback."""
     if endpoint_id is not None:
-        existing_vms = await rest_list_async(
+        existing = await resolve_virtual_machine_by_sync_state(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": endpoint_id},
+            proxmox_vm_id=vmid,
+            endpoint_id=endpoint_id,
+            fallback_query={"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": endpoint_id},
         )
-        if existing_vms:
-            return existing_vms[0], False
+        if existing is not None:
+            return existing.record, False
         return None, False
     if cluster_id is not None:
-        existing_vms = await rest_list_async(
+        existing = await resolve_virtual_machine_by_sync_state(
             nb,
-            "/api/virtualization/virtual-machines/",
-            query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
+            proxmox_vm_id=vmid,
+            cluster_id=cluster_id,
+            fallback_query={"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id},
         )
-        if existing_vms:
-            return existing_vms[0], False
+        if existing is not None:
+            return existing.record, False
         return None, False
     return await _lookup_unique_vm_by_vmid(nb, vmid=vmid, cluster_name=cluster_name)
 

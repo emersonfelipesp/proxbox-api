@@ -14,6 +14,7 @@ from typing import Literal
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async
+from proxbox_api.services.sync.sync_state_reader import resolve_vm_last_synced_role_id
 from proxbox_api.services.sync.vm_helpers import relation_id as _relation_id
 from proxbox_api.settings_client import get_settings
 
@@ -210,3 +211,12 @@ def extract_snapshot_id(record: dict[str, object] | None) -> int | None:
     if not isinstance(custom_fields, dict):
         return None
     return _coerce_int(custom_fields.get(LAST_SYNCED_ROLE_CUSTOM_FIELD))
+
+
+async def resolve_snapshot_id(nb: object, record: dict[str, object] | None) -> int | None:
+    """Resolve the role snapshot id from the legacy VM custom field."""
+    return await resolve_vm_last_synced_role_id(
+        nb,
+        vm_record=record,
+        custom_field_name=LAST_SYNCED_ROLE_CUSTOM_FIELD,
+    )

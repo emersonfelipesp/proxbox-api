@@ -19,6 +19,7 @@ VIRTUAL_DISK_SYNC_STATE_PATH = "/api/plugins/proxbox/sync-state/virtual-disks/"
 VM_INTERFACE_SYNC_STATE_PATH = "/api/plugins/proxbox/sync-state/vm-interfaces/"
 
 _UNAVAILABLE_SIDECAR_PATHS: set[str] = set()
+_SIDECAR_ABSENT_STATUSES = frozenset({404, 501})
 
 
 def _int_record_id(value: object) -> int | None:
@@ -110,6 +111,13 @@ def _without_none(payload: dict[str, object]) -> dict[str, object]:
 def reset_sidecar_availability_cache() -> None:
     """Clear the current sync-run memo of unavailable optional sidecar routes."""
     _UNAVAILABLE_SIDECAR_PATHS.clear()
+    try:
+        from proxbox_api.services.sync.sync_state_reader import (
+            reset_sidecar_reader_availability_cache,
+        )
+    except ImportError:
+        return
+    reset_sidecar_reader_availability_cache()
 
 
 def _record_to_dict(value: object) -> dict[str, object] | None:
@@ -137,29 +145,25 @@ def _record_to_dict(value: object) -> dict[str, object] | None:
     return None
 
 
+def _http_status_candidates(value: object) -> set[int]:
+    if value is None:
+        return set()
+    if isinstance(value, bool):
+        return set()
+    if isinstance(value, int):
+        return {value}
+    return set()
+
+
 def _is_sidecar_unavailable(error: Exception) -> bool:
-    detail = getattr(error, "detail", None)
-    message = getattr(error, "message", None)
-    status = (
-        getattr(error, "status", None)
-        or getattr(error, "status_code", None)
-        or getattr(error, "http_status_code", None)
-    )
-    text = " ".join(str(part) for part in (status, detail, message, error) if part).lower()
-    return any(
-        marker in text
-        for marker in (
-            "404",
-            "501",
-            "not found",
-            "not_found",
-            "not implemented",
-            "not_implemented",
-            "unavailable",
-            "unknown endpoint",
-            "invalid endpoint",
-        )
-    )
+    statuses: set[int] = set()
+    for value in (
+        getattr(error, "status", None),
+        getattr(error, "status_code", None),
+        getattr(error, "http_status_code", None),
+    ):
+        statuses.update(_http_status_candidates(value))
+    return bool(statuses & _SIDECAR_ABSENT_STATUSES)
 
 
 def _is_sidecar_duplicate_conflict(error: Exception) -> bool:

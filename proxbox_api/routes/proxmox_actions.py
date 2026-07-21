@@ -91,6 +91,19 @@ Verb = Literal[
 
 LIFECYCLE_WRITES_DISABLED_REASON = "writes_disabled_for_endpoint"
 
+AUDIT_REQUIRED_VERBS: frozenset[Verb] = frozenset(
+    (
+        "start",
+        "stop",
+        "snapshot",
+        "migrate",
+        "reboot",
+        "delete",
+        "backup",
+        "delete_snapshot",
+    )
+)
+
 
 async def _gate(
     session: SessionDep,
@@ -137,6 +150,52 @@ async def _gate(
         )
 
     return endpoint
+
+
+async def _resolve_audit_target_or_error(
+    *,
+    nb: object,
+    endpoint: ProxmoxEndpoint,
+    vmid: int,
+    verb: Verb,
+) -> int | JSONResponse | None:
+    """Resolve the NetBox VM journal target before dispatching Proxmox writes."""
+    endpoint_id = endpoint.id
+    fail_closed = verb in AUDIT_REQUIRED_VERBS
+    try:
+        netbox_vm_id = await resolve_netbox_vm_id(
+            nb,
+            vmid,
+            endpoint_id=endpoint_id,
+            fail_closed=fail_closed,
+        )
+    except ProxboxException as error:
+        detail = error.detail if error.detail is not None else str(error)
+        return JSONResponse(
+            status_code=error.http_status_code,
+            content={
+                "reason": "netbox_vm_identity_required_for_audit",
+                "detail": detail,
+                "verb": verb,
+                "vmid": vmid,
+                "endpoint_id": endpoint_id,
+            },
+        )
+    if fail_closed and netbox_vm_id is None:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "reason": "netbox_vm_identity_required_for_audit",
+                "detail": (
+                    "Refusing to dispatch operational verb without a durable "
+                    "NetBox VM audit journal target."
+                ),
+                "verb": verb,
+                "vmid": vmid,
+                "endpoint_id": endpoint_id,
+            },
+        )
+    return netbox_vm_id
 
 
 async def _open_proxmox_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
@@ -244,7 +303,12 @@ async def _dispatch_start(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="start"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     # State-based no-op pre-flight (§4.2). Reached before any cache write.
@@ -377,7 +441,12 @@ async def _dispatch_stop(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="stop"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     try:
@@ -508,7 +577,12 @@ async def _dispatch_reboot(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="reboot"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     try:
@@ -635,7 +709,12 @@ async def _dispatch_delete(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="delete"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     try:
@@ -807,7 +886,12 @@ async def _dispatch_snapshot(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="snapshot"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     effective_snapname = snapname or _default_snapname(idempotency_key)
@@ -915,7 +999,12 @@ async def _dispatch_backup(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="backup"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     try:
@@ -1026,7 +1115,12 @@ async def _dispatch_delete_snapshot(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="delete_snapshot"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     try:
@@ -1175,7 +1269,12 @@ async def _dispatch_migrate(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb, endpoint=endpoint, vmid=vmid, verb="migrate"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     # §9 preflight: GET nodes/{node}/{vm_type}/{vmid}/migrate, then
@@ -1725,7 +1824,12 @@ async def _handle_migrate_cancel(
         return node_or_error
     node: str = node_or_error
 
-    netbox_vm_id = await resolve_netbox_vm_id(nb_session, vmid)
+    netbox_vm_id_or_error = await _resolve_audit_target_or_error(
+        nb=nb_session, endpoint=endpoint, vmid=vmid, verb="migrate"
+    )
+    if isinstance(netbox_vm_id_or_error, JSONResponse):
+        return netbox_vm_id_or_error
+    netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
 
     try:

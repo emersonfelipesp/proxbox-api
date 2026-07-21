@@ -264,9 +264,13 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     async def _fake_first(nb, path, query):
         return None
 
+    async def _fake_resolve(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(sync_vm, "rest_create_async", _fake_create)
     monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
     monkeypatch.setattr(sync_vm, "rest_first_async", _fake_first)
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolve)
 
     prepared_create = _prepared_vm(cluster_name="cluster-a", vmid=201, memory=2048)
     prepared_get = _prepared_vm(cluster_name="cluster-a", vmid=202, memory=2048)
@@ -295,6 +299,140 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
     assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
     assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_re_adopts_sidecar_vm_when_custom_fields_absent(monkeypatch):
+    calls: list[str] = []
+
+    async def _unexpected_create(*_args, **_kwargs):
+        raise AssertionError("sidecar-adopted VM must not be created again")
+
+    async def _fake_resolver(*_args, **_kwargs):
+        return type(
+            "Resolution",
+            (),
+            {
+                "record": {
+                    "id": 6101,
+                    "name": "vm-301",
+                    "status": "active",
+                    "cluster": {"id": 1},
+                    "device": {"id": 10},
+                    "role": {"id": 20},
+                    "vcpus": 2,
+                    "memory": 1024,
+                    "disk": 30,
+                    "tags": [{"id": 99}],
+                    "custom_fields": {},
+                    "description": "old",
+                },
+                "record_id": 6101,
+                "source": "sidecar",
+            },
+        )()
+
+    async def _fake_reconcile(*_args, **kwargs):
+        calls.append(kwargs["existing_record"]["id"])
+        return {"id": kwargs["existing_record"]["id"], **kwargs["payload"]}
+
+    monkeypatch.setattr(sync_vm, "rest_create_async", _unexpected_create)
+    monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolver)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
+
+    prepared = _prepared_vm(cluster_name="cluster-a", vmid=301, memory=2048)
+    queue = [sync_vm._NetBoxVMOperation(method="CREATE", prepared=prepared)]
+
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert failed_keys == set()
+    assert calls == [6101]
+    assert resolved[("cluster-a", 301, "qemu")]["id"] == 6101
+    assert resolved[("cluster-a", 301, "qemu")]["memory"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_sidecar_hydration_prevents_name_prepass_rename_for_cf_absent_vm(monkeypatch):
+    prepared = _prepared_vm(cluster_name="cluster-a", vmid=301, memory=2048)
+    snapshot = [
+        {
+            "id": 6101,
+            "name": "vm-301",
+            "cluster": {"id": 1, "name": "cluster-a"},
+            "custom_fields": {},
+        }
+    ]
+
+    async def _fake_resolver(*_args, **kwargs):
+        assert kwargs["proxmox_vm_id"] == 301
+        assert kwargs["endpoint_id"] == 500
+        return type(
+            "Resolution",
+            (),
+            {"record": snapshot[0], "record_id": 6101, "source": "sidecar"},
+        )()
+
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolver)
+
+    hydrated = await sync_vm._hydrate_vm_snapshot_with_sidecar_identity(
+        object(),
+        prepared_vms=[prepared],
+        netbox_snapshot=snapshot,
+    )
+    resolutions = await sync_vm._resolve_vm_names_pre_pass([prepared], snapshot, None)
+
+    assert hydrated == 1
+    assert resolutions == []
+    assert prepared.desired_payload["name"] == "vm-301"
+    assert snapshot[0]["custom_fields"] == {
+        "proxmox_endpoint_id": 500,
+        "proxmox_vm_id": 301,
+        "proxmox_vm_type": "qemu",
+    }
+
+
+@pytest.mark.asyncio
+async def test_sidecar_hydration_makes_reconciliation_queue_adopt_cf_absent_vm(monkeypatch):
+    prepared = _prepared_vm(cluster_name="cluster-a", vmid=302, memory=2048)
+    snapshot = [
+        {
+            "id": 6102,
+            "name": "vm-302",
+            "status": "active",
+            "cluster": {"id": 1, "name": "cluster-a"},
+            "device": {"id": 10},
+            "role": {"id": 20},
+            "vcpus": 2,
+            "memory": 1024,
+            "disk": 30,
+            "tags": [{"id": 99}],
+            "custom_fields": {},
+            "description": "Synced from Proxmox node pve01",
+        }
+    ]
+
+    async def _fake_resolver(*_args, **kwargs):
+        assert kwargs["proxmox_vm_id"] == 302
+        assert kwargs["endpoint_id"] == 500
+        return type(
+            "Resolution",
+            (),
+            {"record": snapshot[0], "record_id": 6102, "source": "sidecar"},
+        )()
+
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolver)
+
+    await sync_vm._hydrate_vm_snapshot_with_sidecar_identity(
+        object(),
+        prepared_vms=[prepared],
+        netbox_snapshot=snapshot,
+    )
+    queue = sync_vm._build_vm_operation_queue([prepared], snapshot)
+
+    assert [op.method for op in queue] == ["UPDATE"]
+    assert queue[0].existing_record and queue[0].existing_record["id"] == 6102
+    assert queue[0].patch_payload["memory"] == 2048
 
 
 @pytest.mark.asyncio
@@ -407,8 +545,12 @@ async def test_dispatch_vm_operation_queue_isolates_failed_operation(monkeypatch
     async def _fake_first(nb, path, query):
         return None
 
+    async def _fake_resolve(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(sync_vm, "rest_create_async", _fake_create)
     monkeypatch.setattr(sync_vm, "rest_first_async", _fake_first)
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolve)
 
     prepared_bad = _prepared_vm(cluster_name="cluster-a", vmid=401, memory=2048)
     prepared_ok = _prepared_vm(cluster_name="cluster-a", vmid=402, memory=2048)

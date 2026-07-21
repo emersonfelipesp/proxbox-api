@@ -76,6 +76,15 @@ VM-interface bridge links, virtual-disk storage links, and VM last-run ids.
 Writes use the existing NetBox session and degrade gracefully when an older
 plugin does not expose the sidecar API.
 
+During the migration window, `proxbox-api` also reads sidecars first for
+custom-field-dependent state. VM identity and orphan-sweep last-run checks use
+the typed sidecar rows before falling back to the legacy `cf_*` filters.
+Role-ownership snapshots remain legacy-CF-only because the VM sidecar model has
+no role ownership field. This lets a normal re-sync re-adopt existing NetBox
+VMs after Proxbox custom fields have been removed, while preserving
+compatibility with older plugin builds. Full custom-field retirement remains a
+later migration item.
+
 ### `NetBoxEndpoint`
 
 - Fields: `name`, `ip_address`, `domain`, `port`, `token_version`, `token_key`, `token`, `verify_ssl`

@@ -113,6 +113,9 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.sync_state_reader import (
+    resolve_virtual_machine_by_sync_state,
+)
 from proxbox_api.services.sync.sync_state_writer import (
     reset_sidecar_availability_cache,
     write_virtual_disk_sync_state,
@@ -449,6 +452,123 @@ async def _load_netbox_virtual_machine_snapshot(
         offset += page_size
 
     return snapshot
+
+
+def _prepared_proxmox_vmid(prepared: _PreparedVMState) -> int | None:
+    vmid = _relation_id(prepared.resource.get("vmid"))
+    return vmid if vmid is not None and vmid > 0 else None
+
+
+def _overlay_sidecar_identity_on_vm_snapshot(
+    record: dict[str, object],
+    *,
+    prepared: _PreparedVMState,
+    proxmox_vmid: int,
+    endpoint_id: int | None,
+) -> None:
+    custom_fields = record.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        merged_custom_fields = dict(custom_fields)
+    else:
+        merged_custom_fields = {}
+
+    merged_custom_fields["proxmox_vm_id"] = proxmox_vmid
+    if endpoint_id is not None:
+        merged_custom_fields["proxmox_endpoint_id"] = endpoint_id
+    vm_type = str(prepared.vm_type or "").strip().lower()
+    if vm_type in {"qemu", "lxc"}:
+        merged_custom_fields["proxmox_vm_type"] = vm_type
+    record["custom_fields"] = merged_custom_fields
+
+
+async def _hydrate_vm_snapshot_with_sidecar_identity(
+    nb: object,
+    *,
+    prepared_vms: list[_PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+) -> int:
+    """Overlay sidecar VM identity onto snapshot records that lack legacy CFs.
+
+    The reconciliation queue is intentionally pure and indexes the loaded VM
+    snapshot. Before building that queue, use the sidecar resolver for prepared
+    VMs that are not already owned by legacy custom fields so sidecar-only rows
+    are adopted instead of treated as name collisions or creates.
+    """
+    if not prepared_vms:
+        return 0
+
+    (
+        endpoint_typed_vm_index,
+        endpoint_untyped_vm_candidates,
+        cluster_typed_vm_index,
+        cluster_untyped_vm_candidates,
+    ) = _build_vm_snapshot_identity_indexes(netbox_snapshot)
+    snapshot_by_id = {
+        record_id: record
+        for record in netbox_snapshot
+        if (record_id := _relation_id(record.get("id"))) is not None
+    }
+    resolved_keys: set[tuple[int | None, int, str]] = set()
+    hydrated = 0
+
+    for prepared in prepared_vms:
+        proxmox_vmid = _prepared_proxmox_vmid(prepared)
+        if proxmox_vmid is None:
+            continue
+        endpoint_id = extract_proxmox_endpoint_id(prepared.desired_payload)
+        cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
+        if (
+            _select_existing_vm_record(
+                prepared=prepared,
+                endpoint_id=endpoint_id,
+                cluster_id=cluster_id,
+                proxmox_vmid=proxmox_vmid,
+                endpoint_typed_index=endpoint_typed_vm_index,
+                endpoint_untyped_candidates=endpoint_untyped_vm_candidates,
+                cluster_typed_index=cluster_typed_vm_index,
+                cluster_untyped_candidates=cluster_untyped_vm_candidates,
+            )
+            is not None
+        ):
+            continue
+
+        vm_type = str(prepared.vm_type or "").strip().lower()
+        resolver_key = (endpoint_id, proxmox_vmid, vm_type)
+        if resolver_key in resolved_keys:
+            continue
+        resolved_keys.add(resolver_key)
+
+        resolution = await resolve_virtual_machine_by_sync_state(
+            nb,
+            proxmox_vm_id=proxmox_vmid,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id,
+            fallback_query=prepared.lookup,
+        )
+        if resolution is None or resolution.source != "sidecar":
+            continue
+
+        record = snapshot_by_id.get(resolution.record_id)
+        if record is None:
+            record = _to_mapping(resolution.record)
+            if not record:
+                continue
+            netbox_snapshot.append(record)
+            snapshot_by_id[resolution.record_id] = record
+        _overlay_sidecar_identity_on_vm_snapshot(
+            record,
+            prepared=prepared,
+            proxmox_vmid=proxmox_vmid,
+            endpoint_id=endpoint_id,
+        )
+        hydrated += 1
+
+    if hydrated:
+        logger.info(
+            "Hydrated %d VM snapshot records from Proxbox sync-state sidecar identity",
+            hydrated,
+        )
+    return hydrated
 
 
 def _build_vm_index_by_proxmox_id(
@@ -863,6 +983,32 @@ async def _dispatch_vm_operation_queue(
                     return
 
                 if operation.method == "CREATE":
+                    existing_resolution = await resolve_virtual_machine_by_sync_state(
+                        nb,
+                        proxmox_vm_id=vmid,
+                        endpoint_id=extract_proxmox_endpoint_id(operation.prepared.desired_payload),
+                        cluster_id=_relation_id(operation.prepared.desired_payload.get("cluster")),
+                        fallback_query=operation.prepared.lookup,
+                        fail_on_ambiguous=True,
+                    )
+                    if existing_resolution is not None:
+                        reconciled = await rest_reconcile_async(
+                            nb,
+                            "/api/virtualization/virtual-machines/",
+                            lookup=operation.prepared.lookup,
+                            payload=operation.prepared.desired_payload,
+                            schema=NetBoxVirtualMachineCreateBody,
+                            current_normalizer=lambda record: (
+                                _normalize_current_virtual_machine_payload(
+                                    record,
+                                    supports_virtual_machine_type_field=True,
+                                )
+                            ),
+                            strict_lookup=True,
+                            existing_record=existing_resolution.record,
+                        )
+                        resolved_records[key] = _to_mapping(reconciled)
+                        return
                     try:
                         created = await rest_create_async(
                             nb,
@@ -1194,10 +1340,12 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
         )
 
     try:
-        virtual_machines = await rest_list_async(
+        resolution = await resolve_virtual_machine_by_sync_state(
             netbox_session,
-            "/api/virtualization/virtual-machines/",
-            query=query,
+            proxmox_vm_id=vmid,
+            endpoint_id=resolved_endpoint_id,
+            cluster_id=resolved_cluster_id,
+            fallback_query=query,
         )
     except Exception as exc:
         error_detail = getattr(exc, "detail", str(exc))
@@ -1211,18 +1359,10 @@ async def _resolve_netbox_virtual_machine_by_proxmox_id(
         )
         return None
 
-    if not virtual_machines:
+    if resolution is None:
         return None
 
-    if resolved_endpoint_id is None and resolved_cluster_id is None and len(virtual_machines) > 1:
-        logger.warning(
-            "ambiguous vmid across endpoints/clusters: proxmox_vm_id=%s matched %s NetBox VMs",
-            proxmox_vm_id,
-            len(virtual_machines),
-        )
-        return None
-
-    virtual_machine = virtual_machines[0]
+    virtual_machine = resolution.record
     if isinstance(virtual_machine, dict):
         return virtual_machine
     if hasattr(virtual_machine, "dict"):
@@ -2305,6 +2445,11 @@ async def create_virtual_machines(  # noqa: C901
             return [], failed_vms
 
         netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb, fresh=True)
+        await _hydrate_vm_snapshot_with_sidecar_identity(
+            nb,
+            prepared_vms=prepared_vms,
+            netbox_snapshot=netbox_snapshot,
+        )
         await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
         reconciliation_t0 = time.perf_counter()
         operation_queue = _build_vm_operation_queue(
@@ -2629,14 +2774,23 @@ async def create_virtual_machines(  # noqa: C901
                 item={"name": vm_name},
             )
 
+        vm_lookup = _vm_identity_lookup(
+            vmid=resource.get("vmid"),
+            endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
+            cluster_id=int(getattr(cluster, "id", 0) or 0) or None,
+        )
+        existing_resolution = await resolve_virtual_machine_by_sync_state(
+            nb,
+            proxmox_vm_id=resource.get("vmid"),
+            endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
+            cluster_id=int(getattr(cluster, "id", 0) or 0) or None,
+            fallback_query=vm_lookup,
+            fail_on_ambiguous=True,
+        )
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
-            lookup=_vm_identity_lookup(
-                vmid=resource.get("vmid"),
-                endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
-                cluster_id=int(getattr(cluster, "id", 0) or 0) or None,
-            ),
+            lookup=vm_lookup,
             payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=vm_patchable_fields,
@@ -2645,6 +2799,9 @@ async def create_virtual_machines(  # noqa: C901
                 supports_virtual_machine_type_field=supports_vm_type,
             ),
             strict_lookup=True,
+            existing_record=(
+                existing_resolution.record if existing_resolution is not None else None
+            ),
         )
 
         await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)

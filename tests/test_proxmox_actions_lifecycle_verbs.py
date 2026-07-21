@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from proxbox_api.database import ProxmoxEndpoint
-from proxbox_api.exception import ProxmoxAPIError
+from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.routes import proxmox_actions
 from proxbox_api.services.idempotency import get_idempotency_cache
 
@@ -140,6 +140,7 @@ def _patched_route(
     *,
     node_or_response="pve-node-01",
     netbox_vm_id: int | None = 42,
+    netbox_id_side_effect=None,
     status_payload=SimpleNamespace(status="running"),
     reboot_result="UPID:pve-node-01:0001:reboot",
     reboot_side_effect=None,
@@ -160,7 +161,7 @@ def _patched_route(
         "open_session": AsyncMock(return_value=object()),
         "nb_session": AsyncMock(return_value=object()),
         "node": AsyncMock(return_value=node_or_response),
-        "netbox_id": AsyncMock(return_value=netbox_vm_id),
+        "netbox_id": AsyncMock(return_value=netbox_vm_id, side_effect=netbox_id_side_effect),
         "status": AsyncMock(return_value=status_payload),
         "reboot": AsyncMock(return_value=reboot_result, side_effect=reboot_side_effect),
         "stop": AsyncMock(return_value=stop_result, side_effect=stop_side_effect),
@@ -299,6 +300,54 @@ async def test_delete_qemu_running_stops_then_deletes_and_audits_once(
     handles["delete"].assert_awaited_once()
     handles["journal"].assert_awaited_once()
     assert "verb: delete" in handles["journal"].call_args.kwargs["comments"]
+
+
+async def test_delete_qemu_unresolved_netbox_vm_fails_closed_before_dispatch(
+    route_session: _GateSession,
+):
+    with _patched_route(netbox_vm_id=None) as handles:
+        resp = await _call_delete(
+            route_session,
+            idempotency_key="delete-no-audit-target",
+            actor="alice@netbox",
+        )
+
+    assert resp.status_code == 409
+    body = _json_response(resp)
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "delete"
+    assert body["vmid"] == 100
+    assert body["endpoint_id"] == _endpoint_id(route_session)
+    handles["status"].assert_not_awaited()
+    handles["stop"].assert_not_awaited()
+    handles["delete"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
+
+
+async def test_delete_qemu_ambiguous_netbox_vm_fails_closed_before_dispatch(
+    route_session: _GateSession,
+):
+    with _patched_route(
+        netbox_id_side_effect=ProxboxException(
+            message="Refusing to create or bind a VM from ambiguous sync-state identity.",
+            detail={
+                "reason": "netbox_vm_identity_unverifiable_for_audit",
+                "vmid": 100,
+                "endpoint_id": _endpoint_id(route_session),
+            },
+            http_status_code=409,
+        )
+    ) as handles:
+        resp = await _call_delete(route_session)
+
+    assert resp.status_code == 409
+    body = _json_response(resp)
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "delete"
+    handles["status"].assert_not_awaited()
+    handles["stop"].assert_not_awaited()
+    handles["delete"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 async def test_delete_qemu_idempotency_key_reuse_returns_cached_response(

@@ -270,8 +270,7 @@ def test_start_lxc_routes_through_same_dispatch(client: TestClient):
     assert node_call.args[1] == "lxc" or node_call.kwargs.get("vm_type") == "lxc"
 
 
-def test_start_qemu_no_matching_netbox_vm_still_dispatches(client: TestClient):
-    """When no NetBox VM carries the matching cf, dispatch proceeds (no audit URL)."""
+def test_start_qemu_no_matching_netbox_vm_fails_closed_before_dispatch(client: TestClient):
     endpoint_id = _make_endpoint(client)
     handles = _patch_route(netbox_vm_id=None)
     for p in handles["patches"]:
@@ -282,9 +281,12 @@ def test_start_qemu_no_matching_netbox_vm_still_dispatches(client: TestClient):
         for p in handles["patches"]:
             p.stop()
 
-    assert resp.status_code == 200
+    assert resp.status_code == 409
     body = resp.json()
-    assert body["result"] == "ok"
-    assert "journal_entry_url" not in body
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "start"
+    assert body["vmid"] == 100
+    assert body["endpoint_id"] == endpoint_id
+    handles["status"].assert_not_awaited()
     handles["journal"].assert_not_awaited()
-    handles["start"].assert_awaited_once()
+    handles["start"].assert_not_awaited()

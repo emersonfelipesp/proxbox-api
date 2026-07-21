@@ -17,12 +17,13 @@ Pins the contracts in ``docs/design/operational-verbs.md`` §6 and §7.3:
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.responses import JSONResponse
 
-from proxbox_api.exception import NetBoxAPIError, ProxmoxAPIError
+from proxbox_api.exception import NetBoxAPIError, ProxboxException, ProxmoxAPIError
 from proxbox_api.services import verb_dispatch
 
 
@@ -166,22 +167,48 @@ async def test_resolve_proxmox_node_returns_502_on_proxmox_error():
 
 
 async def test_resolve_netbox_vm_id_returns_id_when_found():
-    fake_record = {"id": 42, "name": "vm-fixture"}
+    fake_resolution = SimpleNamespace(record_id=42)
     with patch(
-        "proxbox_api.services.verb_dispatch.rest_first_async",
-        new=AsyncMock(return_value=fake_record),
-    ):
-        netbox_id = await verb_dispatch.resolve_netbox_vm_id(nb=object(), vmid=101)
+        "proxbox_api.services.verb_dispatch.resolve_virtual_machine_by_sync_state",
+        new=AsyncMock(return_value=fake_resolution),
+    ) as resolver:
+        netbox_id = await verb_dispatch.resolve_netbox_vm_id(
+            nb=object(),
+            vmid=101,
+            endpoint_id=500,
+            fail_closed=True,
+        )
     assert netbox_id == 42
+    resolver.assert_awaited_once()
+    assert resolver.call_args.kwargs == {
+        "proxmox_vm_id": 101,
+        "endpoint_id": 500,
+        "cluster_id": None,
+        "fail_on_ambiguous": True,
+    }
 
 
 async def test_resolve_netbox_vm_id_returns_none_when_missing():
     with patch(
-        "proxbox_api.services.verb_dispatch.rest_first_async",
+        "proxbox_api.services.verb_dispatch.resolve_virtual_machine_by_sync_state",
         new=AsyncMock(return_value=None),
     ):
         netbox_id = await verb_dispatch.resolve_netbox_vm_id(nb=object(), vmid=101)
     assert netbox_id is None
+
+
+async def test_resolve_netbox_vm_id_fails_closed_when_missing():
+    with patch(
+        "proxbox_api.services.verb_dispatch.resolve_virtual_machine_by_sync_state",
+        new=AsyncMock(return_value=None),
+    ):
+        with pytest.raises(ProxboxException, match="without a NetBox VM audit target"):
+            await verb_dispatch.resolve_netbox_vm_id(
+                nb=object(),
+                vmid=101,
+                endpoint_id=500,
+                fail_closed=True,
+            )
 
 
 async def test_write_verb_journal_entry_posts_payload():
