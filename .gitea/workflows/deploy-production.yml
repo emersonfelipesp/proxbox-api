@@ -17,13 +17,54 @@ on:
         options:
           - staging
           - production
+      skip_ci_gate:
+        description: "EMERGENCY ONLY: deploy without a green CI result for this SHA (e.g. rolling back to a known-good older commit whose CI status has aged out). Recorded in the run log."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
+  # Gate: the exact SHA about to be deployed must have passed CI.
+  #
+  # Before this existed, CI and deploy were sibling workflows on the same push
+  # event. They raced, deploy never consulted CI, and a red or still-running CI
+  # could not stop a production rollout — N-MultiCloud/nmulticloud-context#204
+  # requirement 6 ("a parallel workflow on the same push is insufficient").
+  #
+  # Deliberately implemented as an API poll rather than a `workflow_run` trigger:
+  # this Gitea (1.26.2) has known trigger quirks (see CLAUDE.md on tag/dispatch
+  # events), and an explicit status check on the *exact* SHA is both portable and
+  # easier to audit.
+  verify-ci:
+    name: Verify CI passed for this SHA
+    runs-on: prod-deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Require a green CI status for the deployed SHA
+        shell: bash
+        env:
+          # The SHA that will actually be deployed -- not a branch name, so the
+          # check cannot drift to a different commit between verification and
+          # rollout.
+          DEPLOY_SHA: ${{ github.sha }}
+          REQUESTED_REF: ${{ inputs.ref }}
+          SKIP_CI_GATE: ${{ inputs.skip_ci_gate }}
+          REQUIRED_CI_CONTEXT: "CI / Lint, smoke, and core coverage (push)"
+          API_BASE: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          GITEA_API_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+          CI_GATE_TIMEOUT_SECONDS: "1800"
+        run: python3 .gitea/scripts/require_ci_status.py
+
   deploy:
     name: Deploy proxbox-api
+    needs: verify-ci
     runs-on: prod-deploy
     env:
       REF: ${{ inputs.ref || github.sha }}
