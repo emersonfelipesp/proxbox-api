@@ -82,8 +82,21 @@ _SENSITIVE_JSON_VALUE_PATTERN = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 _SENSITIVE_KEY_VALUE_PATTERN = re.compile(
-    r"(?i)\b(password|passwd|pass|token(?:_value)?|api[_-]?key|csrfpreventiontoken|"
-    r"cookie|secret|client[_-]?secret|ticket)\b(\s*[=:]\s*)([^\s&;,}\"'}]+)"
+    r"""
+    \b(?P<key>
+        password|passwd|pass|token(?:_value)?|api[_-]?key|csrfpreventiontoken|
+        cookie|secret|client[_-]?secret|authorization|ticket
+    )\b
+    (?P<separator>\s*[=:]\s*)
+    (?P<value>
+        "(?:\\.|[^"\\])*"
+        |
+        '(?:\\.|[^'\\])*'
+        |
+        (?:(?:bearer|basic|token)\s+)?[^\s&;,}\"'}]+
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 _AUTH_SCHEME_PREFIX_PATTERN = re.compile(r"^(?P<scheme>(?:bearer|basic|token)\s+)", re.IGNORECASE)
 
@@ -106,6 +119,19 @@ def _redact_json_secret_value(match: re.Match[str]) -> str:
     return f'{match.group("prefix")}"[REDACTED]"'
 
 
+def _redact_sensitive_key_value(match: re.Match[str]) -> str:
+    prefix = f"{match.group('key')}{match.group('separator')}"
+    value = match.group("value")
+    quote = value[0] if value[:1] in {"'", '"'} and value.endswith(value[0]) else ""
+    unquoted_value = value[1:-1] if quote else value
+    if match.group("key").lower() == "authorization":
+        scheme_match = _AUTH_SCHEME_PREFIX_PATTERN.match(unquoted_value)
+        if scheme_match:
+            redacted = f"{scheme_match.group('scheme')}[REDACTED]"
+            return f"{prefix}{quote}{redacted}{quote}"
+    return f"{prefix}[REDACTED]"
+
+
 def _safe_error_detail(error: BaseException) -> str:
     detail = str(error) or error.__class__.__name__
     detail = _CREDENTIAL_URL_PATTERN.sub(r"\g<scheme>[REDACTED]@", detail)
@@ -114,7 +140,7 @@ def _safe_error_detail(error: BaseException) -> str:
     detail = _AUTHORIZATION_VALUE_PATTERN.sub(_redact_authorization_value, detail)
     detail = _AUTH_SCHEME_TOKEN_PATTERN.sub(r"\g<scheme>[REDACTED]", detail)
     detail = _SENSITIVE_JSON_VALUE_PATTERN.sub(_redact_json_secret_value, detail)
-    return _SENSITIVE_KEY_VALUE_PATTERN.sub(r"\1\2[REDACTED]", detail)
+    return _SENSITIVE_KEY_VALUE_PATTERN.sub(_redact_sensitive_key_value, detail)
 
 
 def _dump_model_or_mapping(value: object) -> dict[str, object]:
