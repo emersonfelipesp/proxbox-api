@@ -855,6 +855,64 @@ async def get_node_storage_content(
 
 
 @_dual_mode
+async def get_node_zfs_pools(
+    session: ProxmoxSession,
+    node: str,
+) -> list[generated_models.GetNodesNodeDisksZfsResponseItem]:
+    """Get ZFS pool summaries from a Proxmox node via the structured REST API."""
+    try:
+        result = await resolve_async(session.session.nodes(node).disks.zfs.get())
+        validated = generated_models.GetNodesNodeDisksZfsResponse.model_validate(result)
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message=f"Proxmox node ZFS pool list request timed out for {node}",
+            original_error=error,
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message=f"Unable to connect to Proxmox for node ZFS pool list on {node}",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message=f"Error fetching Proxmox ZFS pool list for node {node}",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def get_node_zfs_pool_detail(
+    session: ProxmoxSession,
+    node: str,
+    name: str,
+) -> generated_models.GetNodesNodeDisksZfsNameResponse:
+    """Get ZFS pool detail and vdev topology from the structured Proxmox REST API."""
+    try:
+        result = await resolve_async(session.session.nodes(node).disks.zfs(name).get())
+        return generated_models.GetNodesNodeDisksZfsNameResponse.model_validate(result)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message=f"Proxmox node ZFS pool detail request timed out for {node}/{name}",
+            original_error=error,
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message=f"Unable to connect to Proxmox for ZFS pool detail {node}/{name}",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message=f"Error fetching Proxmox ZFS pool detail for {node}/{name}",
+            original_error=error,
+        )
+
+
+@_dual_mode
 async def get_node_tasks(
     session: ProxmoxSession,
     node: str,

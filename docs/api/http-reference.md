@@ -168,6 +168,8 @@ Validation rules:
 - `GET /proxmox/`
 - `GET /proxmox/storage`
 - `GET /proxmox/nodes/{node}/storage/{storage}/content`
+- `GET /proxmox/storage/zfs/pools?node=` - Read-only ZFS pool health and capacity summaries. Tier 1 uses Proxmox REST `/nodes/{node}/disks/zfs` via `proxmox-sdk`; the response reports the selected source and attempted fallback tiers.
+- `GET /proxmox/storage/zfs/pools/{name}?node=` - Read-only ZFS pool detail including state/status/action/scan/errors and recursive vdev `children[]` from Proxmox REST `/nodes/{node}/disks/zfs/{name}`. InfluxDB and JSON-native SSH fallback tiers currently degrade gracefully when not configured/implemented.
 - `GET /proxmox/{top_level}` where `top_level` is one of `access`, `cluster`, `nodes`, `storage`, or `version`
 - `GET /proxmox/{node}/{type}/{vmid}/config`
 
