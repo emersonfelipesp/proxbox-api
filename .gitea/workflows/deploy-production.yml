@@ -59,7 +59,14 @@ jobs:
           REQUIRED_CI_CONTEXT: "CI / Lint, smoke, and core coverage (push)"
           API_BASE: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           GITEA_API_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
-          CI_GATE_TIMEOUT_SECONDS: "1800"
+          # 90 minutes, not 30. The untrusted CI runner has capacity 1, so a
+          # merge commit's CI can sit queued behind another job before it even
+          # starts. Observed real durations on this runner (queue + execution):
+          # 3, 3, 15, 28 and 44 minutes. A 30-minute budget would have timed out
+          # and blocked a legitimate deploy -- failing closed on a false
+          # negative. The job only sleeps while waiting, so a generous ceiling
+          # costs nothing.
+          CI_GATE_TIMEOUT_SECONDS: "5400"
         run: python3 .gitea/scripts/require_ci_status.py
 
   deploy:
