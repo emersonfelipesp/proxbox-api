@@ -21,7 +21,18 @@ class ProxmoxToNetBoxVMStatus(str, Enum):
     def from_proxmox(cls, raw: object) -> "ProxmoxToNetBoxVMStatus":
         """Return the NetBox status that corresponds to a Proxmox VM status string.
 
-        Unknown values default to ``active``.
+        Also accepts NetBox's own **nested choice shape**
+        (``{"value": "offline", "label": "Offline"}``), because this helper is
+        applied to both the Proxmox-derived desired status *and* the existing
+        NetBox record's status when building the reconciliation diff. The
+        existing record is loaded over raw REST, where a choice field arrives as
+        that object rather than a bare string. Without unwrapping,
+        ``str({...}).lower()`` matched no key and every existing record silently
+        read back as ``active`` — so a VM whose status genuinely changed to
+        ``active`` produced no diff and never updated
+        (netbox-proxbox issue #617).
+
+        Unknown values still default to ``active``.
         """
         _mapping = {
             "running": cls.active,
@@ -32,6 +43,8 @@ class ProxmoxToNetBoxVMStatus(str, Enum):
             "offline": cls.offline,
             "planned": cls.planned,
         }
+        if isinstance(raw, dict):
+            raw = raw.get("value", raw.get("label"))
         text = str(raw or "active").strip().lower()
         return _mapping.get(text, cls.active)
 

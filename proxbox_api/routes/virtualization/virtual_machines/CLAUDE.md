@@ -39,11 +39,30 @@ Main synchronization endpoints for virtual machines and related resources.
 
 ## Behavior Notes
 
+- **Targeted-sync NetBox lookups must be `await`ed (netbox-proxbox #616).**
+  Every netbox-sdk accessor is `async def` — there is no synchronous `get()`
+  anywhere in the SDK. The four targeted single-object routes
+  (`sync_vm.py::_create_virtual_machine_by_netbox_id`, `backups_vm.py`,
+  `disks_vm.py`, `snapshots_vm.py`) resolve the NetBox VM row with
+  `await netbox_session.virtualization.virtual_machines.get(id=...)`.
+  Historically they did not: `sync_vm.py` called it bare and the other three
+  wrapped it in `asyncio.to_thread(lambda: ...)` (which runs the *coroutine
+  factory* in a worker thread and returns an un-awaited coroutine). Both
+  produced a coroutine instead of a `Record`, `to_mapping()` degraded it to
+  `{}`, and every targeted sync failed with *"Virtual machine id=N has no name
+  and no proxmox_vm_id custom field to match in Proxmox"* while full-cluster
+  sync — which never resolves a NetBox row by PK — worked fine. Never wrap an
+  async SDK call in `asyncio.to_thread`; just `await` it. Regression coverage:
+  `tests/test_targeted_vm_sync_await.py` (includes an AST contract over all
+  four modules). Test fakes for `virtual_machines.get` **must be coroutine
+  functions** — a synchronous fake is what let this ship.
 - **Blank-name VM recovery.** `_create_virtual_machine_by_netbox_id` matches a
   NetBox VM to Proxmox by name **or** `proxmox_vm_id`. It only rejects (HTTP
   422) a VM that has neither a name nor a `proxmox_vm_id` custom field — a
   blank-name record with a known `proxmox_vm_id` is matched by vmid and its
-  name is healed from the matched Proxmox resource on the next sync.
+  name is healed from the matched Proxmox resource on the next sync. Note this
+  recovery was unreachable in practice until the missing-`await` fix above,
+  because the record always coerced to `{}`.
 - **Interface failures are surfaced, not swallowed.** Per-interface creation is
   retried a bounded number of times for transient NetBox errors; interfaces
   that still fail are counted. The per-VM progress item carries

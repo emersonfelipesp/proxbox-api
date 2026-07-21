@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from ipaddress import ip_address, ip_interface
 from typing import Literal
@@ -91,26 +92,71 @@ def extract_vm_disk_aggregate_size(error: Exception) -> int | None:
         return None
 
 
-def to_mapping(value: object) -> dict[str, object]:
-    """Coerce any value to a dictionary mapping."""
+_MAX_ROOT_UNWRAP_DEPTH = 4
+
+
+def to_mapping(value: object, _depth: int = 0) -> dict[str, object]:
+    """Coerce a NetBox record-ish value to a dictionary mapping.
+
+    Supports plain dicts, netbox-sdk ``Record`` objects (``serialize()``),
+    Pydantic v1 models (``dict()``), Pydantic v2 models (``model_dump()``), and
+    Pydantic ``RootModel`` wrappers (``root``).
+
+    Returning an empty mapping is a *failure* mode, not a neutral one: callers
+    read ``name``/``custom_fields`` off the result and an empty dict makes a
+    populated record look blank. Every path that gives up therefore logs loudly
+    with the offending type so the cause is visible in backend logs.
+
+    An un-awaited coroutine is called out explicitly because it is always a
+    caller bug: the netbox-sdk accessors are ``async def``, so a missing
+    ``await`` yields a coroutine here and previously degraded into a silent
+    ``{}`` (see netbox-proxbox issue #616, where targeted single-VM sync failed
+    with "has no name and no proxmox_vm_id custom field to match in Proxmox").
+    """
     if isinstance(value, dict):
         return value
-    if hasattr(value, "serialize"):
+    if value is None:
+        return {}
+    if inspect.isawaitable(value):
+        logger.error(
+            "to_mapping() received an un-awaited %s -- the caller is missing an "
+            "'await' on an async netbox-sdk call; treating the record as empty",
+            type(value).__name__,
+        )
+        return {}
+    for method_name in ("serialize", "model_dump", "dict"):
+        method = getattr(value, method_name, None)
+        if not callable(method):
+            continue
         try:
-            serialized = value.serialize()
-            if isinstance(serialized, dict):
-                return serialized
+            dumped = method()
         except Exception as error:
-            logger.debug("serialize() failed while coercing mapping: %s", error)
+            logger.warning(
+                "%s() failed while coercing %s to a mapping: %s",
+                method_name,
+                type(value).__name__,
+                error,
+            )
             return {}
-    if hasattr(value, "dict"):
-        try:
-            dumped = value.dict()
-            if isinstance(dumped, dict):
-                return dumped
-        except Exception as error:
-            logger.debug("dict() failed while coercing mapping: %s", error)
+        if isinstance(dumped, dict):
+            return dumped
+    # ``RootModel``-style unwrap. Bounded, and guarded against a value whose
+    # ``root`` points back at itself, so a malformed record can never spin this
+    # helper into unbounded recursion inside a sync run.
+    root = getattr(value, "root", None)
+    if root is not None and root is not value and not callable(root):
+        if _depth >= _MAX_ROOT_UNWRAP_DEPTH:
+            logger.warning(
+                "to_mapping() stopped unwrapping %s after %s nested 'root' levels",
+                type(value).__name__,
+                _MAX_ROOT_UNWRAP_DEPTH,
+            )
             return {}
+        return to_mapping(root, _depth + 1)
+    logger.warning(
+        "to_mapping() could not coerce %s to a mapping; treating it as empty",
+        type(value).__name__,
+    )
     return {}
 
 

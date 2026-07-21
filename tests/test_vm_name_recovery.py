@@ -51,10 +51,15 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
             "custom_fields": {"proxmox_vm_id": 9551},
         }
     )
+
+    # netbox-sdk's virtual_machines.get() is `async def`; the fake must be a
+    # coroutine function too, or an un-awaited caller looks correct here while
+    # failing in production (netbox-proxbox issue #616).
+    async def _fake_get(id):
+        return vm_record if id == 551 else None
+
     fake_nb = SimpleNamespace(
-        virtualization=SimpleNamespace(
-            virtual_machines=SimpleNamespace(get=lambda id: vm_record if id == 551 else None)
-        )
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
     cluster_resources = [
         {"cluster-a": [{"type": "qemu", "name": "real-name-from-proxmox", "vmid": 9551}]},
@@ -90,8 +95,12 @@ def test_by_netbox_id_raises_422_when_name_and_vmid_missing():
             "custom_fields": {},
         }
     )
+
+    async def _fake_get(id):
+        return vm_record
+
     fake_nb = SimpleNamespace(
-        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=lambda id: vm_record))
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
 
     with pytest.raises(HTTPException) as excinfo:
