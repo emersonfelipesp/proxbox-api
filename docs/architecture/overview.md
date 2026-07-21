@@ -81,6 +81,18 @@ VM-interface bridge links, virtual-disk storage links, and VM last-run ids.
 Writes use the existing NetBox session and degrade gracefully when an older
 plugin does not expose the sidecar API.
 
+**Scope note.** `proxbox-api` populates typed sidecars for the five core object
+types listed above (VM, device, cluster, virtual disk, VM interface), which hold
+all Proxmox identity and linkage data. The supporting objects synced during a run
+(cluster types, manufacturers, device types, device roles, sites) only ever
+carried a `proxmox_last_updated` reflection timestamp in custom fields; with
+`custom_fields_enabled=false` (the default) that stamp is no longer written, and
+the plugin's typed sidecar models for those supporting objects are not populated
+by the backend today. This is intentional — supporting objects carry no
+Proxmox-to-NetBox linkage — and dropping the stamp has no effect on sync
+identity, orphan detection, or reconciliation. Enable `custom_fields_enabled` if
+you still need the legacy supporting-object timestamp during a transition.
+
 `proxbox-api` reads the sidecars for custom-field-dependent state. VM identity
 and orphan-sweep last-run checks use the typed sidecar rows. With
 `custom_fields_enabled=false` (the default) there is **no** legacy `cf_*`

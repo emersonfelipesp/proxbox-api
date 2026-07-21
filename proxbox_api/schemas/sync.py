@@ -274,14 +274,17 @@ class SyncBehaviorFlags(ProxboxBaseModel):
             "before this feature shipped."
         ),
     )
-    custom_fields_enabled: bool = Field(
-        default=False,
+    custom_fields_enabled: bool | None = Field(
+        default=None,
         title="Legacy Custom Fields Enabled",
         description=(
             "When true, legacy Proxbox reflection custom-field writes, reads, "
             "and definition reconcile are enabled for transition. When false, "
             "the typed netbox-proxbox Proxbox*SyncState sidecar models are the "
-            "source of truth."
+            "source of truth. When omitted (null), the value falls back to the "
+            "ProxboxPluginSettings.custom_fields_enabled plugin setting (default "
+            "false), so internal callers that do not thread the request flag "
+            "still honor the operator's opt-in."
         ),
     )
 
