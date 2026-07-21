@@ -27,37 +27,73 @@ _CREDENTIAL_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _AUTHORIZATION_VALUE_PATTERN = re.compile(
-    r"\b(authorization\s*[:=]\s*)(?:(bearer|basic|token)\s+)?([^\s&;,}]+)",
+    r"\b(authorization\s*[:=]\s*)(?:(bearer|basic|token)(\s+))?([^\s&;,}\"'}]+)",
     re.IGNORECASE,
+)
+_AUTHORIZATION_QUOTED_VALUE_PATTERN = re.compile(
+    r"""
+    \b(?P<prefix>authorization\s*[:=]\s*)
+    (?P<quote>["'])
+    (?P<value>(?:\\.|(?! (?P=quote) ).)+)
+    (?P=quote)
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 _AUTH_SCHEME_TOKEN_PATTERN = re.compile(
-    r"(?<![-\w])((?:bearer|basic|token)\s+)([^\s&;,}]+)",
+    r"(?<![-\w])((?:bearer|basic|token)\s+)([^\s&;,}\"'}]+)",
     re.IGNORECASE,
 )
-_SENSITIVE_JSON_PATTERN = re.compile(
-    r"(?i)([\"']?(?:password|passwd|pass|token(?:_value)?|api[_-]?key|"
-    r"csrfpreventiontoken|authorization|secret|client[_-]?secret|ticket)[\"']?\s*:\s*)"
-    r"([\"'])(.*?)(\2)"
+_SENSITIVE_JSON_VALUE_PATTERN = re.compile(
+    r"""
+    (?P<prefix>
+        "
+        (?:password|token_value|token|api_key|client_secret|secret|csrfpreventiontoken|cookie|authorization)
+        "
+        \s*:\s*
+    )
+    (?:
+        "(?:\\.|[^"\\])*"
+        |
+        -?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?
+        |
+        true|false|null
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 _SENSITIVE_KEY_VALUE_PATTERN = re.compile(
     r"(?i)\b(password|passwd|pass|token(?:_value)?|api[_-]?key|csrfpreventiontoken|"
-    r"secret|client[_-]?secret|ticket)\b(\s*[=:]\s*)([^\s&;,}]+)"
+    r"cookie|secret|client[_-]?secret|ticket)\b(\s*[=:]\s*)([^\s&;,}\"'}]+)"
 )
+_AUTH_SCHEME_PREFIX_PATTERN = re.compile(r"^(?P<scheme>(?:bearer|basic|token)\s+)", re.IGNORECASE)
+
+
+def _redact_quoted_authorization_value(match: re.Match[str]) -> str:
+    value = match.group("value")
+    scheme_match = _AUTH_SCHEME_PREFIX_PATTERN.match(value)
+    redacted_value = f"{scheme_match.group('scheme')}[REDACTED]" if scheme_match else "[REDACTED]"
+    return f"{match.group('prefix')}{match.group('quote')}{redacted_value}{match.group('quote')}"
+
+
+def _redact_json_secret_value(match: re.Match[str]) -> str:
+    return f'{match.group("prefix")}"[REDACTED]"'
 
 
 def _safe_error_detail(error: BaseException) -> str:
     detail = str(error) or error.__class__.__name__
     detail = _CREDENTIAL_URL_PATTERN.sub(r"\g<scheme>[REDACTED]@", detail)
+    detail = _SENSITIVE_JSON_VALUE_PATTERN.sub(_redact_json_secret_value, detail)
+    detail = _AUTHORIZATION_QUOTED_VALUE_PATTERN.sub(_redact_quoted_authorization_value, detail)
     detail = _AUTHORIZATION_VALUE_PATTERN.sub(
         lambda match: (
-            f"{match.group(1)}{match.group(2)} [REDACTED]"
+            f"{match.group(1)}{match.group(2)}{match.group(3)}[REDACTED]"
             if match.group(2)
             else f"{match.group(1)}[REDACTED]"
         ),
         detail,
     )
     detail = _AUTH_SCHEME_TOKEN_PATTERN.sub(r"\1[REDACTED]", detail)
-    detail = _SENSITIVE_JSON_PATTERN.sub(r"\1\2[REDACTED]\4", detail)
+    detail = _SENSITIVE_JSON_VALUE_PATTERN.sub(_redact_json_secret_value, detail)
     return _SENSITIVE_KEY_VALUE_PATTERN.sub(r"\1\2[REDACTED]", detail)
 
 

@@ -220,6 +220,31 @@ def test_zfs_error_detail_redacts_credentials() -> None:
     assert "http://[REDACTED]@example.test/path" in detail
 
 
+@pytest.mark.parametrize(
+    ("message", "leaked_fragments", "expected_fragment"),
+    [
+        ('Authorization: "Bearer SECRET"', ["SECRET"], 'Authorization: "Bearer [REDACTED]"'),
+        ("Authorization: Bearer SECRET", ["SECRET"], "Authorization: Bearer [REDACTED]"),
+        ("Bearer SECRET", ["SECRET"], "Bearer [REDACTED]"),
+        ('{"client_secret": "abc\\"def"}', ["abc", "def"], '"client_secret": "[REDACTED]"'),
+        ('{"token": 12345}', ["12345"], '"token": "[REDACTED]"'),
+        ('{"password": "p@ss"}', ["p@ss"], '"password": "[REDACTED]"'),
+        ("http://:secret@h/p", ["secret"], "http://[REDACTED]@h/p"),
+        ("http://user:secret@h/p", ["user:secret"], "http://[REDACTED]@h/p"),
+    ],
+)
+def test_zfs_error_detail_redacts_adversarial_secret_forms(
+    message: str,
+    leaked_fragments: list[str],
+    expected_fragment: str,
+) -> None:
+    detail = zfs_service._safe_error_detail(RuntimeError(message))
+
+    for leaked_fragment in leaked_fragments:
+        assert leaked_fragment not in detail
+    assert expected_fragment in detail
+
+
 def test_zfs_vdev_tree_rejects_adversarial_depth() -> None:
     root: list[dict[str, object]] = [{"name": "root"}]
     current = root[0]
