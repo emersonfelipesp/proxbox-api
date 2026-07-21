@@ -9,6 +9,7 @@ from typing import cast
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async, rest_list_async, rest_list_paginated_async
+from proxbox_api.services.custom_fields import custom_fields_enabled, warn_legacy_custom_fields
 from proxbox_api.services.sync.sync_state_writer import (
     VM_SYNC_STATE_PATH,
     _is_sidecar_unavailable,
@@ -89,7 +90,8 @@ def _memoize_sidecar_failure(path: str, error: Exception) -> None:
         )
     else:
         logger.debug(
-            "Proxbox sync-state sidecar read failed at %s; falling back to legacy custom fields: %s",
+            "Proxbox sync-state sidecar read failed at %s; "
+            "legacy custom-field fallback is available only when custom_fields_enabled=true: %s",
             path,
             getattr(error, "detail", str(error)),
         )
@@ -305,16 +307,31 @@ async def _resolve_unique_vm_identity_candidate(
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
     )
-    (
-        custom_field_candidates,
-        custom_field_read_failed,
-    ) = await _list_custom_field_vm_identity_candidates(
-        nb,
-        proxmox_vm_id=proxmox_vm_id,
-        endpoint_id=endpoint_id,
-        cluster_id=cluster_id,
-        fallback_query=fallback_query,
-    )
+    custom_field_candidates: list[_VMIdentityCandidate] | None = None
+    custom_field_read_failed = False
+    legacy_custom_fields_enabled = custom_fields_enabled()
+    if legacy_custom_fields_enabled:
+        warn_legacy_custom_fields("legacy VM identity custom-field fallback")
+        (
+            custom_field_candidates,
+            custom_field_read_failed,
+        ) = await _list_custom_field_vm_identity_candidates(
+            nb,
+            proxmox_vm_id=proxmox_vm_id,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id,
+            fallback_query=fallback_query,
+        )
+    elif sidecar_candidates is None:
+        logger.warning(
+            "Proxbox VM sync-state lookup for vmid=%s endpoint_id=%s cluster_id=%s "
+            "could not read the typed sidecar and legacy custom-field fallback is disabled; "
+            "refusing to treat the VM identity as verifiably absent",
+            proxmox_vm_id,
+            endpoint_id,
+            cluster_id,
+        )
+        return None, True
     if sidecar_refused and not custom_field_candidates:
         logger.warning(
             "Proxbox VM sync-state lookup for vmid=%s endpoint_id=%s cluster_id=%s "
@@ -475,6 +492,9 @@ async def resolve_vm_last_run_id(
             return value or None
     if not isinstance(vm_record, dict):
         return None
+    if not custom_fields_enabled():
+        return None
+    warn_legacy_custom_fields("legacy VM last-run custom-field fallback")
     custom_fields = vm_record.get("custom_fields")
     if not isinstance(custom_fields, dict):
         return None
@@ -494,6 +514,9 @@ async def resolve_vm_last_synced_role_id(
     ``proxmox_last_synced_role_id`` or an equivalent role-ownership field.
     """
     del nb
+    if not custom_fields_enabled():
+        return None
+    warn_legacy_custom_fields("legacy VM role-ownership custom-field read")
     if not isinstance(vm_record, dict):
         return None
     custom_fields = vm_record.get("custom_fields")

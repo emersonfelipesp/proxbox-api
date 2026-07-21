@@ -62,6 +62,15 @@ from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.proxmox_providers import proxmox_sessions_dep
 
 
+@pytest.fixture(autouse=True)
+def _enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        custom_fields_service,
+        "get_plugin_bool",
+        lambda *, settings_key, default: True,
+    )
+
+
 def test_root_route_returns_service_metadata():
     body = asyncio.run(standalone_info())
     assert body["message"] == "Proxbox Backend made in FastAPI framework"
@@ -1219,6 +1228,13 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
     )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
+        _fake_rest_list,
+    )
+    # The sidecar reader has its own rest_list_async reference; with the legacy
+    # custom fields disabled by default it is sidecar-only, so return an empty
+    # sidecar list (VM absent) instead of letting it error on the bare session.
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list,
     )
     monkeypatch.setattr(

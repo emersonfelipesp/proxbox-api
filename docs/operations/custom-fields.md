@@ -4,11 +4,21 @@
 node, hardware-discovery, disk, interface, and IP synchronization. Startup
 bootstrap and the extras reconcile routes consume the same inventory.
 
+!!! warning "Deprecated — off by default"
+    The legacy reflection custom fields are **deprecated**. The typed
+    `Proxbox*SyncState` sidecar models are now the standard source of truth, and
+    the `custom_fields_enabled` plugin setting defaults to `false`. With the flag
+    off, custom-field **reconcile, writes, and reads are all skipped** — the
+    reconcile route below returns an empty result and this recovery flow does not
+    apply. Set `custom_fields_enabled=true` (a temporary transition option) only
+    if you still depend on the custom fields; the paths then run with deprecation
+    warnings. No custom-field data is deleted.
+
 ## When to use this
 
 Run a forced reconcile after an upgrade if sync fails with an error such as
 `proxmox_last_updated` missing, or if an operator deleted or edited Proxbox
-custom fields in the NetBox UI.
+custom fields in the NetBox UI — and only while `custom_fields_enabled=true`.
 
 ## Check bootstrap status
 

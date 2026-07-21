@@ -75,11 +75,22 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - Prefer `ProxboxException` for expected API failures and `logger` for operational messages.
 - When adding new sync behavior, keep WebSocket and SSE payload shapes aligned.
 - When mirroring custom-field state to netbox-proxbox sidecars, keep the
-  custom-field write unchanged, gate the sidecar with the same overwrite flag,
-  and treat sidecar API 404/501 or transient failures as non-fatal.
+  sidecar written with the same overwrite flag, and treat sidecar API 404/501 or
+  transient failures as non-fatal. The typed sidecars are the DEFAULT source of
+  truth: legacy reflection custom fields are deprecated and gated behind the
+  `custom_fields_enabled` plugin setting (default `false`). Gate every legacy
+  custom-field write/read/reconcile on `custom_fields_enabled()` (via the helpers
+  in `services/custom_fields.py`: `custom_fields_enabled`,
+  `legacy_custom_fields_payload`, `legacy_custom_field_fallback_query`,
+  `warn_legacy_custom_fields`), compose it with the existing
+  `overwrite_*_custom_fields` flags, and keep building the in-memory
+  `custom_fields` dict so the sidecar derivation is unaffected. Never disable
+  sidecar writes when the flag is off.
 - When reading state that now has a sync-state sidecar, use
-  `sync_state_reader.py` so deleting legacy custom fields does not force VM
-  duplicates. Keep CF fallback until the separate custom-field retirement item.
+  `sync_state_reader.py`. Reads are sidecar-only by default; the legacy `cf_*`
+  fallback runs only when `custom_fields_enabled=true` (and emits a deprecation
+  warning). Full custom-field retirement is a later item; do not delete
+  custom-field data while the flag exists.
 - Keep deterministic reconciliation logic in `services/sync/reconciliation/`.
   Do not re-grow operation-queue diffing inside VM route modules.
 - For new runtime tunables, prefer a `ProxboxPluginSettings` field on the

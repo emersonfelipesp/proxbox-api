@@ -108,6 +108,12 @@ def _install_legacy_rename_patches(monkeypatch, calls: list[dict[str, object]]) 
 def test_legacy_rename_keeps_core_rename_ip_resolution_and_skips_guest_plugin(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     calls: list[dict[str, object]] = []
     warnings: list[str] = []
     _install_legacy_rename_patches(monkeypatch, calls)

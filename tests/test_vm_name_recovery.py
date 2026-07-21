@@ -25,6 +25,7 @@ from proxbox_api.routes.virtualization.virtual_machines import create_virtual_ma
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_virtual_machine_by_netbox_id,
 )
+from proxbox_api.services.sync import sync_state_reader
 
 _TAG = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
 
@@ -162,6 +163,11 @@ def _full_vm_sync_scaffold(monkeypatch, interface_impl):
     base = "proxbox_api.routes.virtualization.virtual_machines.sync_vm"
     monkeypatch.setattr(f"{base}.rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr(f"{base}.rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
+        _fake_rest_list,
+    )
+    sync_state_reader.reset_sidecar_reader_availability_cache()
     monkeypatch.setattr(
         f"{base}.get_vm_config",
         lambda **kwargs: {

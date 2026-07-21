@@ -274,6 +274,16 @@ class SyncBehaviorFlags(ProxboxBaseModel):
             "before this feature shipped."
         ),
     )
+    custom_fields_enabled: bool = Field(
+        default=False,
+        title="Legacy Custom Fields Enabled",
+        description=(
+            "When true, legacy Proxbox reflection custom-field writes, reads, "
+            "and definition reconcile are enabled for transition. When false, "
+            "the typed netbox-proxbox Proxbox*SyncState sidecar models are the "
+            "source of truth."
+        ),
+    )
 
 
 def behavior_flags_from_query_params(
@@ -282,6 +292,10 @@ def behavior_flags_from_query_params(
 ) -> SyncBehaviorFlags:
     """Resolve canonical behavior flags from raw flat query parameters."""
     resolved = (base or SyncBehaviorFlags()).model_dump()
+    if "custom_fields_enabled" not in query_params:
+        from proxbox_api.services.custom_fields import custom_fields_enabled
+
+        resolved["custom_fields_enabled"] = custom_fields_enabled()
     for name in SyncBehaviorFlags.model_fields:
         if name in query_params:
             resolved[name] = query_params[name]

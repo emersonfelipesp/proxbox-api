@@ -18,6 +18,10 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.schemas.proxmox import ClusterStatusSchemaList
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.custom_fields import (
+    legacy_custom_field_fallback_query,
+    legacy_custom_fields_payload,
+)
 from proxbox_api.services.sync.cloudinit import sync_vm_cloudinit
 from proxbox_api.services.sync.devices import (
     _effective_cluster_site_id,
@@ -324,7 +328,7 @@ async def create_or_update_virtual_machine(
         proxmox_vm_id=vmid_int,
         endpoint_id=endpoint_lookup_id,
         cluster_id=cluster_id,
-        fallback_query=vm_lookup,
+        fallback_query=legacy_custom_field_fallback_query(vm_lookup),
         fail_on_ambiguous=True,
     )
 
@@ -332,7 +336,11 @@ async def create_or_update_virtual_machine(
         netbox_session,
         "/api/virtualization/virtual-machines/",
         lookup=vm_lookup,
-        payload=payload,
+        payload=legacy_custom_fields_payload(
+            payload,
+            overwrite=(overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields),
+            context="legacy VM custom-field payload",
+        ),
         schema=NetBoxVirtualMachineCreateBody,
         patchable_fields=frozenset(
             _compute_vm_patchable_fields(

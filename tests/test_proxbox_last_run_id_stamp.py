@@ -51,6 +51,16 @@ def patch_recorder(monkeypatch: pytest.MonkeyPatch) -> _PatchRecorder:
     return recorder
 
 
+@pytest.fixture(autouse=True)
+def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_stamp_writes_run_id_on_fresh_vm(patch_recorder: _PatchRecorder) -> None:
     """A VM without `proxbox_last_run_id` receives the stamp via PATCH."""

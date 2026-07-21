@@ -152,6 +152,24 @@ The plugin's `effective_overwrites_for_endpoint(...)` flattens the resolved
 booleans into the SSE query string forwarded to proxbox-api, where they
 materialize as `SyncOverwriteFlags` query parameters.
 
+## Behavior flags (`SyncBehaviorFlags`)
+
+Separate from the per-field `overwrite_*` gates, `SyncBehaviorFlags` carries
+opt-in behavior toggles that compose independently:
+
+- `parse_description_metadata` — parse a fenced `netbox-metadata` block from each
+  Proxmox object's description.
+- `custom_fields_enabled` — **deprecated legacy custom fields**, default `false`.
+  When `false`, the typed `Proxbox*SyncState` sidecars are the sole source of
+  truth and no legacy reflection custom fields are written, read, or reconciled.
+  It composes with the `overwrite_*_custom_fields` gates: a custom-field value is
+  only written to NetBox when the relevant `overwrite_*_custom_fields` flag **and**
+  `custom_fields_enabled` are both true, while sidecar writes continue whenever
+  the `overwrite_*` flag is true. The setting normally comes from the
+  `ProxboxPluginSettings.custom_fields_enabled` plugin field; an explicit
+  per-request behavior flag overrides it. When enabled, every custom-field path
+  emits a deprecation warning.
+
 ## Related
 
 - Plugin docs: `docs/configuration/sync-overwrite-flags.md` (in the

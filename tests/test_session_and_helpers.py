@@ -2045,12 +2045,18 @@ def test_ensure_device_preserves_existing_site_different_from_sync_default():
             )
 
 
-def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device():
+def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device(monkeypatch):
     """Test that _ensure_device prefers the ProxBox-managed duplicate when present.
 
     When multiple devices share the same name, the sync must reuse the ProxBox-tagged
     record instead of arbitrarily updating a user-managed duplicate.
     """
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     proxbox_site_id = 16
     manual_site_id = 99
 

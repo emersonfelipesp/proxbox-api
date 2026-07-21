@@ -32,6 +32,14 @@ def _netbox_api(version: str) -> SimpleNamespace:
     return SimpleNamespace(client=_StatusClient(version))
 
 
+async def _empty_sync_state_sidecars(*args: object, **kwargs: object) -> list[object]:
+    return []
+
+
+async def _skip_vm_sync_state_write(*args: object, **kwargs: object) -> None:
+    return None
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -111,6 +119,20 @@ async def test_create_or_update_vm_uses_legacy_vm_type_payload_before_netbox_46(
         "proxbox_api.services.sync.vm_create.rest_reconcile_async",
         _fake_reconcile,
     )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
+        _empty_sync_state_sidecars,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
+        _skip_vm_sync_state_write,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
 
     await create_or_update_virtual_machine(
         nb,
@@ -159,6 +181,20 @@ async def test_create_or_update_vm_ignores_stale_vm_type_id_before_netbox_46(
         "proxbox_api.services.sync.vm_create.rest_reconcile_async",
         _fake_reconcile,
     )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
+        _empty_sync_state_sidecars,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
+        _skip_vm_sync_state_write,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
 
     await create_or_update_virtual_machine(
         nb,
@@ -205,6 +241,20 @@ async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
     monkeypatch.setattr(
         "proxbox_api.services.sync.vm_create.rest_reconcile_async",
         _fake_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
+        _empty_sync_state_sidecars,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
+        _skip_vm_sync_state_write,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
     )
 
     await create_or_update_virtual_machine(

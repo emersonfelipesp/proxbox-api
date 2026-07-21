@@ -49,7 +49,9 @@ from proxbox_api.netbox_version import (
 )
 from proxbox_api.services.custom_fields import (
     CUSTOM_FIELD_INVENTORY,
+    custom_fields_enabled,
     reconcile_custom_field_with_status,
+    warn_legacy_custom_fields,
 )
 from proxbox_api.services.netbox_writers import (
     UpsertResult,
@@ -279,12 +281,16 @@ async def run_netbox_bootstrap(
             ".".join(str(part) for part in netbox_version),
         )
 
-    for cf in CUSTOM_FIELD_INVENTORY:
-        await _safe_upsert(
-            status,
-            f"custom_field:{cf['name']}",
-            lambda cf=cf: reconcile_custom_field_with_status(nb, cf),
-        )
+    if custom_fields_enabled():
+        warn_legacy_custom_fields("legacy custom-field definition bootstrap")
+        for cf in CUSTOM_FIELD_INVENTORY:
+            await _safe_upsert(
+                status,
+                f"custom_field:{cf['name']}",
+                lambda cf=cf: reconcile_custom_field_with_status(nb, cf, warn=False),
+            )
+    else:
+        logger.info("Skipping custom-field bootstrap: custom_fields_enabled=false")
 
     if status.warnings:
         status.ok = False

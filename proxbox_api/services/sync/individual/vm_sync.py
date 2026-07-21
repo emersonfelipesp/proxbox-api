@@ -19,6 +19,10 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.custom_fields import (
+    legacy_custom_field_fallback_query,
+    legacy_custom_fields_payload,
+)
 from proxbox_api.services.name_collision import resolve_unique_vm_name
 from proxbox_api.services.proxmox.tag_styles import fetch_tag_color_map
 from proxbox_api.services.proxmox_helpers import (
@@ -201,7 +205,7 @@ async def _resolve_sidecar_existing_vm_for_name_collision(
             proxmox_vm_id=vmid,
             endpoint_id=endpoint_id,
             cluster_id=cluster_id if endpoint_id is None else None,
-            fallback_query=vm_query,
+            fallback_query=legacy_custom_field_fallback_query(vm_query),
         )
     except Exception as exc:  # noqa: BLE001 - collision handling can fall back to CF snapshot
         logger.debug(
@@ -238,7 +242,7 @@ async def _lookup_existing_vm_for_dry_run(
         proxmox_vm_id=vmid,
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
-        fallback_query=vm_query,
+        fallback_query=legacy_custom_field_fallback_query(vm_query),
     )
     return existing.record if existing is not None else None
 
@@ -468,7 +472,7 @@ async def sync_vm_individual(
             proxmox_vm_id=vmid,
             endpoint_id=endpoint_id,
             cluster_id=cluster_id,
-            fallback_query=vm_lookup,
+            fallback_query=legacy_custom_field_fallback_query(vm_lookup),
             fail_on_ambiguous=True,
         )
         existing_vms = [existing_resolution.record] if existing_resolution is not None else []
@@ -531,7 +535,11 @@ async def sync_vm_individual(
             nb,
             "/api/virtualization/virtual-machines/",
             lookup=vm_lookup,
-            payload=netbox_vm_payload,
+            payload=legacy_custom_fields_payload(
+                netbox_vm_payload,
+                overwrite=(overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields),
+                context="legacy VM custom-field payload",
+            ),
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=frozenset(
                 _compute_vm_patchable_fields(

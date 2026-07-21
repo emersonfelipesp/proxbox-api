@@ -97,6 +97,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "reconciliation_engine": "python",
         "reconciliation_compare_strict": False,
         "custom_fields_request_delay": 0.0,
+        "custom_fields_enabled": False,
         "ensure_netbox_objects": True,
         "delete_orphans": False,
         "debug_cache": False,
@@ -291,6 +292,10 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
                 default=False,
             ),
             "custom_fields_request_delay": float(settings.get("custom_fields_request_delay", 0.0)),
+            "custom_fields_enabled": _coerce_bool(
+                settings.get("custom_fields_enabled"),
+                default=False,
+            ),
             "ensure_netbox_objects": bool(settings.get("ensure_netbox_objects", True)),
             "delete_orphans": bool(settings.get("delete_orphans", False)),
             "debug_cache": bool(settings.get("debug_cache", False)),

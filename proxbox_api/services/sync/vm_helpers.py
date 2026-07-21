@@ -625,29 +625,33 @@ async def stamp_vm_last_run_id(
     if not record_id:
         return
 
-    current_cf = record.get("custom_fields")
-    if not isinstance(current_cf, dict):
-        current_cf = {}
+    from proxbox_api.services.custom_fields import include_custom_fields_in_payload
 
-    if current_cf.get(LAST_RUN_ID_CUSTOM_FIELD) == run_id:
-        return
+    if include_custom_fields_in_payload(
+        True,
+        context="legacy VM last-run custom-field stamp",
+    ):
+        current_cf = record.get("custom_fields")
+        if not isinstance(current_cf, dict):
+            current_cf = {}
 
-    from proxbox_api.netbox_rest import rest_patch_async
+        if current_cf.get(LAST_RUN_ID_CUSTOM_FIELD) != run_id:
+            from proxbox_api.netbox_rest import rest_patch_async
 
-    try:
-        await rest_patch_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            record_id,
-            {"custom_fields": {LAST_RUN_ID_CUSTOM_FIELD: run_id}},
-        )
-    except Exception as error:  # noqa: BLE001
-        logger.warning(
-            "Failed to stamp proxbox_last_run_id on VM id=%s name=%s: %s",
-            record_id,
-            record.get("name"),
-            error,
-        )
+            try:
+                await rest_patch_async(
+                    nb,
+                    "/api/virtualization/virtual-machines/",
+                    record_id,
+                    {"custom_fields": {LAST_RUN_ID_CUSTOM_FIELD: run_id}},
+                )
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "Failed to stamp proxbox_last_run_id on VM id=%s name=%s: %s",
+                    record_id,
+                    record.get("name"),
+                    error,
+                )
 
     from proxbox_api.services.sync.sync_state_writer import write_vm_last_run_sync_state
 

@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services import custom_fields as custom_fields_service
 
 
 @dataclass
@@ -34,6 +35,15 @@ class _FakeBulkResult:
     updated: int = 0
     unchanged: int = 0
     failed: int = 0
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        custom_fields_service,
+        "get_plugin_bool",
+        lambda *, settings_key, default: True,
+    )
 
 
 def _make_bulk_capture(monkeypatch: pytest.MonkeyPatch, target: str) -> _Capture:

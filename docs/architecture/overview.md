@@ -61,8 +61,13 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
 ### NetBox sync-state sidecars
 
 The NetBox plugin owns typed Proxbox sync-state sidecars under
-`/api/plugins/proxbox/sync-state/*`. `proxbox-api` writes these rows
-additively during sync while continuing to write the legacy custom fields:
+`/api/plugins/proxbox/sync-state/*`. These typed sidecars are now the
+**standard** source of truth for the Proxmox-to-NetBox linkage: `proxbox-api`
+writes and reads them during sync. The legacy reflection custom fields are
+**deprecated** and gated behind the `custom_fields_enabled` plugin setting,
+which defaults to `false` — so by default no custom fields are written, read, or
+reconciled, and the sidecars stand alone. `proxbox-api` writes these rows during
+sync:
 
 - `ProxboxVirtualMachineSyncState` extends `virtualization.VirtualMachine`.
 - `ProxboxDeviceSyncState` extends `dcim.Device`.
@@ -76,14 +81,18 @@ VM-interface bridge links, virtual-disk storage links, and VM last-run ids.
 Writes use the existing NetBox session and degrade gracefully when an older
 plugin does not expose the sidecar API.
 
-During the migration window, `proxbox-api` also reads sidecars first for
-custom-field-dependent state. VM identity and orphan-sweep last-run checks use
-the typed sidecar rows before falling back to the legacy `cf_*` filters.
-Role-ownership snapshots remain legacy-CF-only because the VM sidecar model has
-no role ownership field. This lets a normal re-sync re-adopt existing NetBox
-VMs after Proxbox custom fields have been removed, while preserving
-compatibility with older plugin builds. Full custom-field retirement remains a
-later migration item.
+`proxbox-api` reads the sidecars for custom-field-dependent state. VM identity
+and orphan-sweep last-run checks use the typed sidecar rows. With
+`custom_fields_enabled=false` (the default) there is **no** legacy `cf_*`
+fallback — reads are sidecar-only, and because the sidecars are rebuilt from
+live Proxmox data on each sync, a normal re-sync re-adopts existing NetBox VMs
+even when the custom fields are already gone. Setting
+`custom_fields_enabled=true` restores the legacy behavior for a transition
+period (dual-writing custom fields and using the `cf_*` read fallback), and
+every custom-field code path then emits a deprecation warning. Role-ownership
+snapshots have no sidecar field and are only read when the flag is enabled. Full
+custom-field retirement remains a later migration item; no custom-field data is
+deleted while the flag exists.
 
 ### `NetBoxEndpoint`
 

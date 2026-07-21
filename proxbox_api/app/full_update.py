@@ -20,6 +20,7 @@ from proxbox_api.dependencies import (
     NetBoxSessionDep,
     NetBoxSyncDependenciesDep,
     ProxboxTagDep,
+    ResolvedSyncBehaviorFlagsDep,
     ResolvedSyncOverwriteFlagsDep,
 )
 from proxbox_api.exception import ProxboxException
@@ -45,7 +46,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
 )
 from proxbox_api.runtime_settings import get_bool
 from proxbox_api.schemas.stream_messages import ErrorCategory
-from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.orphan_sweep import (
@@ -98,6 +99,7 @@ async def full_update_sync(
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
+    behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
     fetch_max_concurrency: int | None = None,
     netbox_branch_schema_id: Annotated[
         str | None,
@@ -118,6 +120,7 @@ async def full_update_sync(
         custom_fields=custom_fields,
         tag=tag,
         overwrite_flags=overwrite_flags,
+        behavior_flags=behavior_flags,
         fetch_max_concurrency=fetch_max_concurrency,
         netbox_branch_schema_id=netbox_branch_schema_id,
     )
@@ -132,6 +135,7 @@ async def _full_update_sync_run(
     custom_fields,
     tag,
     overwrite_flags: SyncOverwriteFlags,
+    behavior_flags: SyncBehaviorFlags,
     fetch_max_concurrency: int | None,
     netbox_branch_schema_id: str | None,
 ) -> dict:
@@ -149,6 +153,7 @@ async def _full_update_sync_run(
             custom_fields=custom_fields,
             tag=tag,
             overwrite_flags=overwrite_flags,
+            behavior_flags=behavior_flags,
             fetch_max_concurrency=fetch_max_concurrency,
         )
 
@@ -162,6 +167,7 @@ async def _full_update_sync_impl(  # noqa: C901
     custom_fields,
     tag,
     overwrite_flags: SyncOverwriteFlags,
+    behavior_flags: SyncBehaviorFlags,
     fetch_max_concurrency: int | None,
 ) -> dict:
     sync_nodes: list = []
@@ -246,6 +252,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 overwrite_vm_description=overwrite_flags.overwrite_vm_description,
                 overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
                 overwrite_flags=overwrite_flags,
+                behavior_flags=behavior_flags,
                 run_id=operation_id,
             )
         except ProxboxException:
@@ -491,6 +498,7 @@ async def full_update_sync_stream(  # noqa: C901
     custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
+    behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
     fetch_max_concurrency: int | None = None,
     dry_run: bool = Query(
         default=False,
@@ -704,6 +712,7 @@ async def full_update_sync_stream(  # noqa: C901
                             overwrite_vm_description=overwrite_flags.overwrite_vm_description,
                             overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
                             overwrite_flags=overwrite_flags,
+                            behavior_flags=behavior_flags,
                             run_id=operation_id,
                         )
                     finally:

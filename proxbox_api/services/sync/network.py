@@ -25,6 +25,10 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVlanSyncState,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.services.custom_fields import (
+    include_custom_fields_in_payload,
+    legacy_custom_fields_payload,
+)
 from proxbox_api.services.sync.guest_vm_interface import (
     should_use_guest_agent_core_interface_name,
 )
@@ -457,13 +461,17 @@ async def _resolve_vm_interface_vlan(
             nb,
             "/api/ipam/vlans/",
             lookup={"vid": vlan_tag},
-            payload={
-                "vid": vlan_tag,
-                "name": f"VLAN {vlan_tag}",
-                "status": "active",
-                "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
-            },
+            payload=legacy_custom_fields_payload(
+                {
+                    "vid": vlan_tag,
+                    "name": f"VLAN {vlan_tag}",
+                    "status": "active",
+                    "tags": tag_refs,
+                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
+                },
+                overwrite=True,
+                context="legacy VLAN custom-field payload",
+            ),
             schema=NetBoxVlanSyncState,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
@@ -560,7 +568,11 @@ async def _reconcile_vm_interface_record(
         nb,
         "/api/virtualization/interfaces/",
         lookup=lookup,
-        payload=payload,
+        payload=legacy_custom_fields_payload(
+            payload,
+            overwrite=True,
+            context="legacy VM-interface custom-field payload",
+        ),
         schema=NetBoxVirtualMachineInterfaceSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -639,7 +651,14 @@ async def bulk_reconcile_vlans(
         result = await rest_bulk_reconcile_async(
             nb,
             "/api/ipam/vlans/",
-            payloads=vlan_payloads,
+            payloads=[
+                legacy_custom_fields_payload(
+                    payload,
+                    overwrite=True,
+                    context="legacy VLAN custom-field payload",
+                )
+                for payload in vlan_payloads
+            ],
             lookup_fields=["vid", "site", "tenant"],
             # NetBox's `site`/`tenant` filters match by slug, but the payload
             # carries their NetBox ids. Without this remap the id is silently
@@ -744,7 +763,10 @@ async def bulk_reconcile_vm_interfaces(
     }
     if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_tags:
         _vm_interface_patchable.add("tags")
-    if overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields:
+    if include_custom_fields_in_payload(
+        overwrite_flags is None or overwrite_flags.overwrite_vm_interface_custom_fields,
+        context="legacy VM-interface custom-field payload",
+    ):
         _vm_interface_patchable.add("custom_fields")
 
     interface_name_vm_to_id = {}
@@ -754,7 +776,17 @@ async def bulk_reconcile_vm_interfaces(
         result = await rest_bulk_reconcile_async(
             nb,
             "/api/virtualization/interfaces/",
-            payloads=interface_payloads,
+            payloads=[
+                legacy_custom_fields_payload(
+                    payload,
+                    overwrite=(
+                        overwrite_flags is None
+                        or overwrite_flags.overwrite_vm_interface_custom_fields
+                    ),
+                    context="legacy VM-interface custom-field payload",
+                )
+                for payload in interface_payloads
+            ],
             lookup_fields=["name", "virtual_machine"],
             # NetBox's `virtual_machine` filter matches by VM *name*; the payload
             # carries the VM id, so without this remap the id is silently ignored
@@ -837,16 +869,23 @@ async def bulk_reconcile_vm_interface_ips(
     # time; status/tags/custom_fields are safe to update, gated by the
     # per-field overwrite_ip_* flags.
     if overwrite_flags is None:
-        patchable_fields: frozenset[str] = frozenset(
-            {"status", "tags", "custom_fields", "dns_name"}
-        )
+        fields = {"status", "tags", "dns_name"}
+        if include_custom_fields_in_payload(
+            True,
+            context="legacy IP-address custom-field payload",
+        ):
+            fields.add("custom_fields")
+        patchable_fields = frozenset(fields)
     else:
         gated: set[str] = set()
         if overwrite_flags.overwrite_ip_status:
             gated.add("status")
         if overwrite_flags.overwrite_ip_tags:
             gated.add("tags")
-        if overwrite_flags.overwrite_ip_custom_fields:
+        if include_custom_fields_in_payload(
+            overwrite_flags.overwrite_ip_custom_fields,
+            context="legacy IP-address custom-field payload",
+        ):
             gated.add("custom_fields")
         if overwrite_flags.overwrite_ip_address_dns_name:
             gated.add("dns_name")
@@ -857,7 +896,16 @@ async def bulk_reconcile_vm_interface_ips(
         result = await rest_bulk_reconcile_async(
             nb,
             "/api/ipam/ip-addresses/",
-            payloads=ip_payloads,
+            payloads=[
+                legacy_custom_fields_payload(
+                    payload,
+                    overwrite=(
+                        overwrite_flags is None or overwrite_flags.overwrite_ip_custom_fields
+                    ),
+                    context="legacy IP-address custom-field payload",
+                )
+                for payload in ip_payloads
+            ],
             lookup_fields=["address", "assigned_object_id"],
             schema=NetBoxIpAddressSyncState,
             current_normalizer=_ip_address_current_normalizer,

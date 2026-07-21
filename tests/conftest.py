@@ -32,7 +32,11 @@ from proxbox_api.routes.proxmox.runtime_generated import (
     clear_generated_proxmox_routes,
 )
 from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
+from proxbox_api.services.sync.sync_state_reader import (
+    reset_sidecar_reader_availability_cache,
+)
 from proxbox_api.session.netbox import get_netbox_async_session, get_netbox_session
+from proxbox_api.settings_client import invalidate_settings_cache
 
 
 class FakeNetBoxSession:
@@ -112,6 +116,8 @@ def reset_fastapi_state():
     app.openapi_schema = None
     _reset_netbox_globals()
     invalidate_custom_fields_cache()
+    invalidate_settings_cache()
+    reset_sidecar_reader_availability_cache()
     yield
     app.dependency_overrides.clear()
     clear_generated_proxmox_route_cache()
@@ -119,6 +125,8 @@ def reset_fastapi_state():
     app.openapi_schema = None
     _reset_netbox_globals()
     invalidate_custom_fields_cache()
+    invalidate_settings_cache()
+    reset_sidecar_reader_availability_cache()
 
 
 @pytest.fixture

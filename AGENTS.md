@@ -99,13 +99,19 @@ device/cluster timestamps, VM-interface bridge FKs, and virtual-disk storage
 FKs must be built from the same live payloads already used for custom-field
 writes. Keep these sidecar writes best-effort: 404/501 from older plugin builds
 and transient NetBox errors are logged and skipped without aborting sync.
-Sync reads that historically depended on Proxbox custom fields must resolve via
-`proxbox_api/services/sync/sync_state_reader.py` first, then fall back to the
-legacy `cf_*` query when no sidecar row exists or the plugin sidecar API is
-unavailable. This includes VM identity lookup and orphan-sweep last-run checks.
-Role-ownership snapshots remain legacy-CF-only because the VM sidecar model has
-no role ownership field. Complete custom-field retirement is a separate
-follow-up; do not remove legacy CF fallback in this item.
+The typed sidecars are the DEFAULT source of truth. The legacy reflection custom
+fields are deprecated and gated behind the `custom_fields_enabled` plugin setting
+(default `false`). Gate every legacy custom-field write, read, and reconcile on
+`custom_fields_enabled()` (helpers in `proxbox_api/services/custom_fields.py`),
+composed with the existing `overwrite_*_custom_fields` flags; keep building the
+in-memory `custom_fields` dict so sidecar derivation stays intact, and never
+disable sidecar writes when the flag is off. Sync reads resolve via
+`proxbox_api/services/sync/sync_state_reader.py`: sidecar-only by default, with
+the legacy `cf_*` fallback (VM identity lookup, orphan-sweep last-run checks)
+running only when `custom_fields_enabled=true`, which also emits a deprecation
+warning. Role-ownership snapshots have no sidecar field and are read only when
+the flag is enabled. Complete custom-field retirement is a separate follow-up; do
+not delete custom-field data while the flag exists.
 
 ## CI/CD Workflows
 

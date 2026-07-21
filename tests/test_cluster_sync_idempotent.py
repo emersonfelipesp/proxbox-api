@@ -54,6 +54,12 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
     """Return a NetBox stand-in whose stored cluster type and cluster already
     match the payloads that ``upsert_*`` will compute, so the second sync run
     must be a no-op end-to-end."""
+    monkeypatch.setattr(
+        "proxbox_api.services.custom_fields.get_plugin_bool",
+        lambda *, settings_key, default=False: (
+            True if settings_key == "custom_fields_enabled" else default
+        ),
+    )
     cluster_type_record = _FakeRecord(
         {
             "name": "Cluster",
