@@ -168,3 +168,37 @@ def test_to_mapping_warns_on_uncoercible_value(proxbox_caplog):
     assert to_mapping(object()) == {}
 
     assert any("could not coerce" in record.getMessage() for record in proxbox_caplog.records)
+
+
+def test_to_mapping_root_unwrap_is_bounded(proxbox_caplog):
+    """A malformed ``root`` chain must not spin the helper into recursion.
+
+    ``RootModel`` unwrapping recurses, so a record whose ``root`` points back at
+    itself (or a pathologically deep chain) would otherwise raise RecursionError
+    in the middle of a sync run.
+    """
+
+    class _SelfRoot:
+        pass
+
+    self_referential = _SelfRoot()
+    self_referential.root = self_referential
+
+    class _Node:
+        pass
+
+    chain: object = {"deep": True}
+    for _ in range(10):
+        node = _Node()
+        node.root = chain
+        chain = node
+
+    # Neither raises; both degrade to the documented empty mapping.
+    assert to_mapping(self_referential) == {}
+    assert to_mapping(chain) == {}
+
+    # A single legitimate unwrap still works.
+    class _RootWrapper:
+        root = {"ok": True}
+
+    assert to_mapping(_RootWrapper()) == {"ok": True}

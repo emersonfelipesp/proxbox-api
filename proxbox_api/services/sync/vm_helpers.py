@@ -92,7 +92,10 @@ def extract_vm_disk_aggregate_size(error: Exception) -> int | None:
         return None
 
 
-def to_mapping(value: object) -> dict[str, object]:
+_MAX_ROOT_UNWRAP_DEPTH = 4
+
+
+def to_mapping(value: object, _depth: int = 0) -> dict[str, object]:
     """Coerce a NetBox record-ish value to a dictionary mapping.
 
     Supports plain dicts, netbox-sdk ``Record`` objects (``serialize()``),
@@ -137,9 +140,19 @@ def to_mapping(value: object) -> dict[str, object]:
             return {}
         if isinstance(dumped, dict):
             return dumped
+    # ``RootModel``-style unwrap. Bounded, and guarded against a value whose
+    # ``root`` points back at itself, so a malformed record can never spin this
+    # helper into unbounded recursion inside a sync run.
     root = getattr(value, "root", None)
-    if root is not None and not callable(root):
-        return to_mapping(root)
+    if root is not None and root is not value and not callable(root):
+        if _depth >= _MAX_ROOT_UNWRAP_DEPTH:
+            logger.warning(
+                "to_mapping() stopped unwrapping %s after %s nested 'root' levels",
+                type(value).__name__,
+                _MAX_ROOT_UNWRAP_DEPTH,
+            )
+            return {}
+        return to_mapping(root, _depth + 1)
     logger.warning(
         "to_mapping() could not coerce %s to a mapping; treating it as empty",
         type(value).__name__,
