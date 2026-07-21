@@ -95,9 +95,9 @@ _SENSITIVE_KEY_VALUE_PATTERN = re.compile(
     (?![-\w])
     (?P<separator>\s*[=:]\s*)
     (?P<value>
-        "(?:\\.|[^"\\])*"
+        [A-Za-z]{0,2}"(?:\\.|[^"\\])*"
         |
-        '(?:\\.|[^'\\])*'
+        [A-Za-z]{0,2}'(?:\\.|[^'\\])*'
         |
         (?:(?:bearer|basic|token)\s+)?[^\s&;,}\"'}]+
     )
