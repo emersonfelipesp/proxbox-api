@@ -505,6 +505,47 @@ async def test_stale_sidecar_candidates_filter_last_run_client_side(
 
 
 @pytest.mark.asyncio
+async def test_load_vm_last_synced_names_omits_conflicting_duplicate_sidecar_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+
+    async def _fake_paginated(
+        _nb: object,
+        path: str,
+        *,
+        base_query: dict[str, object],
+        page_size: int,
+    ):
+        assert path == VM_SYNC_STATE_PATH
+        assert base_query == {}
+        assert page_size == 500
+        return [
+            {"id": 1, "virtual_machine": {"id": 42}, "proxmox_vm_name": "web-01"},
+            {"id": 2, "virtual_machine": {"id": 42}, "proxmox_vm_name": "web-02"},
+            {"id": 3, "virtual_machine": {"id": 43}, "proxmox_vm_name": "db-01"},
+            {"id": 4, "virtual_machine": {"id": 43}, "proxmox_vm_name": "db-01"},
+            {"id": 5, "virtual_machine": {"id": 44}, "proxmox_vm_name": ""},
+            {"id": 6, "virtual_machine": {"id": 44}, "proxmox_vm_name": "api-01"},
+        ]
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    names = await sync_state_reader.load_vm_last_synced_names(object())
+
+    assert names == {43: "db-01", 44: "api-01"}
+    assert len(warnings) == 1
+    assert "NetBox VM id=42" in warnings[0]
+    assert "web-01" in warnings[0]
+    assert "web-02" in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_create_does_not_create_when_sync_state_resolution_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

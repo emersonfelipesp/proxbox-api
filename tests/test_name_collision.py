@@ -271,6 +271,28 @@ async def test_proxmox_rename_does_not_collide_with_its_own_old_name():
 
 
 @pytest.mark.asyncio
+async def test_proxmox_rename_applies_when_existing_name_is_own_collision_suffix():
+    """A VM's own old algorithmic suffix must not be classified as an operator edit."""
+    used: set[str] = {"web-01 (2)"}
+    resolution = await resolve_unique_vm_name(
+        None,
+        netbox_cluster_id=10,
+        proxmox_cluster_name="lab",
+        candidate="web-02",
+        proxmox_vmid=101,
+        used_names_in_cluster=used,
+        existing_vm_by_vmid=_existing(101, "web-01 (2)"),
+        last_synced_proxmox_name="web-01",
+    )
+
+    assert resolution.resolved_name == "web-02"
+    assert resolution.operator_renamed is False
+    assert resolution.is_collision is False
+    assert "web-01 (2)" not in used
+    assert "web-02" in used
+
+
+@pytest.mark.asyncio
 async def test_genuine_collision_still_suffixes_after_a_proxmox_rename():
     """A real clash with a *different* VM must still be suffixed."""
     used: set[str] = {"web-02"}

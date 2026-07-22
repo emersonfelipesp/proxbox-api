@@ -138,8 +138,9 @@ async def resolve_unique_vm_name(
             # first upgrade -- fall back to the historical assumption. Preserving
             # a name we are unsure about is the safer failure: it loses a rename,
             # where the opposite would destroy an operator's deliberate edit.
-            renamed_in_proxmox = (
-                bool(last_synced_proxmox_name) and existing_name == last_synced_proxmox_name
+            renamed_in_proxmox = bool(last_synced_proxmox_name) and (
+                existing_name == last_synced_proxmox_name
+                or _is_algorithmic_variant(existing_name, last_synced_proxmox_name)
             )
             if not renamed_in_proxmox:
                 used_names_in_cluster.add(existing_name)

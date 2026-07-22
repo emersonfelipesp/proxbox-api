@@ -497,7 +497,7 @@ async def load_vm_last_synced_names(
     if not rows:
         return {}
 
-    names: dict[int, str] = {}
+    names_by_parent_id: dict[int, set[str]] = {}
     for row in rows:
         sidecar = _record_to_dict(row)
         if not sidecar:
@@ -507,7 +507,19 @@ async def load_vm_last_synced_names(
             continue
         name = _sidecar_text(sidecar.get("proxmox_vm_name"))
         if name:
-            names[parent_id] = name
+            names_by_parent_id.setdefault(parent_id, set()).add(name)
+
+    names: dict[int, str] = {}
+    for parent_id, values in names_by_parent_id.items():
+        if len(values) == 1:
+            names[parent_id] = next(iter(values))
+            continue
+        logger.warning(
+            "Omitting proxmox_vm_name evidence for NetBox VM id=%s because "
+            "multiple sync-state sidecar rows disagree: %s",
+            parent_id,
+            sorted(values),
+        )
     return names
 
 

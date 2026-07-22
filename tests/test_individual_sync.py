@@ -327,6 +327,128 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sync_vm_individual_applies_proxmox_rename_and_writes_sidecar_name(
+    monkeypatch,
+):
+    existing_vm = {
+        "id": 55,
+        "name": "web-01",
+        "cluster": {"id": 10, "name": "lab"},
+        "tags": [],
+        "custom_fields": {
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+        },
+    }
+    recorded_payload: dict[str, object] = {}
+    sidecar_kwargs: dict[str, object] = {}
+
+    async def _fake_get_deps(self, cluster_name, node_name, vm_type):
+        return (
+            SimpleNamespace(id=10),
+            SimpleNamespace(id=11),
+            SimpleNamespace(id=12),
+            SimpleNamespace(id=13),
+            SimpleNamespace(id=14),
+            SimpleNamespace(id=15),
+            SimpleNamespace(id=16),
+            SimpleNamespace(id=17),
+            SimpleNamespace(id=18),
+        )
+
+    async def _fake_get_vm_config_individual(*_args, **_kwargs):
+        return {"onboot": 1, "agent": 1}
+
+    async def _fake_get_vm_resource_individual(*_args, **_kwargs):
+        return {
+            "vmid": 101,
+            "name": "web-02",
+            "node": "pve01",
+            "type": "qemu",
+            "status": "running",
+            "maxcpu": 4,
+            "maxmem": 8_000_000_000,
+            "maxdisk": 120_000_000_000,
+        }
+
+    async def _fake_resolver(*_args, **_kwargs):
+        return SimpleNamespace(record=existing_vm, record_id=55, source="sidecar")
+
+    async def _fake_rest_list_async(*_args, **_kwargs):
+        return [existing_vm]
+
+    async def _fake_sidecar_by_parent(_nb, vm_id):
+        assert vm_id == 55
+        return {"virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"}
+
+    async def _fake_detect_netbox_version(_nb):
+        return (4, 5, 0)
+
+    async def _fake_rest_reconcile_async(*_args, **kwargs):
+        recorded_payload.update(kwargs["payload"])
+        return FakeRecord(kwargs["payload"], record_id=55)
+
+    async def _fake_write_sidecar(*_args, **kwargs):
+        sidecar_kwargs.update(kwargs)
+        return None
+
+    async def _fake_stamp(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        individual_vm_sync.BaseIndividualSyncService,
+        "_get_or_create_vm_dependencies",
+        _fake_get_deps,
+    )
+    monkeypatch.setattr(
+        individual_vm_sync,
+        "get_vm_config_individual",
+        _fake_get_vm_config_individual,
+    )
+    monkeypatch.setattr(
+        individual_vm_sync,
+        "get_vm_resource_individual",
+        _fake_get_vm_resource_individual,
+    )
+    monkeypatch.setattr(
+        individual_vm_sync,
+        "resolve_virtual_machine_by_sync_state",
+        _fake_resolver,
+    )
+    monkeypatch.setattr(individual_vm_sync, "rest_list_async", _fake_rest_list_async)
+    monkeypatch.setattr(
+        individual_vm_sync,
+        "resolve_vm_sidecar_by_parent_id",
+        _fake_sidecar_by_parent,
+    )
+    monkeypatch.setattr(individual_vm_sync, "detect_netbox_version", _fake_detect_netbox_version)
+    monkeypatch.setattr(individual_vm_sync, "rest_reconcile_async", _fake_rest_reconcile_async)
+    monkeypatch.setattr(
+        individual_vm_sync,
+        "write_virtual_machine_sync_state",
+        _fake_write_sidecar,
+    )
+    monkeypatch.setattr(individual_vm_sync, "stamp_vm_last_run_id", _fake_stamp)
+
+    result = await sync_vm_individual(
+        nb=object(),
+        px=SimpleNamespace(name="lab", db_endpoint_id=500),
+        tag=SimpleNamespace(id=7),
+        cluster_name="lab",
+        node="pve01",
+        vm_type="qemu",
+        vmid=101,
+    )
+
+    assert result["action"] == "updated"
+    assert result["error"] is None
+    assert recorded_payload["name"] == "web-02"
+    assert sidecar_kwargs["virtual_machine_id"] == 55
+    assert sidecar_kwargs["proxmox_vm_name"] == "web-02"
+
+
+@pytest.mark.asyncio
 async def test_individual_name_collision_uses_sidecar_identity_before_rename(monkeypatch):
     payload = {
         "name": "db01",
