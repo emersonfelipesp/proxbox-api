@@ -97,7 +97,10 @@ jobs:
 
       - name: Upload coverage report
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # Gitea's artifact service implements the v3 protocol. The v4 action
+        # talks only to GitHub's newer artifact backend and fails after an
+        # otherwise-green test run with GHESNotSupportedError.
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
         with:
           name: coverage-py312-gitea
           path: coverage.xml
