@@ -83,6 +83,7 @@ def _patch_route(
     snapshot_result="UPID:pve-node-01:0001:snapshot",
     journal_entry: dict | None = None,
     snapshot_side_effect=None,
+    journal_create_side_effect=None,
     journal_update_side_effect=None,
 ):
     if journal_entry is None:
@@ -93,7 +94,10 @@ def _patch_route(
     node_mock = AsyncMock(return_value=node_or_response)
     netbox_id_mock = AsyncMock(return_value=netbox_vm_id)
     snapshot_mock = AsyncMock(return_value=snapshot_result, side_effect=snapshot_side_effect)
-    journal_create_mock = AsyncMock(return_value=journal_entry)
+    journal_create_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_create_side_effect,
+    )
     journal_update_mock = AsyncMock(
         return_value=journal_entry,
         side_effect=journal_update_side_effect,
@@ -191,6 +195,62 @@ def test_snapshot_qemu_default_snapname_when_only_idempotency_key(
     # Per §13: proxbox-{idempotency_key[:8]}
     assert body["snapname"] == "proxbox-abcdef12"
     handles["snapshot"].assert_awaited_once()
+
+
+def test_snapshot_qemu_creates_writeahead_journal_before_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 791, "url": "/api/extras/journal-entries/791/"}
+
+    async def _create_snapshot(*_args, **_kwargs):
+        events.append("snapshot_dispatch")
+        return "UPID:pve-node-01:0001:snapshot"
+
+    handles = _patch_route(
+        snapshot_side_effect=_create_snapshot,
+        journal_create_side_effect=_create_journal,
+    )
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post(
+            "/proxmox/qemu/100/snapshot",
+            params={"endpoint_id": endpoint_id},
+            json={"snapname": "before-upgrade"},
+        )
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("snapshot_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+def test_snapshot_qemu_writeahead_journal_without_id_blocks_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"})
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post("/proxmox/qemu/100/snapshot", params={"endpoint_id": endpoint_id})
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "snapshot"
+    handles["journal_create"].assert_awaited_once()
+    handles["snapshot"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 def test_snapshot_qemu_default_snapname_with_no_key_uses_utc_stamp(

@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator, Literal, TypeVar
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query, status
@@ -77,6 +78,8 @@ from proxbox_api.session.proxmox_providers import _parse_db_endpoint
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 router = APIRouter()
+
+T = TypeVar("T")
 
 VmType = Literal["qemu", "lxc"]
 Verb = Literal[
@@ -365,6 +368,125 @@ async def _finalize_journal_entry(
     return _journal_entry_url(entry) or journal_entry_url
 
 
+def _unexpected_dispatch_result(error: BaseException) -> tuple[str, str]:
+    if isinstance(error, asyncio.CancelledError):
+        return (
+            "interrupted",
+            "Operation interrupted before the Proxmox call returned.",
+        )
+    message = str(error) or type(error).__name__
+    return "failed", f"{type(error).__name__}: {message}"
+
+
+async def _finalize_after_unexpected_dispatch_error(
+    *,
+    error: BaseException,
+    phase: str,
+    nb: object,
+    netbox_vm_id: int | None,
+    writeahead_journal_entry: dict[str, object] | None,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    dispatched_at: str,
+    idempotency_key: str | None,
+    cache: object,
+    cache_key: CacheKey | None,
+    proxmox_task_upid: str | None = None,
+    extra: dict[str, object] | None = None,
+) -> None:
+    result, error_detail = _unexpected_dispatch_result(error)
+    logger.warning(
+        "Finalizing write-ahead journal for %s/%s verb=%s after %s %s: %s",
+        vm_type,
+        vmid,
+        verb,
+        phase,
+        result,
+        error_detail,
+    )
+    try:
+        await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result=result,
+            kind="warning",
+            proxmox_task_upid=proxmox_task_upid,
+            error_detail=error_detail,
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            reason="proxmox_dispatch_interrupted"
+            if isinstance(error, asyncio.CancelledError)
+            else "proxmox_dispatch_unexpected_error",
+            extra=extra,
+        )
+    except BaseException as finalize_error:  # noqa: BLE001
+        logger.warning(
+            "Failed to finalize write-ahead journal for %s/%s verb=%s after %s error: %s",
+            vm_type,
+            vmid,
+            verb,
+            phase,
+            finalize_error,
+        )
+
+
+async def _await_with_interruption_journal(
+    awaitable: Awaitable[T],
+    *,
+    phase: str,
+    nb: object,
+    netbox_vm_id: int | None,
+    writeahead_journal_entry: dict[str, object] | None,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    dispatched_at: str,
+    idempotency_key: str | None,
+    cache: object,
+    cache_key: CacheKey | None,
+    proxmox_task_upid: str | None = None,
+    extra: dict[str, object] | None = None,
+) -> T:
+    try:
+        return await awaitable
+    except ProxmoxAPIError:
+        raise
+    except BaseException as error:
+        await _finalize_after_unexpected_dispatch_error(
+            error=error,
+            phase=phase,
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            proxmox_task_upid=proxmox_task_upid,
+            extra=extra,
+        )
+        raise
+
+
 async def _open_proxmox_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
     """Open a Proxmox API session for ``endpoint`` (factored for testability)."""
     schema = _parse_db_endpoint(endpoint)
@@ -401,6 +523,7 @@ async def delete_vm_via_intent_dispatcher(
     node: str,
     *,
     actor: str,
+    suppress_dispatcher_journal: bool = False,
 ) -> str | None:
     """Destroy a VM through the existing intent deletion dispatcher."""
     from proxbox_api.routes.intent.dispatchers.common import IntentEndpointContext
@@ -415,10 +538,22 @@ async def delete_vm_via_intent_dispatcher(
     try:
         if vm_type == "qemu":
             result = await dispatch_qemu_destroy(
-                endpoint_context, vmid, node, run_uuid, actor=actor
+                endpoint_context,
+                vmid,
+                node,
+                run_uuid,
+                actor=actor,
+                suppress_journal=suppress_dispatcher_journal,
             )
         else:
-            result = await dispatch_lxc_destroy(endpoint_context, vmid, node, run_uuid, actor=actor)
+            result = await dispatch_lxc_destroy(
+                endpoint_context,
+                vmid,
+                node,
+                run_uuid,
+                actor=actor,
+                suppress_journal=suppress_dispatcher_journal,
+            )
     except HTTPException as error:
         raise ProxmoxAPIError(message=str(error.detail), original_error=error) from error
 
@@ -570,7 +705,22 @@ async def _dispatch_start(
 
     # State-based no-op pre-flight (§4.2). Reached before any cache write.
     try:
-        current = await get_vm_status(proxmox, node, vm_type, vmid)
+        current = await _await_with_interruption_journal(
+            get_vm_status(proxmox, node, vm_type, vmid),
+            phase="status",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="start",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -615,7 +765,22 @@ async def _dispatch_start(
 
     # Dispatch the verb.
     try:
-        upid = await start_vm(proxmox, node, vm_type, vmid)
+        upid = await _await_with_interruption_journal(
+            start_vm(proxmox, node, vm_type, vmid),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="start",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -723,7 +888,22 @@ async def _dispatch_stop(
         return writeahead_journal_entry
 
     try:
-        current = await get_vm_status(proxmox, node, vm_type, vmid)
+        current = await _await_with_interruption_journal(
+            get_vm_status(proxmox, node, vm_type, vmid),
+            phase="status",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="stop",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -767,7 +947,22 @@ async def _dispatch_stop(
         )
 
     try:
-        upid = await stop_vm(proxmox, node, vm_type, vmid)
+        upid = await _await_with_interruption_journal(
+            stop_vm(proxmox, node, vm_type, vmid),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="stop",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -875,7 +1070,22 @@ async def _dispatch_reboot(
         return writeahead_journal_entry
 
     try:
-        current = await get_vm_status(proxmox, node, vm_type, vmid)
+        current = await _await_with_interruption_journal(
+            get_vm_status(proxmox, node, vm_type, vmid),
+            phase="status",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="reboot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -919,7 +1129,22 @@ async def _dispatch_reboot(
         )
 
     try:
-        upid = await reboot_vm(proxmox, node, vm_type, vmid)
+        upid = await _await_with_interruption_journal(
+            reboot_vm(proxmox, node, vm_type, vmid),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="reboot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -1022,14 +1247,29 @@ async def _dispatch_delete(
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
 
-    stop_task_upid, prepare_response = await _prepare_delete_dispatch(
-        proxmox=proxmox,
-        node=node,
-        vm_type=vm_type,
-        vmid=vmid,
+    stop_task_upid, prepare_response = await _await_with_interruption_journal(
+        _prepare_delete_dispatch(
+            proxmox=proxmox,
+            node=node,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        ),
+        phase="delete_prepare",
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         writeahead_journal_entry=writeahead_journal_entry,
+        verb="delete",
+        vm_type=vm_type,
+        vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
@@ -1042,8 +1282,30 @@ async def _dispatch_delete(
 
     extra = _delete_extra(stop_task_upid)
     try:
-        upid = await delete_vm_via_intent_dispatcher(
-            endpoint, session, vm_type, vmid, node, actor=actor
+        upid = await _await_with_interruption_journal(
+            delete_vm_via_intent_dispatcher(
+                endpoint,
+                session,
+                vm_type,
+                vmid,
+                node,
+                actor=actor,
+                suppress_dispatcher_journal=True,
+            ),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="delete",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            extra=extra,
         )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
@@ -1186,8 +1448,22 @@ async def _dispatch_snapshot(
     effective_snapname = snapname or _default_snapname(idempotency_key)
 
     try:
-        upid = await create_vm_snapshot(
-            proxmox, node, vm_type, vmid, effective_snapname, description
+        upid = await _await_with_interruption_journal(
+            create_vm_snapshot(proxmox, node, vm_type, vmid, effective_snapname, description),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="snapshot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            extra={"snapname": effective_snapname},
         )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
@@ -1311,16 +1587,6 @@ async def _dispatch_backup(
         return writeahead_journal_entry
 
     try:
-        upid = await backup_vm(
-            proxmox,
-            node,
-            vmid,
-            storage=storage_name,
-            mode=mode,
-            compress=compress,
-            notes=notes,
-        )
-    except ProxmoxAPIError as error:
         extra: dict[str, object] = {
             "storage": storage_name,
             "mode": mode,
@@ -1328,6 +1594,32 @@ async def _dispatch_backup(
         }
         if notes is not None:
             extra["notes"] = notes
+        upid = await _await_with_interruption_journal(
+            backup_vm(
+                proxmox,
+                node,
+                vmid,
+                storage=storage_name,
+                mode=mode,
+                compress=compress,
+                notes=notes,
+            ),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="backup",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            extra=extra,
+        )
+    except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
@@ -1350,13 +1642,6 @@ async def _dispatch_backup(
             extra=extra,
         )
 
-    extra = {
-        "storage": storage_name,
-        "mode": mode,
-        "compress": compress,
-    }
-    if notes is not None:
-        extra["notes"] = notes
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
@@ -1441,7 +1726,23 @@ async def _dispatch_delete_snapshot(
         return writeahead_journal_entry
 
     try:
-        upid = await delete_vm_snapshot(proxmox, node, vm_type, vmid, snapname)
+        upid = await _await_with_interruption_journal(
+            delete_vm_snapshot(proxmox, node, vm_type, vmid, snapname),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="delete_snapshot",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            extra={"snapname": snapname},
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -1611,7 +1912,22 @@ async def _dispatch_migrate(
     # §9 preflight: GET nodes/{node}/{vm_type}/{vmid}/migrate, then
     # apply the three reject conditions before any state mutation.
     try:
-        preflight = await migrate_preflight(proxmox, node, vm_type, vmid)
+        preflight = await _await_with_interruption_journal(
+            migrate_preflight(proxmox, node, vm_type, vmid),
+            phase="preflight",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="migrate",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -1660,7 +1976,23 @@ async def _dispatch_migrate(
         )
 
     try:
-        upid = await migrate_vm(proxmox, node, vm_type, vmid, target, online)
+        upid = await _await_with_interruption_journal(
+            migrate_vm(proxmox, node, vm_type, vmid, target, online),
+            phase="dispatch",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="migrate",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            extra={"target": target, "online": online, "source_node": node},
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb,
@@ -2167,13 +2499,42 @@ async def _handle_migrate_cancel(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb_session,
+        netbox_vm_id=netbox_vm_id,
+        verb="migrate",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=None,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     try:
-        await cancel_task(proxmox, node, task_upid)
+        await _await_with_interruption_journal(
+            cancel_task(proxmox, node, task_upid),
+            phase="cancel",
+            nb=nb_session,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="migrate",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=None,
+            cache=get_idempotency_cache(),
+            cache_key=None,
+            proxmox_task_upid=task_upid,
+        )
     except ProxmoxAPIError as error:
         return await _audit_and_respond(
             nb=nb_session,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="migrate",
             vm_type=vm_type,
             vmid=vmid,
@@ -2194,6 +2555,7 @@ async def _handle_migrate_cancel(
     return await _audit_and_respond(
         nb=nb_session,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="migrate",
         vm_type=vm_type,
         vmid=vmid,
