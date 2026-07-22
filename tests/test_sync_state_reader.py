@@ -73,6 +73,68 @@ def test_extract_payload_preserves_sidecar_absent_statuses() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_vm_last_synced_names_keeps_unavailable_sidecar_read_at_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    debug_messages: list[str] = []
+
+    async def _fake_paginated(*_args: Any, **_kwargs: Any):
+        raise ProxboxException(
+            message="Not found",
+            detail="Not found.",
+            http_status_code=404,
+        )
+
+    def _capture_debug(message: str, *args: object) -> None:
+        debug_messages.append(message % args)
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    monkeypatch.setattr(sync_state_reader.logger, "debug", _capture_debug)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    names = await sync_state_reader.load_vm_last_synced_names(object())
+
+    assert names == {}
+    assert warnings == []
+    assert any("sidecar read" in message and "unavailable" in message for message in debug_messages)
+
+
+@pytest.mark.asyncio
+async def test_load_vm_last_synced_names_warns_on_unexpected_sidecar_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    debug_messages: list[str] = []
+
+    async def _fake_paginated(*_args: Any, **_kwargs: Any):
+        raise RuntimeError("temporary NetBox outage")
+
+    def _capture_debug(message: str, *args: object) -> None:
+        debug_messages.append(message % args)
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    monkeypatch.setattr(sync_state_reader.logger, "debug", _capture_debug)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    names = await sync_state_reader.load_vm_last_synced_names(object())
+
+    assert names == {}
+    assert debug_messages == []
+    assert len(warnings) == 1
+    assert "sidecar read failed" in warnings[0]
+    assert "temporary NetBox outage" in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_vm_identity_resolver_prefers_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 

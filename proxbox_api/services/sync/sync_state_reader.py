@@ -89,7 +89,7 @@ def _memoize_sidecar_failure(path: str, error: Exception) -> None:
             getattr(error, "detail", str(error)),
         )
     else:
-        logger.debug(
+        logger.warning(
             "Proxbox sync-state sidecar read failed at %s; "
             "legacy custom-field fallback is available only when custom_fields_enabled=true: %s",
             path,
