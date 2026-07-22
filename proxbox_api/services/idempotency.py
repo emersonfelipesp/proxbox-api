@@ -23,7 +23,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeVar
 
 Verb = Literal[
     "start",
@@ -36,6 +36,7 @@ Verb = Literal[
     "delete_snapshot",
 ]
 TTL_SECONDS = 60.0
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,22 @@ class IdempotencyCache:
         expired = [k for k, e in self._entries.items() if e.expires_at <= now]
         for k in expired:
             del self._entries[k]
+
+    async def _await_to_completion(self, task: asyncio.Task[T]) -> tuple[T, bool]:
+        was_cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                was_cancelled = True
+                continue
+        return task.result(), was_cancelled
+
+    async def _release_single_flight(self, cache_key: CacheKey, flight: _Flight) -> None:
+        async with self._lock:
+            flight.users -= 1
+            if flight.users == 0 and self._flights.get(cache_key) is flight:
+                del self._flights[cache_key]
 
     async def get(self, cache_key: CacheKey) -> dict[str, object] | None:
         entry = await self.get_entry(cache_key)
@@ -158,17 +175,21 @@ class IdempotencyCache:
             flight.users += 1
 
         lock_acquired = False
+        pending_error: BaseException | None = None
         try:
             await flight.lock.acquire()
             lock_acquired = True
             yield
+        except BaseException as error:
+            pending_error = error
+            raise
         finally:
             if lock_acquired:
                 flight.lock.release()
-            async with self._lock:
-                flight.users -= 1
-                if flight.users == 0 and self._flights.get(cache_key) is flight:
-                    del self._flights[cache_key]
+            cleanup_task = asyncio.create_task(self._release_single_flight(cache_key, flight))
+            _, cleanup_cancelled = await self._await_to_completion(cleanup_task)
+            if cleanup_cancelled and pending_error is None:
+                raise asyncio.CancelledError()
 
     async def clear(self) -> None:
         async with self._lock:

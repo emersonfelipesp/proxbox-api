@@ -625,6 +625,8 @@ async def test_start_qemu_cancelled_writeahead_create_finalizes_same_entry_and_c
         await asyncio.wait_for(create_committed.wait(), timeout=1)
         first.cancel()
         await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.sleep(0)
         release_create.set()
         with pytest.raises(asyncio.CancelledError):
             await first
@@ -662,6 +664,121 @@ async def test_start_qemu_cancelled_writeahead_create_finalizes_same_entry_and_c
     )
     assert cached is not None
     assert cached.journal_finalization is None
+
+
+@pytest.mark.asyncio
+async def test_start_qemu_cancelled_dispatch_cleanup_survives_second_cancel_and_caches():
+    route_session = _route_session()
+    cache = get_idempotency_cache()
+    await cache.clear()
+    dispatch_started = asyncio.Event()
+    patch_started = asyncio.Event()
+    release_patch = asyncio.Event()
+    patched_comments: list[str] = []
+
+    async def _start_vm(*_args, **_kwargs):
+        dispatch_started.set()
+        await asyncio.Event().wait()
+
+    async def _update_journal(_nb, **kwargs):
+        patch_started.set()
+        await release_patch.wait()
+        patched_comments.append(kwargs["comments"])
+        return {"id": 789, "url": "/api/extras/journal-entries/789/"}
+
+    handles = _patch_route(
+        start_side_effect=_start_vm,
+        journal_update_side_effect=_update_journal,
+    )
+    for patcher in handles["patches"]:
+        patcher.start()
+    try:
+        first = asyncio.create_task(
+            _call_start(
+                route_session,
+                idempotency_key="key-cancel-dispatch-finalize",
+                actor="alice@netbox",
+            )
+        )
+        await asyncio.wait_for(dispatch_started.wait(), timeout=1)
+        first.cancel()
+        await asyncio.wait_for(patch_started.wait(), timeout=1)
+        first.cancel()
+        await asyncio.sleep(0)
+        release_patch.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        retry = await _call_start(
+            route_session,
+            idempotency_key="key-cancel-dispatch-finalize",
+            actor="alice@netbox",
+        )
+    finally:
+        for patcher in handles["patches"]:
+            patcher.stop()
+
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+    handles["start"].assert_awaited_once()
+    assert len(patched_comments) == 1
+    assert "result: interrupted" in patched_comments[0]
+
+    assert retry.status_code == 500
+    body = _json_response(retry)
+    assert body["result"] == "interrupted"
+    assert body["journal_entry_url"] == "/api/extras/journal-entries/789/"
+    assert body["reason"] == "proxmox_dispatch_interrupted"
+    cached = await cache.get_entry(
+        CacheKey(
+            endpoint_id=73,
+            verb="start",
+            vmid=100,
+            key="key-cancel-dispatch-finalize",
+        )
+    )
+    assert cached is not None
+    assert cached.journal_finalization is None
+    assert cached.response.get("journal_finalized") is not False
+
+
+@pytest.mark.asyncio
+async def test_start_empty_idempotency_key_is_unkeyed_and_not_serialized():
+    route_session = _route_session()
+    cache = get_idempotency_cache()
+    await cache.clear()
+    dispatch_count = 0
+    both_dispatched = asyncio.Event()
+    release_dispatch = asyncio.Event()
+
+    async def _start_vm(*_args, **_kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        if dispatch_count == 2:
+            both_dispatched.set()
+        await release_dispatch.wait()
+        return "UPID:pve-node-01:0001:start"
+
+    handles = _patch_route(start_side_effect=_start_vm)
+    for patcher in handles["patches"]:
+        patcher.start()
+    try:
+        first = asyncio.create_task(_call_start(route_session, idempotency_key=""))
+        second = asyncio.create_task(_call_start(route_session, idempotency_key=""))
+        await asyncio.wait_for(both_dispatched.wait(), timeout=1)
+        release_dispatch.set()
+        first_response, second_response = await asyncio.gather(first, second)
+    finally:
+        for patcher in handles["patches"]:
+            patcher.stop()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert handles["journal_create"].await_count == 2
+    assert handles["start"].await_count == 2
+    assert handles["journal"].await_count == 2
+    assert cache._entries == {}
+    assert cache._flights == {}
 
 
 def test_start_lxc_routes_through_same_dispatch(client: TestClient):

@@ -121,6 +121,18 @@ class JournalFinalizationResult:
     retry_metadata: dict[str, object] | None = None
 
 
+async def _await_to_completion(task: asyncio.Task[T]) -> tuple[T, bool]:
+    """Await ``task`` to completion even if this caller is cancelled repeatedly."""
+    was_cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            was_cancelled = True
+            continue
+    return task.result(), was_cancelled
+
+
 async def _gate(
     session: SessionDep,
     endpoint_id: int | None,
@@ -322,7 +334,7 @@ async def _best_effort_mark_journal_terminal(
                 comments=comments,
             )
         )
-        await asyncio.shield(task)
+        await _await_to_completion(task)
         _mark_journal_entry_terminal(writeahead_journal_entry)
     except BaseException as error:  # noqa: BLE001
         logger.error(
@@ -365,10 +377,7 @@ async def _update_journal_entry_resistant_to_cancellation(
         return entry
     except asyncio.CancelledError:
         try:
-            if task.done():
-                entry = task.result()
-            else:
-                entry = await task
+            entry, _ = await _await_to_completion(task)
             _mark_journal_entry_terminal(writeahead_journal_entry)
             _mark_journal_entry_terminal(entry)
         except BaseException as finalization_error:  # noqa: BLE001
@@ -464,7 +473,7 @@ async def _create_writeahead_journal_or_error(
         entry = await asyncio.shield(create_task)
     except asyncio.CancelledError as error:
         try:
-            entry = create_task.result() if create_task.done() else await create_task
+            entry, _ = await _await_to_completion(create_task)
         except BaseException as create_error:  # noqa: BLE001
             logger.warning(
                 "Write-ahead journal create did not return an entry after "
@@ -488,22 +497,25 @@ async def _create_writeahead_journal_or_error(
             )
             raise
 
-        await _finalize_after_unexpected_dispatch_error(
-            error=error,
-            phase="writeahead",
-            nb=nb,
-            netbox_vm_id=netbox_vm_id,
-            writeahead_journal_entry=entry,
-            verb=verb,
-            vm_type=vm_type,
-            vmid=vmid,
-            endpoint=endpoint,
-            actor=actor,
-            dispatched_at=dispatched_at,
-            idempotency_key=idempotency_key,
-            cache=cache,
-            cache_key=cache_key,
+        finalize_task = asyncio.create_task(
+            _finalize_after_unexpected_dispatch_error(
+                error=error,
+                phase="writeahead",
+                nb=nb,
+                netbox_vm_id=netbox_vm_id,
+                writeahead_journal_entry=entry,
+                verb=verb,
+                vm_type=vm_type,
+                vmid=vmid,
+                endpoint=endpoint,
+                actor=actor,
+                dispatched_at=dispatched_at,
+                idempotency_key=idempotency_key,
+                cache=cache,
+                cache_key=cache_key,
+            )
         )
+        await _await_to_completion(finalize_task)
         raise
     except Exception as error:  # noqa: BLE001
         logger.warning(
@@ -955,24 +967,27 @@ async def _await_with_interruption_journal(
     except ProxmoxAPIError:
         raise
     except BaseException as error:
-        await _finalize_after_unexpected_dispatch_error(
-            error=error,
-            phase=phase,
-            nb=nb,
-            netbox_vm_id=netbox_vm_id,
-            writeahead_journal_entry=writeahead_journal_entry,
-            verb=verb,
-            vm_type=vm_type,
-            vmid=vmid,
-            endpoint=endpoint,
-            actor=actor,
-            dispatched_at=dispatched_at,
-            idempotency_key=idempotency_key,
-            cache=cache,
-            cache_key=cache_key,
-            proxmox_task_upid=proxmox_task_upid,
-            extra=extra,
+        finalize_task = asyncio.create_task(
+            _finalize_after_unexpected_dispatch_error(
+                error=error,
+                phase=phase,
+                nb=nb,
+                netbox_vm_id=netbox_vm_id,
+                writeahead_journal_entry=writeahead_journal_entry,
+                verb=verb,
+                vm_type=vm_type,
+                vmid=vmid,
+                endpoint=endpoint,
+                actor=actor,
+                dispatched_at=dispatched_at,
+                idempotency_key=idempotency_key,
+                cache=cache,
+                cache_key=cache_key,
+                proxmox_task_upid=proxmox_task_upid,
+                extra=extra,
+            )
         )
+        await _await_to_completion(finalize_task)
         raise
 
 
@@ -2781,7 +2796,7 @@ def _idempotency_cache_key(
     idempotency_key: str | None,
 ) -> CacheKey | None:
     endpoint_id = endpoint.id
-    if idempotency_key is None or endpoint_id is None:
+    if not idempotency_key or endpoint_id is None:
         return None
     return CacheKey(endpoint_id=endpoint_id, verb=verb, vmid=vmid, key=idempotency_key)
 
