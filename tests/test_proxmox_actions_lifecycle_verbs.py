@@ -512,6 +512,40 @@ async def test_delete_qemu_stop_failure_writes_warning_and_skips_delete(
     assert handles["journal"].call_args.kwargs["kind"] == "warning"
 
 
+async def test_delete_prepare_stop_failure_cancelled_after_internal_finalize_patches_once(
+    route_session: _GateSession,
+):
+    patch_started = asyncio.Event()
+    finish_patch = asyncio.Event()
+    patched_comments: list[str] = []
+
+    async def _update_journal(_nb, **kwargs):
+        patch_started.set()
+        await finish_patch.wait()
+        patched_comments.append(kwargs["comments"])
+        return {"id": 793, "url": "/api/extras/journal-entries/793/"}
+
+    with _patched_route(
+        stop_side_effect=ProxmoxAPIError(message="stop refused"),
+        journal_update_side_effect=_update_journal,
+    ) as handles:
+        task = asyncio.create_task(_call_delete(route_session))
+        await asyncio.wait_for(patch_started.wait(), timeout=1)
+        task.cancel()
+        await asyncio.sleep(0)
+        finish_patch.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    handles["journal_create"].assert_awaited_once()
+    handles["stop"].assert_awaited_once()
+    handles["delete"].assert_not_awaited()
+    handles["journal"].assert_awaited_once()
+    assert len(patched_comments) == 1
+    assert "result: failed" in patched_comments[0]
+    assert "result: interrupted" not in patched_comments[0]
+
+
 async def test_delete_qemu_delete_failure_writes_warning_journal(
     route_session: _GateSession,
 ):

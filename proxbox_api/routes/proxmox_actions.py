@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Literal, TypeVar
@@ -109,6 +109,8 @@ AUDIT_REQUIRED_VERBS: frozenset[Verb] = frozenset(
         "delete_snapshot",
     )
 )
+
+_JOURNAL_TERMINAL_SENTINEL = "_proxbox_terminal_finalized"
 
 
 @dataclass(frozen=True)
@@ -237,6 +239,15 @@ def _journal_entry_url(entry: dict[str, object] | None) -> str | None:
     return None
 
 
+def _journal_entry_is_terminal(entry: dict[str, object] | None) -> bool:
+    return entry is not None and entry.get(_JOURNAL_TERMINAL_SENTINEL) is True
+
+
+def _mark_journal_entry_terminal(entry: dict[str, object] | None) -> None:
+    if entry is not None:
+        entry[_JOURNAL_TERMINAL_SENTINEL] = True
+
+
 def _error_detail(error: BaseException) -> str:
     message = str(error)
     if message:
@@ -294,6 +305,7 @@ async def _best_effort_mark_journal_terminal(
     *,
     nb: object,
     journal_entry_id: int,
+    writeahead_journal_entry: dict[str, object] | None = None,
     kind: JournalKind,
     comments: str,
     verb: Verb,
@@ -311,6 +323,7 @@ async def _best_effort_mark_journal_terminal(
             )
         )
         await asyncio.shield(task)
+        _mark_journal_entry_terminal(writeahead_journal_entry)
     except BaseException as error:  # noqa: BLE001
         logger.error(
             "Best-effort terminal journal mark failed for entry id=%s "
@@ -328,6 +341,7 @@ async def _update_journal_entry_resistant_to_cancellation(
     *,
     nb: object,
     journal_entry_id: int,
+    writeahead_journal_entry: dict[str, object] | None = None,
     kind: JournalKind,
     comments: str,
     interrupted_comments: str,
@@ -345,17 +359,23 @@ async def _update_journal_entry_resistant_to_cancellation(
         )
     )
     try:
-        return await asyncio.shield(task)
+        entry = await asyncio.shield(task)
+        _mark_journal_entry_terminal(writeahead_journal_entry)
+        _mark_journal_entry_terminal(entry)
+        return entry
     except asyncio.CancelledError:
         try:
             if task.done():
-                task.result()
+                entry = task.result()
             else:
-                await task
+                entry = await task
+            _mark_journal_entry_terminal(writeahead_journal_entry)
+            _mark_journal_entry_terminal(entry)
         except BaseException as finalization_error:  # noqa: BLE001
             await _best_effort_mark_journal_terminal(
                 nb=nb,
                 journal_entry_id=journal_entry_id,
+                writeahead_journal_entry=writeahead_journal_entry,
                 kind="warning",
                 comments=interrupted_comments,
                 verb=verb,
@@ -370,6 +390,7 @@ async def _update_journal_entry_resistant_to_cancellation(
         await _best_effort_mark_journal_terminal(
             nb=nb,
             journal_entry_id=journal_entry_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             kind="warning",
             comments=failed_comments,
             verb=verb,
@@ -479,6 +500,9 @@ async def _finalize_journal_entry(
     terminal_status_code: int,
 ) -> JournalFinalizationResult:
     journal_entry_url = _journal_entry_url(writeahead_journal_entry)
+    if _journal_entry_is_terminal(writeahead_journal_entry):
+        return JournalFinalizationResult(journal_entry_url=journal_entry_url, finalized=True)
+
     if netbox_vm_id is None:
         return JournalFinalizationResult(journal_entry_url=journal_entry_url, finalized=True)
 
@@ -521,6 +545,7 @@ async def _finalize_journal_entry(
         entry = await _update_journal_entry_resistant_to_cancellation(
             nb=nb,
             journal_entry_id=entry_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             kind=kind,
             comments=comments,
             interrupted_comments=interrupted_comments,
@@ -730,10 +755,7 @@ async def _store_pending_journal_finalization_cache(
     interrupted_comments: str,
     failed_comments: str,
 ) -> dict[str, object] | None:
-    if cache_key is None or http_status not in (
-        status.HTTP_200_OK,
-        status.HTTP_202_ACCEPTED,
-    ):
+    if cache_key is None:
         return None
 
     writeahead_entry_id = _journal_entry_id(writeahead_journal_entry)
@@ -805,6 +827,16 @@ async def _finalize_after_unexpected_dispatch_error(
     proxmox_task_upid: str | None = None,
     extra: dict[str, object] | None = None,
 ) -> None:
+    if _journal_entry_is_terminal(writeahead_journal_entry):
+        logger.info(
+            "Skipping %s journal finalization for %s/%s verb=%s because entry is already terminal",
+            phase,
+            vm_type,
+            vmid,
+            verb,
+        )
+        return
+
     result, error_detail = _unexpected_dispatch_result(error)
     logger.warning(
         "Finalizing write-ahead journal for %s/%s verb=%s after %s %s: %s",
@@ -2572,26 +2604,28 @@ async def _audit_and_respond(
         error_detail="Journal finalization failed before the terminal state was committed.",
     )
     endpoint_id = endpoint.id or 0
-    preliminary_retry_metadata = await _store_pending_journal_finalization_cache(
-        cache=cache,
-        cache_key=cache_key,
-        writeahead_journal_entry=writeahead_journal_entry,
-        verb=verb,
-        vm_type=vm_type,
-        vmid=vmid,
-        endpoint_id=endpoint_id,
-        result=result,
-        dispatched_at=dispatched_at,
-        proxmox_task_upid=proxmox_task_upid,
-        http_status=http_status,
-        reason=reason,
-        error_detail=error_detail,
-        extra=extra,
-        kind=kind,
-        comments=comments,
-        interrupted_comments=interrupted_comments,
-        failed_comments=failed_comments,
-    )
+    preliminary_retry_metadata = None
+    if not _journal_entry_is_terminal(writeahead_journal_entry):
+        preliminary_retry_metadata = await _store_pending_journal_finalization_cache(
+            cache=cache,
+            cache_key=cache_key,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint_id=endpoint_id,
+            result=result,
+            dispatched_at=dispatched_at,
+            proxmox_task_upid=proxmox_task_upid,
+            http_status=http_status,
+            reason=reason,
+            error_detail=error_detail,
+            extra=extra,
+            kind=kind,
+            comments=comments,
+            interrupted_comments=interrupted_comments,
+            failed_comments=failed_comments,
+        )
 
     finalization = await _finalize_journal_entry(
         nb=nb,
@@ -2634,15 +2668,7 @@ async def _audit_and_respond(
     # not, keep private metadata so a retry patches the existing entry
     # instead of re-dispatching the Proxmox verb, which is unsafe because
     # these mutations are not idempotent on the Proxmox side.
-    if (
-        cache_key is not None
-        and finalization.finalized
-        and http_status
-        in (
-            status.HTTP_200_OK,
-            status.HTTP_202_ACCEPTED,
-        )
-    ):
+    if cache_key is not None and finalization.finalized:
         await cache.store(cache_key, body, status_code=response_status)
     elif cache_key is not None and (
         finalization.retry_metadata is not None or preliminary_retry_metadata is not None
@@ -2674,6 +2700,30 @@ def _not_implemented(verb: Verb, vm_type: VmType, vmid: int) -> JSONResponse:
     )
 
 
+def _idempotency_cache_key(
+    *,
+    endpoint: ProxmoxEndpoint,
+    verb: Verb,
+    vmid: int,
+    idempotency_key: str | None,
+) -> CacheKey | None:
+    endpoint_id = endpoint.id
+    if idempotency_key is None or endpoint_id is None:
+        return None
+    return CacheKey(endpoint_id=endpoint_id, verb=verb, vmid=vmid, key=idempotency_key)
+
+
+async def _run_with_idempotency_single_flight(
+    cache_key: CacheKey | None,
+    operation: Callable[[], Awaitable[JSONResponse]],
+) -> JSONResponse:
+    if cache_key is None:
+        return await operation()
+    cache = get_idempotency_cache()
+    async with cache.single_flight(cache_key):
+        return await operation()
+
+
 async def _handle_start(
     vm_type: VmType,
     vmid: int,
@@ -2698,13 +2748,21 @@ async def _handle_start(
                 "detail": str(error),
             },
         )
-    return await _dispatch_start(
-        endpoint=gated,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="start",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_start(
+            endpoint=gated,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        ),
     )
 
 
@@ -2729,13 +2787,21 @@ async def _handle_stop(
                 "detail": str(error),
             },
         )
-    return await _dispatch_stop(
-        endpoint=gated,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="stop",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_stop(
+            endpoint=gated,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        ),
     )
 
 
@@ -2763,15 +2829,23 @@ async def _handle_snapshot(
         )
     snapname = body.snapname if body is not None else None
     description = body.description if body is not None else None
-    return await _dispatch_snapshot(
-        endpoint=gated,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
-        snapname=snapname,
-        description=description,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="snapshot",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_snapshot(
+            endpoint=gated,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            snapname=snapname,
+            description=description,
+        ),
     )
 
 
@@ -2800,13 +2874,21 @@ async def _handle_reboot(
                 "detail": str(error),
             },
         )
-    return await _dispatch_reboot(
-        endpoint=gated,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="reboot",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_reboot(
+            endpoint=gated,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        ),
     )
 
 
@@ -2835,14 +2917,22 @@ async def _handle_delete(
                 "detail": str(error),
             },
         )
-    return await _dispatch_delete(
-        endpoint=gated,
-        session=session,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="delete",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_delete(
+            endpoint=gated,
+            session=session,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+        ),
     )
 
 
@@ -2880,17 +2970,25 @@ async def _handle_backup(
                 "detail": str(error),
             },
         )
-    return await _dispatch_backup(
-        endpoint=gated,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
-        storage_name=body.storage,
-        mode=body.mode,
-        compress=body.compress,
-        notes=body.notes,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="backup",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_backup(
+            endpoint=gated,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            storage_name=body.storage,
+            mode=body.mode,
+            compress=body.compress,
+            notes=body.notes,
+        ),
     )
 
 
@@ -2920,14 +3018,22 @@ async def _handle_delete_snapshot(
                 "detail": str(error),
             },
         )
-    return await _dispatch_delete_snapshot(
-        endpoint=gated,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
-        snapname=snapname,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="delete_snapshot",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_delete_snapshot(
+            endpoint=gated,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            snapname=snapname,
+        ),
     )
 
 
@@ -2964,15 +3070,23 @@ async def _handle_migrate(
                 "detail": str(error),
             },
         )
-    return await _dispatch_migrate(
-        endpoint=gated,
-        vm_type=vm_type,
-        vmid=vmid,
-        nb=nb_session,
-        idempotency_key=idempotency_key,
-        actor=actor,
-        target=body.target,
-        online=body.online,
+    return await _run_with_idempotency_single_flight(
+        _idempotency_cache_key(
+            endpoint=gated,
+            verb="migrate",
+            vmid=vmid,
+            idempotency_key=idempotency_key,
+        ),
+        lambda: _dispatch_migrate(
+            endpoint=gated,
+            vm_type=vm_type,
+            vmid=vmid,
+            nb=nb_session,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            target=body.target,
+            online=body.online,
+        ),
     )
 
 

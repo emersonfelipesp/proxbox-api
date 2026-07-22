@@ -11,14 +11,17 @@ Implements the contract pinned by ``docs/design/operational-verbs.md`` §4:
   60-second TTL; no SQLite write. Process restart clears the dict —
   acceptable for the 60-second window.
 
-The cache is concurrency-safe via an ``asyncio.Lock`` so that two
-near-simultaneous POSTs with the same key resolve to a single dispatch.
+The cache is concurrency-safe via a mutex for the entry map plus per-key
+single-flight locks so that two near-simultaneous POSTs with the same key
+resolve to a single dispatch.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -51,6 +54,12 @@ class _Entry:
     expires_at: float
 
 
+@dataclass
+class _Flight:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 @dataclass(frozen=True)
 class CachedResponse:
     response: dict[str, object]
@@ -61,16 +70,14 @@ class CachedResponse:
 class IdempotencyCache:
     """TTL cache keyed by ``(endpoint_id, verb, vmid, key)``.
 
-    Use :meth:`reserve` from a verb handler. It returns either the
-    cached response (when the same key was seen within ``TTL_SECONDS``)
-    or ``None``, in which case the caller dispatches the verb and then
-    calls :meth:`store` to record the result. A single ``asyncio.Lock``
-    serialises the reserve/store pair to avoid the
-    "two concurrent POSTs both dispatch" race.
+    Verb handlers should wrap the cache miss, write-ahead journal create,
+    Proxmox dispatch, terminal journal update, and response store in
+    :meth:`single_flight` when a caller supplies an Idempotency-Key.
     """
 
     def __init__(self, ttl_seconds: float = TTL_SECONDS) -> None:
         self._entries: dict[CacheKey, _Entry] = {}
+        self._flights: dict[CacheKey, _Flight] = {}
         self._lock = asyncio.Lock()
         self._ttl = ttl_seconds
 
@@ -113,6 +120,17 @@ class IdempotencyCache:
     ) -> None:
         async with self._lock:
             now = self._now()
+            existing = self._entries.get(cache_key)
+            new_unfinalized = (
+                journal_finalization is not None or response.get("journal_finalized") is False
+            )
+            existing_finalized = (
+                existing is not None
+                and existing.journal_finalization is None
+                and existing.response.get("journal_finalized") is not False
+            )
+            if existing_finalized and new_unfinalized:
+                return
             self._entries[cache_key] = _Entry(
                 response=dict(response),
                 status_code=status_code,
@@ -121,6 +139,33 @@ class IdempotencyCache:
                 ),
                 expires_at=now + self._ttl,
             )
+
+    @asynccontextmanager
+    async def single_flight(self, cache_key: CacheKey) -> AsyncIterator[None]:
+        """Serialize one miss-to-store operation for ``cache_key``.
+
+        The keyed lock is intentionally separate from the cache mutex:
+        the mutex protects maps, while this lock lets one request run the
+        full write-ahead, Proxmox dispatch, journal-finalize, and cache-store
+        sequence. Waiters then re-check the cache under the same keyed guard.
+        """
+        async with self._lock:
+            self._prune(self._now())
+            flight = self._flights.get(cache_key)
+            if flight is None:
+                flight = _Flight(lock=asyncio.Lock())
+                self._flights[cache_key] = flight
+            flight.users += 1
+
+        await flight.lock.acquire()
+        try:
+            yield
+        finally:
+            flight.lock.release()
+            async with self._lock:
+                flight.users -= 1
+                if flight.users == 0 and self._flights.get(cache_key) is flight:
+                    del self._flights[cache_key]
 
     async def clear(self) -> None:
         async with self._lock:

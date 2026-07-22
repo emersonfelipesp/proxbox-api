@@ -13,6 +13,7 @@ dispatch + audit + cache contracts can be exercised without a live cluster.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -81,6 +82,50 @@ def _make_endpoint(client: TestClient) -> int:
         endpoint_id = endpoint.id
         assert endpoint_id is not None
         return endpoint_id
+
+
+class _GateSession:
+    def __init__(self, endpoint: ProxmoxEndpoint) -> None:
+        self.endpoint = endpoint
+
+    async def get(self, model: object, object_id: int) -> ProxmoxEndpoint | None:
+        if model is ProxmoxEndpoint and object_id == self.endpoint.id:
+            return self.endpoint
+        return None
+
+
+def _route_session() -> _GateSession:
+    return _GateSession(
+        ProxmoxEndpoint(
+            id=73,
+            name="pve-prod",
+            ip_address="10.0.0.10",
+            port=8006,
+            username="root@pam",
+            verify_ssl=False,
+            allow_writes=True,
+        )
+    )
+
+
+def _json_response(response) -> dict[str, object]:
+    return json.loads(response.body)
+
+
+async def _call_start(
+    session: _GateSession,
+    *,
+    idempotency_key: str | None = None,
+    actor: str = "proxbox-api",
+):
+    return await proxmox_actions._handle_start(
+        "qemu",
+        100,
+        session,  # type: ignore[arg-type]
+        session.endpoint.id,
+        idempotency_key,
+        actor,
+    )
 
 
 def _patch_route(
@@ -355,6 +400,126 @@ def test_start_qemu_idempotency_key_reuse_returns_cached_response(
     assert handles["journal"].await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_start_qemu_concurrent_same_idempotency_key_single_dispatches():
+    route_session = _route_session()
+    dispatch_started = asyncio.Event()
+    finish_dispatch = asyncio.Event()
+
+    async def _start_vm(*_args, **_kwargs):
+        dispatch_started.set()
+        await finish_dispatch.wait()
+        return "UPID:pve-node-01:0001:start"
+
+    handles = _patch_route(start_side_effect=_start_vm)
+    for patcher in handles["patches"]:
+        patcher.start()
+    try:
+        first = asyncio.create_task(
+            _call_start(route_session, idempotency_key="start-single-flight")
+        )
+        await asyncio.wait_for(dispatch_started.wait(), timeout=1)
+        second = asyncio.create_task(
+            _call_start(route_session, idempotency_key="start-single-flight")
+        )
+        await asyncio.sleep(0)
+        assert handles["journal_create"].await_count == 1
+        assert handles["start"].await_count == 1
+
+        finish_dispatch.set()
+        first_response, second_response = await asyncio.gather(first, second)
+    finally:
+        for patcher in handles["patches"]:
+            patcher.stop()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert _json_response(first_response) == _json_response(second_response)
+    handles["journal_create"].assert_awaited_once()
+    handles["start"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_qemu_concurrent_unfinalized_cache_hit_retries_once():
+    route_session = _route_session()
+    cache = get_idempotency_cache()
+    await cache.clear()
+    cache_key = CacheKey(
+        endpoint_id=73,
+        verb="start",
+        vmid=100,
+        key="start-finalize-single-flight",
+    )
+    metadata = proxmox_actions._journal_finalization_retry_metadata(
+        journal_entry_id=789,
+        journal_entry_url="/api/extras/journal-entries/789/",
+        kind="info",
+        comments="verb: start\nresult: ok",
+        interrupted_comments="verb: start\nresult: interrupted",
+        failed_comments="verb: start\nresult: failed",
+        terminal_status_code=200,
+    )
+    await cache.store(
+        cache_key,
+        {
+            "verb": "start",
+            "vmid": 100,
+            "vm_type": "qemu",
+            "endpoint_id": 73,
+            "result": "ok",
+            "dispatched_at": "2026-07-22T12:00:00Z",
+            "proxmox_task_upid": "UPID:pve-node-01:0001:start",
+            "journal_entry_url": "/api/extras/journal-entries/789/",
+            "journal_finalized": False,
+            "finalization_error": "netbox patch down",
+            "reason": "netbox_journal_finalization_failed",
+        },
+        status_code=502,
+        journal_finalization=metadata,
+    )
+    retry_started = asyncio.Event()
+    finish_retry = asyncio.Event()
+
+    async def _update_journal(_nb, **_kwargs):
+        retry_started.set()
+        await finish_retry.wait()
+        return {"id": 789, "url": "/api/extras/journal-entries/789/"}
+
+    handles = _patch_route(journal_update_side_effect=_update_journal)
+    for patcher in handles["patches"]:
+        patcher.start()
+    try:
+        first = asyncio.create_task(
+            _call_start(route_session, idempotency_key="start-finalize-single-flight")
+        )
+        await asyncio.wait_for(retry_started.wait(), timeout=1)
+        second = asyncio.create_task(
+            _call_start(route_session, idempotency_key="start-finalize-single-flight")
+        )
+        await asyncio.sleep(0)
+        assert handles["journal"].await_count == 1
+
+        finish_retry.set()
+        first_response, second_response = await asyncio.gather(first, second)
+    finally:
+        for patcher in handles["patches"]:
+            patcher.stop()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert _json_response(first_response) == _json_response(second_response)
+    handles["journal"].assert_awaited_once()
+    handles["journal_create"].assert_not_awaited()
+    handles["start"].assert_not_awaited()
+    cached = await cache.get_entry(cache_key)
+    assert cached is not None
+    assert cached.status_code == 200
+    assert cached.journal_finalization is None
+    assert "journal_finalized" not in cached.response
+    assert "finalization_error" not in cached.response
+
+
 def test_start_qemu_already_running_skips_dispatch_but_writes_journal(
     client: TestClient,
 ):
@@ -400,6 +565,36 @@ def test_start_qemu_proxmox_dispatch_failure_writes_warning_journal(
     handles["journal"].assert_awaited_once()
     assert handles["journal"].call_args.kwargs["kind"] == "warning"
     assert "error_detail: " in handles["journal"].call_args.kwargs["comments"]
+
+
+def test_start_qemu_idempotency_key_reuse_after_dispatch_failure_returns_cached_failure(
+    client: TestClient,
+):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(start_side_effect=ProxmoxAPIError(message="lock conflict"))
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp1 = client.post(
+            "/proxmox/qemu/100/start",
+            params={"endpoint_id": endpoint_id},
+            headers={"Idempotency-Key": "key-dispatch-failure"},
+        )
+        resp2 = client.post(
+            "/proxmox/qemu/100/start",
+            params={"endpoint_id": endpoint_id},
+            headers={"Idempotency-Key": "key-dispatch-failure"},
+        )
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp1.status_code == 502
+    assert resp2.status_code == 502
+    assert resp1.json() == resp2.json()
+    handles["journal_create"].assert_awaited_once()
+    handles["start"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
 
 
 def test_start_lxc_routes_through_same_dispatch(client: TestClient):
