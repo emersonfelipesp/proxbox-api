@@ -83,6 +83,7 @@ def _patch_route(
     snapshot_result="UPID:pve-node-01:0001:snapshot",
     journal_entry: dict | None = None,
     snapshot_side_effect=None,
+    journal_update_side_effect=None,
 ):
     if journal_entry is None:
         journal_entry = {"id": 791, "url": "/api/extras/journal-entries/791/"}
@@ -92,7 +93,11 @@ def _patch_route(
     node_mock = AsyncMock(return_value=node_or_response)
     netbox_id_mock = AsyncMock(return_value=netbox_vm_id)
     snapshot_mock = AsyncMock(return_value=snapshot_result, side_effect=snapshot_side_effect)
-    journal_mock = AsyncMock(return_value=journal_entry)
+    journal_create_mock = AsyncMock(return_value=journal_entry)
+    journal_update_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_update_side_effect,
+    )
 
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
@@ -102,7 +107,11 @@ def _patch_route(
         patch("proxbox_api.routes.proxmox_actions.create_vm_snapshot", snapshot_mock),
         patch(
             "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
-            journal_mock,
+            journal_create_mock,
+        ),
+        patch(
+            "proxbox_api.routes.proxmox_actions.update_verb_journal_entry",
+            journal_update_mock,
         ),
     ]
 
@@ -110,7 +119,8 @@ def _patch_route(
         "patches": patches,
         "node": node_mock,
         "snapshot": snapshot_mock,
-        "journal": journal_mock,
+        "journal": journal_update_mock,
+        "journal_create": journal_create_mock,
     }
 
 

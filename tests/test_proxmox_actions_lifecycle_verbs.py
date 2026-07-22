@@ -153,6 +153,7 @@ def _patched_route(
     delete_snapshot_result="UPID:pve-node-01:0001:delsnap",
     delete_snapshot_side_effect=None,
     journal_entry: dict | None = None,
+    journal_update_side_effect=None,
 ):
     if journal_entry is None:
         journal_entry = {"id": 793, "url": "/api/extras/journal-entries/793/"}
@@ -171,7 +172,11 @@ def _patched_route(
             return_value=delete_snapshot_result,
             side_effect=delete_snapshot_side_effect,
         ),
-        "journal": AsyncMock(return_value=journal_entry),
+        "journal_create": AsyncMock(return_value=journal_entry),
+        "journal": AsyncMock(
+            return_value=journal_entry,
+            side_effect=journal_update_side_effect,
+        ),
     }
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", handles["open_session"]),
@@ -187,7 +192,11 @@ def _patched_route(
         ),
         patch("proxbox_api.routes.proxmox_actions.backup_vm", handles["backup"]),
         patch("proxbox_api.routes.proxmox_actions.delete_vm_snapshot", handles["delete_snapshot"]),
-        patch("proxbox_api.routes.proxmox_actions.write_verb_journal_entry", handles["journal"]),
+        patch(
+            "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
+            handles["journal_create"],
+        ),
+        patch("proxbox_api.routes.proxmox_actions.update_verb_journal_entry", handles["journal"]),
     ]
     started = [patcher.start() for patcher in patches]
     try:

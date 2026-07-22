@@ -84,6 +84,7 @@ def _patch_route(
     stop_result="UPID:pve-node-01:0001:stop",
     journal_entry: dict | None = None,
     stop_side_effect=None,
+    journal_update_side_effect=None,
 ):
     if journal_entry is None:
         journal_entry = {"id": 790, "url": "/api/extras/journal-entries/790/"}
@@ -94,7 +95,11 @@ def _patch_route(
     netbox_id_mock = AsyncMock(return_value=netbox_vm_id)
     status_mock = AsyncMock(return_value=status_payload)
     stop_mock = AsyncMock(return_value=stop_result, side_effect=stop_side_effect)
-    journal_mock = AsyncMock(return_value=journal_entry)
+    journal_create_mock = AsyncMock(return_value=journal_entry)
+    journal_update_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_update_side_effect,
+    )
 
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
@@ -105,7 +110,11 @@ def _patch_route(
         patch("proxbox_api.routes.proxmox_actions.stop_vm", stop_mock),
         patch(
             "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
-            journal_mock,
+            journal_create_mock,
+        ),
+        patch(
+            "proxbox_api.routes.proxmox_actions.update_verb_journal_entry",
+            journal_update_mock,
         ),
     ]
 
@@ -114,7 +123,8 @@ def _patch_route(
         "node": node_mock,
         "status": status_mock,
         "stop": stop_mock,
-        "journal": journal_mock,
+        "journal": journal_update_mock,
+        "journal_create": journal_create_mock,
     }
 
 

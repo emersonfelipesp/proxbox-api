@@ -93,6 +93,8 @@ def _patch_route(
     journal_entry: dict | None = None,
     start_side_effect=None,
     status_side_effect=None,
+    journal_create_side_effect=None,
+    journal_update_side_effect=None,
 ):
     """Patch every I/O symbol on the route module in one go.
 
@@ -107,7 +109,14 @@ def _patch_route(
     netbox_id_mock = AsyncMock(return_value=netbox_vm_id)
     status_mock = AsyncMock(return_value=status_payload, side_effect=status_side_effect)
     start_mock = AsyncMock(return_value=start_result, side_effect=start_side_effect)
-    journal_mock = AsyncMock(return_value=journal_entry)
+    journal_create_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_create_side_effect,
+    )
+    journal_update_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_update_side_effect,
+    )
 
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
@@ -118,7 +127,11 @@ def _patch_route(
         patch("proxbox_api.routes.proxmox_actions.start_vm", start_mock),
         patch(
             "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
-            journal_mock,
+            journal_create_mock,
+        ),
+        patch(
+            "proxbox_api.routes.proxmox_actions.update_verb_journal_entry",
+            journal_update_mock,
         ),
     ]
 
@@ -130,7 +143,8 @@ def _patch_route(
         "netbox_id": netbox_id_mock,
         "status": status_mock,
         "start": start_mock,
-        "journal": journal_mock,
+        "journal": journal_update_mock,
+        "journal_create": journal_create_mock,
     }
 
 
@@ -163,14 +177,95 @@ def test_start_qemu_success_returns_response_shape_and_writes_journal(
     assert "dispatched_at" in body
 
     handles["start"].assert_awaited_once()
+    handles["journal_create"].assert_awaited_once()
+    assert handles["journal_create"].call_args.kwargs["netbox_vm_id"] == 42
     handles["journal"].assert_awaited_once()
     journal_kwargs = handles["journal"].call_args.kwargs
-    assert journal_kwargs["netbox_vm_id"] == 42
     assert journal_kwargs["kind"] == "info"
     assert "verb: start" in journal_kwargs["comments"]
     assert "actor: alice@netbox" in journal_kwargs["comments"]
     assert "result: ok" in journal_kwargs["comments"]
     assert "idempotency_key: key-abc" in journal_kwargs["comments"]
+
+
+def test_start_qemu_creates_writeahead_journal_before_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["netbox_vm_id"] == 42
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 789, "url": "/api/extras/journal-entries/789/"}
+
+    async def _start_vm(*_args, **_kwargs):
+        events.append("start_dispatch")
+        return "UPID:pve-node-01:0001:start"
+
+    handles = _patch_route(
+        start_side_effect=_start_vm,
+        journal_create_side_effect=_create_journal,
+    )
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post("/proxmox/qemu/100/start", params={"endpoint_id": endpoint_id})
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("start_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+def test_start_qemu_journal_update_failure_returns_dispatch_result(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(journal_update_side_effect=RuntimeError("netbox patch down"))
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post("/proxmox/qemu/100/start", params={"endpoint_id": endpoint_id})
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"] == "ok"
+    assert body["proxmox_task_upid"] == "UPID:pve-node-01:0001:start"
+    assert body["journal_entry_url"] == "/api/extras/journal-entries/789/"
+    handles["journal_create"].assert_awaited_once()
+    assert "result: in_progress" in handles["journal_create"].call_args.kwargs["comments"]
+    handles["journal"].assert_awaited_once()
+    handles["start"].assert_awaited_once()
+
+
+def test_start_qemu_writeahead_journal_create_failure_blocks_dispatch(
+    client: TestClient,
+):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(journal_create_side_effect=RuntimeError("netbox create down"))
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post("/proxmox/qemu/100/start", params={"endpoint_id": endpoint_id})
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "start"
+    assert body["vmid"] == 100
+    assert body["endpoint_id"] == endpoint_id
+    handles["journal_create"].assert_awaited_once()
+    handles["status"].assert_not_awaited()
+    handles["start"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 def test_start_qemu_idempotency_key_reuse_returns_cached_response(

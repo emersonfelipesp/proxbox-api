@@ -67,6 +67,7 @@ from proxbox_api.services.verb_dispatch import (
     build_success_response,
     resolve_netbox_vm_id,
     resolve_proxmox_node,
+    update_verb_journal_entry,
     utcnow_iso,
     write_verb_journal_entry,
 )
@@ -198,6 +199,172 @@ async def _resolve_audit_target_or_error(
     return netbox_vm_id
 
 
+def _journal_entry_id(entry: dict[str, object] | None) -> int | None:
+    if entry is None:
+        return None
+    value = entry.get("id")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _journal_entry_url(entry: dict[str, object] | None) -> str | None:
+    if entry is None:
+        return None
+    url = entry.get("url")
+    if isinstance(url, str):
+        return url
+    entry_id = _journal_entry_id(entry)
+    if entry_id is not None:
+        return f"/api/extras/journal-entries/{entry_id}/"
+    return None
+
+
+def _writeahead_journal_failure_response(
+    *,
+    verb: Verb,
+    vmid: int,
+    endpoint_id: int,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "reason": "netbox_vm_identity_required_for_audit",
+            "detail": (
+                "Refusing to dispatch operational verb because the write-ahead "
+                "NetBox VM audit journal entry could not be created."
+            ),
+            "verb": verb,
+            "vmid": vmid,
+            "endpoint_id": endpoint_id,
+        },
+    )
+
+
+async def _create_writeahead_journal_or_error(
+    *,
+    nb: object,
+    netbox_vm_id: int | None,
+    verb: Verb,
+    vmid: int,
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    dispatched_at: str,
+    idempotency_key: str | None,
+) -> dict[str, object] | JSONResponse | None:
+    """Create the durable pre-dispatch audit journal entry for required verbs."""
+    endpoint_id = endpoint.id or 0
+    if verb not in AUDIT_REQUIRED_VERBS or netbox_vm_id is None:
+        return None
+
+    comments = build_journal_comments(
+        verb=verb,
+        actor=actor,
+        result="in_progress",
+        endpoint_name=endpoint.name,
+        endpoint_id=endpoint_id,
+        dispatched_at=dispatched_at,
+        proxmox_task_upid=None,
+        idempotency_key=idempotency_key,
+        error_detail=None,
+    )
+    try:
+        entry = await write_verb_journal_entry(
+            nb,
+            netbox_vm_id=netbox_vm_id,
+            kind="info",
+            comments=comments,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Blocking %s for endpoint=%s vmid=%s because write-ahead journal create failed: %s",
+            verb,
+            endpoint_id,
+            vmid,
+            error,
+        )
+        return _writeahead_journal_failure_response(
+            verb=verb,
+            vmid=vmid,
+            endpoint_id=endpoint_id,
+        )
+
+    if _journal_entry_id(entry) is None:
+        logger.warning(
+            "Blocking %s for endpoint=%s vmid=%s because write-ahead journal create returned no id",
+            verb,
+            endpoint_id,
+            vmid,
+        )
+        return _writeahead_journal_failure_response(
+            verb=verb,
+            vmid=vmid,
+            endpoint_id=endpoint_id,
+        )
+    return entry
+
+
+async def _finalize_journal_entry(
+    *,
+    nb: object,
+    netbox_vm_id: int | None,
+    writeahead_journal_entry: dict[str, object] | None,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+    kind: Literal["info", "success", "warning", "danger"],
+    comments: str,
+) -> str | None:
+    journal_entry_url = _journal_entry_url(writeahead_journal_entry)
+    if netbox_vm_id is None:
+        return journal_entry_url
+
+    if writeahead_journal_entry is None:
+        entry = await write_verb_journal_entry(
+            nb,
+            netbox_vm_id=netbox_vm_id,
+            kind=kind,
+            comments=comments,
+        )
+        return _journal_entry_url(entry)
+
+    entry_id = _journal_entry_id(writeahead_journal_entry)
+    if entry_id is None:
+        logger.warning(
+            "Write-ahead journal entry for %s/%s verb=%s had no id; "
+            "returning Proxmox result without terminal journal update",
+            vm_type,
+            vmid,
+            verb,
+        )
+        return journal_entry_url
+
+    try:
+        entry = await update_verb_journal_entry(
+            nb,
+            journal_entry_id=entry_id,
+            kind=kind,
+            comments=comments,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Failed to finalize write-ahead journal entry id=%s for "
+            "%s/%s verb=%s; returning Proxmox result: %s",
+            entry_id,
+            vm_type,
+            vmid,
+            verb,
+            error,
+        )
+        return journal_entry_url
+
+    return _journal_entry_url(entry) or journal_entry_url
+
+
 async def _open_proxmox_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
     """Open a Proxmox API session for ``endpoint`` (factored for testability)."""
     schema = _parse_db_endpoint(endpoint)
@@ -259,6 +426,84 @@ async def delete_vm_via_intent_dispatcher(
     return str(upid) if upid is not None else None
 
 
+def _delete_extra(stop_task_upid: str | None) -> dict[str, object] | None:
+    if stop_task_upid is None:
+        return None
+    return {"stop_task_upid": stop_task_upid}
+
+
+async def _prepare_delete_dispatch(
+    *,
+    proxmox: object,
+    node: str,
+    vm_type: VmType,
+    vmid: int,
+    nb: object,
+    netbox_vm_id: int | None,
+    writeahead_journal_entry: dict[str, object] | None,
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    dispatched_at: str,
+    idempotency_key: str | None,
+    cache: object,
+    cache_key: CacheKey | None,
+) -> tuple[str | None, JSONResponse | None]:
+    try:
+        current = await get_vm_status(proxmox, node, vm_type, vmid)
+    except ProxmoxAPIError as error:
+        response = await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="delete",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_status_unreachable",
+        )
+        return None, response
+
+    if not _is_running(vm_type, current):
+        return None, None
+
+    try:
+        stop_task_upid = await stop_vm(proxmox, node, vm_type, vmid)
+    except ProxmoxAPIError as error:
+        response = await _audit_and_respond(
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
+            verb="delete",
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+            result="failed",
+            kind="warning",
+            proxmox_task_upid=None,
+            error_detail=str(error),
+            http_status=status.HTTP_502_BAD_GATEWAY,
+            reason="proxmox_dispatch_failed",
+        )
+        return None, response
+
+    return stop_task_upid, None
+
+
 async def _dispatch_start(
     *,
     endpoint: ProxmoxEndpoint,
@@ -310,6 +555,18 @@ async def _dispatch_start(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="start",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     # State-based no-op pre-flight (§4.2). Reached before any cache write.
     try:
@@ -318,6 +575,7 @@ async def _dispatch_start(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="start",
             vm_type=vm_type,
             vmid=vmid,
@@ -339,6 +597,7 @@ async def _dispatch_start(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="start",
             vm_type=vm_type,
             vmid=vmid,
@@ -361,6 +620,7 @@ async def _dispatch_start(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="start",
             vm_type=vm_type,
             vmid=vmid,
@@ -381,6 +641,7 @@ async def _dispatch_start(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="start",
         vm_type=vm_type,
         vmid=vmid,
@@ -448,6 +709,18 @@ async def _dispatch_stop(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="stop",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     try:
         current = await get_vm_status(proxmox, node, vm_type, vmid)
@@ -455,6 +728,7 @@ async def _dispatch_stop(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="stop",
             vm_type=vm_type,
             vmid=vmid,
@@ -476,6 +750,7 @@ async def _dispatch_stop(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="stop",
             vm_type=vm_type,
             vmid=vmid,
@@ -497,6 +772,7 @@ async def _dispatch_stop(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="stop",
             vm_type=vm_type,
             vmid=vmid,
@@ -517,6 +793,7 @@ async def _dispatch_stop(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="stop",
         vm_type=vm_type,
         vmid=vmid,
@@ -584,6 +861,18 @@ async def _dispatch_reboot(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="reboot",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     try:
         current = await get_vm_status(proxmox, node, vm_type, vmid)
@@ -591,6 +880,7 @@ async def _dispatch_reboot(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="reboot",
             vm_type=vm_type,
             vmid=vmid,
@@ -612,6 +902,7 @@ async def _dispatch_reboot(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="reboot",
             vm_type=vm_type,
             vmid=vmid,
@@ -633,6 +924,7 @@ async def _dispatch_reboot(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="reboot",
             vm_type=vm_type,
             vmid=vmid,
@@ -653,6 +945,7 @@ async def _dispatch_reboot(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="reboot",
         vm_type=vm_type,
         vmid=vmid,
@@ -716,56 +1009,38 @@ async def _dispatch_delete(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="delete",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
-    try:
-        current = await get_vm_status(proxmox, node, vm_type, vmid)
-    except ProxmoxAPIError as error:
-        return await _audit_and_respond(
-            nb=nb,
-            netbox_vm_id=netbox_vm_id,
-            verb="delete",
-            vm_type=vm_type,
-            vmid=vmid,
-            endpoint=endpoint,
-            actor=actor,
-            dispatched_at=dispatched_at,
-            idempotency_key=idempotency_key,
-            cache=cache,
-            cache_key=cache_key,
-            result="failed",
-            kind="warning",
-            proxmox_task_upid=None,
-            error_detail=str(error),
-            http_status=status.HTTP_502_BAD_GATEWAY,
-            reason="proxmox_status_unreachable",
-        )
+    stop_task_upid, prepare_response = await _prepare_delete_dispatch(
+        proxmox=proxmox,
+        node=node,
+        vm_type=vm_type,
+        vmid=vmid,
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
+    )
+    if prepare_response is not None:
+        return prepare_response
 
-    stop_task_upid: str | None = None
-    if _is_running(vm_type, current):
-        try:
-            stop_task_upid = await stop_vm(proxmox, node, vm_type, vmid)
-        except ProxmoxAPIError as error:
-            return await _audit_and_respond(
-                nb=nb,
-                netbox_vm_id=netbox_vm_id,
-                verb="delete",
-                vm_type=vm_type,
-                vmid=vmid,
-                endpoint=endpoint,
-                actor=actor,
-                dispatched_at=dispatched_at,
-                idempotency_key=idempotency_key,
-                cache=cache,
-                cache_key=cache_key,
-                result="failed",
-                kind="warning",
-                proxmox_task_upid=None,
-                error_detail=str(error),
-                http_status=status.HTTP_502_BAD_GATEWAY,
-                reason="proxmox_dispatch_failed",
-            )
-
-    extra = {"stop_task_upid": stop_task_upid} if stop_task_upid is not None else None
+    extra = _delete_extra(stop_task_upid)
     try:
         upid = await delete_vm_via_intent_dispatcher(
             endpoint, session, vm_type, vmid, node, actor=actor
@@ -774,6 +1049,7 @@ async def _dispatch_delete(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="delete",
             vm_type=vm_type,
             vmid=vmid,
@@ -795,6 +1071,7 @@ async def _dispatch_delete(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="delete",
         vm_type=vm_type,
         vmid=vmid,
@@ -893,6 +1170,18 @@ async def _dispatch_snapshot(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="snapshot",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     effective_snapname = snapname or _default_snapname(idempotency_key)
 
@@ -904,6 +1193,7 @@ async def _dispatch_snapshot(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="snapshot",
             vm_type=vm_type,
             vmid=vmid,
@@ -925,6 +1215,7 @@ async def _dispatch_snapshot(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="snapshot",
         vm_type=vm_type,
         vmid=vmid,
@@ -1006,6 +1297,18 @@ async def _dispatch_backup(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="backup",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     try:
         upid = await backup_vm(
@@ -1028,6 +1331,7 @@ async def _dispatch_backup(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="backup",
             vm_type=vm_type,
             vmid=vmid,
@@ -1056,6 +1360,7 @@ async def _dispatch_backup(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="backup",
         vm_type=vm_type,
         vmid=vmid,
@@ -1122,6 +1427,18 @@ async def _dispatch_delete_snapshot(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="delete_snapshot",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     try:
         upid = await delete_vm_snapshot(proxmox, node, vm_type, vmid, snapname)
@@ -1129,6 +1446,7 @@ async def _dispatch_delete_snapshot(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="delete_snapshot",
             vm_type=vm_type,
             vmid=vmid,
@@ -1150,6 +1468,7 @@ async def _dispatch_delete_snapshot(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="delete_snapshot",
         vm_type=vm_type,
         vmid=vmid,
@@ -1276,6 +1595,18 @@ async def _dispatch_migrate(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    writeahead_journal_entry = await _create_writeahead_journal_or_error(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        verb="migrate",
+        vmid=vmid,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(writeahead_journal_entry, JSONResponse):
+        return writeahead_journal_entry
 
     # §9 preflight: GET nodes/{node}/{vm_type}/{vmid}/migrate, then
     # apply the three reject conditions before any state mutation.
@@ -1285,6 +1616,7 @@ async def _dispatch_migrate(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="migrate",
             vm_type=vm_type,
             vmid=vmid,
@@ -1308,6 +1640,7 @@ async def _dispatch_migrate(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="migrate",
             vm_type=vm_type,
             vmid=vmid,
@@ -1332,6 +1665,7 @@ async def _dispatch_migrate(
         return await _audit_and_respond(
             nb=nb,
             netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=writeahead_journal_entry,
             verb="migrate",
             vm_type=vm_type,
             vmid=vmid,
@@ -1352,6 +1686,7 @@ async def _dispatch_migrate(
     return await _audit_and_respond(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
         verb="migrate",
         vm_type=vm_type,
         vmid=vmid,
@@ -1379,6 +1714,7 @@ async def _audit_and_respond(
     *,
     nb: object,
     netbox_vm_id: int | None,
+    writeahead_journal_entry: dict[str, object] | None = None,
     verb: Verb,
     vm_type: VmType,
     vmid: int,
@@ -1396,13 +1732,15 @@ async def _audit_and_respond(
     reason: str | None = None,
     extra: dict[str, object] | None = None,
 ) -> JSONResponse:
-    """Write the journal entry, cache the response, return JSONResponse.
+    """Finalize the journal entry, cache the response, return JSONResponse.
 
     Centralises the §6 + §7.3 + §4 cache contracts so the dispatch flow
     above stays readable. ``http_status``/``reason`` are passed only on
     error paths; the success / no-op paths use the §7.3 shape verbatim.
     ``extra`` carries verb-specific fields (e.g. snapshot's ``snapname``)
-    that the §7.3 base shape doesn't model.
+    that the §7.3 base shape doesn't model. When ``writeahead_journal_entry``
+    is supplied, the existing NetBox record is patched in place instead of
+    creating a second journal entry.
     """
     comments = build_journal_comments(
         verb=verb,
@@ -1416,18 +1754,16 @@ async def _audit_and_respond(
         error_detail=error_detail,
     )
 
-    journal_entry_url: str | None = None
-    if netbox_vm_id is not None:
-        entry = await write_verb_journal_entry(
-            nb, netbox_vm_id=netbox_vm_id, kind=kind, comments=comments
-        )
-        if entry is not None:
-            url = entry.get("url") if isinstance(entry, dict) else None
-            entry_id = entry.get("id") if isinstance(entry, dict) else None
-            if isinstance(url, str):
-                journal_entry_url = url
-            elif isinstance(entry_id, int):
-                journal_entry_url = f"/api/extras/journal-entries/{entry_id}/"
+    journal_entry_url = await _finalize_journal_entry(
+        nb=nb,
+        netbox_vm_id=netbox_vm_id,
+        writeahead_journal_entry=writeahead_journal_entry,
+        verb=verb,
+        vm_type=vm_type,
+        vmid=vmid,
+        kind=kind,
+        comments=comments,
+    )
 
     body = build_success_response(
         verb=verb,

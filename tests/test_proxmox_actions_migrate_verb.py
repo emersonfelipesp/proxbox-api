@@ -91,6 +91,7 @@ def _patch_route(
     cancel_side_effect=None,
     task_status_payload=None,
     journal_entry: dict | None = None,
+    journal_update_side_effect=None,
 ):
     if preflight_payload is None:
         preflight_payload = {
@@ -112,7 +113,11 @@ def _patch_route(
     task_status_mock = AsyncMock(
         return_value=task_status_payload or SimpleNamespace(status="stopped", exitstatus="OK")
     )
-    journal_mock = AsyncMock(return_value=journal_entry)
+    journal_create_mock = AsyncMock(return_value=journal_entry)
+    journal_update_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_update_side_effect,
+    )
 
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
@@ -128,7 +133,11 @@ def _patch_route(
         ),
         patch(
             "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
-            journal_mock,
+            journal_create_mock,
+        ),
+        patch(
+            "proxbox_api.routes.proxmox_actions.update_verb_journal_entry",
+            journal_update_mock,
         ),
     ]
 
@@ -139,7 +148,8 @@ def _patch_route(
         "migrate": migrate_mock,
         "cancel": cancel_mock,
         "task_status": task_status_mock,
-        "journal": journal_mock,
+        "journal": journal_update_mock,
+        "journal_create": journal_create_mock,
     }
 
 
@@ -400,8 +410,8 @@ def test_migrate_qemu_cancel_returns_200_and_writes_journal(client: TestClient):
     assert body["result"] == "cancel_requested"
     assert body["proxmox_task_upid"] == "UPID:pve-node-01:0001:migrate"
     handles["cancel"].assert_awaited_once()
-    handles["journal"].assert_awaited_once()
-    assert handles["journal"].call_args.kwargs["kind"] == "info"
+    handles["journal_create"].assert_awaited_once()
+    assert handles["journal_create"].call_args.kwargs["kind"] == "info"
 
 
 def test_migrate_qemu_cancel_proxmox_failure_writes_warning(client: TestClient):
@@ -422,8 +432,8 @@ def test_migrate_qemu_cancel_proxmox_failure_writes_warning(client: TestClient):
     body = resp.json()
     assert body["result"] == "cancel_failed"
     assert body["reason"] == "proxmox_cancel_failed"
-    handles["journal"].assert_awaited_once()
-    assert handles["journal"].call_args.kwargs["kind"] == "warning"
+    handles["journal_create"].assert_awaited_once()
+    assert handles["journal_create"].call_args.kwargs["kind"] == "warning"
 
 
 # ---------------------------------------------------------------------------

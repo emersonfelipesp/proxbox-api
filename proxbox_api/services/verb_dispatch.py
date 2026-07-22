@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import NetBoxAPIError, ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_create_async
+from proxbox_api.netbox_rest import rest_create_async, rest_patch_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
 from proxbox_api.services.sync.sync_state_reader import (
     resolve_virtual_machine_by_sync_state,
@@ -243,6 +243,54 @@ async def write_verb_journal_entry(
         return body
     if isinstance(record, dict):
         return record
+    return None
+
+
+async def update_verb_journal_entry(
+    nb: object,
+    *,
+    journal_entry_id: int,
+    kind: JournalKind,
+    comments: str,
+) -> dict[str, object] | None:
+    """PATCH a verb-dispatch journal entry in place."""
+    payload = scrub_cloud_init(
+        {
+            "kind": kind,
+            "comments": comments,
+        }
+    )
+    try:
+        record = await rest_patch_async(
+            nb,
+            "/api/extras/journal-entries/",
+            journal_entry_id,
+            payload,
+        )
+    except ProxboxException as error:
+        logger.warning(
+            "Failed to update verb journal entry id=%s: %s",
+            journal_entry_id,
+            error,
+        )
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Failed to update verb journal entry id=%s: %s",
+            journal_entry_id,
+            error,
+        )
+        raise NetBoxAPIError(
+            "Failed to update verb audit journal entry",
+            endpoint="/api/extras/journal-entries/",
+            method="PATCH",
+            original_error=error,
+        ) from error
+    if isinstance(record, dict):
+        return record
+    body = getattr(record, "data", None)
+    if isinstance(body, dict):
+        return body
     return None
 
 
