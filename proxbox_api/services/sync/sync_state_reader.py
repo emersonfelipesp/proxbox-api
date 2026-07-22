@@ -89,7 +89,7 @@ def _memoize_sidecar_failure(path: str, error: Exception) -> None:
             getattr(error, "detail", str(error)),
         )
     else:
-        logger.debug(
+        logger.warning(
             "Proxbox sync-state sidecar read failed at %s; "
             "legacy custom-field fallback is available only when custom_fields_enabled=true: %s",
             path,
@@ -475,6 +475,98 @@ async def resolve_vm_sidecar_by_parent_id(nb: object, vm_id: int) -> dict[str, o
     """Return the VM sidecar row for a NetBox VM id, if the optional API is available."""
     sidecar = await _first_sidecar(nb, query={"virtual_machine_id": vm_id})
     return _record_to_dict(sidecar) if sidecar is not None else None
+
+
+def _collapse_vm_last_synced_name(parent_id: int, values: set[str]) -> str | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return next(iter(values))
+    logger.warning(
+        "Omitting proxmox_vm_name evidence for NetBox VM id=%s because "
+        "multiple sync-state sidecar rows disagree: %s",
+        parent_id,
+        sorted(values),
+    )
+    return None
+
+
+async def load_vm_last_synced_name(nb: object, vm_id: int) -> str | None:
+    """Return one VM's last synced Proxmox name from sidecar evidence.
+
+    This mirrors :func:`load_vm_last_synced_names` for the individual sync path:
+    agreeing non-empty duplicate sidecar rows collapse to one value, disagreeing
+    non-empty rows are treated as no evidence, and blank/missing values remain
+    absent.
+    """
+    parent_id = _as_positive_int(vm_id)
+    if parent_id is None:
+        return None
+    rows = await _list_sidecars(nb, query={"virtual_machine_id": parent_id})
+    if not rows:
+        return None
+
+    values: set[str] = set()
+    for row in rows:
+        sidecar = _record_to_dict(row)
+        if not sidecar:
+            continue
+        row_parent_id = _relation_id_from_field(sidecar, "virtual_machine")
+        if row_parent_id is None:
+            continue
+        if row_parent_id != parent_id:
+            logger.debug(
+                "Ignoring VM sync-state sidecar row returned for virtual_machine_id=%s "
+                "because it belongs to NetBox VM id=%s: %s",
+                parent_id,
+                row_parent_id,
+                sidecar,
+            )
+            continue
+        name = _sidecar_text(sidecar.get("proxmox_vm_name"))
+        if name:
+            values.add(name)
+    return _collapse_vm_last_synced_name(parent_id, values)
+
+
+async def load_vm_last_synced_names(
+    nb: object,
+    *,
+    page_size: int = 500,
+) -> dict[int, str]:
+    """Map NetBox VM id -> the Proxmox name recorded at the last successful sync.
+
+    Fetched once per sync pass rather than per VM. The name resolver needs this
+    for every VM it examines, and a per-VM lookup would add an N+1 REST round
+    trip to a pass that already runs over the whole fleet.
+
+    Returns an empty mapping when the sidecar API is unavailable or the field is
+    not populated, which callers must treat as "no evidence" and fall back to
+    their previous behaviour -- every row is blank until it has been re-synced
+    at least once after the field was introduced.
+    """
+    rows = await _list_sidecars(nb, query={}, page_size=page_size)
+    if not rows:
+        return {}
+
+    names_by_parent_id: dict[int, set[str]] = {}
+    for row in rows:
+        sidecar = _record_to_dict(row)
+        if not sidecar:
+            continue
+        parent_id = _relation_id_from_field(sidecar, "virtual_machine")
+        if parent_id is None:
+            continue
+        name = _sidecar_text(sidecar.get("proxmox_vm_name"))
+        if name:
+            names_by_parent_id.setdefault(parent_id, set()).add(name)
+
+    names: dict[int, str] = {}
+    for parent_id, values in names_by_parent_id.items():
+        name = _collapse_vm_last_synced_name(parent_id, values)
+        if name is not None:
+            names[parent_id] = name
+    return names
 
 
 async def resolve_vm_last_run_id(

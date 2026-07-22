@@ -171,3 +171,141 @@ class TestResolveUniqueVmName:
         )
         assert resolution.operator_renamed is False
         assert resolution.resolved_name == "gateway"
+
+
+# --- Proxmox-side rename vs operator rename (netbox-proxbox issue #617) -------
+#
+# "Stored NetBox name != incoming Proxmox name" has two possible causes and, on
+# its own, cannot distinguish them. `last_synced_proxmox_name` -- the name
+# Proxmox reported at the last successful sync -- is what separates them.
+
+
+def _existing(vmid: int, name: str) -> dict[int, dict]:
+    return {vmid: {"id": 900 + vmid, "name": name}}
+
+
+@pytest.mark.asyncio
+async def test_proxmox_side_rename_is_applied():
+    """Stored name still matches what Proxmox last said -> Proxmox renamed it."""
+    used: set[str] = set()
+    resolution = await resolve_unique_vm_name(
+        None,
+        netbox_cluster_id=10,
+        proxmox_cluster_name="lab",
+        candidate="web-02",
+        proxmox_vmid=101,
+        used_names_in_cluster=used,
+        existing_vm_by_vmid=_existing(101, "web-01"),
+        last_synced_proxmox_name="web-01",
+    )
+
+    assert resolution.resolved_name == "web-02", (
+        "nobody touched the name in NetBox, so the Proxmox rename must win"
+    )
+    assert resolution.operator_renamed is False
+
+
+@pytest.mark.asyncio
+async def test_operator_rename_still_wins_over_a_proxmox_rename():
+    """Stored name differs from what Proxmox last said -> a human edited it."""
+    used: set[str] = set()
+    resolution = await resolve_unique_vm_name(
+        None,
+        netbox_cluster_id=10,
+        proxmox_cluster_name="lab",
+        candidate="web-02",
+        proxmox_vmid=101,
+        used_names_in_cluster=used,
+        existing_vm_by_vmid=_existing(101, "gateway-prod"),
+        last_synced_proxmox_name="web-01",
+    )
+
+    assert resolution.resolved_name == "gateway-prod", (
+        "the operator's NetBox-side edit must be preserved"
+    )
+    assert resolution.operator_renamed is True
+
+
+@pytest.mark.asyncio
+async def test_missing_last_synced_name_falls_back_to_preserving():
+    """No evidence -> keep the old behaviour.
+
+    Every row is blank until re-synced after the field was added, so this is the
+    state of an entire fleet immediately after upgrade. Preserving a name we are
+    unsure about is the safer failure: it loses a rename, where the opposite
+    would destroy a deliberate operator edit.
+    """
+    for absent in (None, ""):
+        used: set[str] = set()
+        resolution = await resolve_unique_vm_name(
+            None,
+            netbox_cluster_id=10,
+            proxmox_cluster_name="lab",
+            candidate="web-02",
+            proxmox_vmid=101,
+            used_names_in_cluster=used,
+            existing_vm_by_vmid=_existing(101, "web-01"),
+            last_synced_proxmox_name=absent,
+        )
+        assert resolution.resolved_name == "web-01", f"fallback broken for {absent!r}"
+        assert resolution.operator_renamed is True
+
+
+@pytest.mark.asyncio
+async def test_proxmox_rename_does_not_collide_with_its_own_old_name():
+    """The VM's own outgoing name must not push its new name to a " (2)" suffix."""
+    used: set[str] = {"web-01"}
+    resolution = await resolve_unique_vm_name(
+        None,
+        netbox_cluster_id=10,
+        proxmox_cluster_name="lab",
+        candidate="web-02",
+        proxmox_vmid=101,
+        used_names_in_cluster=used,
+        existing_vm_by_vmid=_existing(101, "web-01"),
+        last_synced_proxmox_name="web-01",
+    )
+
+    assert resolution.resolved_name == "web-02"
+    assert resolution.is_collision is False
+
+
+@pytest.mark.asyncio
+async def test_proxmox_rename_applies_when_existing_name_is_own_collision_suffix():
+    """A VM's own old algorithmic suffix must not be classified as an operator edit."""
+    used: set[str] = {"web-01 (2)"}
+    resolution = await resolve_unique_vm_name(
+        None,
+        netbox_cluster_id=10,
+        proxmox_cluster_name="lab",
+        candidate="web-02",
+        proxmox_vmid=101,
+        used_names_in_cluster=used,
+        existing_vm_by_vmid=_existing(101, "web-01 (2)"),
+        last_synced_proxmox_name="web-01",
+    )
+
+    assert resolution.resolved_name == "web-02"
+    assert resolution.operator_renamed is False
+    assert resolution.is_collision is False
+    assert "web-01 (2)" not in used
+    assert "web-02" in used
+
+
+@pytest.mark.asyncio
+async def test_genuine_collision_still_suffixes_after_a_proxmox_rename():
+    """A real clash with a *different* VM must still be suffixed."""
+    used: set[str] = {"web-02"}
+    resolution = await resolve_unique_vm_name(
+        None,
+        netbox_cluster_id=10,
+        proxmox_cluster_name="lab",
+        candidate="web-02",
+        proxmox_vmid=101,
+        used_names_in_cluster=used,
+        existing_vm_by_vmid=_existing(101, "web-01"),
+        last_synced_proxmox_name="web-01",
+    )
+
+    assert resolution.resolved_name == "web-02 (2)"
+    assert resolution.is_collision is True
