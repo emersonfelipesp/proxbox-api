@@ -10,7 +10,7 @@ import pytest
 from proxbox_api.exception import ProxboxException
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
-from proxbox_api.services.sync import sync_state_reader
+from proxbox_api.services.sync import sync_state_reader, sync_state_writer
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
@@ -37,14 +37,50 @@ def _resource(vmid: int) -> dict[str, object]:
     }
 
 
-def _install_full_update_stubs(monkeypatch, *, payload_side_effect=None) -> list[int]:
+def _existing_vm_snapshot(*, name: str, vmid: int = 101, record_id: int = 55) -> dict[str, object]:
+    return {
+        "id": record_id,
+        "name": name,
+        "status": "active",
+        "cluster": {"id": 1, "name": "cluster-a"},
+        "device": {"id": 1},
+        "role": None,
+        "vcpus": 1,
+        "memory": 1024,
+        "disk": 0,
+        "tags": [{"id": 5}],
+        "custom_fields": {
+            "proxmox_vm_id": vmid,
+            "proxmox_vm_type": "qemu",
+        },
+        "description": "Synced from Proxmox node pve01",
+    }
+
+
+def _install_full_update_stubs(
+    monkeypatch,
+    *,
+    payload_side_effect=None,
+    netbox_snapshot: list[dict[str, object]] | None = None,
+    sidecar_rows: list[dict[str, object]] | None = None,
+) -> list[int]:
     fetch_calls: list[int] = []
 
     async def _fake_detect_netbox_version(_nb):
         return (4, 5, 0)
 
-    async def _fake_rest_list(*_args, **_kwargs):
+    async def _fake_rest_list(_nb, path, *, query=None, **_kwargs):
+        if path == "/api/virtualization/virtual-machines/" and netbox_snapshot is not None:
+            limit = int((query or {}).get("limit", len(netbox_snapshot)) or len(netbox_snapshot))
+            offset = int((query or {}).get("offset", 0) or 0)
+            return [dict(record) for record in netbox_snapshot[offset : offset + limit]]
         return []
+
+    async def _fake_sidecar_paginated(_nb, path, *, base_query, page_size):
+        assert path == sync_state_reader.VM_SYNC_STATE_PATH
+        assert base_query == {}
+        assert page_size == 500
+        return [dict(row) for row in sidecar_rows or []]
 
     async def _fake_reconcile(*_args, **kwargs):
         payload = kwargs.get("payload") or {}
@@ -60,7 +96,7 @@ def _install_full_update_stubs(monkeypatch, *, payload_side_effect=None) -> list
         resource = kwargs["proxmox_resource"]
         vmid = int(resource["vmid"])
         return {
-            "name": f"vm-{vmid}",
+            "name": str(resource.get("name") or f"vm-{vmid}"),
             "status": "active",
             "cluster": kwargs["cluster_id"],
             "device": kwargs["device_id"],
@@ -80,6 +116,15 @@ def _install_full_update_stubs(monkeypatch, *, payload_side_effect=None) -> list
         vmid = int((lookup or {})["cf_proxmox_vm_id"])
         return {"id": vmid, **payload}
 
+    async def _fake_sidecar_first(_nb, _path, *, query=None):
+        return None
+
+    async def _fake_sidecar_create(_nb, _path, payload, *, lookup=None):
+        return {"id": 900, **payload}
+
+    async def _fake_sidecar_patch(_nb, _path, record_id, payload):
+        return {"id": record_id, **payload}
+
     async def _fake_stamp(*_args, **_kwargs):
         return None
 
@@ -92,7 +137,15 @@ def _install_full_update_stubs(monkeypatch, *, payload_side_effect=None) -> list
         "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list,
     )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_paginated_async",
+        _fake_sidecar_paginated,
+    )
     sync_state_reader.reset_sidecar_reader_availability_cache()
+    monkeypatch.setattr(sync_state_writer, "rest_first_async", _fake_sidecar_first)
+    monkeypatch.setattr(sync_state_writer, "rest_create_async", _fake_sidecar_create)
+    monkeypatch.setattr(sync_state_writer, "rest_patch_async", _fake_sidecar_patch)
+    sync_state_writer.reset_sidecar_availability_cache()
     monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 4)
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 4)
@@ -114,6 +167,51 @@ def _install_full_update_stubs(monkeypatch, *, payload_side_effect=None) -> list
     monkeypatch.setattr(sync_vm, "sync_virtual_machine_task_history", _fake_task_history)
 
     return fetch_calls
+
+
+def _run_full_update_name_case(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    existing_name: str,
+    incoming_name: str,
+    sidecar_rows: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    existing_vm = _existing_vm_snapshot(name=existing_name)
+    patch_payloads: list[dict[str, object]] = []
+    _install_full_update_stubs(
+        monkeypatch,
+        netbox_snapshot=[existing_vm],
+        sidecar_rows=sidecar_rows,
+    )
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _fake_patch(_nb, path, record_id, payload):
+        assert path == "/api/virtualization/virtual-machines/"
+        assert record_id == 55
+        patch_payload = dict(payload)
+        patch_payloads.append(patch_payload)
+        return {"id": record_id, **existing_vm, **patch_payload}
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[
+                {"cluster-a": [{**_resource(101), "name": incoming_name}]},
+            ],
+            custom_fields=[],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    return result, patch_payloads
 
 
 def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkeypatch):
@@ -212,6 +310,58 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     assert context.vm_role_cache["qemu"].id == 33
     assert resolved_vm_types == ["qemu"]
     assert resolved_tag_inputs == [("cluster-a", vm_config)]
+
+
+def test_full_update_batch_applies_proxmox_rename_when_sidecar_matches_stored_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, patch_payloads = _run_full_update_name_case(
+        monkeypatch,
+        existing_name="web-01",
+        incoming_name="web-renamed",
+        sidecar_rows=[
+            {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+        ],
+    )
+
+    assert len(result) == 1
+    assert result[0]["name"] == "web-renamed"
+    assert patch_payloads
+    assert patch_payloads[-1]["name"] == "web-renamed"
+
+
+def test_full_update_batch_preserves_operator_rename_when_sidecar_differs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, patch_payloads = _run_full_update_name_case(
+        monkeypatch,
+        existing_name="gateway-prod",
+        incoming_name="web-renamed",
+        sidecar_rows=[
+            {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+        ],
+    )
+
+    assert len(result) == 1
+    assert result[0]["name"] == "gateway-prod"
+    assert all("name" not in payload for payload in patch_payloads)
+
+
+def test_full_update_batch_preserves_netbox_name_when_sidecar_name_is_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, patch_payloads = _run_full_update_name_case(
+        monkeypatch,
+        existing_name="web-01",
+        incoming_name="web-renamed",
+        sidecar_rows=[
+            {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": ""},
+        ],
+    )
+
+    assert len(result) == 1
+    assert result[0]["name"] == "web-01"
+    assert all("name" not in payload for payload in patch_payloads)
 
 
 def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
