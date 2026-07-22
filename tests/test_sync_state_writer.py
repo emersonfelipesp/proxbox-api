@@ -189,6 +189,51 @@ async def test_sidecar_writer_respects_custom_field_gate(recorder: _Recorder) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("custom_fields", [{"proxmox_vm_id": 101}, None])
+async def test_vm_sidecar_writes_proxmox_name_when_custom_field_gate_is_closed(
+    recorder: _Recorder,
+    custom_fields: dict[str, object] | None,
+) -> None:
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=123,
+        custom_fields=custom_fields,
+        overwrite_custom_fields=False,
+        proxmox_vm_name="web-renamed",
+    )
+
+    assert recorder.calls[0] == {
+        "method": "GET",
+        "path": writer.VM_SYNC_STATE_PATH,
+        "query": {"virtual_machine_id": 123, "limit": 2},
+    }
+    post = recorder.calls[1]
+    assert post["method"] == "POST"
+    assert post["path"] == writer.VM_SYNC_STATE_PATH
+    assert post["payload"] == {
+        "virtual_machine": {"id": 123},
+        "proxmox_vm_name": "web-renamed",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proxmox_vm_name", [None, "", "   "])
+async def test_vm_sidecar_custom_field_gate_still_skips_blank_proxmox_name(
+    recorder: _Recorder,
+    proxmox_vm_name: object,
+) -> None:
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=123,
+        custom_fields={"proxmox_vm_id": 101},
+        overwrite_custom_fields=False,
+        proxmox_vm_name=proxmox_vm_name,
+    )
+
+    assert recorder.calls == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("func", "kwargs", "path", "parent_field", "expected"),
     [

@@ -19,7 +19,13 @@ jobs:
   quality:
     name: Lint, smoke, and core coverage
     runs-on: ci-untrusted-python312
-    timeout-minutes: 30
+    # 90, not 30. The full suite (~2200 tests, some rebuilding the FastAPI app
+    # per test) exceeds 30 min on the shared, CPU-quota'd ci-untrusted runner --
+    # jobs were killed at exactly 30 min and recorded as `failure` despite every
+    # truncated log ending mid-run all-passing. Local wall-clock is ~13 min; 90
+    # gives comfortable headroom on the slower runner. The runner's own
+    # config.yaml `timeout` was raised to match.
+    timeout-minutes: 90
     env:
       HOME: ${{ github.workspace }}
       UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache

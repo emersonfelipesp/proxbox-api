@@ -24,7 +24,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
-from proxbox_api.schemas.sync import SyncOverwriteFlags
+from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
@@ -148,6 +148,146 @@ def test_build_netbox_virtual_machine_payload_sets_lxc_vm_type(monkeypatch):
         tag_ids=[7],
     )
     assert payload["custom_fields"]["proxmox_vm_type"] == "lxc"
+
+
+def test_default_vm_sync_network_preserves_operator_rename_with_sidecar(monkeypatch):
+    existing_vm = {
+        "id": 55,
+        "name": "gateway-prod",
+        "status": "active",
+        "cluster": {"id": 10, "name": "cluster-a"},
+        "device": {"id": 22},
+        "role": {"id": 17},
+        "vcpus": 2,
+        "memory": 2048,
+        "disk": 0,
+        "tags": [{"id": 7}],
+        "custom_fields": {
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+        },
+        "description": "Synced from Proxmox node pve01",
+    }
+    vm_reconcile_payloads: list[dict[str, object]] = []
+    sidecar_kwargs: dict[str, object] = {}
+    last_synced_loads = 0
+
+    async def _fake_detect_netbox_version(_nb):
+        return (4, 5, 0)
+
+    async def _fake_rest_list(_nb, _path, **_kwargs):
+        return []
+
+    async def _fake_ensure(*_args, **_kwargs):
+        return SimpleNamespace(id=1)
+
+    async def _fake_ensure_cluster(*_args, **_kwargs):
+        return SimpleNamespace(id=10)
+
+    async def _fake_ensure_device(*_args, **_kwargs):
+        return SimpleNamespace(id=22)
+
+    async def _fake_reconcile(_nb, path, **kwargs):
+        if path == "/api/virtualization/virtual-machines/":
+            payload = dict(kwargs["payload"])
+            vm_reconcile_payloads.append(payload)
+            return {"id": 55, **payload}
+        return SimpleNamespace(id=17, name=(kwargs.get("payload") or {}).get("name"))
+
+    async def _fake_snapshot(_nb, *, fresh=False):
+        assert fresh is True
+        return [dict(existing_vm)]
+
+    async def _fake_last_synced(_nb):
+        nonlocal last_synced_loads
+        last_synced_loads += 1
+        return {55: "web-01"}
+
+    async def _fake_existing_resolution(*_args, **_kwargs):
+        return SimpleNamespace(record=existing_vm, record_id=55, source="sidecar")
+
+    def _fake_get_vm_config(**_kwargs):
+        return {}
+
+    async def _fake_write_sidecar(*_args, **kwargs):
+        sidecar_kwargs.update(kwargs)
+        return None
+
+    async def _fake_stamp(*_args, **_kwargs):
+        return None
+
+    async def _fake_task_history(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(sync_vm, "detect_netbox_version", _fake_detect_netbox_version)
+    monkeypatch.setattr(sync_vm, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_snapshot)
+    monkeypatch.setattr(sync_vm, "load_vm_last_synced_names", _fake_last_synced)
+    monkeypatch.setattr(
+        sync_vm,
+        "resolve_virtual_machine_by_sync_state",
+        _fake_existing_resolution,
+    )
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 1)
+    monkeypatch.setattr(sync_vm, "write_virtual_machine_sync_state", _fake_write_sidecar)
+    monkeypatch.setattr(sync_vm, "stamp_vm_last_run_id", _fake_stamp)
+    monkeypatch.setattr(sync_vm, "sync_virtual_machine_task_history", _fake_task_history)
+    for name in (
+        "_ensure_cluster_type",
+        "_ensure_manufacturer",
+        "_ensure_device_type",
+        "_ensure_site",
+        "_resolve_tenant",
+        "_ensure_proxmox_node_role",
+    ):
+        monkeypatch.setattr(sync_vm, name, _fake_ensure)
+    monkeypatch.setattr(sync_vm, "_ensure_cluster", _fake_ensure_cluster)
+    monkeypatch.setattr(sync_vm, "_ensure_device", _fake_ensure_device)
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[
+                SimpleNamespace(
+                    name="cluster-a",
+                    cluster_name="cluster-a",
+                    db_endpoint_id=500,
+                    domain="pve.example",
+                    http_port=8006,
+                )
+            ],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[
+                {
+                    "cluster-a": [
+                        {
+                            "type": "qemu",
+                            "name": "web-01",
+                            "node": "pve01",
+                            "vmid": 101,
+                            "status": "running",
+                            "maxcpu": 2,
+                            "maxmem": 2_147_483_648,
+                            "maxdisk": 0,
+                        }
+                    ]
+                }
+            ],
+            custom_fields=[],
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            behavior_flags=SyncBehaviorFlags(custom_fields_enabled=True),
+        )
+    )
+
+    assert len(result) == 1
+    assert last_synced_loads == 1
+    assert vm_reconcile_payloads[0]["name"] == "gateway-prod"
+    assert result[0]["name"] == "gateway-prod"
+    assert sidecar_kwargs["virtual_machine_id"] == 55
+    assert sidecar_kwargs["proxmox_vm_name"] == "web-01"
 
 
 def test_build_virtual_machine_transform_requires_cluster_id(monkeypatch):
