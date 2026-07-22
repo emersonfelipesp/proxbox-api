@@ -348,12 +348,17 @@ async def write_virtual_machine_sync_state(
     record the NetBox name as "what Proxmox last said" and permanently cement a
     stale value as ground truth (netbox-proxbox issue #617).
     """
-    if not overwrite_custom_fields or custom_fields is None:
-        return None
-    payload = vm_sidecar_payload_from_custom_fields(custom_fields)
+    should_write_custom_field_state = overwrite_custom_fields and custom_fields is not None
+    payload = (
+        vm_sidecar_payload_from_custom_fields(custom_fields)
+        if should_write_custom_field_state
+        else {}
+    )
     name = _text_or_blank(proxmox_vm_name)
     if name:
         payload["proxmox_vm_name"] = name
+    elif not should_write_custom_field_state:
+        return None
     return await _upsert_parent_sidecar(
         nb,
         path=VM_SYNC_STATE_PATH,
