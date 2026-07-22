@@ -37,8 +37,8 @@ from proxbox_api.services.sync.discovery_tags import (
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
 from proxbox_api.services.sync.sync_state_reader import (
+    load_vm_last_synced_name,
     resolve_virtual_machine_by_sync_state,
-    resolve_vm_sidecar_by_parent_id,
 )
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
@@ -145,10 +145,7 @@ async def _apply_name_collision_resolution(
     last_synced_proxmox_name: str | None = None
     existing_vm_id = record_id(existing_vm_by_vmid.get(vmid))
     if existing_vm_id is not None:
-        sidecar = await resolve_vm_sidecar_by_parent_id(nb, existing_vm_id)
-        if sidecar is not None:
-            raw_name = str(sidecar.get("proxmox_vm_name") or "").strip()
-            last_synced_proxmox_name = raw_name or None
+        last_synced_proxmox_name = await load_vm_last_synced_name(nb, existing_vm_id)
 
     candidate_name = str(netbox_vm_payload.get("name") or "")
     if not candidate_name:

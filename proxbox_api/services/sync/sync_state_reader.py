@@ -477,6 +477,58 @@ async def resolve_vm_sidecar_by_parent_id(nb: object, vm_id: int) -> dict[str, o
     return _record_to_dict(sidecar) if sidecar is not None else None
 
 
+def _collapse_vm_last_synced_name(parent_id: int, values: set[str]) -> str | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return next(iter(values))
+    logger.warning(
+        "Omitting proxmox_vm_name evidence for NetBox VM id=%s because "
+        "multiple sync-state sidecar rows disagree: %s",
+        parent_id,
+        sorted(values),
+    )
+    return None
+
+
+async def load_vm_last_synced_name(nb: object, vm_id: int) -> str | None:
+    """Return one VM's last synced Proxmox name from sidecar evidence.
+
+    This mirrors :func:`load_vm_last_synced_names` for the individual sync path:
+    agreeing non-empty duplicate sidecar rows collapse to one value, disagreeing
+    non-empty rows are treated as no evidence, and blank/missing values remain
+    absent.
+    """
+    parent_id = _as_positive_int(vm_id)
+    if parent_id is None:
+        return None
+    rows = await _list_sidecars(nb, query={"virtual_machine_id": parent_id})
+    if not rows:
+        return None
+
+    values: set[str] = set()
+    for row in rows:
+        sidecar = _record_to_dict(row)
+        if not sidecar:
+            continue
+        row_parent_id = _relation_id_from_field(sidecar, "virtual_machine")
+        if row_parent_id is None:
+            continue
+        if row_parent_id != parent_id:
+            logger.debug(
+                "Ignoring VM sync-state sidecar row returned for virtual_machine_id=%s "
+                "because it belongs to NetBox VM id=%s: %s",
+                parent_id,
+                row_parent_id,
+                sidecar,
+            )
+            continue
+        name = _sidecar_text(sidecar.get("proxmox_vm_name"))
+        if name:
+            values.add(name)
+    return _collapse_vm_last_synced_name(parent_id, values)
+
+
 async def load_vm_last_synced_names(
     nb: object,
     *,
@@ -511,15 +563,9 @@ async def load_vm_last_synced_names(
 
     names: dict[int, str] = {}
     for parent_id, values in names_by_parent_id.items():
-        if len(values) == 1:
-            names[parent_id] = next(iter(values))
-            continue
-        logger.warning(
-            "Omitting proxmox_vm_name evidence for NetBox VM id=%s because "
-            "multiple sync-state sidecar rows disagree: %s",
-            parent_id,
-            sorted(values),
-        )
+        name = _collapse_vm_last_synced_name(parent_id, values)
+        if name is not None:
+            names[parent_id] = name
     return names
 
 

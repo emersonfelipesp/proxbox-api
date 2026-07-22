@@ -546,6 +546,52 @@ async def test_load_vm_last_synced_names_omits_conflicting_duplicate_sidecar_row
 
 
 @pytest.mark.asyncio
+async def test_load_vm_last_synced_name_collapses_single_vm_duplicate_sidecar_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    calls: list[dict[str, object]] = []
+
+    async def _fake_list(
+        _nb: object,
+        path: str,
+        *,
+        query: dict[str, object] | None = None,
+    ):
+        assert path == VM_SYNC_STATE_PATH
+        calls.append(dict(query or {}))
+        if query == {"virtual_machine_id": 55}:
+            return [
+                {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+                {"id": 2, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+            ]
+        if query == {"virtual_machine_id": 56}:
+            return [
+                {"id": 3, "virtual_machine": {"id": 56}, "proxmox_vm_name": "web-01"},
+                {"id": 4, "virtual_machine": {"id": 56}, "proxmox_vm_name": "web-02"},
+            ]
+        return []
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_async", _fake_list)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    agreeing = await sync_state_reader.load_vm_last_synced_name(object(), 55)
+    disagreeing = await sync_state_reader.load_vm_last_synced_name(object(), 56)
+
+    assert agreeing == "web-01"
+    assert disagreeing is None
+    assert calls == [{"virtual_machine_id": 55}, {"virtual_machine_id": 56}]
+    assert len(warnings) == 1
+    assert "NetBox VM id=56" in warnings[0]
+    assert "web-01" in warnings[0]
+    assert "web-02" in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_create_does_not_create_when_sync_state_resolution_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
