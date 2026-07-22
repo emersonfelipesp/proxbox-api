@@ -78,6 +78,7 @@ async def resolve_unique_vm_name(
     proxmox_vmid: int,
     used_names_in_cluster: set[str],
     existing_vm_by_vmid: dict[int, dict] | None = None,
+    last_synced_proxmox_name: str | None = None,
 ) -> NameResolution:
     """Resolve a deterministic, NetBox-unique VM name within one NetBox cluster.
 
@@ -121,20 +122,52 @@ async def resolve_unique_vm_name(
     if existing is not None and netbox_cluster_id is not None:
         existing_name = str(existing.get("name", ""))
         if existing_name and not _is_algorithmic_variant(existing_name, candidate):
-            used_names_in_cluster.add(existing_name)
+            # "Stored NetBox name differs from the incoming Proxmox name" has two
+            # possible causes and, on its own, cannot tell them apart:
+            #   * an operator renamed the VM inside NetBox   -> keep their edit
+            #   * somebody renamed the VM in Proxmox         -> apply the rename
+            #
+            # `last_synced_proxmox_name` is the name Proxmox reported at the last
+            # successful sync, which disambiguates them. If the stored name still
+            # matches what Proxmox last said, nobody has touched it in NetBox and
+            # the difference must come from the Proxmox side, so the new name
+            # wins (netbox-proxbox issue #617).
+            #
+            # When it is absent -- the sidecar API is unavailable, or the row has
+            # not been re-synced since the field was added, which is every row on
+            # first upgrade -- fall back to the historical assumption. Preserving
+            # a name we are unsure about is the safer failure: it loses a rename,
+            # where the opposite would destroy an operator's deliberate edit.
+            renamed_in_proxmox = bool(last_synced_proxmox_name) and (
+                existing_name == last_synced_proxmox_name
+                or _is_algorithmic_variant(existing_name, last_synced_proxmox_name)
+            )
+            if not renamed_in_proxmox:
+                used_names_in_cluster.add(existing_name)
+                logger.info(
+                    "name_collision: operator-renamed VM detected vmid=%s candidate=%r netbox_name=%r",
+                    proxmox_vmid,
+                    candidate,
+                    existing_name,
+                )
+                return NameResolution(
+                    resolved_name=existing_name,
+                    original_name=candidate,
+                    suffix_index=1,
+                    is_collision=False,
+                    operator_renamed=True,
+                )
             logger.info(
-                "name_collision: operator-renamed VM detected vmid=%s candidate=%r netbox_name=%r",
+                "name_collision: Proxmox-side rename accepted vmid=%s %r -> %r "
+                "(last synced name matched the stored NetBox name)",
                 proxmox_vmid,
-                candidate,
                 existing_name,
+                candidate,
             )
-            return NameResolution(
-                resolved_name=existing_name,
-                original_name=candidate,
-                suffix_index=1,
-                is_collision=False,
-                operator_renamed=True,
-            )
+            # The stored name is about to be replaced, so it must not stay in the
+            # used-name set -- otherwise this VM's own old name could push its new
+            # name to a " (2)" suffix.
+            used_names_in_cluster.discard(existing_name)
 
     resolved, idx = _pick_suffix(candidate, used_names_in_cluster)
     used_names_in_cluster.add(resolved)

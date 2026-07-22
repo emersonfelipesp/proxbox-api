@@ -36,13 +36,17 @@ from proxbox_api.services.sync.discovery_tags import (
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
-from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
+from proxbox_api.services.sync.sync_state_reader import (
+    load_vm_last_synced_name,
+    resolve_virtual_machine_by_sync_state,
+)
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     iter_proxmox_net_config_items,
     normalize_current_virtual_machine_payload,
+    record_id,
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
     to_mapping,
@@ -138,6 +142,11 @@ async def _apply_name_collision_resolution(
         if isinstance(current_name, str):
             used_names_in_cluster.discard(current_name)
 
+    last_synced_proxmox_name: str | None = None
+    existing_vm_id = record_id(existing_vm_by_vmid.get(vmid))
+    if existing_vm_id is not None:
+        last_synced_proxmox_name = await load_vm_last_synced_name(nb, existing_vm_id)
+
     candidate_name = str(netbox_vm_payload.get("name") or "")
     if not candidate_name:
         return
@@ -149,6 +158,7 @@ async def _apply_name_collision_resolution(
         proxmox_vmid=vmid,
         used_names_in_cluster=used_names_in_cluster,
         existing_vm_by_vmid=existing_vm_by_vmid,
+        last_synced_proxmox_name=last_synced_proxmox_name,
     )
     if resolution.resolved_name != candidate_name:
         logger.info(
@@ -570,6 +580,7 @@ async def sync_vm_individual(
             overwrite_custom_fields=(
                 overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
             ),
+            proxmox_vm_name=proxmox_resource.get("name"),
         )
         await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
 

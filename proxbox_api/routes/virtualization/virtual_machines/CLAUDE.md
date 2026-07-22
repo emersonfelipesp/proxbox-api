@@ -221,6 +221,34 @@ Main synchronization endpoints for virtual machines and related resources.
   paths. Coverage:
   `tests/test_guest_vm_interface_sync.py::test_registered_stream_routes_expose_strategy_param`.
 
+- **Proxmox-authoritative VM rename via the last-synced-name truth table
+  (netbox-proxbox #617).** When a VM's name differs between Proxmox and the
+  stored NetBox record, sync no longer unconditionally preserves the NetBox
+  name. It decides using evidence recorded in the `ProxboxVMSyncState` sidecar
+  (`proxmox_vm_name` = the Proxmox name observed on the previous sync), read via
+  `services/sync/sync_state_reader.py` (`load_vm_last_synced_name(s)`) and
+  written via `services/sync/sync_state_writer.py`:
+  - stored NetBox name **==** last-synced sidecar name but **!=** incoming
+    Proxmox name ⇒ Proxmox was renamed ⇒ **UPDATE** the NetBox name to match;
+  - stored NetBox name **!=** last-synced sidecar name ⇒ a human edited the
+    NetBox name ⇒ **KEEP** the NetBox name (operator intent wins);
+  - no/blank/ambiguous sidecar evidence ⇒ **fall back to name-preserving**
+    behavior (fail-safe — a missing sidecar can never trigger an unwanted
+    rename). There is no toggle; the fail-safe default reproduces the old
+    behavior whenever evidence is absent.
+  The decision runs in `_resolve_vm_names_pre_pass` (`sync_vm.py`), which is
+  invoked from **two** call sites and applied on **every** name-writing path:
+  the batch `_run_full_update_vm_batch` path, and the `sync_vm_network=True`
+  `create_vm_task` path (via `name_prepass_vms` / `default_resolved_vm_names`,
+  with the resolved name overriding the payload before dispatch). The sidecar
+  `proxmox_vm_name` evidence is refreshed on each sync whenever the observed
+  Proxmox name is non-blank, independent of the `overwrite_custom_fields` flag,
+  so the truth table always has fresh evidence to compare against next run.
+  Coverage: `tests/test_vm_sync_two_phase.py`
+  (`test_full_update_batch_applies_proxmox_rename_when_sidecar_matches_stored_name`,
+  `test_full_update_batch_preserves_operator_rename_when_sidecar_differs`,
+  `test_full_update_batch_preserves_netbox_name_when_sidecar_name_is_blank`).
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.

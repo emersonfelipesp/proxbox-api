@@ -73,6 +73,68 @@ def test_extract_payload_preserves_sidecar_absent_statuses() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_vm_last_synced_names_keeps_unavailable_sidecar_read_at_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    debug_messages: list[str] = []
+
+    async def _fake_paginated(*_args: Any, **_kwargs: Any):
+        raise ProxboxException(
+            message="Not found",
+            detail="Not found.",
+            http_status_code=404,
+        )
+
+    def _capture_debug(message: str, *args: object) -> None:
+        debug_messages.append(message % args)
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    monkeypatch.setattr(sync_state_reader.logger, "debug", _capture_debug)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    names = await sync_state_reader.load_vm_last_synced_names(object())
+
+    assert names == {}
+    assert warnings == []
+    assert any("sidecar read" in message and "unavailable" in message for message in debug_messages)
+
+
+@pytest.mark.asyncio
+async def test_load_vm_last_synced_names_warns_on_unexpected_sidecar_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    debug_messages: list[str] = []
+
+    async def _fake_paginated(*_args: Any, **_kwargs: Any):
+        raise RuntimeError("temporary NetBox outage")
+
+    def _capture_debug(message: str, *args: object) -> None:
+        debug_messages.append(message % args)
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    monkeypatch.setattr(sync_state_reader.logger, "debug", _capture_debug)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    names = await sync_state_reader.load_vm_last_synced_names(object())
+
+    assert names == {}
+    assert debug_messages == []
+    assert len(warnings) == 1
+    assert "sidecar read failed" in warnings[0]
+    assert "temporary NetBox outage" in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_vm_identity_resolver_prefers_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
@@ -502,6 +564,93 @@ async def test_stale_sidecar_candidates_filter_last_run_client_side(
 
     assert calls == [{}]
     assert [candidate["id"] for candidate in candidates or []] == [11, 12]
+
+
+@pytest.mark.asyncio
+async def test_load_vm_last_synced_names_omits_conflicting_duplicate_sidecar_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+
+    async def _fake_paginated(
+        _nb: object,
+        path: str,
+        *,
+        base_query: dict[str, object],
+        page_size: int,
+    ):
+        assert path == VM_SYNC_STATE_PATH
+        assert base_query == {}
+        assert page_size == 500
+        return [
+            {"id": 1, "virtual_machine": {"id": 42}, "proxmox_vm_name": "web-01"},
+            {"id": 2, "virtual_machine": {"id": 42}, "proxmox_vm_name": "web-02"},
+            {"id": 3, "virtual_machine": {"id": 43}, "proxmox_vm_name": "db-01"},
+            {"id": 4, "virtual_machine": {"id": 43}, "proxmox_vm_name": "db-01"},
+            {"id": 5, "virtual_machine": {"id": 44}, "proxmox_vm_name": ""},
+            {"id": 6, "virtual_machine": {"id": 44}, "proxmox_vm_name": "api-01"},
+        ]
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    names = await sync_state_reader.load_vm_last_synced_names(object())
+
+    assert names == {43: "db-01", 44: "api-01"}
+    assert len(warnings) == 1
+    assert "NetBox VM id=42" in warnings[0]
+    assert "web-01" in warnings[0]
+    assert "web-02" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_load_vm_last_synced_name_collapses_single_vm_duplicate_sidecar_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    calls: list[dict[str, object]] = []
+
+    async def _fake_list(
+        _nb: object,
+        path: str,
+        *,
+        query: dict[str, object] | None = None,
+    ):
+        assert path == VM_SYNC_STATE_PATH
+        calls.append(dict(query or {}))
+        if query == {"virtual_machine_id": 55}:
+            return [
+                {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+                {"id": 2, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+            ]
+        if query == {"virtual_machine_id": 56}:
+            return [
+                {"id": 3, "virtual_machine": {"id": 56}, "proxmox_vm_name": "web-01"},
+                {"id": 4, "virtual_machine": {"id": 56}, "proxmox_vm_name": "web-02"},
+            ]
+        return []
+
+    def _capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_async", _fake_list)
+    monkeypatch.setattr(sync_state_reader.logger, "warning", _capture_warning)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    agreeing = await sync_state_reader.load_vm_last_synced_name(object(), 55)
+    disagreeing = await sync_state_reader.load_vm_last_synced_name(object(), 56)
+
+    assert agreeing == "web-01"
+    assert disagreeing is None
+    assert calls == [{"virtual_machine_id": 55}, {"virtual_machine_id": 56}]
+    assert len(warnings) == 1
+    assert "NetBox VM id=56" in warnings[0]
+    assert "web-01" in warnings[0]
+    assert "web-02" in warnings[0]
 
 
 @pytest.mark.asyncio

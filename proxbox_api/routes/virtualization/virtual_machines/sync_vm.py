@@ -119,6 +119,7 @@ from proxbox_api.services.sync.storage_links import (
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.sync_state_reader import (
+    load_vm_last_synced_names,
     resolve_virtual_machine_by_sync_state,
 )
 from proxbox_api.services.sync.sync_state_writer import (
@@ -145,6 +146,9 @@ from proxbox_api.services.sync.vm_helpers import (
     preferred_primary_ip_order,
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
+)
+from proxbox_api.services.sync.vm_helpers import (
+    record_id as _record_id,
 )
 from proxbox_api.services.sync.vm_helpers import (
     relation_id as _relation_id,
@@ -731,6 +735,7 @@ async def _resolve_vm_names_pre_pass(
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
     bridge: WebSocketSSEBridge | None,
+    nb: object | None = None,
 ) -> list[NameResolution]:
     """Apply deterministic name-collision resolution to ``prepared_vms``.
 
@@ -750,6 +755,14 @@ async def _resolve_vm_names_pre_pass(
         cluster_typed_vm_index,
         cluster_untyped_vm_candidates,
     ) = _build_vm_snapshot_identity_indexes(netbox_snapshot)
+    # One fetch for the whole pass. The resolver needs the last-synced Proxmox
+    # name for every VM it examines; looking it up per VM would add an N+1 REST
+    # round trip across the fleet. Empty when the sidecar API is unavailable or
+    # nothing has been re-synced yet, which the resolver treats as "no evidence".
+    last_synced_names: dict[int, str] = {}
+    if nb is not None:
+        last_synced_names = await load_vm_last_synced_names(nb)
+
     cluster_used_names: dict[int, set[str]] = {}
     cluster_no_id_used_names: set[str] = set()
     for record in netbox_snapshot:
@@ -836,6 +849,9 @@ async def _resolve_vm_names_pre_pass(
                 proxmox_vmid=vmid,
                 used_names_in_cluster=used,
                 existing_vm_by_vmid={vmid: existing} if existing is not None else {},
+                last_synced_proxmox_name=(
+                    last_synced_names.get(_record_id(existing)) if existing is not None else None
+                ),
             )
 
             if resolution.operator_renamed:
@@ -2507,7 +2523,7 @@ async def create_virtual_machines(  # noqa: C901
             netbox_snapshot=netbox_snapshot,
             custom_fields_enabled_flag=behavior_flags.custom_fields_enabled,
         )
-        await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge)
+        await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge, nb)
         reconciliation_t0 = time.perf_counter()
         operation_queue = _build_vm_operation_queue(
             prepared_vms,
@@ -2565,6 +2581,11 @@ async def create_virtual_machines(  # noqa: C901
                     desired_custom_fields if isinstance(desired_custom_fields, dict) else None
                 ),
                 overwrite_custom_fields=overwrite_vm_custom_fields,
+                # The live Proxmox name, NOT desired_payload["name"] -- the name
+                # resolver may have rewritten that to preserve an operator's
+                # NetBox-side rename, and recording it here would cement the
+                # stale name as "what Proxmox last said".
+                proxmox_vm_name=operation.prepared.resource.get("name"),
             )
             results.append(vm_record)
 
@@ -2638,6 +2659,74 @@ async def create_virtual_machines(  # noqa: C901
             failed_vms,
         )
         return flattened_results
+
+    default_resolved_vm_names: dict[tuple[str, int, str], str] = {}
+    name_prepass_vms: list[_PreparedVMState] = []
+    name_prepass_now = datetime.now(timezone.utc)
+    for cluster in filtered_cluster_resources:
+        if not isinstance(cluster, dict):
+            continue
+        for cluster_name, resources in cluster.items():
+            if not isinstance(resources, list):
+                continue
+            cluster_name_text = str(cluster_name)
+            cluster_dependencies = cluster_dependency_cache.get(cluster_name_text, {})
+            cluster_obj = cluster_dependencies.get("cluster")
+            cluster_id = _relation_id(cluster_obj) or _relation_id(getattr(cluster_obj, "id", None))
+            endpoint_id = endpoint_id_by_cluster.get(cluster_name_text)
+            for resource in resources:
+                if not isinstance(resource, dict):
+                    continue
+                vm_type_for_name = str(resource.get("type") or "").strip().lower()
+                if vm_type_for_name not in ("qemu", "lxc"):
+                    continue
+                try:
+                    vmid_for_name = int(resource.get("vmid") or 0)
+                except (TypeError, ValueError):
+                    vmid_for_name = 0
+                if vmid_for_name <= 0:
+                    continue
+                desired_payload = {
+                    "name": str(resource.get("name") or ""),
+                    "cluster": cluster_id,
+                    "custom_fields": {
+                        "proxmox_endpoint_id": endpoint_id,
+                        "proxmox_vm_id": vmid_for_name,
+                        "proxmox_vm_type": vm_type_for_name,
+                    },
+                }
+                name_prepass_vms.append(
+                    _PreparedVMState(
+                        cluster_name=cluster_name_text,
+                        resource=resource,
+                        vm_config={},
+                        vm_config_obj=ProxmoxVmConfigInput.model_validate({}),
+                        desired_payload=desired_payload,
+                        lookup=_vm_identity_lookup(
+                            vmid=vmid_for_name,
+                            endpoint_id=endpoint_id,
+                            cluster_id=cluster_id,
+                        ),
+                        now=name_prepass_now,
+                        vm_type=vm_type_for_name,
+                    )
+                )
+
+    if name_prepass_vms:
+        netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb, fresh=True)
+        await _hydrate_vm_snapshot_with_sidecar_identity(
+            nb,
+            prepared_vms=name_prepass_vms,
+            netbox_snapshot=netbox_snapshot,
+            custom_fields_enabled_flag=behavior_flags.custom_fields_enabled,
+        )
+        await _resolve_vm_names_pre_pass(name_prepass_vms, netbox_snapshot, bridge, nb)
+        default_resolved_vm_names = {
+            _prepared_vm_result_key(prepared): resolved_name
+            for prepared in name_prepass_vms
+            if isinstance((resolved_name := prepared.desired_payload.get("name")), str)
+            and resolved_name
+        }
 
     async def create_vm_task(cluster_name, resource):  # noqa: C901
         undefined_html = return_status_html("undefined", use_css)
@@ -2824,6 +2913,19 @@ async def create_virtual_machines(  # noqa: C901
             parse_description_metadata=behavior_flags.parse_description_metadata,
             overwrite_flags=effective_vm_overwrite_flags,
         )
+        try:
+            vmid_for_name = int(resource.get("vmid") or 0)
+        except (TypeError, ValueError):
+            vmid_for_name = 0
+        resolved_vm_name = default_resolved_vm_names.get(
+            (
+                str(cluster_name),
+                vmid_for_name,
+                str(resource.get("type") or "").strip().lower(),
+            )
+        )
+        if resolved_vm_name:
+            netbox_vm_payload["name"] = resolved_vm_name
 
         if bridge:
             await bridge.emit_substep(
@@ -2886,6 +2988,7 @@ async def create_virtual_machines(  # noqa: C901
             if isinstance(desired_custom_fields, dict)
             else None,
             overwrite_custom_fields=overwrite_vm_custom_fields,
+            proxmox_vm_name=resource.get("name"),
         )
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)

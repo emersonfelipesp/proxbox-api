@@ -125,6 +125,42 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   `return {}`; a silent one is what hid netbox-proxbox issue #616 for two
   releases.
 
+- **Proxmox-side VM renames are attributable, not guessed (netbox-proxbox #617).**
+  `name_collision.resolve_unique_vm_name()` used to treat *any* difference
+  between the stored NetBox name and the incoming Proxmox name as "an operator
+  renamed this inside NetBox" and push the stored name back onto the payload —
+  so a genuine Proxmox-side rename was silently discarded. The two causes are
+  indistinguishable from that function's inputs alone.
+
+  The netbox-proxbox sidecar now carries `proxmox_vm_name`: the name Proxmox
+  reported at the last successful sync. That disambiguates them:
+
+  | stored NetBox name | vs `proxmox_vm_name` | meaning | action |
+  |---|---|---|---|
+  | `web-01` | `== web-01` | untouched in NetBox | Proxmox renamed it → **update** |
+  | `gateway-prod` | `!= web-01` | a human edited it | → **preserve** |
+  | anything | blank/absent | no evidence | → **preserve** (legacy behaviour) |
+
+  Three rules keep this safe, and all three are load-bearing:
+
+  1. **Blank falls back.** Every row is blank until re-synced after the field
+     was added — an entire fleet, immediately after upgrade. Preserving a name
+     we are unsure about loses a rename; the opposite destroys an operator's
+     deliberate edit, which is worse.
+  2. **Write the *Proxmox* name, never the desired payload's.** The resolver may
+     have rewritten `desired_payload["name"]` to preserve an operator rename;
+     recording that would cement the stale name as "what Proxmox last said" and
+     make the field self-confirming. `write_virtual_machine_sync_state` takes
+     `proxmox_vm_name` explicitly and callers pass `prepared.resource["name"]`.
+  3. **Drop the outgoing name from the used-name set.** Otherwise a VM's own old
+     name collides with its new one and forces a spurious `" (2)"` suffix.
+
+  The last-synced names are loaded **once per sync pass** by
+  `sync_state_reader.load_vm_last_synced_names()`; the resolver needs one for
+  every VM it examines, so a per-VM lookup would be an N+1 across the fleet.
+  Coverage: `tests/test_name_collision.py` (both rename directions, the blank
+  fallback, self-collision, and a genuine collision still suffixing).
+
 ## Extension Guidance
 
 - Keep sync routines idempotent where possible.
