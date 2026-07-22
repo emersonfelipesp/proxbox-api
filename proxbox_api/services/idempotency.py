@@ -157,11 +157,14 @@ class IdempotencyCache:
                 self._flights[cache_key] = flight
             flight.users += 1
 
-        await flight.lock.acquire()
+        lock_acquired = False
         try:
+            await flight.lock.acquire()
+            lock_acquired = True
             yield
         finally:
-            flight.lock.release()
+            if lock_acquired:
+                flight.lock.release()
             async with self._lock:
                 flight.users -= 1
                 if flight.users == 0 and self._flights.get(cache_key) is flight:

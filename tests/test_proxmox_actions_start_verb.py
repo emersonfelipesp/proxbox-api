@@ -597,6 +597,73 @@ def test_start_qemu_idempotency_key_reuse_after_dispatch_failure_returns_cached_
     handles["journal"].assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_start_qemu_cancelled_writeahead_create_finalizes_same_entry_and_caches_retry():
+    route_session = _route_session()
+    cache = get_idempotency_cache()
+    await cache.clear()
+    create_committed = asyncio.Event()
+    release_create = asyncio.Event()
+
+    async def _create_journal(_nb, **kwargs):
+        assert "result: in_progress" in kwargs["comments"]
+        create_committed.set()
+        await release_create.wait()
+        return {"id": 789, "url": "/api/extras/journal-entries/789/"}
+
+    handles = _patch_route(journal_create_side_effect=_create_journal)
+    for patcher in handles["patches"]:
+        patcher.start()
+    try:
+        first = asyncio.create_task(
+            _call_start(
+                route_session,
+                idempotency_key="key-cancel-writeahead-create",
+                actor="alice@netbox",
+            )
+        )
+        await asyncio.wait_for(create_committed.wait(), timeout=1)
+        first.cancel()
+        await asyncio.sleep(0)
+        release_create.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        retry = await _call_start(
+            route_session,
+            idempotency_key="key-cancel-writeahead-create",
+            actor="alice@netbox",
+        )
+    finally:
+        for patcher in handles["patches"]:
+            patcher.stop()
+
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+    journal_kwargs = handles["journal"].call_args.kwargs
+    assert journal_kwargs["journal_entry_id"] == 789
+    assert journal_kwargs["kind"] == "warning"
+    assert "result: interrupted" in journal_kwargs["comments"]
+    handles["status"].assert_not_awaited()
+    handles["start"].assert_not_awaited()
+
+    assert retry.status_code == 500
+    body = _json_response(retry)
+    assert body["result"] == "interrupted"
+    assert body["journal_entry_url"] == "/api/extras/journal-entries/789/"
+    assert body["reason"] == "proxmox_dispatch_interrupted"
+    cached = await cache.get_entry(
+        CacheKey(
+            endpoint_id=73,
+            verb="start",
+            vmid=100,
+            key="key-cancel-writeahead-create",
+        )
+    )
+    assert cached is not None
+    assert cached.journal_finalization is None
+
+
 def test_start_lxc_routes_through_same_dispatch(client: TestClient):
     endpoint_id = _make_endpoint(client)
     handles = _patch_route()

@@ -66,6 +66,45 @@ async def test_single_flight_serializes_same_key_and_cleans_up(cache: Idempotenc
     assert cache._flights == {}
 
 
+async def test_single_flight_cancelled_waiter_cleans_up_refcount(cache: IdempotencyCache):
+    key = CacheKey(endpoint_id=1, verb="start", vmid=100, key="cancelled-waiter")
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def _holder() -> None:
+        async with cache.single_flight(key):
+            first_entered.set()
+            await release_first.wait()
+
+    async def _waiter() -> None:
+        async with cache.single_flight(key):
+            raise AssertionError("cancelled waiter must not enter the flight")
+
+    async def _wait_for_users(expected: int) -> None:
+        for _ in range(20):
+            async with cache._lock:
+                flight = cache._flights.get(key)
+                users = flight.users if flight is not None else 0
+            if users == expected:
+                return
+            await asyncio.sleep(0)
+        pytest.fail(f"single-flight users did not reach {expected}")
+
+    holder = asyncio.create_task(_holder())
+    await asyncio.wait_for(first_entered.wait(), timeout=1)
+    waiter = asyncio.create_task(_waiter())
+    await asyncio.wait_for(_wait_for_users(2), timeout=1)
+
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    await asyncio.wait_for(_wait_for_users(1), timeout=1)
+
+    release_first.set()
+    await holder
+    assert cache._flights == {}
+
+
 async def test_store_returns_independent_copy(cache: IdempotencyCache):
     """Mutating the returned dict must not corrupt the cache entry."""
     key = CacheKey(endpoint_id=1, verb="start", vmid=100, key="abc")

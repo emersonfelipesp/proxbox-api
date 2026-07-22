@@ -427,11 +427,14 @@ async def _create_writeahead_journal_or_error(
     nb: object,
     netbox_vm_id: int | None,
     verb: Verb,
+    vm_type: VmType,
     vmid: int,
     endpoint: ProxmoxEndpoint,
     actor: str,
     dispatched_at: str,
     idempotency_key: str | None,
+    cache: IdempotencyCache,
+    cache_key: CacheKey | None,
 ) -> dict[str, object] | JSONResponse | None:
     """Create the durable pre-dispatch audit journal entry for required verbs."""
     endpoint_id = endpoint.id or 0
@@ -449,13 +452,59 @@ async def _create_writeahead_journal_or_error(
         idempotency_key=idempotency_key,
         error_detail=None,
     )
-    try:
-        entry = await write_verb_journal_entry(
+    create_task = asyncio.create_task(
+        write_verb_journal_entry(
             nb,
             netbox_vm_id=netbox_vm_id,
             kind="info",
             comments=comments,
         )
+    )
+    try:
+        entry = await asyncio.shield(create_task)
+    except asyncio.CancelledError as error:
+        try:
+            entry = create_task.result() if create_task.done() else await create_task
+        except BaseException as create_error:  # noqa: BLE001
+            logger.warning(
+                "Write-ahead journal create did not return an entry after "
+                "cancellation for %s/%s verb=%s endpoint=%s: %s",
+                vm_type,
+                vmid,
+                verb,
+                endpoint_id,
+                _error_detail(create_error),
+            )
+            raise error from create_error
+
+        if _journal_entry_id(entry) is None:
+            logger.warning(
+                "Write-ahead journal create returned no id after cancellation "
+                "for %s/%s verb=%s endpoint=%s",
+                vm_type,
+                vmid,
+                verb,
+                endpoint_id,
+            )
+            raise
+
+        await _finalize_after_unexpected_dispatch_error(
+            error=error,
+            phase="writeahead",
+            nb=nb,
+            netbox_vm_id=netbox_vm_id,
+            writeahead_journal_entry=entry,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            idempotency_key=idempotency_key,
+            cache=cache,
+            cache_key=cache_key,
+        )
+        raise
     except Exception as error:  # noqa: BLE001
         logger.warning(
             "Blocking %s for endpoint=%s vmid=%s because write-ahead journal create failed: %s",
@@ -1141,11 +1190,14 @@ async def _dispatch_start(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="start",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -1332,11 +1384,14 @@ async def _dispatch_stop(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="stop",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -1521,11 +1576,14 @@ async def _dispatch_reboot(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="reboot",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -1706,11 +1764,14 @@ async def _dispatch_delete(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="delete",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -1911,11 +1972,14 @@ async def _dispatch_snapshot(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="snapshot",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -2059,11 +2123,14 @@ async def _dispatch_backup(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="backup",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -2205,11 +2272,14 @@ async def _dispatch_delete_snapshot(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="delete_snapshot",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -2396,11 +2466,14 @@ async def _dispatch_migrate(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         verb="migrate",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=idempotency_key,
+        cache=cache,
+        cache_key=cache_key,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -3142,15 +3215,19 @@ async def _handle_migrate_cancel(
         return netbox_vm_id_or_error
     netbox_vm_id = netbox_vm_id_or_error
     dispatched_at = utcnow_iso()
+    cache = get_idempotency_cache()
     writeahead_journal_entry = await _create_writeahead_journal_or_error(
         nb=nb_session,
         netbox_vm_id=netbox_vm_id,
         verb="migrate",
+        vm_type=vm_type,
         vmid=vmid,
         endpoint=endpoint,
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=None,
+        cache=cache,
+        cache_key=None,
     )
     if isinstance(writeahead_journal_entry, JSONResponse):
         return writeahead_journal_entry
@@ -3169,7 +3246,7 @@ async def _handle_migrate_cancel(
             actor=actor,
             dispatched_at=dispatched_at,
             idempotency_key=None,
-            cache=get_idempotency_cache(),
+            cache=cache,
             cache_key=None,
             proxmox_task_upid=task_upid,
         )
@@ -3185,7 +3262,7 @@ async def _handle_migrate_cancel(
             actor=actor,
             dispatched_at=dispatched_at,
             idempotency_key=None,
-            cache=get_idempotency_cache(),
+            cache=cache,
             cache_key=None,
             result="cancel_failed",
             kind="warning",
@@ -3206,7 +3283,7 @@ async def _handle_migrate_cancel(
         actor=actor,
         dispatched_at=dispatched_at,
         idempotency_key=None,
-        cache=get_idempotency_cache(),
+        cache=cache,
         cache_key=None,
         result="cancel_requested",
         kind="info",
