@@ -160,7 +160,7 @@ Open the nearest scoped guide for the code you are changing.
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
 - Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, including the caller-supplied host-agent URL through the shared SSRF guard, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by `nms-backend`.
 - Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and bootstrap flow for first-time key registration.
-- Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration.
+- Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration. The NetBox lifecycle owner keeps one current client fingerprint per endpoint, rotates and closes retired transports outside its lock, and drains all clients during lifespan shutdown.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
 - Schema and enum layer (`proxbox_api/schemas/*`, `proxbox_api/enum/*`): validate payloads, normalize data, and define contract-safe choice values.
 - Transform and codegen layer (`proxbox_api/proxmox_to_netbox/*`, `proxbox_api/proxmox_codegen/*`, `proxbox_api/generated/*`): turn Proxmox data into NetBox payloads and generate contract artifacts.
@@ -169,14 +169,24 @@ Open the nearest scoped guide for the code you are changing.
 
 ### Runtime flow
 
-1. `proxbox_api.app.factory.create_app()` initializes database state, builds the default NetBox session, and records bootstrap status.
-2. The app registers generated Proxmox proxy routes during lifespan startup and wires shared middleware, routers, and exception handlers.
+1. `proxbox_api.app.factory.create_app()` initializes database metadata required for app composition.
+2. Lifespan startup acquires the default lifecycle-owned NetBox session, records bootstrap status, and registers generated Proxmox proxy routes; its `finally` block drains every cached NetBox client.
 3. Requests resolve NetBox and Proxmox sessions through dependency providers.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.
 5. Route handlers delegate remaining heavy work to service modules and schemas.
 6. Firecracker Cloud routes under `/cloud/firecracker/*` call a selected host-agent VM after `nms-backend` resolves NetBox Proxbox inventory and creates the `FirecrackerMicroVM` row.
 7. Sync and provisioning runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
+
+### NetBox client lifecycle
+
+- `proxbox_api/session/netbox.py` is the only owner of cached `netbox-sdk` clients. Keep at most one current fingerprint per `NetBoxEndpoint.id`.
+- Detach replaced or invalidated entries atomically, release the lifecycle lock, then await transport closure. Never await while holding that lock.
+- NetBox endpoint create/update/delete routes must await targeted invalidation before returning. Enabled create/update operations publish the lifecycle-owned default immediately; disable/delete clears it, and explicit selection of a disabled endpoint fails closed. Partial updates preserve the exact stored ciphertext of omitted credentials. Repeated invalidation is a no-op, and endpoint A invalidation must not close endpoint B.
+- The FastAPI lifespan must reject new acquisition during terminal shutdown and drain active plus already-retiring clients from `finally`, including startup, request-scope, and cancellation paths.
+- Caller cancellation may be propagated only after the detached client's close task finishes; keep in-flight retirements tracked until completion.
+- Bound each asynchronous client close to 10 seconds. A stuck transport may be abandoned after a secret-safe warning so endpoint mutation and process shutdown remain live.
+- Close-failure logs may include endpoint id and exception class, but never credential material, endpoint URLs, fingerprints, or exception messages that could contain them.
 
 ### Route Group Map
 

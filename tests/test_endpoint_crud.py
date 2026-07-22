@@ -7,6 +7,20 @@ and DB persistence via the overridden get_session dependency.
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
+from proxbox_api import credentials as credentials_module
+from proxbox_api.database import NetBoxEndpoint
+from proxbox_api.routes.netbox import (
+    NetBoxEndpointCreate,
+    NetBoxEndpointUpdate,
+    create_netbox_endpoint,
+    delete_netbox_endpoint,
+    update_netbox_endpoint,
+)
+
 
 class TestAuthBoundary:
     """Verify that protected routes reject unauthenticated callers."""
@@ -92,6 +106,193 @@ class TestNetBoxEndpointCRUD:
         assert resp.status_code == 200
         assert resp.json()["name"] == "by-id"
 
+    @pytest.mark.asyncio
+    async def test_create_publishes_enabled_endpoint_to_runtime(self, db_session, monkeypatch):
+        completed = {"invalidate": False, "refresh": False}
+
+        async def invalidate(endpoint_id: int) -> int:
+            assert endpoint_id > 0
+            completed["invalidate"] = True
+            return 17
+
+        async def refresh(endpoint_arg, *, expected_revision: int) -> bool:
+            assert endpoint_arg.enabled is True
+            assert expected_revision == 17
+            completed["refresh"] = True
+            return True
+
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.invalidate_netbox_api_cache",
+            invalidate,
+        )
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.refresh_default_netbox_api",
+            refresh,
+        )
+
+        created = await create_netbox_endpoint(
+            NetBoxEndpointCreate(
+                name="runtime-default",
+                ip_address="192.168.1.21",
+                port=8000,
+                token="runtime-token",
+                verify_ssl=False,
+            ),
+            db_session,
+        )
+
+        assert created.id is not None
+        assert completed == {"invalidate": True, "refresh": True}
+
+    @pytest.mark.asyncio
+    async def test_partial_update_preserves_exact_encrypted_credentials(
+        self,
+        db_session,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "partial-update-regression-key")
+        credentials_module.reset_encryption_cache()
+        try:
+            endpoint = NetBoxEndpoint(
+                name="encrypted",
+                ip_address="192.168.1.22",
+                domain="",
+                port=8000,
+                token_version="v2",
+                token_key="public-id",
+                token="secret-value",
+                verify_ssl=False,
+                enabled=False,
+            )
+            endpoint.set_encrypted_token(endpoint.token)
+            endpoint.set_encrypted_token_key(endpoint.token_key)
+            db_session.add(endpoint)
+            db_session.commit()
+            db_session.refresh(endpoint)
+            assert endpoint.id is not None
+            stored_token = endpoint.token
+            stored_token_key = endpoint.token_key
+
+            await update_netbox_endpoint(
+                endpoint.id,
+                NetBoxEndpointUpdate(name="renamed"),
+                db_session,
+            )
+
+            db_session.refresh(endpoint)
+            assert endpoint.name == "renamed"
+            assert endpoint.token == stored_token
+            assert endpoint.token_key == stored_token_key
+            assert endpoint.get_decrypted_token() == "secret-value"
+            assert endpoint.get_decrypted_token_key() == "public-id"
+        finally:
+            credentials_module.reset_encryption_cache()
+
+    @pytest.mark.asyncio
+    async def test_update_awaits_runtime_client_invalidation(self, db_session, monkeypatch):
+        endpoint = NetBoxEndpoint(
+            name="to-rotate",
+            ip_address="192.168.1.25",
+            domain="",
+            port=8000,
+            token_version="v1",
+            token="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            verify_ssl=False,
+        )
+        endpoint.set_encrypted_token(endpoint.token)
+        db_session.add(endpoint)
+        db_session.commit()
+        db_session.refresh(endpoint)
+        assert endpoint.id is not None
+        completed = {"invalidate": False, "refresh": False}
+
+        async def invalidate(endpoint_id_arg: int) -> int:
+            await asyncio.sleep(0)
+            assert endpoint_id_arg == endpoint.id
+            completed["invalidate"] = True
+            return 41
+
+        async def refresh(endpoint_arg, *, expected_revision: int) -> bool:
+            await asyncio.sleep(0)
+            assert endpoint_arg is endpoint
+            assert expected_revision == 41
+            completed["refresh"] = True
+            return True
+
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.invalidate_netbox_api_cache",
+            invalidate,
+        )
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.refresh_default_netbox_api",
+            refresh,
+        )
+
+        updated = await update_netbox_endpoint(
+            endpoint.id,
+            NetBoxEndpointUpdate(token="cccccccccccccccccccccccccccccccccccccccc"),
+            db_session,
+        )
+
+        assert updated.id == endpoint.id
+        assert completed == {"invalidate": True, "refresh": True}
+
+    @pytest.mark.asyncio
+    async def test_disabling_endpoint_invalidates_without_republishing(
+        self,
+        db_session,
+        monkeypatch,
+    ):
+        endpoint = NetBoxEndpoint(
+            name="to-disable",
+            ip_address="192.168.1.26",
+            domain="",
+            port=8000,
+            token_version="v1",
+            token="dddddddddddddddddddddddddddddddddddddddd",
+            verify_ssl=False,
+        )
+        endpoint.set_encrypted_token(endpoint.token)
+        db_session.add(endpoint)
+        db_session.commit()
+        db_session.refresh(endpoint)
+        assert endpoint.id is not None
+        completed = {"invalidate": False, "refresh": False, "clear": False}
+
+        async def invalidate(endpoint_id_arg: int) -> int:
+            assert endpoint_id_arg == endpoint.id
+            completed["invalidate"] = True
+            return 42
+
+        async def refresh(endpoint_arg, *, expected_revision: int) -> bool:
+            completed["refresh"] = True
+            return True
+
+        def clear_default() -> None:
+            completed["clear"] = True
+
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.invalidate_netbox_api_cache",
+            invalidate,
+        )
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.refresh_default_netbox_api",
+            refresh,
+        )
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.clear_default_netbox_api",
+            clear_default,
+        )
+
+        updated = await update_netbox_endpoint(
+            endpoint.id,
+            NetBoxEndpointUpdate(enabled=False),
+            db_session,
+        )
+
+        assert updated.enabled is False
+        assert completed == {"invalidate": True, "refresh": False, "clear": True}
+
     def test_delete_endpoint(self, auth_test_client):
         payload = {
             "name": "to-delete",
@@ -111,6 +312,39 @@ class TestNetBoxEndpointCRUD:
 
         get_resp = auth_test_client.get(f"/netbox/endpoint/{endpoint_id}")
         assert get_resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_awaits_runtime_client_invalidation(self, db_session, monkeypatch):
+        endpoint = NetBoxEndpoint(
+            name="to-delete-await",
+            ip_address="192.168.1.31",
+            domain="",
+            port=8000,
+            token_version="v1",
+            token="dddddddddddddddddddddddddddddddddddddddd",
+            verify_ssl=False,
+        )
+        endpoint.set_encrypted_token(endpoint.token)
+        db_session.add(endpoint)
+        db_session.commit()
+        db_session.refresh(endpoint)
+        assert endpoint.id is not None
+        completed = {"value": False}
+
+        async def invalidate(endpoint_id_arg: int) -> None:
+            await asyncio.sleep(0)
+            assert endpoint_id_arg == endpoint.id
+            completed["value"] = True
+
+        monkeypatch.setattr(
+            "proxbox_api.routes.netbox.invalidate_netbox_api_cache",
+            invalidate,
+        )
+
+        deleted = await delete_netbox_endpoint(endpoint.id, db_session)
+
+        assert deleted == {"message": "NetBox Endpoint deleted."}
+        assert completed["value"] is True
 
 
 class TestProxmoxEndpointCRUD:

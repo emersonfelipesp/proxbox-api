@@ -62,7 +62,7 @@ def test_custom_openapi_contains_embedded_proxmox_extension():
 
 
 def test_create_app_skips_static_mount_when_directory_is_missing(monkeypatch):
-    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda: None)
+    monkeypatch.setattr(factory.bootstrap, "init_database_state", lambda: None)
 
     real_isdir = os.path.isdir
 

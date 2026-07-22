@@ -37,6 +37,23 @@
 - Acesso ao Proxmox via sessoes do SDK sync `proxmox-sdk` e wrappers tipados.
 - Rotas Proxmox geradas em runtime sao montadas durante o startup da aplicacao.
 
+## Ciclo de vida do cliente NetBox
+
+`proxbox_api/session/netbox.py` e o proprietario local ao processo dos clientes
+`netbox-sdk`. Ele mantem no maximo um fingerprint de cliente atual por id de
+`NetBoxEndpoint`. Uma alteracao de URL, token, timeout ou TLS substitui a entrada
+de forma atomica; o transporte aposentado e destacado dentro do lock e fechado
+de forma assincrona depois que o lock e liberado.
+
+As rotas de update e delete de endpoint NetBox aguardam a invalidacao direcionada
+antes de retornar; o update republica um cliente padrao novo para consumidores
+raw e WebSocket. Invalidacoes repetidas sao seguras e a invalidacao de um
+endpoint nao fecha o cliente de outro. Durante o shutdown terminal, a lifespan
+recusa novas aquisicoes e fecha clientes ativos ou ja em processo de fechamento
+em um bloco `finally`, inclusive quando o startup, uma requisicao ou o cancelamento
+falha. Falhas de fechamento registram somente o id do endpoint
+e o tipo da excecao, sem credenciais, URLs ou fingerprints de configuracao.
+
 ## Modelos de dados principais
 
 ### `NetBoxEndpoint`
@@ -54,11 +71,12 @@
 
 ## Fluxo de startup
 
-1. `create_app()` inicializa o banco e o bootstrap do NetBox.
+1. `create_app()` inicializa os metadados do banco necessarios para compor a app.
 2. A app monta static assets, CORS, handlers de excecao, rotas de cache, full-update e WebSocket.
 3. Os routers sao incluidos para NetBox, Proxmox, DCIM, virtualization, extras e sync individual.
-4. As rotas Proxmox geradas em runtime sao montadas no startup da lifespan e podem falhar em modo open, a menos que `PROXBOX_STRICT_STARTUP` esteja habilitado.
+4. O startup da lifespan adquire o cliente NetBox padrao, gerenciado pelo ciclo de vida, e monta as rotas Proxmox geradas; elas podem falhar em modo open, a menos que `PROXBOX_STRICT_STARTUP` esteja habilitado.
 5. O OpenAPI customizado embute o contrato Proxmox gerado quando ele existe.
+6. O shutdown da lifespan recusa novos clientes e drena os clientes NetBox em cache ou ja aposentados dentro de um bloco `finally`; um transporte que trava durante o fechamento assincrono e abandonado apos o limite de 10 segundos, com aviso sem segredos.
 
 ## Extensao de OpenAPI
 

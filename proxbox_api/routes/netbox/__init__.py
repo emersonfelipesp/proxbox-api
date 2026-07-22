@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,7 +12,11 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
-from proxbox_api.session.netbox import invalidate_netbox_api_cache
+from proxbox_api.session.netbox import (
+    clear_default_netbox_api,
+    invalidate_netbox_api_cache,
+    refresh_default_netbox_api,
+)
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
@@ -92,6 +96,49 @@ def _validate_netbox_credentials(nb: NetBoxEndpoint) -> None:
     nb.token_key = key
 
 
+def _apply_netbox_endpoint_update(
+    db_netbox: NetBoxEndpoint,
+    update_data: dict[str, object],
+) -> None:
+    """Apply a partial update without re-encrypting omitted credentials."""
+    token_supplied = "token" in update_data
+    token_key_supplied = "token_key" in update_data
+    stored_token = db_netbox.token
+    stored_token_key = db_netbox.token_key
+    supplied_token = cast("str | None", update_data.pop("token", None))
+    supplied_token_key = cast("str | None", update_data.pop("token_key", None))
+    plaintext_token = (
+        (supplied_token or "").strip() if token_supplied else db_netbox.get_decrypted_token()
+    )
+    plaintext_token_key = (
+        supplied_token_key if token_key_supplied else db_netbox.get_decrypted_token_key()
+    )
+
+    for key, value in update_data.items():
+        setattr(db_netbox, key, value)
+
+    # Validate the effective plaintext credential set, then re-encrypt only
+    # fields explicitly supplied by the caller. Omitted credentials retain
+    # their exact stored ciphertext instead of being encrypted a second time.
+    db_netbox.token = plaintext_token
+    db_netbox.token_key = plaintext_token_key
+    _normalize_netbox_endpoint_fields(db_netbox)
+    _validate_netbox_credentials(db_netbox)
+
+    validated_token = db_netbox.token
+    validated_token_key = db_netbox.token_key
+    if token_supplied:
+        db_netbox.set_encrypted_token(validated_token)
+    else:
+        db_netbox.token = stored_token
+    if db_netbox.token_version == "v1":
+        db_netbox.token_key = None
+    elif token_key_supplied:
+        db_netbox.set_encrypted_token_key(validated_token_key)
+    else:
+        db_netbox.token_key = stored_token_key
+
+
 @router.post("/endpoint", response_model=NetBoxEndpointResponse)
 async def create_netbox_endpoint(
     netbox: NetBoxEndpointCreate, session: SessionDep
@@ -138,6 +185,15 @@ async def create_netbox_endpoint(
     await _maybe_await(session.commit())
     await _maybe_await(session.refresh(db_endpoint))
     clear_endpoint_cache()
+    if db_endpoint.id is not None:
+        revision = await invalidate_netbox_api_cache(db_endpoint.id)
+        if db_endpoint.enabled:
+            await refresh_default_netbox_api(
+                db_endpoint,
+                expected_revision=revision,
+            )
+        else:
+            clear_default_netbox_api()
     return NetBoxEndpointResponse.model_validate(db_endpoint)
 
 
@@ -195,24 +251,21 @@ async def update_netbox_endpoint(
                 detail=f"Invalid domain: {domain_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
             )
 
-    if "token" in update_data:
-        update_data["token"] = (update_data["token"] or "").strip()
-
-    for key, value in update_data.items():
-        setattr(db_netbox, key, value)
-
-    _normalize_netbox_endpoint_fields(db_netbox)
-    _validate_netbox_credentials(db_netbox)
-
-    db_netbox.set_encrypted_token(db_netbox.token)
-    if db_netbox.token_key:
-        db_netbox.set_encrypted_token_key(db_netbox.token_key)
+    _apply_netbox_endpoint_update(db_netbox, update_data)
 
     session.add(db_netbox)
     await _maybe_await(session.commit())
     await _maybe_await(session.refresh(db_netbox))
     clear_endpoint_cache()
-    invalidate_netbox_api_cache(db_netbox.id)
+    if db_netbox.id is not None:
+        revision = await invalidate_netbox_api_cache(db_netbox.id)
+        if db_netbox.enabled:
+            await refresh_default_netbox_api(
+                db_netbox,
+                expected_revision=revision,
+            )
+        else:
+            clear_default_netbox_api()
     return NetBoxEndpointResponse.model_validate(db_netbox)
 
 
@@ -225,7 +278,9 @@ async def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
     await _maybe_await(session.delete(netbox_endpoint))
     await _maybe_await(session.commit())
     clear_endpoint_cache()
-    invalidate_netbox_api_cache(deleted_id)
+    if deleted_id is not None:
+        await invalidate_netbox_api_cache(deleted_id)
+        clear_default_netbox_api()
     return {"message": "NetBox Endpoint deleted."}
 
 

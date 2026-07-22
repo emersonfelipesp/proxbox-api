@@ -35,7 +35,12 @@ from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.sync.sync_state_reader import (
     reset_sidecar_reader_availability_cache,
 )
-from proxbox_api.session.netbox import get_netbox_async_session, get_netbox_session
+from proxbox_api.session.netbox import (
+    close_netbox_api_cache,
+    get_netbox_async_session,
+    get_netbox_session,
+    open_netbox_api_cache,
+)
 from proxbox_api.settings_client import invalidate_settings_cache
 
 
@@ -110,6 +115,8 @@ def _async_db_override(db_engine):
 
 @pytest.fixture(autouse=True)
 def reset_fastapi_state():
+    asyncio.run(close_netbox_api_cache())
+    open_netbox_api_cache()
     app.dependency_overrides.clear()
     clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)
@@ -119,6 +126,7 @@ def reset_fastapi_state():
     invalidate_settings_cache()
     reset_sidecar_reader_availability_cache()
     yield
+    asyncio.run(close_netbox_api_cache())
     app.dependency_overrides.clear()
     clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)

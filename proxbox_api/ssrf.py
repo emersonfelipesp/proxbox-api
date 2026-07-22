@@ -14,7 +14,8 @@ import ipaddress
 import logging
 import re
 import socket
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
@@ -159,7 +160,7 @@ def is_registered_endpoint(host: str) -> bool:
 
 def is_ip_blocked(  # noqa: C901
     ip: str,
-    settings: dict | None = None,
+    settings: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
     """Check if an IP address is blocked based on settings.
 
@@ -209,7 +210,7 @@ def is_ip_blocked(  # noqa: C901
 
 def validate_endpoint_host(  # noqa: C901
     host: str | None,
-    settings: dict | None = None,
+    settings: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
     """Validate that an endpoint host is not an internal/reserved IP.
 
@@ -272,7 +273,10 @@ def validate_endpoint_host(  # noqa: C901
     return True, "OK"
 
 
-def validate_endpoint_url(url: str | None, settings: dict | None = None) -> tuple[bool, str]:
+def validate_endpoint_url(
+    url: str | None,
+    settings: Mapping[str, Any] | None = None,
+) -> tuple[bool, str]:
     """Validate that a URL doesn't point to an internal resource."""
     if not url:
         return False, "URL cannot be empty"

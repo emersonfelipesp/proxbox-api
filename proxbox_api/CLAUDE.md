@@ -39,7 +39,7 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 - `proxbox_api.app.factory.create_app()` is the application assembly point. It initializes bootstrap state, registers middleware (including `APIKeyAuthMiddleware`), mounts root/cache/full-update/WebSocket routes, and exposes the `app` object imported by `proxbox_api.main`.
 - `auth.py` implements bcrypt-hashed API key validation, IP-based brute-force lockout, and the `check_auth_header_with_session` helper used by `APIKeyAuthMiddleware`.
 - `database.py` persists NetBox and Proxmox endpoint records, API keys, and auth lockout state in SQLite.
-- `session/netbox.py` and `session/proxmox.py` own client construction and dependency wiring. Route handlers should use these dependencies instead of creating clients inline.
+- `session/netbox.py` and `session/proxmox.py` own client construction and dependency wiring. The NetBox lifecycle manager keeps one current fingerprint per endpoint, tracks and closes retired transports outside its lock, and is drained by the app lifespan. Route handlers should use these dependencies instead of creating clients inline.
 - `services/sync/`, `services/sync/reconciliation/`, and
   `routes/virtualization/virtual_machines/` handle the main Proxmox-to-NetBox
   sync flow, including VM operation-queue classification, per-object journal
@@ -48,7 +48,7 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 
 ## Key Data Flow
 
-1. Startup bootstraps the local database and default NetBox session unless bootstrap is skipped.
+1. App construction loads local database metadata; lifespan startup acquires the lifecycle-owned default NetBox session unless bootstrap is skipped.
 2. Routes resolve NetBox or Proxmox clients through dependency aliases.
 3. Service modules fetch source data, normalize it through schemas, and create or update NetBox objects.
 4. Full VM sync prepares Proxmox VM state plus a NetBox snapshot, then calls
@@ -64,7 +64,7 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
    absent. Role-ownership snapshots remain legacy-CF-only because the VM
    sidecar model has no role ownership field.
 6. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
-7. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
+7. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`; terminal lifespan `finally` rejects new acquisition and drains cached plus already-retiring NetBox clients on normal, cancellation, and error exits.
 
 ## Extension Guidance
 

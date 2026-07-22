@@ -18,7 +18,7 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 | File | Role |
 |------|------|
 | `factory.py` | `create_app()` — assembles the full FastAPI application: registers all routers, mounts static files, sets custom OpenAPI, wires exception handlers, and starts generated Proxmox route registration during lifespan. |
-| `bootstrap.py` | Initializes SQLite tables, opens the default NetBox session, and records bootstrap status for health checks. Called once during lifespan startup. |
+| `bootstrap.py` | Initializes SQLite metadata for app composition, then asynchronously acquires the lifecycle-owned default NetBox session during lifespan startup. |
 | `cors.py` | Builds CORS allowed-origin list from active NetBox endpoint records. |
 | `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
 | `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including NetBox GET and custom-field reconcile cache invalidation. |
@@ -37,11 +37,12 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 4. The NetBox bootstrap pass records `app.state.bootstrap_status`, which is exposed by `GET /extras/bootstrap-status`.
 5. Middleware (CORS, logging) and exception handlers are attached.
 6. All routers from `proxbox_api/routes/` are mounted.
-7. App is ready to serve.
+7. App is ready to serve; terminal lifespan shutdown rejects new clients and drains cached plus already-retiring NetBox clients from `finally`, including cancellation and error exits.
 
 ## Key Rules
 
 - Keep `factory.py` as the single composition root. Do not initialize sessions or routes elsewhere at module level.
+- Keep the NetBox client owned by `session/netbox.py`; raw-session helpers may expose that same facade but must not create an untracked client.
 - `bootstrap.py` is idempotent: calling it when the database already exists is safe.
 - WebSocket broadcasts in `websockets.py` must tolerate disconnected clients silently.
 - `PROXBOX_STRICT_STARTUP=1` turns generated-route load failures into fatal startup errors.

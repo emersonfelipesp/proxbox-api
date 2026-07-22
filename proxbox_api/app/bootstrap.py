@@ -50,37 +50,69 @@ def _configure_backend_file_logging() -> None:
     )
 
 
-def init_database_and_netbox() -> None:
-    """Create tables if needed, open a DB session, and configure the default NetBox client."""
-    global netbox_session, database_session, netbox_endpoints, init_ok, last_init_error
+def init_database_state() -> None:
+    """Create tables and load endpoint metadata needed while constructing the app."""
+    global database_session, netbox_endpoints, init_ok, last_init_error
 
     init_ok = False
     last_init_error = None
-    netbox_session = None
     database_session = None
     netbox_endpoints = []
-    NetBoxBase.nb = None
+    session_iterator = get_session()
 
     try:
         create_db_and_tables()
-        database_session = next(get_session())
-        skip_netbox = os.environ.get("PROXBOX_SKIP_NETBOX_BOOTSTRAP", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
+        database_session = next(session_iterator)
+        try:
+            netbox_endpoints = list(database_session.exec(select(NetBoxEndpoint)).all())
+        except OperationalError:
+            create_db_and_tables()
+            netbox_endpoints = list(database_session.exec(select(NetBoxEndpoint)).all())
+        init_ok = True
+    except Exception as error:  # noqa: BLE001
+        last_init_error = str(error)
+        logger.exception("bootstrap: Database initialization failed")
+        netbox_endpoints = []
+    finally:
+        if database_session is not None:
+            database_session.close()
+            database_session = None
+        session_iterator.close()
+
+
+async def init_database_and_netbox() -> None:
+    """Initialize database state and asynchronously acquire the default NetBox client."""
+    global netbox_session, init_ok, last_init_error
+
+    init_database_state()
+    netbox_session = None
+    NetBoxBase.nb = None
+
+    if not init_ok:
+        _configure_backend_file_logging()
+        return
+
+    skip_netbox = os.environ.get("PROXBOX_SKIP_NETBOX_BOOTSTRAP", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if skip_netbox:
+        logger.info(
+            "Skipping NetBox API bootstrap (PROXBOX_SKIP_NETBOX_BOOTSTRAP); "
+            "no default NetBox client until an endpoint is configured"
         )
-        if skip_netbox:
-            netbox_session = None
-            NetBoxBase.nb = None
-            init_ok = True
-            logger.info(
-                "Skipping NetBox API bootstrap (PROXBOX_SKIP_NETBOX_BOOTSTRAP); "
-                "no default NetBox client until an endpoint is configured"
-            )
-        else:
-            netbox_session = get_netbox_session(database_session=database_session)
-            NetBoxBase.nb = netbox_session
-            init_ok = True
+        _configure_backend_file_logging()
+        return
+
+    try:
+        session_iterator = get_session()
+        try:
+            sync_database_session = next(session_iterator)
+            netbox_session = await get_netbox_session(sync_database_session)
+        finally:
+            session_iterator.close()
+        NetBoxBase.nb = netbox_session
     except ProxboxException as error:
         last_init_error = str(error)
         logger.warning("bootstrap: NetBox is not connected — %s", error)
@@ -89,22 +121,8 @@ def init_database_and_netbox() -> None:
         init_ok = True  # DB is healthy; missing NetBox endpoint is an expected state
     except Exception as error:  # noqa: BLE001
         last_init_error = str(error)
-        logger.exception("bootstrap: Database or NetBox client bootstrap failed")
+        logger.exception("bootstrap: NetBox client bootstrap failed")
         netbox_session = None
         NetBoxBase.nb = None
-
-    if database_session:
-        try:
-            netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
-        except OperationalError:
-            try:
-                create_db_and_tables()
-                netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
-            except Exception as error:  # noqa: BLE001
-                logger.exception("Failed to load NetBox endpoint rows after schema retry")
-                netbox_endpoints = []
-                last_init_error = last_init_error or str(error)
-        finally:
-            database_session.close()
-
+        init_ok = False
     _configure_backend_file_logging()

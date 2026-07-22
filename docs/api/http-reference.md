@@ -135,6 +135,12 @@ The response includes:
 - `GET /netbox/status` - Fetch NetBox API status.
 - `GET /netbox/openapi` - Fetch NetBox OpenAPI.
 
+Enabled create/update operations publish the committed endpoint as the runtime
+default after awaiting lifecycle invalidation. Disable/delete operations retire the
+client and clear that default, and direct session resolution rejects disabled IDs.
+For partial updates, omitted credentials retain their exact stored ciphertext;
+credential fields are encrypted only when explicitly supplied.
+
 ### NetBox singleton rule
 
 Attempting to create a second endpoint returns HTTP 400 with:

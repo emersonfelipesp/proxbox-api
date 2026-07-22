@@ -21,6 +21,17 @@
 - **Bottom — downstream SDKs**:
   - **Write target** — `netbox-sdk` → `netbox · REST API` (4.5.x / 4.6.x). Async with a
     cached GET layer (60s TTL); concurrency capped by `PROXBOX_NETBOX_MAX_CONCURRENT`.
+    Each worker also owns one current `netbox-sdk` client per configured endpoint.
+    Credential, URL, timeout, or TLS changes atomically rotate that client and await
+    closure of the retired transport. Creating an enabled endpoint publishes its
+    lifecycle-owned client immediately; disabling or deleting it clears the default
+    runtime reference. Endpoint mutation closes retired transports before the
+    response completes, and terminal lifespan shutdown drains active and already
+    retiring clients even when startup or request handling fails. Partial endpoint
+    updates preserve the exact stored ciphertext for every omitted credential. A
+    stalled asynchronous transport close is bounded to 10 seconds so mutation and
+    shutdown cannot hang indefinitely.
+
   - **Read source** — `proxmox-sdk` → `proxmox · REST API` (8.1 / 8.2 / 8.3 / latest, per `SUPPORTED_PROXMOX_VERSIONS` in `proxbox_api/constants.py`). PVE 9.x route groups (HA rules, firewall writes, SDN controllers/zones/VNets/subnets/fabrics, datacenter CPU models, access token regeneration, CRS config) are implemented and degrade gracefully on older clusters. Async, read-only for discovery, `mock | real` modes; concurrency capped by `PROXBOX_VM_SYNC_MAX_CONCURRENCY`.
   - **Firecracker host-agent** — `/cloud/firecracker/provision` and
     `/cloud/firecracker/provision/stream` call the selected host-agent VM to
@@ -29,6 +40,12 @@
     `netbox-proxbox`; this service owns the host-agent HTTP contract and
     validates caller-supplied host-agent URLs with its SSRF guard before making
     outbound requests.
+
+Python callers should keep using the synchronous public export
+`proxbox_api.get_netbox_session(...)` outside an event loop. Internal imports from
+`proxbox_api.session.netbox` now use the awaitable `get_netbox_session()` /
+`get_netbox_async_session()` providers; async callers should migrate to those named
+providers rather than invoking the synchronous facade from a running loop.
 
 The interactive version of this diagram lives at
 [emersonfelipesp.com/proxbox-api](https://emersonfelipesp.com/proxbox-api).

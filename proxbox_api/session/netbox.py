@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
+import json
 import threading
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import Depends
@@ -11,12 +15,13 @@ from netbox_sdk.client import NetBoxApiClient
 from netbox_sdk.config import Config
 from netbox_sdk.facade import Api
 from netbox_sdk.schema import build_schema_index
-from sqlmodel import select
+from sqlmodel import Session, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.constants import NETBOX_SCHEMA_VERSION
-from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
+from proxbox_api.database import NetBoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.runtime_settings import get_float
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
@@ -27,12 +32,11 @@ if TYPE_CHECKING:
         config: Config
 
     class _EndpointResult(Protocol):
-        def all(self) -> list[NetBoxEndpoint]: ...
-
         def first(self) -> NetBoxEndpoint | None: ...
 
 
 _DEFAULT_NETBOX_TIMEOUT = 120.0
+_NETBOX_CLIENT_CLOSE_TIMEOUT = 10.0
 
 
 def _resolve_netbox_timeout() -> float:
@@ -67,64 +71,325 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
     )
 
 
-_API_CACHE_LOCK = threading.Lock()
-# Keyed on (endpoint_id, config_fingerprint). The fingerprint hashes the active
-# Config (URL/token/version) so token rotation produces a new key and the stale
-# Api becomes unreachable; explicit invalidation drops it from memory.
-_API_CACHE: dict[tuple[int, str], Api] = {}
-
-
 def _config_fingerprint(cfg: Config, ssl_verify: bool) -> str:
-    parts = [
-        cfg.base_url or "",
-        cfg.token_version or "",
-        cfg.token_key or "",
-        cfg.token_secret or "",
-        f"{cfg.timeout:.3f}",
-        "1" if ssl_verify else "0",
-    ]
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+    fields = {
+        "base_url": cfg.base_url or "",
+        "ssl_verify": ssl_verify,
+        "timeout": cfg.timeout,
+        "token_key": cfg.token_key or "",
+        "token_secret": cfg.token_secret or "",
+        "token_version": cfg.token_version or "",
+    }
+    serialized = json.dumps(fields, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
-def invalidate_netbox_api_cache(endpoint_id: int | None = None) -> None:
-    """Drop cached Api objects for an endpoint, or for all endpoints when id is None.
+@dataclass(frozen=True, slots=True)
+class _NetBoxApiCacheEntry:
+    endpoint_id: int
+    fingerprint: str
+    api: Api
 
-    Call this after updating or deleting a NetBoxEndpoint so that the next session
-    request rebuilds the client with fresh credentials and no decrypted token is
-    retained in memory beyond its useful life.
-    """
-    with _API_CACHE_LOCK:
+
+class _NetBoxApiCacheChanged(RuntimeError):
+    """The cache changed while a superseded client was being closed."""
+
+
+class _NetBoxApiLifecycleClosed(RuntimeError):
+    """The application lifecycle is shutting down and rejects new clients."""
+
+
+def _clear_legacy_api_references(entries: tuple[_NetBoxApiCacheEntry, ...]) -> None:
+    """Release process-wide references to retired clients without importing secrets."""
+    if not entries:
+        return
+
+    retired = tuple(entry.api for entry in entries)
+    try:
+        from proxbox_api.app import bootstrap
+        from proxbox_api.netbox_compat import NetBoxBase
+
+        if any(bootstrap.netbox_session is api for api in retired):
+            bootstrap.netbox_session = None
+        if any(NetBoxBase.nb is api for api in retired):
+            NetBoxBase.nb = None
+    except Exception:  # noqa: BLE001
+        # Compatibility globals are best-effort and must never block retirement.
+        return
+
+
+class _NetBoxApiLifecycle:
+    """Own cached NetBox clients from construction through async retirement."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[int, _NetBoxApiCacheEntry] = {}
+        self._pending: dict[int, set[asyncio.Task[None]]] = {}
+        self._revision = 0
+        self._state = "open"
+
+    def open(self) -> None:
+        """Allow acquisitions for a new application lifespan."""
+        with self._lock:
+            if self._state == "closing":
+                raise RuntimeError("NetBox API lifecycle shutdown is still in progress")
+            if self._state == "closed":
+                self._revision += 1
+                self._state = "open"
+
+    def revision(self) -> int:
+        """Return the current invalidation revision for DB-read race detection."""
+        with self._lock:
+            return self._revision
+
+    async def get_or_create(
+        self,
+        endpoint: NetBoxEndpoint,
+        *,
+        expected_revision: int | None = None,
+    ) -> Api:
+        """Return the current client, retiring a superseded fingerprint asynchronously."""
+        endpoint_id = endpoint.id
         if endpoint_id is None:
-            _API_CACHE.clear()
+            raise ProxboxException(
+                message="NetBox endpoint must be persisted before client acquisition",
+                detail="Save the endpoint and refresh its database ID before creating a client",
+            )
+        cfg = netbox_config_from_endpoint(endpoint)
+        fingerprint = _config_fingerprint(cfg, bool(endpoint.verify_ssl))
+
+        with self._lock:
+            if self._state != "open":
+                raise _NetBoxApiLifecycleClosed("NetBox API lifecycle is closed")
+
+            revision = self._revision if expected_revision is None else expected_revision
+            if revision != self._revision:
+                raise _NetBoxApiCacheChanged
+
+            cached = self._entries.get(endpoint_id)
+            if cached is not None and cached.fingerprint == fingerprint:
+                return cached.api
+
+            api = Api(
+                client=NetBoxApiClient(cfg),
+                schema=build_schema_index(version=NETBOX_SCHEMA_VERSION),
+            )
+            created = _NetBoxApiCacheEntry(
+                endpoint_id=endpoint_id,
+                fingerprint=fingerprint,
+                api=api,
+            )
+            self._entries[endpoint_id] = created
+            retired = (cached,) if cached is not None else ()
+            close_tasks = self._schedule_close_locked(retired)
+
+        _clear_legacy_api_references(retired)
+        await self._await_close_tasks(close_tasks)
+
+        if retired:
+            with self._lock:
+                if self._revision != revision or self._entries.get(endpoint_id) is not created:
+                    raise _NetBoxApiCacheChanged
+
+        return api
+
+    async def invalidate(self, endpoint_id: int | None = None) -> int:
+        """Detach matching entries atomically and close them after releasing the lock."""
+        with self._lock:
+            self._revision += 1
+            revision = self._revision
+            if endpoint_id is None:
+                retired = tuple(self._entries.values())
+                self._entries.clear()
+            else:
+                entry = self._entries.pop(endpoint_id, None)
+                retired = (entry,) if entry is not None else ()
+            self._schedule_close_locked(retired)
+            # Repeated/concurrent invalidation joins retirement work already
+            # detached by an earlier caller instead of returning while it runs.
+            close_tasks = self._pending_tasks_locked(endpoint_id)
+
+        _clear_legacy_api_references(retired)
+        await self._await_close_tasks(close_tasks)
+        return revision
+
+    async def shutdown(self) -> None:
+        """Stop new acquisitions and close every active or already-retiring client."""
+        with self._lock:
+            self._state = "closing"
+            self._revision += 1
+            retired = tuple(self._entries.values())
+            self._entries.clear()
+            self._schedule_close_locked(retired)
+            close_tasks = self._pending_tasks_locked(None)
+
+        _clear_legacy_api_references(retired)
+        try:
+            await self._await_close_tasks(close_tasks)
+        finally:
+            with self._lock:
+                self._state = "closed"
+
+    def _schedule_close_locked(
+        self,
+        entries: tuple[_NetBoxApiCacheEntry, ...],
+    ) -> tuple[asyncio.Task[None], ...]:
+        tasks: list[asyncio.Task[None]] = []
+        for entry in entries:
+            task = asyncio.create_task(self._close_entry(entry))
+            self._pending.setdefault(entry.endpoint_id, set()).add(task)
+            task.add_done_callback(
+                lambda completed, endpoint_id=entry.endpoint_id: self._close_finished(
+                    endpoint_id,
+                    completed,
+                )
+            )
+            tasks.append(task)
+        return tuple(tasks)
+
+    def _pending_tasks_locked(
+        self,
+        endpoint_id: int | None,
+    ) -> tuple[asyncio.Task[None], ...]:
+        if endpoint_id is not None:
+            return tuple(self._pending.get(endpoint_id, ()))
+        return tuple(task for tasks in self._pending.values() for task in tasks)
+
+    def _close_finished(self, endpoint_id: int, task: asyncio.Task[None]) -> None:
+        with self._lock:
+            pending = self._pending.get(endpoint_id)
+            if pending is None:
+                return
+            pending.discard(task)
+            if not pending:
+                self._pending.pop(endpoint_id, None)
+
+    async def _await_close_tasks(self, tasks: tuple[asyncio.Task[None], ...]) -> None:
+        unique_tasks = tuple(dict.fromkeys(tasks))
+        if not unique_tasks:
             return
-        for key in [k for k in _API_CACHE if k[0] == endpoint_id]:
-            _API_CACHE.pop(key, None)
+
+        waiter = asyncio.gather(*unique_tasks)
+        cancelled = False
+        while not waiter.done():
+            try:
+                await asyncio.shield(waiter)
+            except asyncio.CancelledError:
+                # Finish resource cleanup before propagating caller cancellation.
+                cancelled = True
+
+        waiter.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _close_entry(self, entry: _NetBoxApiCacheEntry) -> None:
+        try:
+            close_result = entry.api.client.close()
+            if inspect.isawaitable(close_result):
+                await asyncio.wait_for(
+                    close_result,
+                    timeout=_NETBOX_CLIENT_CLOSE_TIMEOUT,
+                )
+        except TimeoutError:
+            logger.warning(
+                "Timed out closing retired NetBox API client for endpoint %s after %.1f seconds",
+                entry.endpoint_id,
+                _NETBOX_CLIENT_CLOSE_TIMEOUT,
+            )
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "Failed to close retired NetBox API client for endpoint %s (%s)",
+                entry.endpoint_id,
+                type(error).__name__,
+            )
 
 
-def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
-    """Instantiate netbox-sdk Api using NetBoxApiClient + Config (no string token shortcut)."""
-    cfg = netbox_config_from_endpoint(endpoint)
-    fingerprint = _config_fingerprint(cfg, bool(endpoint.verify_ssl))
-    cache_key = (endpoint.id or 0, fingerprint)
-    with _API_CACHE_LOCK:
-        cached = _API_CACHE.get(cache_key)
-        if cached is not None:
-            return cached
-    api = Api(client=NetBoxApiClient(cfg), schema=build_schema_index(version=NETBOX_SCHEMA_VERSION))
-    with _API_CACHE_LOCK:
-        _API_CACHE.setdefault(cache_key, api)
-        return _API_CACHE[cache_key]
+_API_CACHE = _NetBoxApiLifecycle()
 
 
-def get_netbox_session(
-    database_session: DatabaseSessionDep,
+def open_netbox_api_cache() -> None:
+    """Open the lifecycle owner for a new FastAPI lifespan or isolated test."""
+    _API_CACHE.open()
+
+
+async def invalidate_netbox_api_cache(endpoint_id: int | None = None) -> int:
+    """Close cached clients for one endpoint, or all endpoints when id is ``None``."""
+    return await _API_CACHE.invalidate(endpoint_id)
+
+
+async def close_netbox_api_cache() -> None:
+    """Terminally drain every cached or retiring client during app shutdown."""
+    await _API_CACHE.shutdown()
+
+
+async def netbox_api_from_endpoint(
+    endpoint: NetBoxEndpoint,
+    *,
+    expected_revision: int | None = None,
+) -> Api:
+    """Return the lifecycle-owned netbox-sdk facade for a persisted endpoint."""
+    return await _API_CACHE.get_or_create(endpoint, expected_revision=expected_revision)
+
+
+def _publish_default_netbox_api(api: Api) -> None:
+    """Keep compatibility globals aligned with the lifecycle-owned default client."""
+    try:
+        from proxbox_api.app import bootstrap
+        from proxbox_api.netbox_compat import NetBoxBase
+
+        bootstrap.netbox_session = api
+        NetBoxBase.nb = api
+    except Exception:  # noqa: BLE001
+        return
+
+
+def clear_default_netbox_api() -> None:
+    """Clear compatibility globals when the singleton endpoint is unusable."""
+    try:
+        from proxbox_api.app import bootstrap
+        from proxbox_api.netbox_compat import NetBoxBase
+
+        bootstrap.netbox_session = None
+        NetBoxBase.nb = None
+    except Exception:  # noqa: BLE001
+        return
+
+
+async def refresh_default_netbox_api(
+    endpoint: NetBoxEndpoint,
+    *,
+    expected_revision: int,
+) -> bool:
+    """Publish a fresh default client unless a newer invalidation won the race."""
+    try:
+        api = await netbox_api_from_endpoint(
+            endpoint,
+            expected_revision=expected_revision,
+        )
+    except (_NetBoxApiCacheChanged, _NetBoxApiLifecycleClosed):
+        return False
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Failed to refresh default NetBox API client for endpoint %s (%s)",
+            endpoint.id,
+            type(error).__name__,
+        )
+        return False
+
+    _publish_default_netbox_api(api)
+    return True
+
+
+async def get_netbox_session(
+    database_session: Session | AsyncSession = Depends(get_async_session),
     netbox_id: int | None = None,
 ) -> Api:
     """
     Get NetBox API parameters from database and establish a netbox-sdk API session.
 
     Args:
-        database_session: Database session dependency.
+        database_session: Async database session dependency. Sync SQLModel sessions
+            remain supported for explicit compatibility callers and tests.
         netbox_id: Optional specific NetBox endpoint ID. If not provided, selects by
             ID when multiple endpoints exist, or returns the only endpoint when only
             one exists.
@@ -136,132 +401,93 @@ def get_netbox_session(
         ProxboxException: If no endpoint found or on error.
     """
     try:
-        if netbox_id is not None:
-            netbox_endpoint = database_session.get(NetBoxEndpoint, netbox_id)
+        while True:
+            revision = _API_CACHE.revision()
+            if netbox_id is not None:
+                netbox_endpoint = cast(
+                    "NetBoxEndpoint | None",
+                    await _maybe_await(
+                        database_session.get(
+                            NetBoxEndpoint,
+                            netbox_id,
+                            populate_existing=True,
+                        )
+                    ),
+                )
+                if not netbox_endpoint:
+                    raise ProxboxException(
+                        message=f"NetBox endpoint {netbox_id} not found",
+                        detail=f"No endpoint with ID {netbox_id}",
+                    )
+                if not netbox_endpoint.enabled:
+                    raise ProxboxException(
+                        message=f"NetBox endpoint {netbox_id} is disabled",
+                        detail="Enable the endpoint before requesting a NetBox API session",
+                    )
+            else:
+                result = cast(
+                    "_EndpointResult",
+                    await _maybe_await(
+                        database_session.exec(
+                            select(NetBoxEndpoint)
+                            .where(NetBoxEndpoint.enabled)
+                            .order_by(cast("Any", NetBoxEndpoint.id))
+                            .execution_options(populate_existing=True)
+                        )
+                    ),
+                )
+                netbox_endpoint = result.first()
+
             if not netbox_endpoint:
                 raise ProxboxException(
-                    message=f"NetBox endpoint {netbox_id} not found",
-                    detail=f"No endpoint with ID {netbox_id}",
+                    message="No NetBox endpoint found",
+                    detail="Please add a NetBox endpoint in the database",
                 )
-            return netbox_api_from_endpoint(netbox_endpoint)
 
-        count = database_session.exec(
-            select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)  # noqa: E712
-        ).all()
-        count = len(count) if count else 0
+            try:
+                api = await netbox_api_from_endpoint(
+                    netbox_endpoint,
+                    expected_revision=revision,
+                )
+            except _NetBoxApiCacheChanged:
+                continue
 
-        if count == 0:
-            raise ProxboxException(
-                message="No NetBox endpoint found",
-                detail="Please add a NetBox endpoint in the database",
-            )
-
-        if count == 1:
-            netbox_endpoint = database_session.exec(
-                select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)  # noqa: E712
-            ).first()
-        else:
-            netbox_endpoint = database_session.exec(
-                select(NetBoxEndpoint)
-                .where(NetBoxEndpoint.enabled == True)  # noqa: E712
-                .order_by(cast("Any", NetBoxEndpoint.id))
-            ).first()
-
-        if not netbox_endpoint:
-            raise ProxboxException(
-                message="Could not resolve NetBox endpoint",
-                detail="Unable to select endpoint from database",
-            )
-
-        return netbox_api_from_endpoint(netbox_endpoint)
+            if netbox_id is None:
+                _publish_default_netbox_api(api)
+            return api
 
     except ProxboxException:
         raise
 
     except Exception as error:
-        raise ProxboxException(
-            message="Error establishing NetBox API session", python_exception=str(error)
-        )
+        error_type = type(error).__name__
+
+    # Raise outside the exception handler so the upstream exception (which may
+    # contain credentials in its message) is neither chained nor retained.
+    raise ProxboxException(
+        message="Error establishing NetBox API session",
+        python_exception=f"{error_type}: details suppressed",
+    )
 
 
 async def get_netbox_async_session(
-    database_session: AsyncSession = Depends(get_async_session),
+    database_session: Session | AsyncSession = Depends(get_async_session),
     netbox_id: int | None = None,
 ) -> Api:
-    """
-    Get NetBox API parameters from database and establish an async netbox-sdk API session.
+    """Compatibility alias for the canonical async NetBox dependency provider."""
+    return await get_netbox_session(database_session, netbox_id)
 
-    Args:
-        database_session: Database session dependency.
-        netbox_id: Optional specific NetBox endpoint ID. If not provided, selects by
-            ID when multiple endpoints exist, or returns the only endpoint when only
-            one exists.
 
-    Returns:
-        NetBox async API session for the endpoint.
-
-    Raises:
-        ProxboxException: If no endpoint found or on error.
-    """
+def get_netbox_session_sync(database_session: Any, netbox_id: int | None = None) -> Api:
+    """Preserve the package's historical synchronous Python API outside event loops."""
     try:
-        if netbox_id is not None:
-            netbox_endpoint = cast(
-                "NetBoxEndpoint | None",
-                await _maybe_await(database_session.get(NetBoxEndpoint, netbox_id)),
-            )
-            if not netbox_endpoint:
-                raise ProxboxException(
-                    message=f"NetBox endpoint {netbox_id} not found",
-                    detail=f"No endpoint with ID {netbox_id}",
-                )
-            return netbox_api_from_endpoint(netbox_endpoint)
-
-        # Fetch all enabled endpoints to determine how many exist
-        endpoints = cast(
-            "_EndpointResult | None",
-            await _maybe_await(
-                database_session.exec(
-                    select(NetBoxEndpoint).where(NetBoxEndpoint.enabled == True)  # noqa: E712
-                )
-            ),
-        )
-        endpoints_list = endpoints.all() if endpoints else []
-        count = len(endpoints_list) if endpoints_list else 0
-
-        if count == 0:
-            raise ProxboxException(
-                message="No NetBox endpoint found",
-                detail="Please add a NetBox endpoint in the database",
-            )
-
-        # Fetch the first enabled endpoint ordered by ID
-        result = cast(
-            "_EndpointResult",
-            await _maybe_await(
-                database_session.exec(
-                    select(NetBoxEndpoint)
-                    .where(NetBoxEndpoint.enabled == True)  # noqa: E712
-                    .order_by(cast("Any", NetBoxEndpoint.id))
-                )
-            ),
-        )
-        netbox_endpoint = result.first()
-
-        if not netbox_endpoint:
-            raise ProxboxException(
-                message="Could not resolve NetBox endpoint",
-                detail="Unable to select endpoint from database",
-            )
-
-        return netbox_api_from_endpoint(netbox_endpoint)
-
-    except ProxboxException:
-        raise
-
-    except Exception as error:
-        raise ProxboxException(
-            message="Error establishing NetBox API session", python_exception=str(error)
-        )
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(get_netbox_session(database_session, netbox_id))
+    raise RuntimeError(
+        "get_netbox_session_sync() cannot run inside an event loop; "
+        "await get_netbox_session() instead"
+    )
 
 
 NetBoxSessionDep = Annotated[Api, Depends(get_netbox_session)]

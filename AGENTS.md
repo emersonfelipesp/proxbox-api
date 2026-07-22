@@ -81,6 +81,28 @@ npm run build
 
 Fix failures locally before finishing the task.
 
+## NetBox Client Lifecycle
+
+`proxbox_api/session/netbox.py` is the sole process-local lifecycle owner for
+cached `netbox-sdk` clients. Keep at most one current configuration fingerprint
+per `NetBoxEndpoint.id`. Replacement and invalidation must detach entries while
+holding the lifecycle lock, release that lock, and only then await transport
+closure; never perform an await inside the lock.
+
+NetBox endpoint create/update/delete routes must await targeted invalidation before
+returning. Enabled create/update operations publish the new lifecycle-owned default;
+disabled or deleted endpoints clear it and must never be selectable even by explicit
+ID. Partial updates must retain the exact ciphertext for omitted credentials rather
+than encrypting ciphertext again. Repeated invalidation must be safe, and invalidating
+endpoint A must not close endpoint B. The FastAPI lifespan must reject new acquisition during
+terminal shutdown and drain active plus already-retiring clients in `finally`,
+including startup, request-scope, and cancellation failure paths. Caller
+cancellation is propagated only after detached close work completes. Close-failure logs
+may identify the endpoint id and exception class, but must not include tokens,
+URLs, configuration fingerprints, or exception messages that could contain
+secret material. Each asynchronous transport close has a 10-second deadline so
+endpoint mutation and shutdown cannot hang forever on a stuck SDK close.
+
 ## NetBox Custom Field Lifecycle
 
 The canonical Proxbox custom-field inventory lives in

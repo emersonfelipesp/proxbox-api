@@ -26,7 +26,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
 | `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
-| `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
+| `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage plus direct awaited-lifecycle checks for NetBox endpoint update/delete routes |
 | `test_ensure_device_overwrite_flags.py` | `_ensure_device` overwrite-flag plumbing for cluster/storage/node-interface/IP tag groups |
 | `test_error_handling.py` | Exception hierarchy and HTTP error response shaping |
 | `test_fetch_concurrency_kwarg.py` | `PROXBOX_FETCH_MAX_CONCURRENCY` and per-call concurrency overrides |
@@ -36,6 +36,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
 | `test_logger_settings.py` | Logger configuration via env vars |
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
+| `test_netbox_client_lifecycle.py` | Deterministic NetBox client rotation, scoped invalidation, concurrent get/invalidate, secret-safe close failures, and lifespan shutdown drain |
 | `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |

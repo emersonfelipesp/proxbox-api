@@ -19,6 +19,13 @@ NetBox endpoint configuration is managed with:
 
 Only one NetBox endpoint record is allowed.
 
+Creating an enabled endpoint makes it the runtime default immediately. Updating an
+enabled endpoint atomically retires the prior client and publishes a client built
+from the committed row. Disabling or deleting the endpoint retires the client and
+clears the runtime default; disabled rows cannot be selected by explicit ID. A
+partial `PUT` preserves the exact stored ciphertext for omitted `token` and
+`token_key` fields. Supply a credential field only when intentionally rotating it.
+
 The stored model now includes:
 
 - `token_version`: `v1` or `v2`
@@ -361,6 +368,6 @@ Or set it in the NetBox plugin settings page under **Encryption** → **Encrypti
 
 ### Backwards compatibility
 
-If credentials were stored in plaintext before encryption was enabled, they continue to work — `decrypt_value` returns them unchanged when no `enc:` prefix is found. They are re-encrypted the next time the endpoint is saved.
+If credentials were stored in plaintext before encryption was enabled, they continue to work — `decrypt_value` returns them unchanged when no `enc:` prefix is found. A partial endpoint update leaves omitted credential storage unchanged; explicitly resubmit the credential to migrate that field to encrypted storage.
 
 If the encryption key changes after credentials were already encrypted, proxbox-api logs a warning and returns the raw ciphertext (unusable as a credential). Re-save each endpoint with the correct credentials after rotating the key.

@@ -12,6 +12,7 @@ from netbox_sdk.client import ApiResponse
 from proxmox_sdk.sdk.exceptions import ResourceException
 from sqlmodel import Session
 
+from proxbox_api import get_netbox_session as get_netbox_session_sync
 from proxbox_api.app.netbox_session import get_raw_netbox_session
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
@@ -348,11 +349,12 @@ class SerializableRecord:
 @pytest.fixture(autouse=False)
 def clear_cached_netbox_api():
     """Drop cached NetBox Api objects to prevent monkeypatch conflicts."""
-    from proxbox_api.session.netbox import invalidate_netbox_api_cache
+    from proxbox_api.session.netbox import close_netbox_api_cache, open_netbox_api_cache
 
-    invalidate_netbox_api_cache()
+    asyncio.run(close_netbox_api_cache())
+    open_netbox_api_cache()
     yield
-    invalidate_netbox_api_cache()
+    asyncio.run(close_netbox_api_cache())
 
 
 def test_to_dict_supports_dict_and_serializable_objects():
@@ -1222,7 +1224,7 @@ def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
     ]
 
 
-def test_get_netbox_session_returns_facade(monkeypatch, db_engine):
+def test_exported_get_netbox_session_preserves_sync_facade(monkeypatch, db_engine):
     with Session(db_engine) as session:
         session.add(
             NetBoxEndpoint(
@@ -1236,18 +1238,22 @@ def test_get_netbox_session_returns_facade(monkeypatch, db_engine):
         )
         session.commit()
 
+        async def fake_netbox_api_from_endpoint(ep, *, expected_revision=None):
+            return AsyncNetBoxFacade()
+
         monkeypatch.setattr(
             netbox_session_module,
             "netbox_api_from_endpoint",
-            lambda ep: AsyncNetBoxFacade(),
+            fake_netbox_api_from_endpoint,
         )
-        facade = netbox_session_module.get_netbox_session(session)
+        facade = get_netbox_session_sync(session)
 
     assert asyncio.run(facade.status()) == {"netbox": "ok"}
 
 
 def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
-    netbox_session_module.invalidate_netbox_api_cache()
+    asyncio.run(netbox_session_module.close_netbox_api_cache())
+    netbox_session_module.open_netbox_api_cache()
 
     api_client_calls = {"count": 0}
 
@@ -1255,6 +1261,9 @@ def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
         def __init__(self, config):
             api_client_calls["count"] += 1
             self.config = config
+
+        async def close(self):
+            return None
 
     class DummyApi:
         def __init__(self, client, schema=None):
@@ -1266,6 +1275,7 @@ def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
     monkeypatch.setattr(netbox_session_module, "build_schema_index", lambda **kwargs: None)
 
     endpoint = NetBoxEndpoint(
+        id=1,
         name="netbox",
         ip_address="10.0.0.20",
         domain="netbox.local",
@@ -1274,8 +1284,12 @@ def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
         verify_ssl=True,
     )
 
-    first = netbox_session_module.netbox_api_from_endpoint(endpoint)
-    second = netbox_session_module.netbox_api_from_endpoint(endpoint)
+    async def scenario():
+        first = await netbox_session_module.netbox_api_from_endpoint(endpoint)
+        second = await netbox_session_module.netbox_api_from_endpoint(endpoint)
+        return first, second
+
+    first, second = asyncio.run(scenario())
 
     assert first is second
     assert api_client_calls["count"] == 1
@@ -1284,7 +1298,7 @@ def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
 def test_get_netbox_session_requires_endpoint(db_engine):
     with Session(db_engine) as session:
         with pytest.raises(ProxboxException) as excinfo:
-            netbox_session_module.get_netbox_session(session)
+            asyncio.run(netbox_session_module.get_netbox_session(session))
         assert excinfo.value.message in [
             "No NetBox endpoint found",
             "Error establishing NetBox API session",
@@ -1307,10 +1321,14 @@ def test_get_netbox_async_session_returns_async_facade(monkeypatch, db_engine):
         session.commit()
 
         async_facade = AsyncNetBoxFacade()
+
+        async def fake_netbox_api_from_endpoint(ep, *, expected_revision=None):
+            return async_facade
+
         monkeypatch.setattr(
             netbox_session_module,
             "netbox_api_from_endpoint",
-            lambda ep: async_facade,
+            fake_netbox_api_from_endpoint,
         )
         returned = asyncio.run(get_netbox_async_session(session))
 
@@ -1563,24 +1581,13 @@ def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
     assert sessions[0].db_endpoint_id == 44
 
 
-def test_get_raw_netbox_session_closes_database_session(monkeypatch):
-    closed = {"value": False}
+def test_get_raw_netbox_session_returns_lifecycle_owned_default(monkeypatch):
+    from proxbox_api.app import bootstrap
+
     sentinel = object()
-
-    def fake_get_session():
-        try:
-            yield object()
-        finally:
-            closed["value"] = True
-
-    monkeypatch.setattr("proxbox_api.app.netbox_session.get_session", fake_get_session)
-    monkeypatch.setattr(
-        "proxbox_api.app.netbox_session.get_netbox_session",
-        lambda database_session: sentinel,
-    )
+    monkeypatch.setattr(bootstrap, "netbox_session", sentinel)
 
     assert get_raw_netbox_session() is sentinel
-    assert closed["value"] is True
 
 
 def test_get_settings_uses_raw_session_helper(monkeypatch):

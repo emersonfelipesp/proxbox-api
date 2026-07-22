@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 
 from proxbox_api.database import DatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
-from proxbox_api.session.netbox import get_netbox_session
+from proxbox_api.session.netbox import get_netbox_session_sync as get_netbox_session
 
 try:
     __version__ = version("proxbox_api")

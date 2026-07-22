@@ -68,6 +68,7 @@ from proxbox_api.routes.sync.active import router as sync_active_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
+from proxbox_api.session.netbox import close_netbox_api_cache, open_netbox_api_cache
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -248,29 +249,39 @@ PROXBOX_PLUGIN_NAME: str = "netbox_proxbox"
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    open_netbox_api_cache()
     try:
-        register_generated_proxmox_routes(app)
-    except ProxboxException as error:
-        logger.warning(
-            "Generated Proxmox proxy routes were not mounted: %s",
-            error.message,
-            extra={"detail": error.detail},
+        await bootstrap.init_database_and_netbox()
+
+        try:
+            register_generated_proxmox_routes(app)
+        except ProxboxException as error:
+            logger.warning(
+                "Generated Proxmox proxy routes were not mounted: %s",
+                error.message,
+                extra={"detail": error.detail},
+            )
+            strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if strict:
+                raise
+
+        from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
+
+        bundled = available_proxmox_sdk_versions()
+        logger.info(
+            "Bundled Proxmox OpenAPI schema versions available: %s",
+            ", ".join(bundled) if bundled else "(none)",
         )
-        strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in ("1", "true", "yes")
-        if strict:
-            raise
 
-    from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
+        await _run_bootstrap_pass(app)
 
-    bundled = available_proxmox_sdk_versions()
-    logger.info(
-        "Bundled Proxmox OpenAPI schema versions available: %s",
-        ", ".join(bundled) if bundled else "(none)",
-    )
-
-    await _run_bootstrap_pass(app)
-
-    yield
+        yield
+    finally:
+        await close_netbox_api_cache()
 
 
 async def _run_bootstrap_pass(app: FastAPI) -> None:
@@ -343,7 +354,7 @@ async def _run_bootstrap_pass(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:  # noqa: C901
     """Build and configure the Proxbox FastAPI application."""
-    bootstrap.init_database_and_netbox()
+    bootstrap.init_database_state()
 
     app = FastAPI(
         title="Proxbox Backend",

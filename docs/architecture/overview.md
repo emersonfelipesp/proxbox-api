@@ -25,6 +25,23 @@ NetBox GET requests are cached in-memory to reduce database load during sync ope
 
 Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55/` only invalidates that exact path and its parent list, not other device detail paths like `/api/dcim/devices/10/`.
 
+## NetBox Client Lifecycle
+
+`proxbox_api/session/netbox.py` is the process-local lifecycle owner for
+`netbox-sdk` clients. It keeps at most one current client fingerprint per
+`NetBoxEndpoint` id. A URL, token, timeout, or TLS-setting change replaces the
+entry atomically; the retired transport is detached while holding the lifecycle
+lock and closed asynchronously after the lock is released.
+
+NetBox endpoint update and delete handlers await targeted invalidation before
+returning; update then republishes a fresh default client for raw and WebSocket
+consumers. Repeated invalidation is safe and invalidating one endpoint does not
+retire another endpoint's client. During terminal shutdown the FastAPI lifespan
+rejects new acquisition and drains every active or already-retiring client from
+a `finally` block, including startup, request-scope, and cancellation paths.
+Client-close failures are logged with endpoint id and exception type only, so
+credentials, URLs, and configuration fingerprints are not exposed.
+
 ## Runtime Components
 
 - FastAPI app mounts the current route groups:
@@ -51,7 +68,7 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
   - `/sync/active` — process-local probe for an in-flight `/full-update` run.
 - Sidecar-only mode: when `PROXBOX_FEATURES` contains only optional sidecar flags (`pbs`, `ceph`, `pdm`), the core Proxmox/NetBox/sync/cloud/intent route groups are skipped and only the selected service routes mount alongside root metadata and auth.
 - SQLite-backed endpoint configuration and bootstrap state.
-- NetBox API access via `netbox-sdk` sync and async clients.
+- NetBox API access via lifecycle-owned async `netbox-sdk` clients.
 - Proxmox API access via `proxmox-sdk` sync SDK sessions and typed helper wrappers.
 - Firecracker host-agent access via `proxbox_api.firecracker_agent.client.FirecrackerHostAgentClient`.
 - Runtime-generated Proxmox live routes mounted during app lifespan startup.
@@ -121,11 +138,12 @@ deleted while the flag exists.
 
 ## Startup Flow
 
-1. `create_app()` initializes the database and NetBox bootstrap state.
+1. `create_app()` initializes database metadata needed for app composition.
 2. The app mounts static assets, CORS middleware, exception handlers, cache routes, full-update routes, and WebSocket routes.
 3. Route packages are included for NetBox, Proxmox, DCIM, virtualization, extras, and individual sync helpers.
-4. Generated Proxmox live routes are mounted during lifespan startup and can fail open unless `PROXBOX_STRICT_STARTUP` is enabled.
+4. Lifespan startup acquires the default lifecycle-owned NetBox client and mounts generated Proxmox live routes, which can fail open unless `PROXBOX_STRICT_STARTUP` is enabled.
 5. The custom OpenAPI builder embeds the generated Proxmox OpenAPI contract when one is available.
+6. Lifespan shutdown rejects new clients and drains cached or already-retiring NetBox clients from a `finally` block; a transport that stalls during asynchronous close is abandoned after the 10-second liveness deadline with a secret-safe warning.
 
 ## OpenAPI Extension
 
