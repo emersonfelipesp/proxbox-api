@@ -46,7 +46,16 @@ class CacheKey:
 @dataclass
 class _Entry:
     response: dict[str, object]
+    status_code: int
+    journal_finalization: dict[str, object] | None
     expires_at: float
+
+
+@dataclass(frozen=True)
+class CachedResponse:
+    response: dict[str, object]
+    status_code: int
+    journal_finalization: dict[str, object] | None = None
 
 
 class IdempotencyCache:
@@ -74,16 +83,44 @@ class IdempotencyCache:
             del self._entries[k]
 
     async def get(self, cache_key: CacheKey) -> dict[str, object] | None:
+        entry = await self.get_entry(cache_key)
+        return entry.response if entry is not None else None
+
+    async def get_entry(self, cache_key: CacheKey) -> CachedResponse | None:
         async with self._lock:
             now = self._now()
             self._prune(now)
             entry = self._entries.get(cache_key)
-            return dict(entry.response) if entry is not None else None
+            if entry is None:
+                return None
+            return CachedResponse(
+                response=dict(entry.response),
+                status_code=entry.status_code,
+                journal_finalization=(
+                    dict(entry.journal_finalization)
+                    if entry.journal_finalization is not None
+                    else None
+                ),
+            )
 
-    async def store(self, cache_key: CacheKey, response: dict[str, object]) -> None:
+    async def store(
+        self,
+        cache_key: CacheKey,
+        response: dict[str, object],
+        *,
+        status_code: int = 200,
+        journal_finalization: dict[str, object] | None = None,
+    ) -> None:
         async with self._lock:
             now = self._now()
-            self._entries[cache_key] = _Entry(response=dict(response), expires_at=now + self._ttl)
+            self._entries[cache_key] = _Entry(
+                response=dict(response),
+                status_code=status_code,
+                journal_finalization=(
+                    dict(journal_finalization) if journal_finalization is not None else None
+                ),
+                expires_at=now + self._ttl,
+            )
 
     async def clear(self) -> None:
         async with self._lock:

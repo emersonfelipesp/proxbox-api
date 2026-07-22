@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Literal, TypeVar
 from uuid import uuid4
@@ -49,7 +50,7 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
-from proxbox_api.services.idempotency import CacheKey, get_idempotency_cache
+from proxbox_api.services.idempotency import CacheKey, IdempotencyCache, get_idempotency_cache
 from proxbox_api.services.proxmox_helpers import (
     backup_vm,
     cancel_task,
@@ -82,6 +83,7 @@ router = APIRouter()
 T = TypeVar("T")
 
 VmType = Literal["qemu", "lxc"]
+JournalKind = Literal["info", "success", "warning", "danger"]
 Verb = Literal[
     "start",
     "stop",
@@ -107,6 +109,14 @@ AUDIT_REQUIRED_VERBS: frozenset[Verb] = frozenset(
         "delete_snapshot",
     )
 )
+
+
+@dataclass(frozen=True)
+class JournalFinalizationResult:
+    journal_entry_url: str | None
+    finalized: bool
+    error: str | None = None
+    retry_metadata: dict[str, object] | None = None
 
 
 async def _gate(
@@ -227,6 +237,149 @@ def _journal_entry_url(entry: dict[str, object] | None) -> str | None:
     return None
 
 
+def _error_detail(error: BaseException) -> str:
+    message = str(error)
+    if message:
+        return f"{type(error).__name__}: {message}"
+    return type(error).__name__
+
+
+def _metadata_int(metadata: dict[str, object], key: str) -> int | None:
+    value = metadata.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _metadata_str(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _metadata_kind(metadata: dict[str, object]) -> JournalKind | None:
+    value = metadata.get("kind")
+    if value in ("info", "success", "warning", "danger"):
+        return value
+    return None
+
+
+def _journal_finalization_retry_metadata(
+    *,
+    journal_entry_id: int,
+    journal_entry_url: str | None,
+    kind: JournalKind,
+    comments: str,
+    interrupted_comments: str,
+    failed_comments: str,
+    terminal_status_code: int,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "journal_entry_id": journal_entry_id,
+        "kind": kind,
+        "comments": comments,
+        "interrupted_comments": interrupted_comments,
+        "failed_comments": failed_comments,
+        "terminal_status_code": terminal_status_code,
+    }
+    if journal_entry_url is not None:
+        metadata["journal_entry_url"] = journal_entry_url
+    return metadata
+
+
+async def _best_effort_mark_journal_terminal(
+    *,
+    nb: object,
+    journal_entry_id: int,
+    kind: JournalKind,
+    comments: str,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+    cause: BaseException,
+) -> None:
+    try:
+        task = asyncio.create_task(
+            update_verb_journal_entry(
+                nb,
+                journal_entry_id=journal_entry_id,
+                kind=kind,
+                comments=comments,
+            )
+        )
+        await asyncio.shield(task)
+    except BaseException as error:  # noqa: BLE001
+        logger.error(
+            "Best-effort terminal journal mark failed for entry id=%s "
+            "%s/%s verb=%s after finalization interruption %s: %s",
+            journal_entry_id,
+            vm_type,
+            vmid,
+            verb,
+            _error_detail(cause),
+            _error_detail(error),
+        )
+
+
+async def _update_journal_entry_resistant_to_cancellation(
+    *,
+    nb: object,
+    journal_entry_id: int,
+    kind: JournalKind,
+    comments: str,
+    interrupted_comments: str,
+    failed_comments: str,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+) -> dict[str, object] | None:
+    task = asyncio.create_task(
+        update_verb_journal_entry(
+            nb,
+            journal_entry_id=journal_entry_id,
+            kind=kind,
+            comments=comments,
+        )
+    )
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            if task.done():
+                task.result()
+            else:
+                await task
+        except BaseException as finalization_error:  # noqa: BLE001
+            await _best_effort_mark_journal_terminal(
+                nb=nb,
+                journal_entry_id=journal_entry_id,
+                kind="warning",
+                comments=interrupted_comments,
+                verb=verb,
+                vm_type=vm_type,
+                vmid=vmid,
+                cause=finalization_error,
+            )
+        raise
+    except Exception:
+        raise
+    except BaseException as error:
+        await _best_effort_mark_journal_terminal(
+            nb=nb,
+            journal_entry_id=journal_entry_id,
+            kind="warning",
+            comments=failed_comments,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
+            cause=error,
+        )
+        raise
+
+
 def _writeahead_journal_failure_response(
     *,
     verb: Verb,
@@ -319,53 +472,308 @@ async def _finalize_journal_entry(
     verb: Verb,
     vm_type: VmType,
     vmid: int,
-    kind: Literal["info", "success", "warning", "danger"],
+    kind: JournalKind,
     comments: str,
-) -> str | None:
+    interrupted_comments: str,
+    failed_comments: str,
+    terminal_status_code: int,
+) -> JournalFinalizationResult:
     journal_entry_url = _journal_entry_url(writeahead_journal_entry)
     if netbox_vm_id is None:
-        return journal_entry_url
+        return JournalFinalizationResult(journal_entry_url=journal_entry_url, finalized=True)
 
     if writeahead_journal_entry is None:
-        entry = await write_verb_journal_entry(
-            nb,
-            netbox_vm_id=netbox_vm_id,
-            kind=kind,
-            comments=comments,
+        try:
+            entry = await write_verb_journal_entry(
+                nb,
+                netbox_vm_id=netbox_vm_id,
+                kind=kind,
+                comments=comments,
+            )
+        except Exception as error:  # noqa: BLE001
+            return JournalFinalizationResult(
+                journal_entry_url=journal_entry_url,
+                finalized=False,
+                error=_error_detail(error),
+            )
+        return JournalFinalizationResult(
+            journal_entry_url=_journal_entry_url(entry),
+            finalized=True,
         )
-        return _journal_entry_url(entry)
 
     entry_id = _journal_entry_id(writeahead_journal_entry)
     if entry_id is None:
+        error_detail = "write-ahead journal entry returned without an id"
         logger.warning(
             "Write-ahead journal entry for %s/%s verb=%s had no id; "
-            "returning Proxmox result without terminal journal update",
+            "cannot apply terminal journal update",
             vm_type,
             vmid,
             verb,
         )
-        return journal_entry_url
+        return JournalFinalizationResult(
+            journal_entry_url=journal_entry_url,
+            finalized=False,
+            error=error_detail,
+        )
 
     try:
-        entry = await update_verb_journal_entry(
-            nb,
+        entry = await _update_journal_entry_resistant_to_cancellation(
+            nb=nb,
             journal_entry_id=entry_id,
             kind=kind,
             comments=comments,
+            interrupted_comments=interrupted_comments,
+            failed_comments=failed_comments,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
         )
     except Exception as error:  # noqa: BLE001
-        logger.warning(
+        error_detail = _error_detail(error)
+        logger.error(
             "Failed to finalize write-ahead journal entry id=%s for "
-            "%s/%s verb=%s; returning Proxmox result: %s",
+            "%s/%s verb=%s after Proxmox result resolved: %s",
             entry_id,
             vm_type,
             vmid,
             verb,
-            error,
+            error_detail,
         )
-        return journal_entry_url
+        return JournalFinalizationResult(
+            journal_entry_url=journal_entry_url,
+            finalized=False,
+            error=error_detail,
+            retry_metadata=_journal_finalization_retry_metadata(
+                journal_entry_id=entry_id,
+                journal_entry_url=journal_entry_url,
+                kind=kind,
+                comments=comments,
+                interrupted_comments=interrupted_comments,
+                failed_comments=failed_comments,
+                terminal_status_code=terminal_status_code,
+            ),
+        )
 
-    return _journal_entry_url(entry) or journal_entry_url
+    return JournalFinalizationResult(
+        journal_entry_url=_journal_entry_url(entry) or journal_entry_url,
+        finalized=True,
+    )
+
+
+async def _retry_cached_journal_finalization(
+    *,
+    nb: object,
+    metadata: dict[str, object],
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+) -> JournalFinalizationResult:
+    entry_id = _metadata_int(metadata, "journal_entry_id")
+    kind = _metadata_kind(metadata)
+    comments = _metadata_str(metadata, "comments")
+    interrupted_comments = _metadata_str(metadata, "interrupted_comments") or comments
+    failed_comments = _metadata_str(metadata, "failed_comments") or comments
+    journal_entry_url = _metadata_str(metadata, "journal_entry_url")
+    if (
+        entry_id is None
+        or kind is None
+        or comments is None
+        or interrupted_comments is None
+        or failed_comments is None
+    ):
+        return JournalFinalizationResult(
+            journal_entry_url=journal_entry_url,
+            finalized=False,
+            error="cached journal finalization metadata is incomplete",
+            retry_metadata=metadata,
+        )
+
+    try:
+        entry = await _update_journal_entry_resistant_to_cancellation(
+            nb=nb,
+            journal_entry_id=entry_id,
+            kind=kind,
+            comments=comments,
+            interrupted_comments=interrupted_comments,
+            failed_comments=failed_comments,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+    except Exception as error:  # noqa: BLE001
+        error_detail = _error_detail(error)
+        logger.error(
+            "Retrying cached journal finalization failed for entry id=%s %s/%s verb=%s: %s",
+            entry_id,
+            vm_type,
+            vmid,
+            verb,
+            error_detail,
+        )
+        return JournalFinalizationResult(
+            journal_entry_url=journal_entry_url,
+            finalized=False,
+            error=error_detail,
+            retry_metadata=metadata,
+        )
+
+    return JournalFinalizationResult(
+        journal_entry_url=_journal_entry_url(entry) or journal_entry_url,
+        finalized=True,
+    )
+
+
+async def _cached_idempotency_response(
+    *,
+    cache: IdempotencyCache,
+    cache_key: CacheKey,
+    nb: object,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+) -> JSONResponse | None:
+    cached = await cache.get_entry(cache_key)
+    if cached is None:
+        return None
+
+    body = dict(cached.response)
+    status_code = cached.status_code
+    metadata = cached.journal_finalization
+    if body.get("journal_finalized") is False and metadata is not None:
+        finalization = await _retry_cached_journal_finalization(
+            nb=nb,
+            metadata=metadata,
+            verb=verb,
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if finalization.finalized:
+            body.pop("journal_finalized", None)
+            body.pop("finalization_error", None)
+            if body.get("reason") == "netbox_journal_finalization_failed":
+                body.pop("reason", None)
+            if finalization.journal_entry_url is not None:
+                body["journal_entry_url"] = finalization.journal_entry_url
+            terminal_status = _metadata_int(metadata, "terminal_status_code")
+            if terminal_status is not None:
+                status_code = terminal_status
+            await cache.store(cache_key, body, status_code=status_code)
+        else:
+            body["journal_finalized"] = False
+            if finalization.error is not None:
+                body["finalization_error"] = finalization.error
+            body.setdefault("reason", "netbox_journal_finalization_failed")
+            await cache.store(
+                cache_key,
+                body,
+                status_code=status_code,
+                journal_finalization=finalization.retry_metadata or metadata,
+            )
+
+    return JSONResponse(status_code=status_code, content=body)
+
+
+def _audit_response_body(
+    *,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+    endpoint_id: int,
+    result: str,
+    dispatched_at: str,
+    proxmox_task_upid: str | None,
+    journal_entry_url: str | None,
+    http_status: int,
+    reason: str | None,
+    error_detail: str | None,
+    extra: dict[str, object] | None,
+) -> dict[str, object]:
+    body = build_success_response(
+        verb=verb,
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint_id=endpoint_id,
+        result=result,
+        dispatched_at=dispatched_at,
+        proxmox_task_upid=proxmox_task_upid,
+        journal_entry_url=journal_entry_url,
+    )
+    if reason is not None:
+        body["reason"] = reason
+    if error_detail is not None and http_status >= 400:
+        body["detail"] = error_detail
+    if extra:
+        for key, value in extra.items():
+            body.setdefault(key, value)
+    return body
+
+
+async def _store_pending_journal_finalization_cache(
+    *,
+    cache: IdempotencyCache,
+    cache_key: CacheKey | None,
+    writeahead_journal_entry: dict[str, object] | None,
+    verb: Verb,
+    vm_type: VmType,
+    vmid: int,
+    endpoint_id: int,
+    result: str,
+    dispatched_at: str,
+    proxmox_task_upid: str | None,
+    http_status: int,
+    reason: str | None,
+    error_detail: str | None,
+    extra: dict[str, object] | None,
+    kind: JournalKind,
+    comments: str,
+    interrupted_comments: str,
+    failed_comments: str,
+) -> dict[str, object] | None:
+    if cache_key is None or http_status not in (
+        status.HTTP_200_OK,
+        status.HTTP_202_ACCEPTED,
+    ):
+        return None
+
+    writeahead_entry_id = _journal_entry_id(writeahead_journal_entry)
+    if writeahead_entry_id is None:
+        return None
+
+    journal_entry_url = _journal_entry_url(writeahead_journal_entry)
+    retry_metadata = _journal_finalization_retry_metadata(
+        journal_entry_id=writeahead_entry_id,
+        journal_entry_url=journal_entry_url,
+        kind=kind,
+        comments=comments,
+        interrupted_comments=interrupted_comments,
+        failed_comments=failed_comments,
+        terminal_status_code=http_status,
+    )
+    body = _audit_response_body(
+        verb=verb,
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint_id=endpoint_id,
+        result=result,
+        dispatched_at=dispatched_at,
+        proxmox_task_upid=proxmox_task_upid,
+        journal_entry_url=journal_entry_url,
+        http_status=http_status,
+        reason=reason,
+        error_detail=error_detail,
+        extra=extra,
+    )
+    body["journal_finalized"] = False
+    body["finalization_error"] = "terminal journal finalization is pending"
+    body.setdefault("reason", "netbox_journal_finalization_failed")
+    await cache.store(
+        cache_key,
+        body,
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        journal_finalization=retry_metadata,
+    )
+    return retry_metadata
 
 
 def _unexpected_dispatch_result(error: BaseException) -> tuple[str, str]:
@@ -392,7 +800,7 @@ async def _finalize_after_unexpected_dispatch_error(
     actor: str,
     dispatched_at: str,
     idempotency_key: str | None,
-    cache: object,
+    cache: IdempotencyCache,
     cache_key: CacheKey | None,
     proxmox_task_upid: str | None = None,
     extra: dict[str, object] | None = None,
@@ -661,9 +1069,16 @@ async def _dispatch_start(
     cache_key: CacheKey | None = None
     if idempotency_key:
         cache_key = CacheKey(endpoint_id=endpoint_id, verb="start", vmid=vmid, key=idempotency_key)
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="start",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -845,9 +1260,16 @@ async def _dispatch_stop(
     cache_key: CacheKey | None = None
     if idempotency_key:
         cache_key = CacheKey(endpoint_id=endpoint_id, verb="stop", vmid=vmid, key=idempotency_key)
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="stop",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -1027,9 +1449,16 @@ async def _dispatch_reboot(
     cache_key: CacheKey | None = None
     if idempotency_key:
         cache_key = CacheKey(endpoint_id=endpoint_id, verb="reboot", vmid=vmid, key=idempotency_key)
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="reboot",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -1205,9 +1634,16 @@ async def _dispatch_delete(
     cache_key: CacheKey | None = None
     if idempotency_key:
         cache_key = CacheKey(endpoint_id=endpoint_id, verb="delete", vmid=vmid, key=idempotency_key)
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="delete",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -1403,9 +1839,16 @@ async def _dispatch_snapshot(
         cache_key = CacheKey(
             endpoint_id=endpoint_id, verb="snapshot", vmid=vmid, key=idempotency_key
         )
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="snapshot",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -1544,9 +1987,16 @@ async def _dispatch_backup(
     cache_key: CacheKey | None = None
     if idempotency_key:
         cache_key = CacheKey(endpoint_id=endpoint_id, verb="backup", vmid=vmid, key=idempotency_key)
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="backup",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -1683,9 +2133,16 @@ async def _dispatch_delete_snapshot(
         cache_key = CacheKey(
             endpoint_id=endpoint_id, verb="delete_snapshot", vmid=vmid, key=idempotency_key
         )
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="delete_snapshot",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -1867,9 +2324,16 @@ async def _dispatch_migrate(
         cache_key = CacheKey(
             endpoint_id=endpoint_id, verb="migrate", vmid=vmid, key=idempotency_key
         )
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=cached)
+        cached_response = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="migrate",
+            vm_type=vm_type,
+            vmid=vmid,
+        )
+        if cached_response is not None:
+            return cached_response
 
     try:
         proxmox = await _open_proxmox_session(endpoint)
@@ -2054,10 +2518,10 @@ async def _audit_and_respond(
     actor: str,
     dispatched_at: str,
     idempotency_key: str | None,
-    cache: object,
+    cache: IdempotencyCache,
     cache_key: CacheKey | None,
     result: str,
-    kind: Literal["info", "success", "warning", "danger"],
+    kind: JournalKind,
     proxmox_task_upid: str | None,
     error_detail: str | None,
     http_status: int = status.HTTP_200_OK,
@@ -2085,8 +2549,51 @@ async def _audit_and_respond(
         idempotency_key=idempotency_key,
         error_detail=error_detail,
     )
+    interrupted_comments = build_journal_comments(
+        verb=verb,
+        actor=actor,
+        result="interrupted",
+        endpoint_name=endpoint.name,
+        endpoint_id=endpoint.id or 0,
+        dispatched_at=dispatched_at,
+        proxmox_task_upid=proxmox_task_upid,
+        idempotency_key=idempotency_key,
+        error_detail="Journal finalization was interrupted before the terminal state was committed.",
+    )
+    failed_comments = build_journal_comments(
+        verb=verb,
+        actor=actor,
+        result="failed",
+        endpoint_name=endpoint.name,
+        endpoint_id=endpoint.id or 0,
+        dispatched_at=dispatched_at,
+        proxmox_task_upid=proxmox_task_upid,
+        idempotency_key=idempotency_key,
+        error_detail="Journal finalization failed before the terminal state was committed.",
+    )
+    endpoint_id = endpoint.id or 0
+    preliminary_retry_metadata = await _store_pending_journal_finalization_cache(
+        cache=cache,
+        cache_key=cache_key,
+        writeahead_journal_entry=writeahead_journal_entry,
+        verb=verb,
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint_id=endpoint_id,
+        result=result,
+        dispatched_at=dispatched_at,
+        proxmox_task_upid=proxmox_task_upid,
+        http_status=http_status,
+        reason=reason,
+        error_detail=error_detail,
+        extra=extra,
+        kind=kind,
+        comments=comments,
+        interrupted_comments=interrupted_comments,
+        failed_comments=failed_comments,
+    )
 
-    journal_entry_url = await _finalize_journal_entry(
+    finalization = await _finalize_journal_entry(
         nb=nb,
         netbox_vm_id=netbox_vm_id,
         writeahead_journal_entry=writeahead_journal_entry,
@@ -2095,37 +2602,59 @@ async def _audit_and_respond(
         vmid=vmid,
         kind=kind,
         comments=comments,
+        interrupted_comments=interrupted_comments,
+        failed_comments=failed_comments,
+        terminal_status_code=http_status,
     )
 
-    body = build_success_response(
+    body = _audit_response_body(
         verb=verb,
         vm_type=vm_type,
         vmid=vmid,
-        endpoint_id=endpoint.id or 0,
+        endpoint_id=endpoint_id,
         result=result,
         dispatched_at=dispatched_at,
         proxmox_task_upid=proxmox_task_upid,
-        journal_entry_url=journal_entry_url,
+        journal_entry_url=finalization.journal_entry_url,
+        http_status=http_status,
+        reason=reason,
+        error_detail=error_detail,
+        extra=extra,
     )
-    if reason is not None:
-        body["reason"] = reason
-    if error_detail is not None and http_status >= 400:
-        body["detail"] = error_detail
-    if extra:
-        for key, value in extra.items():
-            body.setdefault(key, value)
 
-    # Cache only the body, not the HTTP status — but only when the
-    # caller supplied an Idempotency-Key. The §4 contract reuses the
-    # full response on the second call. Both 200 (start/stop/snapshot)
-    # and 202 (migrate dispatch) are cacheable success states.
-    if cache_key is not None and http_status in (
-        status.HTTP_200_OK,
-        status.HTTP_202_ACCEPTED,
+    response_status = http_status
+    if not finalization.finalized:
+        response_status = http_status if http_status >= 400 else status.HTTP_502_BAD_GATEWAY
+        body["journal_finalized"] = False
+        body["finalization_error"] = finalization.error or "terminal journal finalization failed"
+        body.setdefault("reason", "netbox_journal_finalization_failed")
+
+    # Cache only when the caller supplied an Idempotency-Key. If the
+    # Proxmox mutation has resolved but the terminal journal PATCH has
+    # not, keep private metadata so a retry patches the existing entry
+    # instead of re-dispatching the Proxmox verb, which is unsafe because
+    # these mutations are not idempotent on the Proxmox side.
+    if (
+        cache_key is not None
+        and finalization.finalized
+        and http_status
+        in (
+            status.HTTP_200_OK,
+            status.HTTP_202_ACCEPTED,
+        )
     ):
-        await cache.store(cache_key, body)  # type: ignore[attr-defined]
+        await cache.store(cache_key, body, status_code=response_status)
+    elif cache_key is not None and (
+        finalization.retry_metadata is not None or preliminary_retry_metadata is not None
+    ):
+        await cache.store(
+            cache_key,
+            body,
+            status_code=response_status,
+            journal_finalization=finalization.retry_metadata or preliminary_retry_metadata,
+        )
 
-    return JSONResponse(status_code=http_status, content=body)
+    return JSONResponse(status_code=response_status, content=body)
 
 
 def _not_implemented(verb: Verb, vm_type: VmType, vmid: int) -> JSONResponse:

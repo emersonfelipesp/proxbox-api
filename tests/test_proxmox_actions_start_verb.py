@@ -26,7 +26,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api.database import ApiKey, ProxmoxEndpoint, get_async_session, get_session
 from proxbox_api.exception import ProxmoxAPIError
 from proxbox_api.main import app
-from proxbox_api.services.idempotency import get_idempotency_cache
+from proxbox_api.routes import proxmox_actions
+from proxbox_api.services.idempotency import CacheKey, get_idempotency_cache
 
 
 @pytest.fixture
@@ -221,25 +222,81 @@ def test_start_qemu_creates_writeahead_journal_before_dispatch(client: TestClien
     handles["journal"].assert_awaited_once()
 
 
-def test_start_qemu_journal_update_failure_returns_dispatch_result(client: TestClient):
+def test_start_qemu_journal_update_failure_is_visible_and_retried_without_redispatch(
+    client: TestClient,
+):
     endpoint_id = _make_endpoint(client)
     handles = _patch_route(journal_update_side_effect=RuntimeError("netbox patch down"))
     for p in handles["patches"]:
         p.start()
     try:
-        resp = client.post("/proxmox/qemu/100/start", params={"endpoint_id": endpoint_id})
+        resp1 = client.post(
+            "/proxmox/qemu/100/start",
+            params={"endpoint_id": endpoint_id},
+            headers={"Idempotency-Key": "key-finalize-failure"},
+        )
+        resp2 = client.post(
+            "/proxmox/qemu/100/start",
+            params={"endpoint_id": endpoint_id},
+            headers={"Idempotency-Key": "key-finalize-failure"},
+        )
     finally:
         for p in handles["patches"]:
             p.stop()
 
-    assert resp.status_code == 200
-    body = resp.json()
+    assert resp1.status_code == 502
+    body = resp1.json()
     assert body["result"] == "ok"
     assert body["proxmox_task_upid"] == "UPID:pve-node-01:0001:start"
     assert body["journal_entry_url"] == "/api/extras/journal-entries/789/"
+    assert body["journal_finalized"] is False
+    assert body["reason"] == "netbox_journal_finalization_failed"
+    assert "netbox patch down" in body["finalization_error"]
+
+    assert resp2.status_code == 502
+    assert resp2.json()["journal_finalized"] is False
     handles["journal_create"].assert_awaited_once()
     assert "result: in_progress" in handles["journal_create"].call_args.kwargs["comments"]
-    handles["journal"].assert_awaited_once()
+    assert handles["journal"].await_count == 2
+    handles["start"].assert_awaited_once()
+
+
+def test_start_qemu_idempotency_retry_finalizes_existing_entry_without_redispatch(
+    client: TestClient,
+):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(
+        journal_update_side_effect=[
+            RuntimeError("netbox patch down"),
+            {"id": 789, "url": "/api/extras/journal-entries/789/"},
+        ],
+    )
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp1 = client.post(
+            "/proxmox/qemu/100/start",
+            params={"endpoint_id": endpoint_id},
+            headers={"Idempotency-Key": "key-finalize-retry"},
+        )
+        resp2 = client.post(
+            "/proxmox/qemu/100/start",
+            params={"endpoint_id": endpoint_id},
+            headers={"Idempotency-Key": "key-finalize-retry"},
+        )
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp1.status_code == 502
+    assert resp1.json()["journal_finalized"] is False
+    assert resp2.status_code == 200
+    body = resp2.json()
+    assert body["result"] == "ok"
+    assert body["journal_entry_url"] == "/api/extras/journal-entries/789/"
+    assert body.get("journal_finalized", True) is True
+    handles["journal_create"].assert_awaited_once()
+    assert handles["journal"].await_count == 2
     handles["start"].assert_awaited_once()
 
 
@@ -385,3 +442,123 @@ def test_start_qemu_no_matching_netbox_vm_fails_closed_before_dispatch(client: T
     handles["status"].assert_not_awaited()
     handles["journal"].assert_not_awaited()
     handles["start"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_audit_and_respond_cancelled_during_finalize_shields_terminal_patch():
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    patched_comments: list[str] = []
+
+    async def _update_journal(_nb, **kwargs):
+        started.set()
+        try:
+            await finish.wait()
+        except asyncio.CancelledError:
+            patched_comments.append("cancelled")
+            raise
+        patched_comments.append(kwargs["comments"])
+        return {"id": 789, "url": "/api/extras/journal-entries/789/"}
+
+    endpoint = ProxmoxEndpoint(
+        id=7,
+        name="pve-prod",
+        ip_address="10.0.0.10",
+        username="root@pam",
+        allow_writes=True,
+    )
+    cache = get_idempotency_cache()
+    await cache.clear()
+    cache_key = CacheKey(endpoint_id=7, verb="start", vmid=100, key="key-cancel-finalize")
+
+    with patch(
+        "proxbox_api.routes.proxmox_actions.update_verb_journal_entry",
+        AsyncMock(side_effect=_update_journal),
+    ) as journal_update:
+        task = asyncio.create_task(
+            proxmox_actions._audit_and_respond(
+                nb=object(),
+                netbox_vm_id=42,
+                writeahead_journal_entry={
+                    "id": 789,
+                    "url": "/api/extras/journal-entries/789/",
+                },
+                verb="start",
+                vm_type="qemu",
+                vmid=100,
+                endpoint=endpoint,
+                actor="alice@netbox",
+                dispatched_at="2026-07-22T12:00:00Z",
+                idempotency_key="key-cancel-finalize",
+                cache=cache,
+                cache_key=cache_key,
+                result="ok",
+                kind="info",
+                proxmox_task_upid="UPID:pve-node-01:0001:start",
+                error_detail=None,
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        await asyncio.sleep(0)
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert journal_update.await_count == 1
+    assert len(patched_comments) == 1
+    assert patched_comments[0] != "cancelled"
+    assert "result: ok" in patched_comments[0]
+    cached = await cache.get_entry(cache_key)
+    assert cached is not None
+    assert cached.response["journal_finalized"] is False
+    assert cached.journal_finalization is not None
+
+
+@pytest.mark.asyncio
+async def test_audit_and_respond_cancelled_finalize_marks_interrupted_then_reraises():
+    endpoint = ProxmoxEndpoint(
+        id=7,
+        name="pve-prod",
+        ip_address="10.0.0.10",
+        username="root@pam",
+        allow_writes=True,
+    )
+    cache = get_idempotency_cache()
+    await cache.clear()
+    journal_update = AsyncMock(
+        side_effect=[
+            asyncio.CancelledError(),
+            {"id": 789, "url": "/api/extras/journal-entries/789/"},
+        ]
+    )
+
+    with patch("proxbox_api.routes.proxmox_actions.update_verb_journal_entry", journal_update):
+        with pytest.raises(asyncio.CancelledError):
+            await proxmox_actions._audit_and_respond(
+                nb=object(),
+                netbox_vm_id=42,
+                writeahead_journal_entry={
+                    "id": 789,
+                    "url": "/api/extras/journal-entries/789/",
+                },
+                verb="start",
+                vm_type="qemu",
+                vmid=100,
+                endpoint=endpoint,
+                actor="alice@netbox",
+                dispatched_at="2026-07-22T12:00:00Z",
+                idempotency_key=None,
+                cache=cache,
+                cache_key=None,
+                result="ok",
+                kind="info",
+                proxmox_task_upid="UPID:pve-node-01:0001:start",
+                error_detail=None,
+            )
+
+    assert journal_update.await_count == 2
+    retry_kwargs = journal_update.await_args_list[1].kwargs
+    assert retry_kwargs["journal_entry_id"] == 789
+    assert retry_kwargs["kind"] == "warning"
+    assert "result: interrupted" in retry_kwargs["comments"]
