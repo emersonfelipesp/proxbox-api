@@ -17,7 +17,9 @@ O servico em lote usa coleta limitada e orientada por node:
    lotes, evitando ler todo o ambiente e limites de tamanho da requisicao.
 2. Carrega uma vez o sidecar de estado de sync das VMs, associa por
    `virtual_machine` e resolve a propriedade por
-   `(proxmox_endpoint_raw_id, proxmox_cluster_name, proxmox_vm_id)`.
+   `(proxmox_endpoint_raw_id, proxmox_cluster_name, proxmox_vm_id,
+   proxmox_vm_type)`. O tipo do guest desambigua a propriedade em memoria; ele
+   nao e um parametro da consulta ao arquivo do Proxmox.
 3. Seleciona somente os nodes dos endpoints/clusters que possuem essas VMs.
 4. Percorre uma vez o arquivo de cada node selecionado, com `source=archive`,
    `limit=500`, offsets crescentes em `start` e um `until` fixado no inicio da
@@ -96,8 +98,8 @@ ao escopo selecionado.
 A rota dedicada
 `/virtualization/virtual-machines/task-history/create/stream` aceita o mesmo
 escopo `netbox_vm_ids` separado por virgulas. Omissao seleciona todo o ambiente;
-um valor explicitamente vazio ou totalmente invalido seleciona zero VMs e nunca
-pode ampliar a execucao para todo o ambiente. A rota aceita apenas
+um valor explicitamente vazio, malformado ou nao positivo recebe HTTP 422 antes
+do inicio do SSE e nunca pode ampliar a execucao para todo o ambiente. A rota aceita apenas
 `fetch_max_concurrency >= 1` e limpa o memo de indisponibilidade do sidecar no
 inicio de cada requisicao, permitindo testar novamente uma rota que antes
 respondeu 404/501.

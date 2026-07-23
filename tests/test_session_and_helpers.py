@@ -2208,6 +2208,47 @@ def test_database_proxmox_schema_timeout_uses_defaults_without_caching_fallback(
     ]
 
 
+def test_database_transport_settings_enforces_outer_wall_clock_budget(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_settings(**_kwargs):
+        started.set()
+        release.wait(timeout=2)
+        return {
+            "proxmox_timeout": 99,
+            "proxmox_max_retries": 9,
+            "proxmox_retry_backoff": 9.0,
+        }
+
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _blocking_settings)
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "_DB_SETTINGS_REQUEST_TIMEOUT_SECONDS",
+        0.05,
+    )
+
+    async def _load_with_timing():
+        started_at = asyncio.get_running_loop().time()
+        settings = await proxmox_providers_module._fetch_db_transport_settings()
+        elapsed = asyncio.get_running_loop().time() - started_at
+        # Release the still-blocked worker thread before the loop closes so
+        # asyncio.run() does not stall joining the default executor.
+        release.set()
+        return settings, elapsed
+
+    try:
+        settings, elapsed = asyncio.run(_load_with_timing())
+    finally:
+        release.set()
+
+    assert started.is_set()
+    assert elapsed < 0.3
+    assert settings["proxmox_timeout"] == 5
+    assert settings["proxmox_max_retries"] == 0
+    assert settings["proxmox_retry_backoff"] == 0.5
+
+
 def test_concurrent_database_proxmox_schema_loads_share_one_cold_settings_fetch(
     monkeypatch,
 ):
@@ -2281,6 +2322,14 @@ def test_database_transport_settings_singleflight_survives_waiter_cancellation(
         }
 
     monkeypatch.setattr(proxmox_providers_module, "get_settings", _settings)
+    # This test exercises waiter cancellation, not the wall-clock budget; give
+    # the fetch a generous deadline so host saturation cannot expire the
+    # production 0.5 s budget before the test releases the settings thread.
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "_DB_SETTINGS_REQUEST_TIMEOUT_SECONDS",
+        30.0,
+    )
 
     async def _cancel_one_waiter():
         first = asyncio.create_task(proxmox_providers_module._load_db_transport_settings())

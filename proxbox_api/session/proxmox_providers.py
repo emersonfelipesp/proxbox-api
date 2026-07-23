@@ -350,13 +350,14 @@ async def _fetch_db_transport_settings() -> ProxboxSettingsDict:
 
     defaults = _default_db_settings()
     try:
-        settings = await asyncio.to_thread(
-            get_settings,
-            netbox_session=None,
-            use_cache=True,
-            request_timeout_seconds=_DB_SETTINGS_REQUEST_TIMEOUT_SECONDS,
-            cache_fallback=False,
-        )
+        async with asyncio.timeout(_DB_SETTINGS_REQUEST_TIMEOUT_SECONDS):
+            settings = await asyncio.to_thread(
+                get_settings,
+                netbox_session=None,
+                use_cache=True,
+                request_timeout_seconds=_DB_SETTINGS_REQUEST_TIMEOUT_SECONDS,
+                cache_fallback=False,
+            )
     except Exception as error:  # noqa: BLE001 - endpoint loading must remain available
         logger.warning(
             "Could not load Proxmox transport settings; using deterministic defaults: %s",

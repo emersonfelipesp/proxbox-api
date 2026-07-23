@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.services.custom_fields import custom_fields_enabled, warn_legacy_custom_fields
+from proxbox_api.services.sync.sync_state_reader import load_vm_sync_state_identities
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
     parse_proxmox_net_configs,
@@ -89,6 +91,135 @@ def _requested_ids(netbox_vm_ids: list[int]) -> list[int]:
             seen.add(vm_id)
             requested.append(vm_id)
     return requested
+
+
+def _selected_sidecar_cluster_name(sidecar: dict[str, object]) -> str:
+    return _normalize_cluster_name(
+        sidecar.get("proxmox_cluster_name") or relation_name(sidecar.get("proxmox_cluster"))
+    )
+
+
+def _overlay_selected_sidecar_identity(
+    vm: dict[str, object],
+    sidecar: dict[str, object],
+    *,
+    netbox_id: int,
+) -> dict[str, object]:
+    """Overlay one verified typed sidecar identity onto a selected VM copy."""
+
+    sidecar_cluster_name = _selected_sidecar_cluster_name(sidecar)
+    endpoint_id = normalize_positive_int(sidecar.get("proxmox_endpoint_raw_id"))
+    vmid = normalize_positive_int(extract_proxmox_vmid(sidecar))
+    vm_type = extract_proxmox_vm_type(sidecar)
+    if not sidecar_cluster_name or endpoint_id is None or vmid is None or vm_type is None:
+        raise _selection_error(
+            f"NetBox VM id {netbox_id} has incomplete or conflicting typed "
+            "Proxbox sync-state ownership; endpoint, cluster, positive "
+            "VMID, and VM type are required."
+        )
+
+    hydrated = dict(vm)
+    custom_fields = vm.get("custom_fields")
+    hydrated_custom_fields = dict(custom_fields) if isinstance(custom_fields, dict) else {}
+    hydrated_custom_fields.update(
+        {
+            "proxmox_endpoint_id": endpoint_id,
+            "proxmox_vm_id": vmid,
+            "proxmox_vm_type": vm_type,
+        }
+    )
+    hydrated["custom_fields"] = hydrated_custom_fields
+    cluster = vm.get("cluster")
+    cluster_id = relation_id(cluster)
+    hydrated["cluster"] = {
+        **({"id": cluster_id} if cluster_id is not None else {}),
+        "name": str(sidecar.get("proxmox_cluster_name") or sidecar_cluster_name).strip(),
+    }
+    return hydrated
+
+
+def _hydrate_selected_vm_identity(
+    vm: dict[str, object],
+    *,
+    sidecars_by_vm_id: dict[int, list[dict[str, object]]],
+    legacy_fallback_allowed: bool,
+) -> dict[str, object]:
+    netbox_id = relation_id(vm.get("id"))
+    if netbox_id is None:
+        return vm
+    candidates = sidecars_by_vm_id.get(netbox_id, [])
+    if len(candidates) > 1:
+        raise _selection_error(
+            f"NetBox VM id {netbox_id} requires exactly one complete typed "
+            f"Proxbox sync-state owner; found {len(candidates)}."
+        )
+    if candidates:
+        return _overlay_selected_sidecar_identity(
+            vm,
+            candidates[0],
+            netbox_id=netbox_id,
+        )
+    if legacy_fallback_allowed:
+        warn_legacy_custom_fields("selected VM ownership fallback")
+        return vm
+    raise _selection_error(
+        f"NetBox VM id {netbox_id} has no typed Proxbox sync-state owner "
+        "and legacy custom-field fallback is disabled."
+    )
+
+
+async def _hydrate_selected_sidecar_identities(
+    netbox_session: NetBoxSessionDep,
+    vms: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Join explicit selections to authoritative sidecars in one scan."""
+
+    selected_ids = {vm_id for vm in vms if (vm_id := relation_id(vm.get("id"))) is not None}
+    if not selected_ids:
+        return vms
+
+    scan = await load_vm_sync_state_identities(netbox_session)
+    legacy_fallback_allowed = custom_fields_enabled()
+    if scan.sidecar_read_failed or scan.sidecar_unavailable:
+        if legacy_fallback_allowed:
+            warn_legacy_custom_fields("selected VM ownership fallback")
+            return vms
+        outcome = "failed" if scan.sidecar_read_failed else "is unavailable"
+        raise _selection_error(
+            "Typed Proxbox VM sync-state lookup "
+            f"{outcome} while resolving selected NetBox VM id(s): "
+            + ", ".join(str(vm_id) for vm_id in sorted(selected_ids))
+            + "."
+        )
+
+    sidecars_by_vm_id: dict[int, list[dict[str, object]]] = {}
+    for row in scan.rows:
+        parent_id = relation_id(row.get("virtual_machine"))
+        if parent_id in selected_ids:
+            sidecars_by_vm_id.setdefault(parent_id, []).append(row)
+
+    return [
+        _hydrate_selected_vm_identity(
+            vm,
+            sidecars_by_vm_id=sidecars_by_vm_id,
+            legacy_fallback_allowed=legacy_fallback_allowed,
+        )
+        for vm in vms
+    ]
+
+
+async def hydrate_selected_vm_identities(
+    netbox_session: NetBoxSessionDep,
+    vms: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Overlay authoritative sidecar identity onto explicitly selected VMs.
+
+    Shared by selection paths outside this module (for example targeted backup
+    sync) so every explicit selection resolves ownership sidecar-first with the
+    same malformed/duplicate fail-closed and gated legacy-fallback semantics.
+    """
+
+    return await _hydrate_selected_sidecar_identities(netbox_session, vms)
 
 
 def _resolve_selected_owner(
@@ -246,10 +377,11 @@ def _filter_cluster_resources_by_owners(  # noqa: C901
     return filtered
 
 
-def filter_cluster_resources_for_selected_vm(
+async def filter_cluster_resources_for_selected_vm(
     vm_record: object,
     cluster_resources: list[dict[str, object]],
     *,
+    netbox_session: NetBoxSessionDep,
     netbox_vm_id: int,
     pxs: object,
     cluster_status: object,
@@ -263,9 +395,13 @@ def filter_cluster_resources_for_selected_vm(
 
     requested_ids = _requested_ids([netbox_vm_id])
     vm = to_mapping(vm_record)
+    hydrated_vms = await _hydrate_selected_sidecar_identities(
+        netbox_session,
+        [vm],
+    )
     endpoint_ids_by_cluster = _source_endpoint_ids_by_cluster(pxs, cluster_status)
     owners = _resolve_selected_owners(
-        [vm],
+        hydrated_vms,
         requested_ids=requested_ids,
         endpoint_ids_by_cluster=endpoint_ids_by_cluster,
         require_stored_endpoint=True,
@@ -302,6 +438,10 @@ async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
 
     requested_ids = _requested_ids(netbox_vm_ids)
     vms = await list_netbox_virtual_machines_by_ids(netbox_session, requested_ids)
+    vms = await _hydrate_selected_sidecar_identities(
+        netbox_session,
+        vms,
+    )
     endpoint_ids_by_cluster = _source_endpoint_ids_by_cluster(pxs, cluster_status)
     owners = _resolve_selected_owners(
         vms,

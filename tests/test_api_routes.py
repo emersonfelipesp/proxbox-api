@@ -1228,6 +1228,76 @@ def test_create_virtual_machine_by_netbox_id_filters_exact_owned_resource(monkey
     assert captured["netbox_vm_ids"] == "248"
 
 
+def test_create_virtual_machine_by_netbox_id_uses_sidecar_only_identity_by_default(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    async def _fake_create_virtual_machines(**kwargs):
+        captured["cluster_resources"] = kwargs["cluster_resources"]
+        return [{"id": 248, "name": "vm-248"}]
+
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 248},
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_endpoint_raw_id": 11,
+                    "proxmox_vm_id": 9248,
+                    "proxmox_vm_type": "qemu",
+                },
+            ),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.create_virtual_machines",
+        _fake_create_virtual_machines,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _scan,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
+
+    vm_record = SimpleNamespace(
+        serialize=lambda: {
+            "id": 248,
+            "name": "vm-248",
+            "cluster": None,
+            "custom_fields": {},
+        }
+    )
+
+    async def _fake_get(id):
+        return vm_record if id == 248 else None
+
+    fake_nb = SimpleNamespace(
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
+    )
+    selected = {"type": "qemu", "name": "vm-248", "vmid": 9248}
+
+    result = asyncio.run(
+        create_virtual_machine_by_netbox_id(
+            netbox_vm_id=248,
+            netbox_session=fake_nb,
+            pxs=[SimpleNamespace(db_endpoint_id=11)],
+            cluster_status=[SimpleNamespace(name="cluster-a")],
+            cluster_resources=[{"cluster-a": [selected]}],
+            custom_fields=[],
+            tag=SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722"),
+        )
+    )
+
+    assert result == [{"id": 248, "name": "vm-248"}]
+    assert captured["cluster_resources"] == [{"cluster-a": [selected]}]
+
+
 def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
     monkeypatch,
 ):

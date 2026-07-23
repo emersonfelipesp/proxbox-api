@@ -284,29 +284,9 @@ async def create_virtual_machine_snapshots_by_id_stream(
             detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
         )
 
-    vm_data = (
-        vm_record
-        if isinstance(vm_record, dict)
-        else (vm_record.serialize() if hasattr(vm_record, "serialize") else dict(vm_record))
-    )
-    cf = vm_data.get("custom_fields") or {}
-    raw_vmid = cf.get("proxmox_vm_id")
-    proxmox_vmid: int | None = None
-    if raw_vmid is not None:
-        try:
-            proxmox_vmid = int(str(raw_vmid).strip())
-        except (TypeError, ValueError):
-            pass
-
-    if proxmox_vmid is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Virtual machine id={netbox_vm_id} has no proxmox_vm_id custom field set; "
-                "cannot filter snapshots."
-            ),
-        )
-
+    # Ownership identity is resolved downstream from the authoritative typed
+    # sidecar (legacy custom fields only as a gated fallback), so no legacy
+    # proxmox_vm_id custom-field precondition applies here.
     async def event_stream():
         bridge = WebSocketSSEBridge()
 

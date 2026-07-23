@@ -18,8 +18,8 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 
+from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmResourceInput
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines, sync_vm
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
@@ -32,6 +32,11 @@ _TAG = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
 
 @pytest.fixture(autouse=True)
 def _bridge_vm_snapshot_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: True,
+    )
+
     async def _legacy_vm_snapshot_bridge(
         netbox_session,
         path,
@@ -109,7 +114,7 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
     ]
 
 
-def test_by_netbox_id_raises_422_when_name_and_vmid_missing():
+def test_by_netbox_id_fails_closed_when_name_and_vmid_missing():
     """With neither a name nor a proxmox_vm_id, the VM cannot be matched."""
     vm_record = SimpleNamespace(
         serialize=lambda: {
@@ -127,7 +132,7 @@ def test_by_netbox_id_raises_422_when_name_and_vmid_missing():
         virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
 
-    with pytest.raises(HTTPException) as excinfo:
+    with pytest.raises(ProxboxException, match="selected VM ownership") as excinfo:
         asyncio.run(
             create_virtual_machine_by_netbox_id(
                 netbox_vm_id=551,
@@ -139,8 +144,8 @@ def test_by_netbox_id_raises_422_when_name_and_vmid_missing():
                 tag=_TAG,
             )
         )
-    assert excinfo.value.status_code == 422
-    assert "proxmox_vm_id" in str(excinfo.value.detail)
+    assert excinfo.value.http_status_code == 502
+    assert "positive VMID" in str(excinfo.value.detail)
 
 
 def test_proxmox_vm_resource_input_fills_blank_name():

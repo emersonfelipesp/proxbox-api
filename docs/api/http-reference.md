@@ -492,8 +492,9 @@ Test coverage:
 - `GET /virtualization/virtual-machines/storage/create/stream`
 - `GET /virtualization/virtual-machines/task-history/create/stream` - Dedicated
   task-history SSE stage; accepts comma-separated `netbox_vm_ids`. Omitted means
-  all VMs, while an explicitly empty/invalid value selects none. The optional
-  `fetch_max_concurrency` must be at least 1. Each request resets and re-probes
+  all VMs, while an explicitly empty, malformed, or non-positive value returns
+  HTTP 422 before SSE starts. The optional `fetch_max_concurrency` must be at
+  least 1. Each request resets and re-probes
   cached optional-sidecar unavailability. Internally, selected IDs are sent to
   NetBox as repeated values in deduplicated groups of at most 100; any failed
   group aborts the explicit selection.

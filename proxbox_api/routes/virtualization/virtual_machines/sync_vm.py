@@ -1635,18 +1635,10 @@ async def _create_virtual_machine_by_netbox_id(
         )
 
     vm_data = _to_mapping(vm_record)
-    if _extract_proxmox_vmid_from_vm_record(vm_data) is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Virtual machine id={netbox_vm_id} has no positive "
-                "proxmox_vm_id custom field; exact targeted ownership cannot be resolved."
-            ),
-        )
-
-    filtered_for_call = _filter_selected_vm_resource(
+    filtered_for_call = await _filter_selected_vm_resource(
         vm_data,
         cluster_resources,
+        netbox_session=netbox_session,
         netbox_vm_id=netbox_vm_id,
         pxs=pxs,
         cluster_status=cluster_status,

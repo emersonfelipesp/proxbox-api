@@ -479,13 +479,24 @@ def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(mon
                 "id": 501,
                 "name": "shared-name",
                 "cluster": {"id": 41, "name": "cluster-a"},
-                "custom_fields": {
-                    "proxmox_endpoint_id": 11,
+                "custom_fields": {},
+            }
+        ]
+
+    async def _sidecar_scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 501},
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_endpoint_raw_id": 11,
                     "proxmox_vm_id": 101,
                     "proxmox_vm_type": "qemu",
                 },
-            }
-        ]
+            ),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
 
     async def _fake_get_vm_config(**_kwargs):
         return dict(PROXMOX_VM_CONFIG)
@@ -499,6 +510,14 @@ def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(mon
         return {"count": 1, "created": 0, "skipped": 0}
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vm_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _sidecar_scan,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
     monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
     monkeypatch.setattr(sync_vm, "rest_create_async", _fake_rest_create)
     monkeypatch.setattr(sync_vm, "sync_all_virtual_machine_task_histories", _fake_task_history)

@@ -384,6 +384,25 @@ def _cluster(name: str, *nodes: str):
     )
 
 
+def _vm_sidecar_scan(netbox_id: int, *, endpoint_id: int, cluster_name: str, vmid: int = 101):
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": netbox_id},
+                    "proxmox_cluster_name": cluster_name,
+                    "proxmox_endpoint_raw_id": endpoint_id,
+                    "proxmox_vm_id": vmid,
+                    "proxmox_vm_type": "qemu",
+                },
+            ),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
+    return _scan
+
+
 @pytest.mark.asyncio
 async def test_selected_backup_scope_never_queries_same_vmid_on_another_endpoint(monkeypatch):
     queries: list[dict] = []
@@ -394,6 +413,15 @@ async def test_selected_backup_scope_never_queries_same_vmid_on_another_endpoint
         assert path == "/api/virtualization/virtual-machines/"
         queries.append(dict(query or {}))
         return [_netbox_vm(7, endpoint_id=1, cluster_name="cluster-a")]
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _vm_sidecar_scan(7, endpoint_id=1, cluster_name="cluster-a"),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
 
     async def _empty_storage_index(_nb):
         return {}
@@ -428,6 +456,66 @@ async def test_selected_backup_scope_never_queries_same_vmid_on_another_endpoint
     )
 
     assert queries == [{"id": ["7"]}]
+    assert fetched_endpoints == [1]
+    assert [payload["virtual_machine"] for payload in reconciled_payloads] == [7]
+
+
+@pytest.mark.asyncio
+async def test_selected_backup_scope_resolves_sidecar_only_identity_by_default(monkeypatch):
+    fetched_endpoints: list[int] = []
+    reconciled_payloads: list[dict] = []
+
+    async def _selected_vms(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        return [
+            {
+                "id": 7,
+                "name": "vm-7",
+                "cluster": None,
+                "custom_fields": {},
+            }
+        ]
+
+    async def _empty_storage_index(_nb):
+        return {}
+
+    async def _get_backups(proxmox, **_kwargs):
+        fetched_endpoints.append(proxmox.db_endpoint_id)
+        return [
+            {
+                "content": "backup",
+                "vmid": 101,
+                "volid": "pbs:backup/vm/101/shared",
+                "format": "pbs-vm",
+                "subtype": "qemu",
+            }
+        ]
+
+    async def _bulk(_nb, payloads, **_kwargs):
+        reconciled_payloads.extend(payloads)
+        return payloads, len(payloads), 0
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _vm_sidecar_scan(7, endpoint_id=1, cluster_name="cluster-a"),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vms)
+    monkeypatch.setattr(backups_vm, "_load_storage_index", _empty_storage_index)
+    monkeypatch.setattr(backups_vm, "get_node_storage_content", _get_backups)
+    monkeypatch.setattr(backups_vm, "_bulk_reconcile_backups", _bulk)
+
+    await _create_all_virtual_machine_backups(
+        netbox_session=object(),
+        pxs=[_px(1), _px(2)],
+        cluster_status=[_cluster("cluster-a", "pve-a"), _cluster("cluster-b", "pve-b")],
+        tag=object(),
+        netbox_vm_ids=[7],
+    )
+
     assert fetched_endpoints == [1]
     assert [payload["virtual_machine"] for payload in reconciled_payloads] == [7]
 

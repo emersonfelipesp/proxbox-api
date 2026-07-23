@@ -57,12 +57,23 @@ Main synchronization endpoints for virtual machines and related resources.
   four modules). Test fakes for `virtual_machines.get` **must be coroutine
   functions** — a synchronous fake is what let this ship.
 - **Exact targeted VM ownership.** `_create_virtual_machine_by_netbox_id`
-  matches only the selected record's stored Proxmox endpoint, normalized
-  cluster name, positive VMID, and guest type. VM names are never selectors,
-  so a same-name guest, a reused VMID on another endpoint/cluster, or the wrong
-  QEMU/LXC type cannot widen the operation. A blank-name record can still heal
-  its name when that complete identity is present; incomplete or ambiguous
-  ownership fails closed.
+  and the selected batch filter join every selected core VM to the typed
+  `ProxboxVMSyncState` sidecar once, then match only its Proxmox endpoint,
+  normalized cluster name, positive VMID, and guest type. Sidecar identity is
+  authoritative even when legacy custom fields are stale. Legacy custom-field
+  fallback is allowed only when the sidecar row is absent/unavailable and
+  `custom_fields_enabled=true`; malformed or duplicate relevant sidecars fail
+  closed. VM names are never selectors, so a same-name guest, a reused VMID on
+  another endpoint/cluster, or the wrong QEMU/LXC type cannot widen the
+  operation. A blank-name record can still heal its name when that complete
+  identity is present. The same sidecar-first selection contract applies to
+  explicitly selected backup sync: `backups_vm.py::_prefetch_vm_cache` overlays
+  sidecar identity onto every selected VM (via
+  `vm_filter.hydrate_selected_vm_identities`) before validating exact
+  endpoint/cluster/VMID scope. The by-id snapshot and backup stream routes have
+  no legacy `proxmox_vm_id` custom-field precondition — ownership resolves
+  downstream from the sidecar, so sidecar-only VMs (the default with
+  `custom_fields_enabled=false`) sync through them.
 - **Interface failures are surfaced, not swallowed.** Per-interface creation is
   retried a bounded number of times for transient NetBox errors; interfaces
   that still fail are counted. The per-VM progress item carries
@@ -125,9 +136,10 @@ Main synchronization endpoints for virtual machines and related resources.
   use deduplicated, bounded repeated `id` parameters and fail closed if any
   chunk lookup fails.
   The dedicated `/task-history/create/stream` route also declares
-  `netbox_vm_ids`; omission means all VMs, while an explicitly empty/invalid
-  string is forwarded as an empty list so a bad scoped request cannot widen to
-  the whole estate. It must reset sidecar availability memoization per request
+  `netbox_vm_ids`; omission means all VMs, while an explicitly empty, malformed,
+  or non-positive string returns ordinary HTTP 422 before SSE starts so a bad
+  scoped request cannot widen to the whole estate. It must reset sidecar
+  availability memoization per request
   and validate `fetch_max_concurrency >= 1`.
 
 - **VM and template sync modes (`sync_mode_vm`, `sync_mode_vm_template`).** The

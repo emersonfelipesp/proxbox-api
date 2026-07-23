@@ -281,8 +281,9 @@ Cobertura de testes:
 - `GET /virtualization/virtual-machines/storage/create/stream`
 - `GET /virtualization/virtual-machines/task-history/create/stream` - Etapa SSE
   dedicada de task history; aceita `netbox_vm_ids` separado por virgulas.
-  Omissao seleciona todas as VMs; valor vazio/invalido seleciona nenhuma. O
-  parametro opcional `fetch_max_concurrency` precisa ser pelo menos 1. Cada
+  Omissao seleciona todas as VMs; valor vazio, malformado ou nao positivo recebe
+  HTTP 422 antes do inicio do SSE. O parametro opcional `fetch_max_concurrency`
+  precisa ser pelo menos 1. Cada
   requisicao limpa e testa novamente o cache de indisponibilidade do sidecar.
   Internamente os IDs selecionados sao enviados ao NetBox como valores
   repetidos em lotes deduplicados de no maximo 100; a falha de qualquer lote

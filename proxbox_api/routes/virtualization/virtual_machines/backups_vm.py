@@ -33,6 +33,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_filter import hydrate_selected_vm_identities
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
     parse_selected_netbox_vm_ids,
@@ -963,7 +964,14 @@ async def _prefetch_vm_cache(
     if netbox_vm_ids is None:
         vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
     else:
-        vms = await list_netbox_virtual_machines_by_ids(nb, netbox_vm_ids)
+        selected = await list_netbox_virtual_machines_by_ids(nb, netbox_vm_ids)
+        # Explicit selections resolve ownership sidecar-first (authoritative
+        # endpoint/cluster/VMID overlay) before scope validation, matching the
+        # targeted VM-sync and task-history selection contract.
+        vms = await hydrate_selected_vm_identities(
+            nb,
+            [to_mapping(vm) for vm in selected],
+        )
 
     cache = _BackupVMCache()
     for vm in vms:
@@ -1544,28 +1552,9 @@ async def create_virtual_machine_backups_by_id_stream(
             detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
         )
 
-    vm_data = (
-        vm_record
-        if isinstance(vm_record, dict)
-        else (vm_record.serialize() if hasattr(vm_record, "serialize") else dict(vm_record))
-    )
-    cf = vm_data.get("custom_fields") or {}
-    raw_vmid = cf.get("proxmox_vm_id")
-    proxmox_vmid: str | None = None
-    if raw_vmid is not None:
-        stripped = str(raw_vmid).strip()
-        if stripped.isdigit():
-            proxmox_vmid = stripped
-
-    if proxmox_vmid is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Virtual machine id={netbox_vm_id} has no proxmox_vm_id custom field set; "
-                "cannot filter backups."
-            ),
-        )
-
+    # Ownership identity is resolved downstream from the authoritative typed
+    # sidecar (legacy custom fields only as a gated fallback), so no legacy
+    # proxmox_vm_id custom-field precondition applies here.
     async def event_stream():
         bridge = WebSocketSSEBridge()
 

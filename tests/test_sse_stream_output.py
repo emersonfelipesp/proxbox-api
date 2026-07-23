@@ -17,6 +17,8 @@ from proxbox_api.dependencies import proxbox_tag
 from proxbox_api.exception import ProxboxException
 from proxbox_api.routes.proxmox.cluster import cluster_status
 from proxbox_api.routes.virtualization.virtual_machines import (
+    backups_vm,
+    disks_vm,
     snapshots_vm,
     sync_vm,
     task_history_vm,
@@ -197,6 +199,31 @@ async def test_task_history_stream_reports_partial_selected_lookup_as_failed(mon
     assert "missing id(s): [502]" in body
 
 
+async def test_virtual_disk_stream_reports_partial_selected_lookup_as_failed(monkeypatch):
+    async def _partial_list(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        assert query == {"id": ["7", "8"]}
+        return [{"id": 7, "custom_fields": {"proxmox_vm_id": 107}}]
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _partial_list)
+
+    response = await disks_vm.create_virtual_disks_stream(
+        netbox_session=SimpleNamespace(),
+        pxs=[],
+        cluster_status=[],
+        cluster_resources=[],
+        tag=None,
+        netbox_vm_ids="7,8",
+        fetch_max_concurrency=None,
+    )
+    body = "".join([chunk async for chunk in response.body_iterator])
+
+    assert "event: error" in body
+    assert '"status": "failed"' in body
+    assert '"ok": false' in body
+    assert "missing id(s): [8]" in body
+
+
 async def test_vms_create_stream_forwards_task_history_false(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -233,20 +260,39 @@ async def test_vms_create_stream_filters_selected_vm_to_exact_owner(monkeypatch)
             {
                 "id": 501,
                 "name": "shared-name",
-                "cluster": {"id": 41, "name": "cluster-a"},
-                "custom_fields": {
-                    "proxmox_endpoint_id": 11,
+                "cluster": None,
+                "custom_fields": {},
+            }
+        ]
+
+    async def _sidecar_scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 501},
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_endpoint_raw_id": 11,
                     "proxmox_vm_id": 101,
                     "proxmox_vm_type": "qemu",
                 },
-            }
-        ]
+            ),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
 
     async def _fake_create_virtual_machines(**kwargs):
         captured.update(kwargs)
         return [{"id": 501}]
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vm_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _sidecar_scan,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
     monkeypatch.setattr(sync_vm, "create_virtual_machines", _fake_create_virtual_machines)
     px_a = SimpleNamespace(
         name="cluster-a",
@@ -352,17 +398,37 @@ async def test_vm_by_id_create_stream_filters_exact_owned_resource(monkeypatch):
         serialize=lambda: {
             "id": 248,
             "name": "shared-name",
-            "cluster": {"id": 10, "name": " Cluster-A "},
-            "custom_fields": {
-                "proxmox_endpoint_id": 11,
-                "proxmox_vm_id": 9248,
-                "proxmox_vm_type": "qemu",
-            },
+            "cluster": None,
+            "custom_fields": {},
         }
     )
 
+    async def _sidecar_scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 248},
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_endpoint_raw_id": 11,
+                    "proxmox_vm_id": 9248,
+                    "proxmox_vm_type": "qemu",
+                },
+            ),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
     async def _fake_get(id):
         return vm_record if id == 248 else None
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _sidecar_scan,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
 
     selected = {"type": "qemu", "name": "renamed-in-proxmox", "vmid": 9248}
     same_name = {"type": "qemu", "name": "shared-name", "vmid": 9999}
@@ -426,6 +492,76 @@ async def test_vm_by_id_create_stream_reports_owned_task_history_fatal_error(mon
     assert '"status": "failed"' in body
     assert '"ok": false' in body
     assert "Task-history archive collection failed" in body
+
+
+def _sidecar_only_vm_session(netbox_vm_id: int):
+    """NetBox session stub returning a VM without legacy Proxbox custom fields."""
+
+    async def _get(id):
+        assert id == netbox_vm_id
+        return {
+            "id": netbox_vm_id,
+            "name": f"vm-{netbox_vm_id}",
+            "cluster": None,
+            "custom_fields": {},
+        }
+
+    return SimpleNamespace(
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_get))
+    )
+
+
+async def test_snapshot_by_id_stream_has_no_legacy_custom_field_precondition(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_create_all(**kwargs):
+        captured.update(kwargs)
+        return {"created": 0, "skipped": 0}
+
+    monkeypatch.setattr(
+        snapshots_vm,
+        "_create_all_virtual_machine_snapshots",
+        _fake_create_all,
+    )
+
+    response = await snapshots_vm.create_virtual_machine_snapshots_by_id_stream(
+        netbox_vm_id=612,
+        netbox_session=_sidecar_only_vm_session(612),
+        pxs=[],
+        cluster_status=[],
+        cluster_resources=[],
+        tag=SimpleNamespace(id=7),
+    )
+    async for _chunk in response.body_iterator:
+        pass
+
+    assert captured["netbox_vm_ids"] == [612]
+
+
+async def test_backup_by_id_stream_has_no_legacy_custom_field_precondition(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_create_all(**kwargs):
+        captured.update(kwargs)
+        return {"created": 0, "skipped": 0}
+
+    monkeypatch.setattr(
+        backups_vm,
+        "_create_all_virtual_machine_backups",
+        _fake_create_all,
+    )
+
+    response = await backups_vm.create_virtual_machine_backups_by_id_stream(
+        netbox_vm_id=613,
+        netbox_session=_sidecar_only_vm_session(613),
+        pxs=[],
+        cluster_status=[],
+        tag=SimpleNamespace(id=7),
+    )
+    async for _chunk in response.body_iterator:
+        pass
+
+    assert captured["netbox_vm_ids"] == [613]
 
 
 async def test_selected_snapshot_second_lookup_chunk_is_rest_and_sse_fatal(monkeypatch):

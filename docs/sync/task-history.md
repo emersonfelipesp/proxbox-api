@@ -15,7 +15,9 @@ The bulk service uses bounded, node-oriented collection:
    deduplicated across chunks, so selected work stays bounded without reading
    the estate or exceeding common request-line limits.
 2. Load the VM sync-state sidecar once, join it by `virtual_machine`, and resolve
-   ownership by `(proxmox_endpoint_raw_id, proxmox_cluster_name, proxmox_vm_id)`.
+   ownership by `(proxmox_endpoint_raw_id, proxmox_cluster_name, proxmox_vm_id,
+   proxmox_vm_type)`. Guest type disambiguates in-memory ownership; it is not a
+   Proxmox archive query parameter.
 3. Select only the endpoint/cluster nodes that own those VMs.
 4. Walk each selected node's `source=archive` task list once, using `limit=500`,
    increasing `start` offsets, and one fixed run-start `until` timestamp.
@@ -92,8 +94,9 @@ remains restricted to the selected scope.
 
 The dedicated `/virtualization/virtual-machines/task-history/create/stream`
 route accepts the same comma-separated `netbox_vm_ids` scope. Omission selects
-the estate; an explicitly empty or wholly invalid value selects no VMs and must
-never widen into an estate-wide run. The route accepts only
+the estate; an explicitly empty, malformed, or non-positive value is rejected
+with ordinary HTTP 422 before the SSE response begins and can never widen into
+an estate-wide run. The route accepts only
 `fetch_max_concurrency >= 1` and resets the optional-sidecar availability memo
 at the start of every request so an earlier 404/501 is re-probed.
 

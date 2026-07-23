@@ -39,6 +39,16 @@ from proxbox_api.services.sync.vm_helpers import parse_selected_netbox_vm_ids
 from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
 
+@pytest.fixture(autouse=True)
+def _enable_legacy_selected_vm_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy-CF selector fixtures must opt into the transitional fallback."""
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: True,
+    )
+
+
 def _selection_source(cluster_name: str, endpoint_id: int) -> tuple[object, object]:
     return (
         SimpleNamespace(
@@ -236,6 +246,159 @@ def test_selected_vm_filter_matches_exact_endpoint_cluster_vmid_and_type(monkeyp
     )
 
     assert filtered == [{"cluster-a": [requested]}]
+
+
+def test_selected_vm_filter_uses_sidecar_only_identity_by_default(monkeypatch):
+    selected_vm = {
+        "id": 55,
+        "name": "vm-101",
+        "cluster": None,
+        "custom_fields": {},
+    }
+
+    async def _list(*_args, **_kwargs):
+        return [selected_vm]
+
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 55},
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_endpoint_raw_id": 11,
+                    "proxmox_vm_id": 101,
+                    "proxmox_vm_type": "qemu",
+                },
+            ),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _scan,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
+    px, status = _selection_source("cluster-a", 11)
+    resource = {"type": "qemu", "vmid": 101, "name": "vm-101"}
+
+    filtered = asyncio.run(
+        filter_cluster_resources_by_netbox_vm_ids(
+            object(),
+            [{"cluster-a": [resource]}],
+            [55],
+            pxs=[px],
+            cluster_status=[status],
+        )
+    )
+
+    assert filtered == [{"cluster-a": [resource]}]
+
+
+def test_selected_vm_filter_prefers_sidecar_over_conflicting_legacy_fields(monkeypatch):
+    selected_vm = _selected_vm_record(
+        55,
+        cluster_name="stale-cluster",
+        vmid=999,
+        endpoint_id=22,
+        vm_type="lxc",
+    )
+
+    async def _list(*_args, **_kwargs):
+        return [selected_vm]
+
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 55},
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_endpoint_raw_id": 11,
+                    "proxmox_vm_id": 101,
+                    "proxmox_vm_type": "qemu",
+                },
+            ),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _scan,
+    )
+    px, status = _selection_source("cluster-a", 11)
+    resource = {"type": "qemu", "vmid": 101, "name": "vm-101"}
+
+    filtered = asyncio.run(
+        filter_cluster_resources_by_netbox_vm_ids(
+            object(),
+            [{"cluster-a": [resource]}],
+            [55],
+            pxs=[px],
+            cluster_status=[status],
+        )
+    )
+
+    assert filtered == [{"cluster-a": [resource]}]
+
+
+@pytest.mark.parametrize("sidecar_count", [0, 2])
+def test_selected_vm_filter_rejects_missing_or_duplicate_sidecar_by_default(
+    monkeypatch,
+    sidecar_count,
+):
+    selected_vm = _selected_vm_record(
+        55,
+        cluster_name="cluster-a",
+        vmid=101,
+        endpoint_id=11,
+    )
+    sidecar = {
+        "virtual_machine": {"id": 55},
+        "proxmox_cluster_name": "cluster-a",
+        "proxmox_endpoint_raw_id": 11,
+        "proxmox_vm_id": 101,
+        "proxmox_vm_type": "qemu",
+    }
+
+    async def _list(*_args, **_kwargs):
+        return [selected_vm]
+
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=tuple(dict(sidecar) for _ in range(sidecar_count)),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _scan,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
+        lambda: False,
+    )
+    px, status = _selection_source("cluster-a", 11)
+
+    with pytest.raises(ProxboxException, match="selected VM ownership") as exc_info:
+        asyncio.run(
+            filter_cluster_resources_by_netbox_vm_ids(
+                object(),
+                [{"cluster-a": [{"type": "qemu", "vmid": 101}]}],
+                [55],
+                pxs=[px],
+                cluster_status=[status],
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
 
 
 def test_selected_vm_filter_allows_only_unique_endpointless_legacy_owner(monkeypatch):
