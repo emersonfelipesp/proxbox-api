@@ -386,3 +386,54 @@ def test_setup_logger_attaches_sensitive_data_filter_to_console_and_file(monkeyp
         assert any(isinstance(f, SensitiveDataFilter) for f in file_handlers[0].filters)
     finally:
         logger.handlers = original_handlers
+
+
+def test_admin_log_buffer_keeps_redacted_tracebacks_behind_the_sensitive_filter():
+    """The buffer handler must still capture tracebacks after the filter runs.
+
+    Production registration order is console/file handlers (each carrying
+    ``SensitiveDataFilter``) first, then ``LogBufferHandler`` appended by
+    ``configure_buffer_logger()``. A single ``LogRecord`` is shared across all
+    of them, so the filter must not destroy ``exc_info``/``exc_text`` state the
+    buffer needs — a regression here silently deletes every traceback from
+    ``/admin/logs`` app-wide.
+    """
+
+    from proxbox_api.log_buffer import LogBufferHandler
+
+    stream = io.StringIO()
+    console = logging.StreamHandler(stream)
+    console.addFilter(SensitiveDataFilter())
+    console.setFormatter(logging.Formatter("%(message)s"))
+
+    buffer_handler = LogBufferHandler()
+
+    test_logger = logging.getLogger("proxbox.test.buffer-traceback-order")
+    original_handlers = list(test_logger.handlers)
+    original_level = test_logger.level
+    original_propagate = test_logger.propagate
+    # Same order as production: filter-carrying handler first, buffer second.
+    test_logger.handlers = [console, buffer_handler]
+    test_logger.setLevel(logging.ERROR)
+    test_logger.propagate = False
+
+    try:
+        try:
+            raise RuntimeError("secret-password=hunter2-canary")
+        except RuntimeError:
+            test_logger.error("operation failed: %s", "boom", exc_info=True)
+    finally:
+        test_logger.handlers = original_handlers
+        test_logger.setLevel(original_level)
+        test_logger.propagate = original_propagate
+
+    assert buffer_handler.count == 1
+    entry = buffer_handler.buffer[-1]
+    assert entry.expandable is not None, (
+        "the buffer lost the traceback: the sensitive filter must not null "
+        "the shared record's exception state"
+    )
+    trace = entry.expandable["traceback"]
+    assert "test_logger_settings" in trace or "RuntimeError" in trace
+    assert "hunter2-canary" not in trace
+    assert "hunter2-canary" not in stream.getvalue()

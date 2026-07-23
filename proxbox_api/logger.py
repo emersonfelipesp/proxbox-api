@@ -159,14 +159,23 @@ def _safe_log_argument(value: object) -> object:
 
 
 def _safe_traceback(record: logging.LogRecord) -> None:
-    """Keep stack locations while removing all exception values and messages."""
+    """Keep stack locations while removing all exception values and messages.
+
+    ``record.exc_info`` is deliberately left intact: a ``LogRecord`` is shared
+    by every handler on the logger, and the in-memory admin log buffer
+    (``log_buffer.LogBufferHandler``) reads ``exc_info`` after this filter has
+    run on the console/file handlers. Nulling it here silently deleted every
+    traceback from ``/admin/logs`` app-wide. Setting ``exc_text`` is enough for
+    the standard ``Formatter`` path — ``Formatter.format()`` only calls
+    ``formatException()`` when ``exc_text`` is not already set — so the raw
+    exception value never reaches console or file output either way.
+    """
 
     if record.exc_info is not None:
         exc_type, _exc_value, exc_tb = record.exc_info
         frames = "".join(traceback.format_tb(exc_tb)) if exc_tb is not None else ""
         type_name = getattr(exc_type, "__name__", "Exception")
         record.exc_text = f"{_redact(frames)}{type_name}: [REDACTED]"
-        record.exc_info = None
     elif record.exc_text:
         record.exc_text = "[REDACTED EXCEPTION]"
     if record.stack_info:

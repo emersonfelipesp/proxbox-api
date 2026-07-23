@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -258,12 +259,30 @@ class BoundProxmoxSession:
             )
 
     async def aclose(self) -> None:
+        """Close the private session even when the request is being cancelled.
+
+        ``except Exception`` alone does not cover ``asyncio.CancelledError``:
+        every caller runs this in a cleanup path, so a client disconnect while
+        the underlying close is in flight would abandon the session and leak
+        it. Shield the close until it reaches a terminal state, then re-raise
+        the remembered cancellation.
+        """
         close = getattr(self.__session, "aclose", None)
-        if callable(close):
+        if not callable(close):
+            return
+        close_task = asyncio.ensure_future(maybe_await(close()))
+        cancellation_requested = False
+        while not close_task.done():
             try:
-                await maybe_await(close())
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError:
+                if close_task.done() and close_task.cancelled():
+                    raise
+                cancellation_requested = True
             except Exception:  # noqa: BLE001 - cleanup is best effort and secret-free
-                return
+                break
+        if cancellation_requested:
+            raise asyncio.CancelledError
 
 
 async def create_bound_proxmox_session(

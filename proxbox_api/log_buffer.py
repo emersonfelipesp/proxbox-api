@@ -217,7 +217,15 @@ class LogBufferHandler(logging.Handler):
             resource_id = getattr(record, "resource_id", None)
 
             expandable = None
-            if record.exc_info:
+            if record.exc_text:
+                # SensitiveDataFilter (attached to the console/file handlers,
+                # which run before this one) pre-renders a value-free redacted
+                # traceback; prefer it so the buffer never re-formats the raw
+                # exception value.
+                expandable = {
+                    "traceback": _redact_pii(record.exc_text),
+                }
+            elif record.exc_info:
                 raw_traceback = "".join(traceback.format_exception(*record.exc_info))
                 expandable = {
                     "traceback": _redact_pii(raw_traceback),
