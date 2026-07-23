@@ -16,10 +16,13 @@ O servico em lote usa coleta limitada e orientada por node:
    texto separado por virgulas. Os resultados tambem sao deduplicados entre os
    lotes, evitando ler todo o ambiente e limites de tamanho da requisicao.
 2. Carrega uma vez o sidecar de estado de sync das VMs, associa por
-   `virtual_machine` e resolve a propriedade por
-   `(proxmox_endpoint_raw_id, proxmox_cluster_name, proxmox_vm_id,
-   proxmox_vm_type)`. O tipo do guest desambigua a propriedade em memoria; ele
-   nao e um parametro da consulta ao arquivo do Proxmox.
+   `virtual_machine` e associa as linhas do arquivo em memoria por
+   `(proxmox_endpoint_raw_id, proxmox_cluster_name, proxmox_vm_id)`. O tipo do
+   guest e evidencia de identidade obrigatoria do sidecar e e gravado na linha
+   reconciliada, mas nao e chave de associacao de propriedade nem parametro da
+   consulta ao arquivo do Proxmox: se duas VMs reivindicarem o mesmo endpoint,
+   cluster e VMID, o UPID e ignorado como ambiguo em vez de ser separado pelo
+   tipo do guest.
 3. Seleciona somente os nodes dos endpoints/clusters que possuem essas VMs.
 4. Percorre uma vez o arquivo de cada node selecionado, com `source=archive`,
    `limit=500`, offsets crescentes em `start` e um `until` fixado no inicio da

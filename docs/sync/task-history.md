@@ -14,10 +14,13 @@ The bulk service uses bounded, node-oriented collection:
    filter as repeated values (`?id=1&id=2`) instead of comma text. Results are
    deduplicated across chunks, so selected work stays bounded without reading
    the estate or exceeding common request-line limits.
-2. Load the VM sync-state sidecar once, join it by `virtual_machine`, and resolve
-   ownership by `(proxmox_endpoint_raw_id, proxmox_cluster_name, proxmox_vm_id,
-   proxmox_vm_type)`. Guest type disambiguates in-memory ownership; it is not a
-   Proxmox archive query parameter.
+2. Load the VM sync-state sidecar once, join it by `virtual_machine`, and match
+   archive rows in memory by `(proxmox_endpoint_raw_id, proxmox_cluster_name,
+   proxmox_vm_id)`. Guest type is required sidecar identity evidence and is
+   written to the reconciled row, but it is neither an ownership-matching key
+   nor a Proxmox archive query parameter: if two VMs ever claim the same
+   endpoint, cluster, and VMID, the UPID is skipped as ambiguous rather than
+   split by guest type.
 3. Select only the endpoint/cluster nodes that own those VMs.
 4. Walk each selected node's `source=archive` task list once, using `limit=500`,
    increasing `start` offsets, and one fixed run-start `until` timestamp.
