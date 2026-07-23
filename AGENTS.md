@@ -368,15 +368,26 @@ Execution rules:
   caller SSH fields are compatibility assertions and any mismatch must fail.
   Verify the persisted host-key fingerprint and pass the exact scanned key to
   OpenSSH with strict host checking before the isolated systemd unit starts.
+  Open the identity once with `O_NOFOLLOW`, verify the descriptor with `fstat`
+  as a root/service-owned regular file with no group/world permissions, and
+  inherit that descriptor through `/proc/self/fd`; never reopen the mutable key
+  pathname in an SSH child.
 - Require the signed, five-minute `preflight_plan_token` produced for the exact
-  server-rendered `recipe_digest`. Revalidate endpoint configuration, target,
-  storage, VMID, and recipe; rerun preflight; consume the plan once; and acquire
-  the durable unique `endpoint_id:vmid` lease before SSH.
+  server-rendered, domain-separated HMAC `recipe_digest`. Endpoint configuration
+  uses a separate keyed binding. Revalidate endpoint configuration, target,
+  storage, VMID, and recipe; rerun preflight; authoritatively refresh and
+  revalidate the endpoint again immediately before consuming the plan; and
+  acquire the durable unique `endpoint_id:vmid` blocker before SSH.
 - Execute asynchronously in a unique server-generated `systemd-run` unit,
   continuously draining stdout/stderr into counters without retaining output.
   Support timeout, request, and operator cancellation. A zero exit code is not
   success until the final Proxmox API artifact check passes; preserve unknown
-  or partial state as `recovery_required` and never auto-delete it.
+  or partial state as `recovery_required` and never auto-delete it. Recovery,
+  cancellation, unknown state, and lease expiry retain the blocker until an
+  explicit reconciliation workflow exists. Keep mandatory cleanup, journal
+  updates, and session close alive through repeated cancellation, and use
+  compare-and-swap journal transitions so stale cancel/completion requests do
+  not overwrite the winning state.
 
 Read-only preflight and response privacy rules:
 

@@ -40,7 +40,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
 | `test_cloud_image_pipeline.py` | Cloud Image Pipeline catalog/rendering, delimiter-proof encoded writes, typed source recipes, legacy storage, secret-safe ASGI validation, exact isolated SSH argv/host-key pinning, HTTP auth, endpoint-write, and execution/direct-SDK boundaries |
 | `test_packer_preflight.py` | Provider-derived preflight storage/snippet behavior, clean-process import boundary, exact-session/read-only behavior, fail-closed payload/storage-state findings, real session/log canaries, preview rules, OpenAPI contracts, and producer fixture validation |
-| `test_packer_execution_binding.py` | Signed plan tamper/drift/expiry rejection, one-time operation leases, final artifact verification, recipe stability, minimal session authority, and a producer-owned consumer-shaped fixture that does not claim downstream validation |
+| `test_packer_execution_binding.py` | Keyed endpoint/recipe bindings and oracle canaries, signed-plan tamper/drift/expiry rejection, retained recovery blockers, expired/concurrent leases, authoritative post-preflight endpoint refresh, cancel/completion CAS, repeated-cancellation journal durability, final artifact verification, minimal session authority, and a producer-owned consumer-shaped fixture that does not claim downstream validation |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |

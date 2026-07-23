@@ -646,6 +646,12 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
         "tenant_id": None,
         "tenant_slug": None,
         "tenant_name": None,
+        "ssh_target_node": None,
+        "ssh_host": None,
+        "ssh_username": None,
+        "ssh_port": 22,
+        "ssh_identity_file": None,
+        "ssh_known_host_fingerprint": None,
     }
 
     listed = asyncio.run(get_proxmox_endpoints(db_session))
@@ -690,6 +696,12 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
         "tenant_id": None,
         "tenant_slug": None,
         "tenant_name": None,
+        "ssh_target_node": None,
+        "ssh_host": None,
+        "ssh_username": None,
+        "ssh_port": 22,
+        "ssh_identity_file": None,
+        "ssh_known_host_fingerprint": None,
     }
 
     deleted = asyncio.run(delete_proxmox_endpoint(endpoint_id, db_session))

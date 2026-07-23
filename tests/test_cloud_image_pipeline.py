@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -91,6 +92,16 @@ class _FakeAsyncProcess:
 
     def kill(self) -> None:
         self.returncode = -9
+
+
+def _trusted_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+    key_dir = tmp_path / "ssh_keys"
+    key_dir.mkdir(exist_ok=True)
+    identity = key_dir / "id_ed25519"
+    identity.write_text("test-private-key", encoding="utf-8")
+    identity.chmod(0o600)
+    monkeypatch.setenv("PROXBOX_SSH_KEY_DIR", str(key_dir))
+    return str(identity)
 
 
 def _bound_endpoint(**overrides: object) -> ProxmoxEndpoint:
@@ -685,6 +696,7 @@ def test_execution_target_is_derived_from_complete_persisted_binding() -> None:
 @pytest.mark.asyncio
 async def test_persisted_fingerprint_pins_exact_scanned_host_key(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     key_data = b"proxbox-packer-test-host-key"
     key_b64 = base64.b64encode(key_data).decode()
@@ -693,7 +705,7 @@ async def test_persisted_fingerprint_pins_exact_scanned_host_key(
         host="93.184.216.34",
         user="root",
         port=22,
-        identity_file="/etc/proxbox/ssh_keys/id_ed25519",
+        identity_file=_trusted_identity(monkeypatch, tmp_path),
         known_host_fingerprint=f"SHA256:{digest}",
     )
 
@@ -716,6 +728,7 @@ async def test_persisted_fingerprint_pins_exact_scanned_host_key(
 @pytest.mark.asyncio
 async def test_oversized_host_key_scan_output_stops_scanner(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     class TrackedProcess(_FakeAsyncProcess):
         def __init__(self) -> None:
@@ -736,7 +749,7 @@ async def test_oversized_host_key_scan_output_stops_scanner(
         host="93.184.216.34",
         user="root",
         port=22,
-        identity_file="/etc/proxbox/ssh_keys/id_ed25519",
+        identity_file=_trusted_identity(monkeypatch, tmp_path),
         known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     )
 
@@ -757,17 +770,19 @@ async def test_remote_execution_ssh_argv_ignores_ambient_config_and_proxies(
         host="93.184.216.34",
         user="root",
         port=2222,
-        identity_file="/etc/proxbox/ssh_keys/id_ed25519",
+        identity_file=_trusted_identity(monkeypatch, tmp_path),
         known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     )
     captured: list[list[str]] = []
+    captured_pass_fds: list[tuple[int, ...]] = []
     processes: list[_FakeAsyncProcess] = []
 
     async def fake_pin(_target: object) -> Path:
         return known_hosts
 
-    async def fake_exec(*args: str, **_kwargs: object) -> _FakeAsyncProcess:
+    async def fake_exec(*args: str, **kwargs: object) -> _FakeAsyncProcess:
         captured.append(list(args))
+        captured_pass_fds.append(tuple(kwargs["pass_fds"]))  # type: ignore[arg-type]
         process = _FakeAsyncProcess(
             returncode=0,
             stdout=b"first\nsecond\n",
@@ -801,6 +816,8 @@ async def test_remote_execution_ssh_argv_ignores_ambient_config_and_proxies(
     assert summary.stdout_lines == 2
     assert summary.stderr_lines == 1
     assert processes[0].stdin.data == b"set -eu\ntrue\n"
+    inherited_identity = captured[0][captured[0].index("-i") + 1]
+    assert inherited_identity == f"/proc/self/fd/{captured_pass_fds[0][0]}"
     assert captured == [
         [
             "/usr/bin/ssh",
@@ -825,7 +842,7 @@ async def test_remote_execution_ssh_argv_ignores_ambient_config_and_proxies(
             "-p",
             "2222",
             "-i",
-            "/etc/proxbox/ssh_keys/id_ed25519",
+            inherited_identity,
             "root@93.184.216.34",
             "/usr/bin/systemd-run",
             "--quiet",
@@ -843,6 +860,7 @@ async def test_remote_execution_ssh_argv_ignores_ambient_config_and_proxies(
 @pytest.mark.asyncio
 async def test_fingerprint_mismatch_stops_before_ssh_execution(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     key_b64 = base64.b64encode(b"different-key").decode()
     calls: list[list[str]] = []
@@ -859,7 +877,7 @@ async def test_fingerprint_mismatch_stops_before_ssh_execution(
         host="93.184.216.34",
         user="root",
         port=22,
-        identity_file="/etc/proxbox/ssh_keys/id_ed25519",
+        identity_file=_trusted_identity(monkeypatch, tmp_path),
         known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     )
 
@@ -885,17 +903,105 @@ async def test_fingerprint_mismatch_stops_before_ssh_execution(
     assert calls == [["/usr/bin/ssh-keyscan", "-T", "10", "-p", "22", "93.184.216.34"]]
 
 
+@pytest.mark.parametrize("replacement", ["permissive_mode", "symlink"])
+@pytest.mark.asyncio
+async def test_execution_rechecks_identity_file_after_target_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    identity_file = Path(_trusted_identity(monkeypatch, tmp_path))
+    target = CloudImageSSHExecutionTarget(
+        host="93.184.216.34",
+        user="root",
+        port=22,
+        identity_file=str(identity_file),
+        known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    )
+    if replacement == "permissive_mode":
+        identity_file.chmod(0o644)
+    else:
+        replacement_file = identity_file.with_name("replacement_key")
+        identity_file.rename(replacement_file)
+        identity_file.symlink_to(replacement_file)
+
+    async def fail_subprocess(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("untrusted identity must fail before subprocess creation")
+
+    monkeypatch.setattr(pipeline_scripts.asyncio, "create_subprocess_exec", fail_subprocess)
+
+    result = await pipeline_scripts._pipeline_execution_result(
+        CloudImageTemplateBuildRequest(product_type="pfsense", execute=True),
+        "true\n",
+        execution_allowed=True,
+        execution_target=target,
+        remote_unit="proxbox-cloud-image-00000000-0000-0000-0000-000000000001",
+    )
+
+    assert result[0] == "failed"
+    assert result[2].attempted is False
+    assert result[3][0].code == "ssh_identity_untrusted"
+    assert result[4] == "ssh_identity_untrusted"
+
+
+@pytest.mark.asyncio
+async def test_execution_pins_open_identity_across_atomic_path_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    identity_file = Path(_trusted_identity(monkeypatch, tmp_path))
+    identity_file.write_text("original-private-key", encoding="utf-8")
+    target = CloudImageSSHExecutionTarget(
+        host="93.184.216.34",
+        user="root",
+        port=22,
+        identity_file=str(identity_file),
+        known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    )
+    known_hosts = tmp_path / "known_hosts"
+    inherited_contents: list[bytes] = []
+
+    async def replace_after_open(_target: object) -> Path:
+        old_identity = identity_file.with_name("old_identity")
+        identity_file.rename(old_identity)
+        identity_file.write_text("replacement-private-key", encoding="utf-8")
+        identity_file.chmod(0o600)
+        return known_hosts
+
+    async def fake_exec(*_args: str, **kwargs: object) -> _FakeAsyncProcess:
+        pass_fds = tuple(kwargs["pass_fds"])  # type: ignore[arg-type]
+        inherited_contents.append(os.pread(pass_fds[0], 4096, 0))
+        return _FakeAsyncProcess(returncode=0)
+
+    monkeypatch.setattr(pipeline_scripts, "_pinned_known_hosts_file", replace_after_open)
+    monkeypatch.setattr(pipeline_scripts.asyncio, "create_subprocess_exec", fake_exec)
+
+    result = await pipeline_scripts._pipeline_execution_result(
+        CloudImageTemplateBuildRequest(product_type="pfsense", execute=True),
+        "true\n",
+        execution_allowed=True,
+        execution_target=target,
+        remote_unit="proxbox-cloud-image-00000000-0000-0000-0000-000000000001",
+    )
+
+    assert result[0] == "verification_pending"
+    assert inherited_contents == [b"original-private-key"]
+    assert identity_file.read_text(encoding="utf-8") == "replacement-private-key"
+
+
+@pytest.mark.parametrize("cancellation_count", [2, 3])
 @pytest.mark.asyncio
 async def test_task_cancellation_stops_local_process_and_remote_unit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    cancellation_count: int,
 ) -> None:
     known_hosts = tmp_path / "known_hosts"
     target = CloudImageSSHExecutionTarget(
         host="93.184.216.34",
         user="root",
         port=22,
-        identity_file="/etc/proxbox/ssh_keys/id_ed25519",
+        identity_file=_trusted_identity(monkeypatch, tmp_path),
         known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     )
     remote_unit = "proxbox-cloud-image-00000000-0000-0000-0000-000000000001"
@@ -914,6 +1020,19 @@ async def test_task_cancellation_stops_local_process_and_remote_unit(
             self.stopped.set()
 
     main_process = BlockingProcess()
+    remote_cancel_entered = asyncio.Event()
+    release_remote_cancel = asyncio.Event()
+
+    class BlockingRemoteCancelProcess(_FakeAsyncProcess):
+        def __init__(self) -> None:
+            super().__init__(returncode=0)
+
+        async def wait(self) -> int:
+            remote_cancel_entered.set()
+            await release_remote_cancel.wait()
+            self.returncode = 0
+            return 0
+
     spawned: list[list[str]] = []
 
     async def fake_pin(_target: object) -> Path:
@@ -923,7 +1042,7 @@ async def test_task_cancellation_stops_local_process_and_remote_unit(
         spawned.append(list(args))
         if len(spawned) == 1:
             return main_process
-        return _FakeAsyncProcess(returncode=0)
+        return BlockingRemoteCancelProcess()
 
     monkeypatch.setattr(pipeline_scripts, "_pinned_known_hosts_file", fake_pin)
     monkeypatch.setattr(pipeline_scripts.asyncio, "create_subprocess_exec", fake_exec)
@@ -938,6 +1057,12 @@ async def test_task_cancellation_stops_local_process_and_remote_unit(
     )
     await asyncio.sleep(0)
     task.cancel()
+    await remote_cancel_entered.wait()
+    for _ in range(cancellation_count - 1):
+        task.cancel()
+        await asyncio.sleep(0)
+    assert task.done() is False
+    release_remote_cancel.set()
 
     with pytest.raises(pipeline_scripts.PipelineExecutionCancelled) as exc:
         await task
@@ -1184,7 +1309,7 @@ async def test_execute_route_scrubs_unexpected_subprocess_failure(
             host="93.184.216.34",
             user="root",
             port=22,
-            identity_file="/etc/proxbox/ssh_keys/id_ed25519",
+            identity_file=_trusted_identity(monkeypatch, tmp_path),
             known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
         remote_unit="proxbox-cloud-image-00000000-0000-0000-0000-000000000001",

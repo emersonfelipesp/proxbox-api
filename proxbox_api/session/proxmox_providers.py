@@ -247,6 +247,14 @@ def _parse_db_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSessionSchema:
     )
 
 
+def proxmox_session_schema_from_endpoint(
+    endpoint: ProxmoxEndpoint,
+) -> ProxmoxSessionSchema:
+    """Build API authority from one caller-owned endpoint snapshot."""
+
+    return _parse_db_endpoint(endpoint)
+
+
 def _parse_netbox_endpoint(
     endpoint: object,
     plugin_settings: dict[str, object] | None = None,
@@ -332,7 +340,7 @@ async def load_proxmox_session_schemas(
     if inspect.isawaitable(result):
         result = await result
     db_endpoints = result.all()
-    return [_parse_db_endpoint(endpoint) for endpoint in db_endpoints]
+    return [proxmox_session_schema_from_endpoint(endpoint) for endpoint in db_endpoints]
 
 
 async def resolve_proxmox_target_session(

@@ -676,8 +676,9 @@ class CloudImageTemplatePreflightRequest(BaseModel):
         max_length=64,
         pattern=r"^[0-9a-f]{64}$",
         description=(
-            "Digest returned by a non-executing server-rendered build plan. Required to issue "
-            "an executable signed plan; omission retains read-only v1 readiness compatibility."
+            "Opaque keyed binding returned by a non-executing server-rendered build plan. "
+            "Required to issue an executable signed plan; omission retains read-only v1 "
+            "readiness compatibility."
         ),
     )
     snippets_required: bool | None = Field(

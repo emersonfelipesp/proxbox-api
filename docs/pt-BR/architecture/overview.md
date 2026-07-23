@@ -49,10 +49,13 @@ schemas de endpoint, credenciais e output de processo nao cruzam a fronteira
 HTTP ou de logs.
 
 Read-only nao significa advisory: quando recebe o `recipe_digest` renderizado
-pelo servidor, um preflight pronto emite um plano assinado de cinco minutos que
-vincula configuracao, target, storages, VMID e receita sem alterar o banco. A
-execucao autentica o plano, repete os GETs e consome o UUID uma unica vez ao
-adquirir o lease exclusivo `endpoint_id:vmid`.
+pelo servidor, um preflight pronto emite um plano assinado de cinco minutos. O
+binding da receita e um HMAC com dominio separado, nao um hash do script sujeito
+a dicionario, e a configuracao do endpoint usa outra chave contextual. O plano
+tambem vincula target, storages e VMID sem alterar o banco. A execucao autentica
+o plano, repete os GETs, atualiza e revalida autoritativamente endpoint/API/SSH
+imediatamente antes da escrita e consome o UUID uma unica vez ao adquirir o
+bloqueador exclusivo `endpoint_id:vmid`.
 
 A execucao possui uma fronteira de autoridade persistida separada. O
 `ProxmoxEndpoint` local selecionado deve estar habilitado e conter um binding
@@ -62,14 +65,20 @@ apenas assercoes e nao podem redirecionar a execucao. A chave do servidor
 escaneada precisa corresponder ao fingerprint persistido antes de ser entregue
 ao OpenSSH com verificacao estrita. Binarios SSH absolutos, `-F none` e opcoes
 que desabilitam proxy e canonicalizacao isolam a conexao da configuracao
-OpenSSH ambiente.
+OpenSSH ambiente. A identidade e aberta uma vez com `O_NOFOLLOW`, validada via
+`fstat` como arquivo regular nao-symlink pertencente a root/servico sem
+permissoes de grupo/mundo, e herdada por `/proc/self/fd`, fechando a troca
+concorrente do pathname.
 
 `CloudImageBuildOperation` persiste somente digests, target, lease, timestamps,
 contadores e transicoes; nunca scripts, URLs, credenciais, cloud-init ou output
 bruto. O SSH roda assincronamente numa unidade `systemd-run` unica. Timeout e
-cancelamento interrompem essa unidade. Exit code zero nao e sucesso: a API
-Proxmox precisa verificar o artefato final. Estado parcial/desconhecido e
-preservado como `recovery_required`, sem delecao automatica.
+cancelamento interrompem essa unidade. Cleanup, journal e fechamento de sessao
+terminam mesmo sob cancelamento repetido; cancelamento/completion usam
+compare-and-swap. Exit code zero nao e sucesso: a API Proxmox precisa verificar
+o artefato final. Recovery, cancelamento, estado parcial/desconhecido ou lease
+expirado preservam `lease_key` como bloqueador `recovery_required`, sem delecao
+ou release automatico e sem recovery destrutivo neste escopo.
 
 `CloudImageBuildTarget` e o plano canonico de provider/storage para preflight e
 renderizacao. O requisito de snippets deriva do provider; todos os providers
@@ -94,9 +103,9 @@ independente.
 | `PF-03` findings estaveis de node/storage/VMID/unsupported | schemas v1, requisitos de storage por provider e `cluster/nextid?vmid=` autoritativo | shape tipado, papeis ISO/release, VMID oculto, payload malformado, colisao, unsupported e fixture |
 | `PF-04` respostas de build/erro sem segredos | resposta v2, writes fixos codificados, recipes source tipados, validacao generica, resumo de execucao, diagnosticos fixos e validador de preview | canarios de delimitador/comando/422/URL/cloud-init/stdout/stderr/sessao/SDK/cleanup e rejeicao de preview durante execucao |
 | `PF-05` estabilidade do produtor/OpenAPI | versoes explicitas, `vm_storage` canonico, alias legado `storage` e janela ate `0.0.21.x` | assercoes OpenAPI, testes de alias/conflito, fixture do produtor e fixture consumer-shaped explicitamente pertencente ao produtor |
-| `PF-06` autoridade persistida e cleanup exato | binding endpoint/node, host key fixada, isolamento da configuracao ambiente e factory de sessao segura para `BaseException` | argv SSH exato, endpoint desabilitado, mismatch de node/host/chave, fingerprint, falha pos-conexao, cancelamento e cleanup uma vez |
-| `PF-07` plano aprovado e owner unico | claims assinados com expiracao e `CloudImageBuildOperation.lease_key` | testes de tamper, drift, expiracao, replay e lease concorrente |
-| `PF-08` execucao duravel verificada | drain async, unidade fixa, cancelamento, journal e verificacao API final | contadores limitados, cancelamento, completion verificado e recovery forcado |
+| `PF-06` autoridade persistida e cleanup exato | binding endpoint/node atualizado, host key fixada, identidade fixada por descritor e cleanup resistente a cancelamento | edit concorrente, symlink/modo/owner/troca de path, argv SSH, fingerprint, cancelamento repetido e close exato |
+| `PF-07` plano aprovado e owner unico | HMACs separados de endpoint/receita, claims assinados e bloqueador `CloudImageBuildOperation.lease_key` retido | oracle de credencial/receita, tamper, drift, expiracao, replay, concorrencia e recovery fail-closed |
+| `PF-08` execucao duravel verificada | drain async, unidade fixa, cleanup sob cancelamento repetido, journal CAS e verificacao API final | contadores, cancelamento duplo/triplo, corrida cancel/completion, completion verificado e recovery forcado |
 
 O storage de imagem exige `iso` apenas para `proxmox_iso`; providers
 release/source usam staging privado e nao declaram capacidade de storage de

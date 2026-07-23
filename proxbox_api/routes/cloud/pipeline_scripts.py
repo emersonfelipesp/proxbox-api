@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import os
 import shlex
 import tempfile
@@ -20,9 +21,11 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
+from proxbox_api.credentials import derive_service_signing_key
 from proxbox_api.logger import logger
 from proxbox_api.routes.cloud.catalog import find_product_version
 from proxbox_api.routes.cloud.display import display_config_for_product
+from proxbox_api.schemas.cloud_image_security import OpenSSHIdentityFile, open_ssh_identity_file
 from proxbox_api.schemas.cloud_provision import (
     CloudImageBuildProvider,
     CloudImageBuildTarget,
@@ -36,10 +39,12 @@ from proxbox_api.schemas.cloud_provision import (
     PackerFinding,
     PackerFindingSeverity,
 )
+from proxbox_api.utils.cancellation import await_task_through_repeated_cancellation
 
 _SSH_BINARY = "/usr/bin/ssh"
 _SSH_KEYSCAN_BINARY = "/usr/bin/ssh-keyscan"
 _LEGACY_PIPELINE_VM_STORAGE = "local-lvm"
+_RECIPE_BINDING_CONTEXT = "packer-recipe-binding-v1"
 
 
 def _q(value: object) -> str:
@@ -677,6 +682,10 @@ class _SSHHostKeyVerificationError(RuntimeError):
     """Internal fixed-message boundary for a failed pinned-host-key check."""
 
 
+class _SSHIdentityFileVerificationError(RuntimeError):
+    """Internal fixed-message boundary for an untrusted SSH private key."""
+
+
 class PipelineExecutionCancelled(asyncio.CancelledError):
     """Cancellation carrying only bounded, secret-free execution metadata."""
 
@@ -735,7 +744,8 @@ async def _pinned_known_hosts_file(target: CloudImageSSHExecutionTarget) -> Path
         returncode = await asyncio.wait_for(scan.wait(), 15)
     except asyncio.CancelledError:
         if scan is not None:
-            await asyncio.shield(_stop_process(scan))
+            stop_task = asyncio.create_task(_stop_process(scan))
+            await await_task_through_repeated_cancellation(stop_task)
         raise
     except (OSError, TimeoutError, _SSHHostKeyVerificationError) as error:
         if scan is not None:
@@ -782,6 +792,7 @@ def _remove_known_hosts_file(path: Path | None) -> None:
 def _ssh_argv(
     target: CloudImageSSHExecutionTarget,
     known_hosts_file: Path,
+    identity: OpenSSHIdentityFile,
     *remote_argv: str,
 ) -> list[str]:
     """Build fixed SSH transport options with no ambient config or proxy authority."""
@@ -809,10 +820,17 @@ def _ssh_argv(
         "-p",
         str(target.port),
         "-i",
-        target.identity_file,
+        identity.child_path,
         f"{target.user}@{target.host}",
         *remote_argv,
     ]
+
+
+def _open_ssh_identity(target: CloudImageSSHExecutionTarget) -> OpenSSHIdentityFile:
+    try:
+        return open_ssh_identity_file(target.identity_file)
+    except ValueError as error:
+        raise _SSHIdentityFileVerificationError from error
 
 
 async def _stream_stats(stream: asyncio.StreamReader) -> tuple[int, int]:
@@ -846,6 +864,7 @@ async def _stop_process(process: asyncio.subprocess.Process) -> None:
 async def _cancel_remote_unit(
     target: CloudImageSSHExecutionTarget,
     known_hosts_file: Path,
+    identity: OpenSSHIdentityFile,
     remote_unit: str,
 ) -> bool:
     """Stop the fixed systemd unit used to isolate a remote build."""
@@ -856,6 +875,7 @@ async def _cancel_remote_unit(
             *_ssh_argv(
                 target,
                 known_hosts_file,
+                identity,
                 "/usr/bin/systemctl",
                 "stop",
                 remote_unit,
@@ -863,17 +883,25 @@ async def _cancel_remote_unit(
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            pass_fds=(identity.fd,),
         )
         return await asyncio.wait_for(process.wait(), 30) == 0
     except asyncio.CancelledError:
         if process is not None:
-            await asyncio.shield(_stop_process(process))
+            stop_task = asyncio.create_task(_stop_process(process))
+            await await_task_through_repeated_cancellation(stop_task)
         raise
     except TimeoutError:
         if process is not None:
             await _stop_process(process)
         return False
-    except OSError:
+    except (OSError, _SSHIdentityFileVerificationError):
+        return False
+    except Exception as error:  # noqa: BLE001 - cancellation must stay secret-safe
+        logger.warning(
+            "Cloud Image Pipeline remote cancellation failed error_type=%s",
+            type(error).__name__,
+        )
         return False
 
 
@@ -896,6 +924,93 @@ async def _completed_stream_stats(
         return 0, 0
 
 
+async def _execution_cleanup_summary(
+    *,
+    process: asyncio.subprocess.Process | None,
+    target: CloudImageSSHExecutionTarget,
+    known_hosts_file: Path | None,
+    identity: OpenSSHIdentityFile | None,
+    remote_unit: str,
+    stdout_task: asyncio.Task[tuple[int, int]] | None,
+    stderr_task: asyncio.Task[tuple[int, int]] | None,
+) -> CloudImageTemplateExecutionSummary:
+    """Stop local/remote work and join stream drains as one mandatory task."""
+
+    if process is not None:
+        await _stop_process(process)
+    cancellation_succeeded = bool(
+        known_hosts_file is not None
+        and identity is not None
+        and await _cancel_remote_unit(target, known_hosts_file, identity, remote_unit)
+    )
+    stdout_stats, stderr_stats = await asyncio.gather(
+        _completed_stream_stats(stdout_task),
+        _completed_stream_stats(stderr_task),
+    )
+    return CloudImageTemplateExecutionSummary(
+        attempted=True,
+        enabled=True,
+        stdout_bytes=stdout_stats[0],
+        stderr_bytes=stderr_stats[0],
+        stdout_lines=stdout_stats[1],
+        stderr_lines=stderr_stats[1],
+        cancellation_attempted=True,
+        cancellation_succeeded=cancellation_succeeded,
+    )
+
+
+async def _await_execution_cleanup(
+    *,
+    process: asyncio.subprocess.Process | None,
+    target: CloudImageSSHExecutionTarget,
+    known_hosts_file: Path | None,
+    identity: OpenSSHIdentityFile | None,
+    remote_unit: str,
+    stdout_task: asyncio.Task[tuple[int, int]] | None,
+    stderr_task: asyncio.Task[tuple[int, int]] | None,
+) -> tuple[CloudImageTemplateExecutionSummary, bool]:
+    """Return cleanup state and whether cancellation arrived while it ran."""
+
+    cleanup_task = asyncio.create_task(
+        _execution_cleanup_summary(
+            process=process,
+            target=target,
+            known_hosts_file=known_hosts_file,
+            identity=identity,
+            remote_unit=remote_unit,
+            stdout_task=stdout_task,
+            stderr_task=stderr_task,
+        )
+    )
+    try:
+        return await await_task_through_repeated_cancellation(cleanup_task), False
+    except asyncio.CancelledError:
+        if cleanup_task.cancelled():
+            raise
+        return cleanup_task.result(), True
+
+
+async def _execution_summary_after_exit(
+    *,
+    returncode: int,
+    stdout_task: asyncio.Task[tuple[int, int]] | None,
+    stderr_task: asyncio.Task[tuple[int, int]] | None,
+) -> CloudImageTemplateExecutionSummary:
+    stdout_stats, stderr_stats = await asyncio.gather(
+        _completed_stream_stats(stdout_task),
+        _completed_stream_stats(stderr_task),
+    )
+    return CloudImageTemplateExecutionSummary(
+        attempted=True,
+        enabled=True,
+        exit_code=returncode,
+        stdout_bytes=stdout_stats[0],
+        stderr_bytes=stderr_stats[0],
+        stdout_lines=stdout_stats[1],
+        stderr_lines=stderr_stats[1],
+    )
+
+
 async def cancel_pipeline_operation(
     target: CloudImageSSHExecutionTarget,
     *,
@@ -904,13 +1019,17 @@ async def cancel_pipeline_operation(
     """Stop one server-generated remote unit with pinned host-key verification."""
 
     known_hosts_file: Path | None = None
+    identity: OpenSSHIdentityFile | None = None
     try:
+        identity = _open_ssh_identity(target)
         known_hosts_file = await _pinned_known_hosts_file(target)
-        return await _cancel_remote_unit(target, known_hosts_file, remote_unit)
-    except _SSHHostKeyVerificationError:
+        return await _cancel_remote_unit(target, known_hosts_file, identity, remote_unit)
+    except (_SSHHostKeyVerificationError, _SSHIdentityFileVerificationError):
         return False
     finally:
         _remove_known_hosts_file(known_hosts_file)
+        if identity is not None:
+            identity.close()
 
 
 async def _pipeline_execution_result(  # noqa: C901
@@ -946,15 +1065,20 @@ async def _pipeline_execution_result(  # noqa: C901
         )
 
     known_hosts_file: Path | None = None
+    identity: OpenSSHIdentityFile | None = None
     process: asyncio.subprocess.Process | None = None
     stdout_task: asyncio.Task[tuple[int, int]] | None = None
     stderr_task: asyncio.Task[tuple[int, int]] | None = None
+    execution: CloudImageTemplateExecutionSummary | None = None
+    completion_cancelled = False
     try:
+        identity = _open_ssh_identity(execution_target)
         known_hosts_file = await _pinned_known_hosts_file(execution_target)
         process = await asyncio.create_subprocess_exec(
             *_ssh_argv(
                 execution_target,
                 known_hosts_file,
+                identity,
                 "/usr/bin/systemd-run",
                 "--quiet",
                 "--wait",
@@ -968,6 +1092,7 @@ async def _pipeline_execution_result(  # noqa: C901
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            pass_fds=(identity.fd,),
         )
         if process.stdin is None or process.stdout is None or process.stderr is None:
             raise OSError("subprocess pipes unavailable")
@@ -978,6 +1103,35 @@ async def _pipeline_execution_result(  # noqa: C901
         process.stdin.close()
         await process.stdin.wait_closed()
         returncode = await asyncio.wait_for(process.wait(), 3600)
+        summary_task = asyncio.create_task(
+            _execution_summary_after_exit(
+                returncode=returncode,
+                stdout_task=stdout_task,
+                stderr_task=stderr_task,
+            )
+        )
+        try:
+            execution = await await_task_through_repeated_cancellation(summary_task)
+        except asyncio.CancelledError:
+            if summary_task.cancelled():
+                raise
+            execution = summary_task.result()
+            completion_cancelled = True
+    except _SSHIdentityFileVerificationError:
+        return (
+            "failed",
+            None,
+            CloudImageTemplateExecutionSummary(attempted=False, enabled=True),
+            [
+                PackerFinding(
+                    code="ssh_identity_untrusted",
+                    severity=PackerFindingSeverity.error,
+                    target=f"endpoint:{request.endpoint_id}",
+                    message="The persisted SSH identity file failed local trust checks.",
+                )
+            ],
+            "ssh_identity_untrusted",
+        )
     except _SSHHostKeyVerificationError:
         return (
             "failed",
@@ -994,27 +1148,21 @@ async def _pipeline_execution_result(  # noqa: C901
             "ssh_host_key_unverified",
         )
     except TimeoutError:
-        if process is not None:
-            await _stop_process(process)
-        cancellation_succeeded = bool(
-            known_hosts_file is not None
-            and await _cancel_remote_unit(execution_target, known_hosts_file, remote_unit)
+        cleanup, cancelled_during_cleanup = await _await_execution_cleanup(
+            process=process,
+            target=execution_target,
+            known_hosts_file=known_hosts_file,
+            identity=identity,
+            remote_unit=remote_unit,
+            stdout_task=stdout_task,
+            stderr_task=stderr_task,
         )
-        stdout_bytes, stdout_lines = await _completed_stream_stats(stdout_task)
-        stderr_bytes, stderr_lines = await _completed_stream_stats(stderr_task)
+        if cancelled_during_cleanup:
+            raise PipelineExecutionCancelled(cleanup) from None
         return (
             "failed",
             None,
-            CloudImageTemplateExecutionSummary(
-                attempted=True,
-                enabled=True,
-                stdout_bytes=stdout_bytes,
-                stderr_bytes=stderr_bytes,
-                stdout_lines=stdout_lines,
-                stderr_lines=stderr_lines,
-                cancellation_attempted=True,
-                cancellation_succeeded=cancellation_succeeded,
-            ),
+            cleanup,
             [
                 PackerFinding(
                     code="execution_timeout",
@@ -1026,33 +1174,28 @@ async def _pipeline_execution_result(  # noqa: C901
             "execution_timeout",
         )
     except asyncio.CancelledError:
-        if process is not None:
-            await asyncio.shield(_stop_process(process))
-        cancellation_succeeded = bool(
-            known_hosts_file is not None
-            and await asyncio.shield(
-                _cancel_remote_unit(execution_target, known_hosts_file, remote_unit)
-            )
+        cleanup, _cancelled_during_cleanup = await _await_execution_cleanup(
+            process=process,
+            target=execution_target,
+            known_hosts_file=known_hosts_file,
+            identity=identity,
+            remote_unit=remote_unit,
+            stdout_task=stdout_task,
+            stderr_task=stderr_task,
         )
-        stdout_bytes, stdout_lines = await asyncio.shield(_completed_stream_stats(stdout_task))
-        stderr_bytes, stderr_lines = await asyncio.shield(_completed_stream_stats(stderr_task))
-        raise PipelineExecutionCancelled(
-            CloudImageTemplateExecutionSummary(
-                attempted=True,
-                enabled=True,
-                stdout_bytes=stdout_bytes,
-                stderr_bytes=stderr_bytes,
-                stdout_lines=stdout_lines,
-                stderr_lines=stderr_lines,
-                cancellation_attempted=True,
-                cancellation_succeeded=cancellation_succeeded,
-            )
-        ) from None
+        raise PipelineExecutionCancelled(cleanup) from None
     except Exception as error:  # noqa: BLE001 - response and logs must never expose raw output
-        if process is not None:
-            await _stop_process(process)
-        stdout_bytes, stdout_lines = await _completed_stream_stats(stdout_task)
-        stderr_bytes, stderr_lines = await _completed_stream_stats(stderr_task)
+        cleanup, cancelled_during_cleanup = await _await_execution_cleanup(
+            process=process,
+            target=execution_target,
+            known_hosts_file=known_hosts_file,
+            identity=identity,
+            remote_unit=remote_unit,
+            stdout_task=stdout_task,
+            stderr_task=stderr_task,
+        )
+        if cancelled_during_cleanup:
+            raise PipelineExecutionCancelled(cleanup) from None
         logger.warning(
             "Cloud Image Pipeline execution could not start error_type=%s",
             type(error).__name__,
@@ -1060,14 +1203,7 @@ async def _pipeline_execution_result(  # noqa: C901
         return (
             "failed",
             None,
-            CloudImageTemplateExecutionSummary(
-                attempted=True,
-                enabled=True,
-                stdout_bytes=stdout_bytes,
-                stderr_bytes=stderr_bytes,
-                stdout_lines=stdout_lines,
-                stderr_lines=stderr_lines,
-            ),
+            cleanup,
             [
                 PackerFinding(
                     code="execution_unavailable",
@@ -1080,19 +1216,14 @@ async def _pipeline_execution_result(  # noqa: C901
         )
     finally:
         _remove_known_hosts_file(known_hosts_file)
+        if identity is not None:
+            identity.close()
 
-    stdout_bytes, stdout_lines = await _completed_stream_stats(stdout_task)
-    stderr_bytes, stderr_lines = await _completed_stream_stats(stderr_task)
+    if execution is None:
+        raise RuntimeError("execution summary unavailable")
+    if completion_cancelled:
+        raise PipelineExecutionCancelled(execution) from None
     succeeded = returncode == 0
-    execution = CloudImageTemplateExecutionSummary(
-        attempted=True,
-        enabled=True,
-        exit_code=returncode,
-        stdout_bytes=stdout_bytes,
-        stderr_bytes=stderr_bytes,
-        stdout_lines=stdout_lines,
-        stderr_lines=stderr_lines,
-    )
     diagnostic = PackerFinding(
         code="execution_awaiting_verification" if succeeded else "execution_failed",
         severity=PackerFindingSeverity.warning if succeeded else PackerFindingSeverity.error,
@@ -1161,14 +1292,24 @@ def _render_pipeline(
     )
 
 
+def _recipe_binding_digest(build_script: str) -> str:
+    """Authenticate a recipe without exposing a dictionary-testable hash."""
+
+    return hmac.new(
+        derive_service_signing_key(_RECIPE_BINDING_CONTEXT),
+        build_script.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def pipeline_recipe_digest(request: CloudImageTemplateBuildRequest) -> str:
-    """Digest the exact server-rendered, execution-independent recipe."""
+    """Return the opaque binding for the exact execution-independent recipe."""
 
     planned_request = request.model_copy(
         update={"execute": False, "include_sensitive_preview": False, "preflight_plan_token": None}
     )
     *_unused, build_script, _commands, _image_url = _render_pipeline(planned_request)
-    return hashlib.sha256(build_script.encode("utf-8")).hexdigest()
+    return _recipe_binding_digest(build_script)
 
 
 def pipeline_execution_contract(
@@ -1182,7 +1323,7 @@ def pipeline_execution_contract(
     normalized, _entry, provider, _user_data, _first_boot, script, _commands, _url = (
         _render_pipeline(planned_request)
     )
-    return normalized.build_target(provider=provider), hashlib.sha256(script.encode()).hexdigest()
+    return normalized.build_target(provider=provider), _recipe_binding_digest(script)
 
 
 def _pipeline_response(
@@ -1206,7 +1347,7 @@ def _pipeline_response(
         "true",
         "yes",
     }
-    recipe_digest = hashlib.sha256(build_script.encode("utf-8")).hexdigest()
+    recipe_digest = _recipe_binding_digest(build_script)
     sensitive_preview = None
     if request.include_sensitive_preview:
         source_command = entry.source_build_command

@@ -93,19 +93,24 @@ does not require an `import` entry.
 
 The executable sequence is intentionally three-step:
 
-1. `POST /cloud/templates/images` with `execute=false` returns the exact
-   `recipe_digest` (and no sensitive material unless the separately protected
+1. `POST /cloud/templates/images` with `execute=false` returns the exact opaque
+   `recipe_digest`: a domain-separated HMAC of the rendered recipe, never a raw
+   script hash (and no sensitive material unless the separately protected
    preview was requested).
 2. `POST /cloud/templates/images/preflight` with that digest returns a signed
    plan only when every read-only capability passes.
 3. `POST /cloud/templates/images` with `execute=true` and
    `preflight_plan_token=<plan_token>` revalidates the signature, expiry,
-   endpoint configuration, and recipe; reruns the exact preflight; then
-   atomically acquires the one-time `endpoint_id:vmid` lease.
+   separately keyed endpoint configuration binding, and recipe; reruns the exact
+   preflight; authoritatively refreshes and revalidates endpoint/SSH authority;
+   then atomically acquires the one-time `endpoint_id:vmid` blocker.
 
 Reusing a plan returns `preflight_plan_already_consumed`; an active target lease
 returns `build_target_leased`; drift and expiry return fixed
-`preflight_plan_mismatch` and `preflight_plan_expired` details.
+`preflight_plan_mismatch` and `preflight_plan_expired` details. A target held by
+recovery, cancellation, unknown state, or an expired execution lease returns
+`build_target_recovery_required` and remains blocked; this API exposes no
+destructive reconciliation or automatic release.
 
 `POST /cloud/templates/images` returns build-response contract v2. Default and
 executed responses omit image/source URLs, generated cloud-init, first-boot and
@@ -128,7 +133,11 @@ persisted `ProxmoxEndpoint`. The endpoint must be enabled, writable, use
 `access_methods="api_ssh"`, and have a complete binding:
 `ssh_target_node`, `ssh_host`, `ssh_username`, `ssh_port`,
 `ssh_identity_file`, and `ssh_known_host_fingerprint`. The identity path must
-resolve under `PROXBOX_SSH_KEY_DIR`. Legacy request fields `ssh_host`,
+resolve under `PROXBOX_SSH_KEY_DIR`; the file must be a root/service-owned
+regular non-symlink with no group/world permissions. The service opens it with
+`O_NOFOLLOW`, verifies the descriptor with `fstat`, and gives OpenSSH the
+inherited `/proc/self/fd/<fd>` path so a concurrent pathname replacement cannot
+change the key. Legacy request fields `ssh_host`,
 `ssh_user`, `ssh_port`, `ssh_identity_file`, and
 `ssh_known_host_fingerprint` are assertions only: omission uses the persisted
 binding and any supplied mismatch returns `409` before a subprocess starts.
@@ -143,6 +152,9 @@ Execution runs inside a unique server-generated `systemd-run` unit through
 byte/line counters and never accumulated, returned, logged, or persisted. A
 timeout, request cancellation, or operator `POST
 /cloud/templates/images/operations/{operation_id}/cancel` stops the fixed unit.
+Mandatory local/remote cleanup, journal persistence, and session close continue
+through repeated cancellation. Cancel and completion journal transitions use
+compare-and-swap ordering so a stale request cannot overwrite the winner.
 `GET /cloud/templates/images/operations/{operation_id}` returns the secret-free
 durable journal state. The service marks an operation `completed` only after a
 final Proxmox API read verifies the expected template or ISO-backed installer
@@ -180,8 +192,10 @@ predictable caller-derived staging path is used.
 VMID, provider, lease and timestamps, bounded counters, cancellation result,
 verification state, and a fixed error code. It deliberately does not store the
 rendered script, URL, cloud-init, SSH material, stdout, or stderr. An expired
-lease is retained as `recovery_required` before a new owner can acquire the
-target, preserving operator history and possible partial state.
+lease is converted to `recovery_required` while retaining the unique target
+blocker. No new owner can acquire that endpoint/VMID until a future explicit,
+non-destructive reconciliation workflow exists, preserving possible remote and
+partial state.
 
 `vm_storage` is the single VM-disk storage authority. The legacy input name
 `storage` is accepted during the `0.0.21.x` window as an alias, is normalized to

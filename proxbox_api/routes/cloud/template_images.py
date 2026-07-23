@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import PurePosixPath
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, status
@@ -54,9 +54,13 @@ from proxbox_api.services.packer_plans import (
 )
 from proxbox_api.services.packer_preflight import run_packer_preflight
 from proxbox_api.session.proxmox import ProxmoxSession
-from proxbox_api.session.proxmox_providers import load_proxmox_session_schemas
+from proxbox_api.session.proxmox_providers import (
+    load_proxmox_session_schemas,
+    proxmox_session_schema_from_endpoint,
+)
 from proxbox_api.ssrf import validate_endpoint_url
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
+from proxbox_api.utils.cancellation import await_task_through_repeated_cancellation
 
 router = APIRouter()
 
@@ -141,6 +145,9 @@ def _plan_error(error: PackerPlanError) -> HTTPException:
         "preflight_plan_mismatch": "The signed preflight plan does not match this build.",
         "preflight_plan_already_consumed": "The signed preflight plan was already consumed.",
         "build_target_leased": "Another operation owns the endpoint and VMID lease.",
+        "build_target_recovery_required": (
+            "The endpoint and VMID remain blocked pending explicit recovery."
+        ),
     }
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -152,20 +159,12 @@ def _plan_error(error: PackerPlanError) -> HTTPException:
 
 
 async def _close_proxmox_session(proxmox: ProxmoxSession, *, context: str) -> None:
-    """Complete exactly one shielded close, including under request cancellation."""
+    """Complete one close through repeated request cancellation."""
 
     close_task = asyncio.create_task(proxmox.aclose())
     try:
-        await asyncio.shield(close_task)
+        await await_task_through_repeated_cancellation(close_task)
     except asyncio.CancelledError:
-        try:
-            await close_task
-        except Exception as error:  # noqa: BLE001 - cleanup must not reveal internals
-            logger.warning(
-                "%s session cleanup failed error_type=%s",
-                context,
-                type(error).__name__,
-            )
         raise
     except Exception as error:  # noqa: BLE001 - cleanup must not replace route results
         logger.warning(
@@ -173,6 +172,48 @@ async def _close_proxmox_session(proxmox: ProxmoxSession, *, context: str) -> No
             context,
             type(error).__name__,
         )
+
+
+async def _finish_operation_durably(
+    session: SessionDep,
+    operation: CloudImageBuildOperation,
+    *,
+    state: Literal["completed", "failed", "cancelled", "recovery_required"],
+    execution: CloudImageTemplateExecutionSummary,
+    verified: bool,
+    recovery_required: bool,
+    error_code: str | None,
+) -> bool:
+    """Persist one terminal transition despite repeated caller cancellation."""
+
+    task = asyncio.create_task(
+        finish_operation(
+            session,
+            operation,
+            state=state,
+            execution=execution,
+            verified=verified,
+            recovery_required=recovery_required,
+            error_code=error_code,
+        )
+    )
+    return await await_task_through_repeated_cancellation(task)
+
+
+async def _record_cancel_request_durably(
+    session: SessionDep,
+    operation: CloudImageBuildOperation,
+    *,
+    cancellation_succeeded: bool,
+) -> bool:
+    task = asyncio.create_task(
+        record_cancel_request(
+            session,
+            operation,
+            cancellation_succeeded=cancellation_succeeded,
+        )
+    )
+    return await await_task_through_repeated_cancellation(task)
 
 
 async def _image_exists(
@@ -209,11 +250,11 @@ async def _wait_for_task(
     return upid
 
 
-async def _resolve_preflight_target(
+async def _refresh_endpoint_snapshot(
     session: SessionDep,
     endpoint_id: int,
-) -> tuple[ProxmoxEndpoint, ProxmoxSession]:
-    """Resolve exactly one enabled, database-backed session for ``endpoint_id``."""
+) -> ProxmoxEndpoint:
+    """Force an authoritative read and return detached endpoint authority."""
 
     endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
     if not isinstance(endpoint, ProxmoxEndpoint):
@@ -225,7 +266,12 @@ async def _resolve_preflight_target(
                 "message": "The persisted Proxmox endpoint does not exist.",
             },
         )
-    if not endpoint.enabled:
+    # ``session.get`` may return an identity-map object populated before a
+    # concurrent endpoint edit. Force a database round trip, then detach the
+    # authority used by both the Proxmox API and SSH execution paths.
+    await _maybe_await(session.refresh(endpoint))
+    endpoint_snapshot = ProxmoxEndpoint.model_validate(endpoint.model_dump())
+    if not endpoint_snapshot.enabled:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -234,6 +280,16 @@ async def _resolve_preflight_target(
                 "message": "The persisted Proxmox endpoint is disabled.",
             },
         )
+    return endpoint_snapshot
+
+
+async def _resolve_preflight_target(
+    session: SessionDep,
+    endpoint_id: int,
+) -> tuple[ProxmoxEndpoint, ProxmoxSession]:
+    """Resolve exactly one enabled, database-backed session for ``endpoint_id``."""
+
+    endpoint_snapshot = await _refresh_endpoint_snapshot(session, endpoint_id)
 
     try:
         schemas = await load_proxmox_session_schemas(
@@ -262,7 +318,10 @@ async def _resolve_preflight_target(
                 "message": "Exactly one enabled Proxmox session must match endpoint_id.",
             },
         )
-    (schema,) = matches
+    # The loader check preserves the exact-one database-session invariant, but
+    # its rows may share this SQLAlchemy identity map. Build credentials from
+    # the same explicitly refreshed snapshot used for plan and SSH validation.
+    schema = proxmox_session_schema_from_endpoint(endpoint_snapshot)
     try:
         proxmox = await ProxmoxSession.create(schema, initialize_metadata=False)
     except Exception:  # noqa: BLE001 - never expose endpoint credentials upstream
@@ -274,7 +333,7 @@ async def _resolve_preflight_target(
                 "message": "The selected Proxmox endpoint session is unavailable.",
             },
         ) from None
-    return endpoint, proxmox
+    return endpoint_snapshot, proxmox
 
 
 def _resolve_execution_ssh_target(
@@ -291,6 +350,24 @@ def _resolve_execution_ssh_target(
                 "code": "endpoint_disabled",
                 "endpoint_id": endpoint_id,
                 "message": "The persisted Proxmox endpoint is disabled.",
+            },
+        )
+    if not endpoint.allow_writes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "endpoint_writes_disabled",
+                "endpoint_id": endpoint_id,
+                "message": "The persisted Proxmox endpoint does not allow writes.",
+            },
+        )
+    if not endpoint.ssh_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "endpoint_ssh_disabled",
+                "endpoint_id": endpoint_id,
+                "message": "The persisted Proxmox endpoint does not allow SSH execution.",
             },
         )
     if not request.target_node:
@@ -456,8 +533,10 @@ async def cancel_cloud_image_build_operation(
     if isinstance(gated, JSONResponse):
         return gated
     await gate_ssh_access(session, operation.endpoint_id)
+    await _maybe_await(session.refresh(gated))
+    endpoint_snapshot = ProxmoxEndpoint.model_validate(gated.model_dump())
     execution_target = _resolve_execution_ssh_target(
-        gated,
+        endpoint_snapshot,
         CloudImageTemplateBuildRequest(
             endpoint_id=operation.endpoint_id,
             target_node=operation.target_node,
@@ -465,15 +544,28 @@ async def cancel_cloud_image_build_operation(
             execute=True,
         ),
     )
-    cancellation_succeeded = await cancel_pipeline_operation(
-        execution_target,
-        remote_unit=operation.remote_unit,
+    cancel_task = asyncio.create_task(
+        cancel_pipeline_operation(
+            execution_target,
+            remote_unit=operation.remote_unit,
+        )
     )
-    await record_cancel_request(
-        session,
-        operation,
-        cancellation_succeeded=cancellation_succeeded,
-    )
+    cancellation_requested = False
+    try:
+        cancellation_succeeded = await await_task_through_repeated_cancellation(cancel_task)
+    except asyncio.CancelledError:
+        cancellation_requested = True
+        cancellation_succeeded = cancel_task.result()
+    try:
+        await _record_cancel_request_durably(
+            session,
+            operation,
+            cancellation_succeeded=cancellation_succeeded,
+        )
+    except asyncio.CancelledError:
+        cancellation_requested = True
+    if cancellation_requested:
+        raise asyncio.CancelledError
     await session.refresh(operation)
     return operation_response(operation)
 
@@ -494,22 +586,12 @@ async def _execute_bound_pipeline(
             },
         )
     target, recipe_digest = pipeline_execution_contract(req)
-    execution_target = _resolve_execution_ssh_target(endpoint, req)
-    try:
-        plan, plan_digest = verify_packer_plan(
-            req.preflight_plan_token,
-            endpoint=endpoint,
-            target=target,
-            recipe_digest=recipe_digest,
-        )
-    except PackerPlanError as error:
-        raise _plan_error(error) from None
-
     resolved_endpoint, proxmox = await _resolve_preflight_target(session, int(endpoint.id or 0))
     operation: CloudImageBuildOperation | None = None
     try:
-        # Re-check after session resolution so a concurrent endpoint edit cannot
-        # change API or SSH authority between plan verification and execution.
+        # Verify exactly once against the refreshed snapshot used to construct
+        # both API credentials and SSH authority. A stale object returned by
+        # the earlier route gate cannot authorize execution.
         try:
             plan, plan_digest = verify_packer_plan(
                 req.preflight_plan_token,
@@ -543,15 +625,39 @@ async def _execute_bound_pipeline(
                 },
             )
 
+        # Preflight can involve multiple remote reads. Re-read endpoint
+        # authority after it completes and authenticate the plan again directly
+        # before acquiring the target lease and starting an SSH child.
+        execution_endpoint = await _refresh_endpoint_snapshot(session, plan.endpoint_id)
         try:
-            operation = await acquire_operation_lease(
-                session,
-                plan=plan,
-                plan_digest=plan_digest,
+            plan, plan_digest = verify_packer_plan(
+                req.preflight_plan_token,
+                endpoint=execution_endpoint,
+                target=target,
+                recipe_digest=recipe_digest,
             )
         except PackerPlanError as error:
             raise _plan_error(error) from None
-        await mark_operation_running(session, operation)
+        execution_target = _resolve_execution_ssh_target(execution_endpoint, req)
+
+        try:
+            lease_task = asyncio.create_task(
+                acquire_operation_lease(
+                    session,
+                    plan=plan,
+                    plan_digest=plan_digest,
+                )
+            )
+            try:
+                operation = await await_task_through_repeated_cancellation(lease_task)
+            except asyncio.CancelledError:
+                if not lease_task.cancelled():
+                    operation = lease_task.result()
+                raise
+        except PackerPlanError as error:
+            raise _plan_error(error) from None
+        running_task = asyncio.create_task(mark_operation_running(session, operation))
+        await await_task_through_repeated_cancellation(running_task)
 
         try:
             response, execution_error = await execute_pipeline_response(
@@ -561,8 +667,8 @@ async def _execute_bound_pipeline(
                 remote_unit=operation.remote_unit,
             )
         except PipelineExecutionCancelled as cancelled:
-            await asyncio.shield(
-                finish_operation(
+            try:
+                await _finish_operation_durably(
                     session,
                     operation,
                     state="recovery_required",
@@ -571,11 +677,14 @@ async def _execute_bound_pipeline(
                     recovery_required=True,
                     error_code="execution_cancelled",
                 )
-            )
+            except asyncio.CancelledError:
+                # The helper only re-raises after the journal task has reached
+                # a terminal state, so preserve the original cancellation.
+                pass
             raise asyncio.CancelledError from None
         except HTTPException as error:
             detail = error.detail if isinstance(error.detail, dict) else {}
-            await finish_operation(
+            await _finish_operation_durably(
                 session,
                 operation,
                 state="failed",
@@ -590,7 +699,7 @@ async def _execute_bound_pipeline(
                 "Cloud Image Pipeline execution failed error_type=%s",
                 type(error).__name__,
             )
-            await finish_operation(
+            await _finish_operation_durably(
                 session,
                 operation,
                 state="recovery_required",
@@ -632,7 +741,7 @@ async def _execute_bound_pipeline(
                     "diagnostics": [*response.diagnostics, completion_finding],
                 }
             )
-            await finish_operation(
+            transitioned = await _finish_operation_durably(
                 session,
                 operation,
                 state="completed",
@@ -641,7 +750,24 @@ async def _execute_bound_pipeline(
                 recovery_required=False,
                 error_code=None,
             )
-            return response
+            if transitioned or operation.state == "completed":
+                return response
+            race_finding = PackerFinding(
+                code="execution_cancel_requested",
+                severity=PackerFindingSeverity.error,
+                target=f"vmid:{target.vmid}",
+                message=(
+                    "Cancellation won the journal transition; preserve the artifact for recovery."
+                ),
+            )
+            return response.model_copy(
+                update={
+                    "status": "recovery_required",
+                    "verified": False,
+                    "recovery_required": True,
+                    "diagnostics": [*response.diagnostics, race_finding],
+                }
+            )
 
         recovery_required = possible_partial or response.execution.attempted
         error_code = (
@@ -671,7 +797,7 @@ async def _execute_bound_pipeline(
                 "diagnostics": [*response.diagnostics, failure_finding],
             }
         )
-        await finish_operation(
+        await _finish_operation_durably(
             session,
             operation,
             state="recovery_required" if recovery_required else "failed",
@@ -681,6 +807,30 @@ async def _execute_bound_pipeline(
             error_code=error_code,
         )
         return response
+    except asyncio.CancelledError:
+        if operation is not None and operation.state not in {
+            "completed",
+            "failed",
+            "cancelled",
+            "recovery_required",
+        }:
+            try:
+                await _finish_operation_durably(
+                    session,
+                    operation,
+                    state="recovery_required",
+                    execution=CloudImageTemplateExecutionSummary(
+                        attempted=operation.attempted,
+                        enabled=operation.attempted,
+                        cancellation_attempted=operation.attempted,
+                    ),
+                    verified=False,
+                    recovery_required=True,
+                    error_code="execution_cancelled",
+                )
+            except asyncio.CancelledError:
+                pass
+        raise
     finally:
         await _close_proxmox_session(proxmox, context="Cloud Image Pipeline")
 

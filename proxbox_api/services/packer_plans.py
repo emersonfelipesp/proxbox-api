@@ -11,8 +11,9 @@ import uuid
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.credentials import derive_service_signing_key
@@ -26,6 +27,7 @@ from proxbox_api.schemas.cloud_provision import (
 _PLAN_TTL_SECONDS = 300
 _EXECUTION_LEASE_SECONDS = 3660
 _PLAN_SIGNING_CONTEXT = "packer-preflight-v1"
+_ENDPOINT_CONFIG_SIGNING_CONTEXT = "packer-endpoint-config-v1"
 
 
 class PackerPlanError(ValueError):
@@ -68,10 +70,10 @@ def _b64decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def endpoint_config_digest(endpoint: ProxmoxEndpoint) -> str:
-    """Hash every persisted field that can affect API or SSH execution authority."""
+def _endpoint_config_payload(endpoint: ProxmoxEndpoint) -> dict[str, object]:
+    """Return every persisted field that can affect API or SSH authority."""
 
-    payload = {
+    return {
         "id": endpoint.id,
         "name": endpoint.name,
         "ip_address": endpoint.ip_address,
@@ -92,7 +94,16 @@ def endpoint_config_digest(endpoint: ProxmoxEndpoint) -> str:
         "ssh_identity_file": endpoint.ssh_identity_file,
         "ssh_known_host_fingerprint": endpoint.ssh_known_host_fingerprint,
     }
-    return hashlib.sha256(_canonical_json(payload)).hexdigest()
+
+
+def endpoint_config_digest(endpoint: ProxmoxEndpoint) -> str:
+    """Authenticate endpoint authority without publishing a credential oracle."""
+
+    return hmac.new(
+        derive_service_signing_key(_ENDPOINT_CONFIG_SIGNING_CONTEXT),
+        _canonical_json(_endpoint_config_payload(endpoint)),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def issue_packer_plan(
@@ -208,16 +219,24 @@ async def acquire_operation_lease(
     )
     existing = existing_result.first()
     if existing is not None:
-        if existing.lease_expires_at > current_time:
-            raise PackerPlanError("build_target_leased")
-        existing.state = "recovery_required"
-        existing.recovery_required = True
-        existing.error_code = "execution_lease_expired"
-        existing.lease_key = None
-        existing.finished_at = current_time
-        existing.updated_at = current_time
-        session.add(existing)
-        await session.commit()
+        if existing.lease_expires_at <= current_time:
+            # Expiry only proves that the control-plane heartbeat is stale. It
+            # cannot prove that the fixed remote systemd unit stopped, so keep
+            # the unique endpoint/VMID blocker until an explicit reconciliation
+            # workflow exists.
+            existing.state = "recovery_required"
+            existing.recovery_required = True
+            existing.error_code = "execution_lease_expired"
+            existing.updated_at = current_time
+            session.add(existing)
+            await session.commit()
+            raise PackerPlanError("build_target_recovery_required")
+        if existing.recovery_required or existing.state in {
+            "cancelled",
+            "recovery_required",
+        }:
+            raise PackerPlanError("build_target_recovery_required")
+        raise PackerPlanError("build_target_leased")
 
     operation = CloudImageBuildOperation(
         id=plan.plan_id,
@@ -268,24 +287,37 @@ async def finish_operation(
     verified: bool,
     recovery_required: bool,
     error_code: str | None,
-) -> None:
+) -> bool:
+    """Conditionally finalize a leased/running row without losing a cancel race."""
+
     now = time.time()
-    operation.state = state
-    operation.lease_key = None
-    operation.exit_code = execution.exit_code
-    operation.stdout_bytes = execution.stdout_bytes
-    operation.stderr_bytes = execution.stderr_bytes
-    operation.stdout_lines = execution.stdout_lines
-    operation.stderr_lines = execution.stderr_lines
-    operation.verified = verified
-    operation.recovery_required = recovery_required
-    operation.cancel_requested = operation.cancel_requested or execution.cancellation_attempted
-    operation.cancellation_succeeded = execution.cancellation_succeeded
-    operation.error_code = error_code
-    operation.finished_at = now
-    operation.updated_at = now
-    session.add(operation)
+    retain_blocker = recovery_required or state in {"cancelled", "recovery_required"}
+    values: dict[str, object] = {
+        "state": state,
+        "exit_code": execution.exit_code,
+        "stdout_bytes": execution.stdout_bytes,
+        "stderr_bytes": execution.stderr_bytes,
+        "stdout_lines": execution.stdout_lines,
+        "stderr_lines": execution.stderr_lines,
+        "verified": verified,
+        "recovery_required": retain_blocker,
+        "cancel_requested": operation.cancel_requested or execution.cancellation_attempted,
+        "cancellation_succeeded": execution.cancellation_succeeded,
+        "error_code": error_code,
+        "finished_at": now,
+        "updated_at": now,
+    }
+    if not retain_blocker:
+        values["lease_key"] = None
+    result = await session.exec(
+        update(CloudImageBuildOperation)
+        .where(col(CloudImageBuildOperation.id) == operation.id)
+        .where(col(CloudImageBuildOperation.state).in_(["leased", "running"]))
+        .values(**values)
+    )
     await session.commit()
+    await session.refresh(operation)
+    return bool(getattr(result, "rowcount", 0))
 
 
 async def record_cancel_request(
@@ -293,18 +325,26 @@ async def record_cancel_request(
     operation: CloudImageBuildOperation,
     *,
     cancellation_succeeded: bool,
-) -> None:
-    """Journal an operator cancellation without prematurely releasing its lease."""
+) -> bool:
+    """CAS a running operation to recovery without overwriting completion."""
 
     now = time.time()
-    operation.cancel_requested = True
-    operation.cancellation_succeeded = cancellation_succeeded
-    operation.recovery_required = True
-    operation.state = "recovery_required"
-    operation.error_code = "execution_cancel_requested"
-    operation.updated_at = now
-    session.add(operation)
+    result = await session.exec(
+        update(CloudImageBuildOperation)
+        .where(col(CloudImageBuildOperation.id) == operation.id)
+        .where(col(CloudImageBuildOperation.state) == "running")
+        .values(
+            cancel_requested=True,
+            cancellation_succeeded=cancellation_succeeded,
+            recovery_required=True,
+            state="recovery_required",
+            error_code="execution_cancel_requested",
+            updated_at=now,
+        )
+    )
     await session.commit()
+    await session.refresh(operation)
+    return bool(getattr(result, "rowcount", 0))
 
 
 def operation_response(operation: CloudImageBuildOperation) -> CloudImageBuildOperationResponse:

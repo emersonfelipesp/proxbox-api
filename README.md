@@ -77,10 +77,12 @@ authoritative `cluster/nextid?vmid=` read without requiring `allow_writes`;
 malformed upstream collections, denied VMID checks, and missing storage health
 state fail closed as `unsupported`.
 An executable workflow first renders a non-executing build plan to obtain its
-`recipe_digest`, submits that digest to preflight, and receives a signed
-five-minute `plan_token`. Execution must present the token; proxbox-api
-revalidates endpoint configuration and the exact target, reruns preflight,
-then consumes the plan into a durable single-owner `endpoint_id:vmid` lease.
+opaque, domain-separated HMAC `recipe_digest`, submits that binding to
+preflight, and receives a signed five-minute `plan_token`. Execution must
+present the token; proxbox-api authenticates endpoint configuration with a
+separate keyed binding, reruns preflight, refreshes endpoint authority again
+immediately before the write boundary, then consumes the plan into a durable
+single-owner `endpoint_id:vmid` lease.
 Operation state is available at `GET /cloud/templates/images/operations/{id}`
 and a running unit can be stopped through the corresponding `/cancel` route.
 Build responses use the secret-safe v2 contract; raw scripts, cloud-init, URLs, and process output
@@ -88,12 +90,19 @@ are omitted unless a protected operator explicitly requests a sensitive
 preview with `execute=false`. Execution additionally requires one complete
 enabled persisted endpoint/node SSH binding; caller SSH fields cannot retarget
 the request, and the persisted host-key fingerprint is verified before strict
-OpenSSH execution isolated from ambient SSH config and proxies. The executor
+OpenSSH execution isolated from ambient SSH config and proxies. The private key
+must be a root/service-owned regular non-symlink file with no group/world
+permissions; it is opened with `O_NOFOLLOW`, verified with `fstat`, and
+inherited through `/proc/self/fd` so a pathname swap cannot replace it. The executor
 uses an async, uniquely named `systemd-run` unit, drains output into bounded
 counts without retaining it, and never reports completion until a final
 Proxmox API read verifies the expected artifact. Cancellation, timeout, or
 failed verification leaves a durable `recovery_required` record and never
-deletes a partial artifact. Generated
+deletes a partial artifact. Recovery, cancellation, unknown state, and lease
+expiry retain the target blocker until a future explicit reconciliation flow;
+this change adds no destructive recovery action. Repeated request cancellation
+cannot interrupt mandatory process/unit cleanup, journal transitions, or
+session close, and cancel/completion transitions use compare-and-swap ordering. Generated
 snippet files use encoded fixed writes and exact `pvesm path` volume targets;
 source-tree builds use fixed root-owned server recipes and artifacts rather
 than caller paths or shell commands; all providers stage in private randomized

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
 import json
 import logging
@@ -36,12 +37,14 @@ _CANARY = "PACKER-CANARY-SECRET-4d9f0c"
 _PUBLIC_IMAGE = f"https://93.184.216.34/image.qcow2?sig={_CANARY}"
 
 
-def _execution_target() -> CloudImageSSHExecutionTarget:
+def _execution_target(
+    identity_file: str = "/etc/proxbox/ssh_keys/id_ed25519",
+) -> CloudImageSSHExecutionTarget:
     return CloudImageSSHExecutionTarget(
         host="93.184.216.34",
         user="root",
         port=22,
-        identity_file="/etc/proxbox/ssh_keys/id_ed25519",
+        identity_file=identity_file,
         known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     )
 
@@ -169,7 +172,8 @@ def _install_route_session(
         *,
         initialize_metadata: bool = True,
     ) -> object:
-        assert resolved_schema is schema
+        assert isinstance(resolved_schema, ProxmoxSessionSchema)
+        assert resolved_schema.db_endpoint_id == endpoint_id
         assert initialize_metadata is False
         return RouteSession()
 
@@ -616,7 +620,9 @@ async def test_preflight_target_resolver_selects_only_exact_enabled_endpoint(
         return [other_schema, exact_schema]
 
     async def fake_create(schema: object, *, initialize_metadata: bool = True) -> object:
-        assert schema is exact_schema
+        assert isinstance(schema, ProxmoxSessionSchema)
+        assert schema.db_endpoint_id == endpoint_id
+        assert schema.ip_address == endpoint.ip_address
         assert initialize_metadata is False
         return created
 
@@ -860,6 +866,41 @@ async def test_preflight_route_suppresses_secret_bearing_cleanup_failure(
     assert canary not in caplog.text
 
 
+@pytest.mark.parametrize("cancellation_count", [2, 3])
+@pytest.mark.asyncio
+async def test_session_close_completes_through_repeated_cancellation(
+    cancellation_count: int,
+) -> None:
+    close_entered = asyncio.Event()
+    release_close = asyncio.Event()
+    close_completed = False
+
+    class BlockingCloseSession:
+        async def aclose(self) -> None:
+            nonlocal close_completed
+            close_entered.set()
+            await release_close.wait()
+            close_completed = True
+
+    task = asyncio.create_task(
+        template_images._close_proxmox_session(
+            BlockingCloseSession(),  # type: ignore[arg-type]
+            context="repeated-cancel test",
+        )
+    )
+    await close_entered.wait()
+    for _ in range(cancellation_count):
+        task.cancel()
+        await asyncio.sleep(0)
+    assert task.done() is False
+    release_close.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert close_completed is True
+
+
 def _secret_build_request(**overrides: object) -> CloudImageTemplateBuildRequest:
     payload: dict[str, object] = {
         "endpoint_id": 7,
@@ -987,6 +1028,12 @@ async def test_subprocess_start_error_is_stable_bounded_and_secret_free(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "true")
+    key_dir = tmp_path / "ssh_keys"
+    key_dir.mkdir()
+    identity_file = key_dir / "id_ed25519"
+    identity_file.write_text("test-private-key", encoding="utf-8")
+    identity_file.chmod(0o600)
+    monkeypatch.setenv("PROXBOX_SSH_KEY_DIR", str(key_dir))
 
     async def fail(*_args: object, **_kwargs: object) -> None:
         raise error_type(f"ssh unavailable {_CANARY}")
@@ -998,7 +1045,7 @@ async def test_subprocess_start_error_is_stable_bounded_and_secret_free(
     monkeypatch.setattr(pipeline_scripts, "_pinned_known_hosts_file", fake_pin)
     response, _error_code = await pipeline_scripts.execute_pipeline_response(
         _secret_build_request(execute=True, ssh_host="93.184.216.34"),
-        execution_target=_execution_target(),
+        execution_target=_execution_target(str(identity_file)),
         operation_id="00000000-0000-0000-0000-000000000001",
         remote_unit="proxbox-cloud-image-00000000-0000-0000-0000-000000000001",
     )

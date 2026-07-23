@@ -87,12 +87,14 @@ The preflight service is deliberately read-only. Keep all Proxmox calls in
 task waits, and SSH execution out of that module.
 
 Readiness callers may omit `recipe_digest` for v1 compatibility, but an
-executable approval requires the digest returned by a non-executing build
-plan. A ready response with that digest carries a signed five-minute
-`plan_token`; it binds endpoint configuration, target, storage roles, VMID, and
-recipe without writing the database. Execution must authenticate the token,
-rerun preflight, and consume the plan UUID exactly once into the durable
-operation journal and unique active `endpoint_id:vmid` lease.
+executable approval requires the opaque, domain-separated HMAC binding returned
+by a non-executing build plan; never expose a raw script hash. A ready response
+with that binding carries a signed five-minute `plan_token`; a separate keyed
+binding authenticates endpoint configuration alongside target, storage roles,
+VMID, and recipe without writing the database. Execution must authenticate the
+token, rerun preflight, authoritatively refresh and revalidate the endpoint
+again immediately before the write boundary, and consume the plan UUID exactly
+once into the durable operation journal and unique `endpoint_id:vmid` blocker.
 
 The netbox-packer-shaped fixture under `tests/fixtures/` is producer-owned
 compatibility intent, not downstream conformance evidence. Keep
@@ -210,9 +212,11 @@ Proxmox packages so cloud-init never blocks on an interactive grub prompt.
   403 before any SSH attempt; an API-only endpoint returns 403
   `reason="ssh_not_enabled_for_endpoint"`.
 - `preflight_plan_token` is mandatory after both endpoint gates. Verify its
-  signature, five-minute expiry, endpoint configuration digest, exact target,
-  and server-rendered recipe digest; then rerun preflight immediately before
-  atomically acquiring the operation lease. Never permit plan replay.
+  signature, five-minute expiry, separately keyed endpoint configuration
+  binding, exact target, and domain-separated HMAC recipe binding; then rerun
+  preflight, force an authoritative endpoint refresh, and revalidate the plan
+  and SSH target immediately before atomically acquiring the operation blocker.
+  Never permit plan replay.
 - The selected endpoint must be enabled and carry a complete persisted binding:
   `ssh_target_node`, `ssh_host`, `ssh_username`, `ssh_port`,
   `ssh_identity_file`, and `ssh_known_host_fingerprint`. The request's
@@ -220,10 +224,13 @@ Proxmox packages so cloud-init never blocks on an interactive grub prompt.
 - Host, user, port, identity path, and host-key fingerprint are derived only
   from that binding. Legacy request SSH fields are assertions when explicitly
   supplied; a mismatch returns 409 before any subprocess starts.
-- `ssh_identity_file` must resolve under `PROXBOX_SSH_KEY_DIR`. Before strict
-  OpenSSH execution, `ssh-keyscan` output must contain a key whose SHA-256
-  fingerprint exactly matches the persisted value; only that exact key is
-written to a temporary `UserKnownHostsFile`.
+- `ssh_identity_file` must resolve under `PROXBOX_SSH_KEY_DIR` and be a
+  root/service-owned regular non-symlink file with no group/world permissions.
+  Open it once with `O_NOFOLLOW`, verify the descriptor with `fstat`, and pass
+  `/proc/self/fd/<fd>` to children so a pathname swap cannot replace the key.
+  Before strict OpenSSH execution, `ssh-keyscan` output must contain a key whose
+  SHA-256 fingerprint exactly matches the persisted value; only that exact key
+  is written to a temporary `UserKnownHostsFile`.
 - Invoke the absolute `/usr/bin/ssh` client with `-F none`; explicitly disable
   `ProxyCommand`, `ProxyJump`, and hostname canonicalization. Do not permit
   ambient OpenSSH configuration to redirect execution.
@@ -231,11 +238,16 @@ written to a temporary `UserKnownHostsFile`.
   unit through `asyncio.create_subprocess_exec`. Drain stdout/stderr by chunks
   into byte/line counters; never retain raw output. Timeout, request
   cancellation, and the authenticated operation `/cancel` route stop that
-  exact unit.
+  exact unit. Mandatory local/remote cleanup, journal updates, and session close
+  must complete through repeated cancellation.
 - Persist state in `CloudImageBuildOperation` without scripts, URLs,
   cloud-init, SSH material, or raw output. Never mark completion from exit code
   alone: verify the expected artifact through the Proxmox API. Preserve any
   unknown/partial state as `recovery_required`; never delete it automatically.
+  Cancel/completion transitions use compare-and-swap ordering. Recovery,
+  cancellation, unknown state, and lease expiry retain the unique target
+  blocker until a future explicit reconciliation flow; this scope has no
+  destructive recovery or automatic release.
 - The runtime image bakes in `openssh-client` (Dockerfile `runtime-base`, since
   `0.0.18.post1`) — never rely on an in-container `apk add`.
 

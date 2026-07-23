@@ -68,11 +68,14 @@ raw exceptions, endpoint schemas, credentials, and process output do not cross
 the HTTP or log boundary.
 
 Read-only does not mean advisory. A successful preflight with a
-server-rendered `recipe_digest` returns a signed five-minute plan that binds the
-current endpoint configuration digest, node, provider, storage roles, VMID,
-and recipe. The preflight still performs no database mutation. Execution must
-authenticate that plan, rerun the exact GET-only checks, and consume its UUID
-once while acquiring a unique active `endpoint_id:vmid` lease.
+server-rendered `recipe_digest` returns a signed five-minute plan. The recipe
+binding is a domain-separated HMAC rather than a dictionary-testable script
+hash, and endpoint configuration uses a separate keyed binding. The plan also
+binds node, provider, storage roles, and VMID. The preflight still performs no
+database mutation. Execution authenticates that plan, reruns the exact GET-only
+checks, then authoritatively refreshes and revalidates endpoint/API/SSH authority
+again immediately before consuming its UUID and acquiring the unique active
+`endpoint_id:vmid` blocker.
 
 Execution has a separate persisted authority boundary. The selected local
 `ProxmoxEndpoint` must be enabled and contain one complete node/SSH binding.
@@ -81,16 +84,23 @@ fingerprint from that row; legacy request SSH fields are assertions and cannot
 retarget execution. A scanned server key must match the persisted fingerprint
 before the exact key is passed to strict OpenSSH host verification. Absolute
 SSH binaries, `-F none`, and disabled proxy/canonicalization options isolate the
-connection from ambient OpenSSH configuration.
+connection from ambient OpenSSH configuration. The private key is opened once
+with `O_NOFOLLOW`, descriptor-verified with `fstat` as a root/service-owned
+regular file without group/world permissions, and inherited through
+`/proc/self/fd`, so a later symlink or atomic pathname swap cannot replace it.
 
 The lease and state transitions are persisted in
 `CloudImageBuildOperation`; scripts, URLs, credentials, cloud-init, and raw
 output are intentionally not. SSH runs asynchronously in a unique fixed
 `systemd-run` unit while stdout/stderr are drained into counters. Timeout,
 request cancellation, and the authenticated operation-cancel route stop that
-unit. A zero exit code is only `verification_pending`: completion requires a
-final Proxmox API read of the expected artifact. Unknown or partial state is
-preserved as `recovery_required`, never deleted automatically.
+unit. Mandatory process/unit cleanup, journal updates, and session close finish
+through repeated cancellation. Cancel/completion transitions use
+compare-and-swap ordering. A zero exit code is only `verification_pending`:
+completion requires a final Proxmox API read of the expected artifact. Unknown,
+cancelled, recovery, or expired state keeps the unique target blocker as
+`recovery_required`, never deleted or released automatically; explicit
+reconciliation is intentionally outside this scope.
 
 `CloudImageBuildTarget` is the canonical provider/storage plan for both
 preflight and rendering. It derives snippet requirements from the provider;
@@ -115,9 +125,9 @@ establish NPR 7150.2D compliance, approval, or independent verification.
 | `PF-03` stable node/storage/VMID/unsupported findings | preflight v1 schemas, provider-derived storage requirements, and authoritative `cluster/nextid?vmid=` | typed finding-shape, ISO/release storage roles, hidden VMID, malformed payload, collision, unsupported-check, and fixture tests |
 | `PF-04` secret-safe build/error responses | build response v2, encoded fixed writes, typed source recipes, generic validation handler, execution summary, fixed diagnostics, preview validator | delimiter/source-command/422 and signed-URL/cloud-init/stdout/stderr/session/SDK/cleanup canaries plus preview/execute rejection tests |
 | `PF-05` producer/OpenAPI stability | explicit contract versions, canonical `vm_storage`, legacy `storage` alias, and `0.0.21.x` support window | OpenAPI assertions, alias/conflict tests, producer fixture validation, and the explicitly producer-owned consumer-shaped fixture in `tests/fixtures/` |
-| `PF-06` persisted execution authority and exact cleanup | endpoint/node SSH binding, pinned host-key verification, ambient-config isolation, and BaseException-safe session factory cleanup | exact SSH argv, disabled/node/host/key mismatch, fingerprint pinning, post-connect failure, cancellation, and exact-once cleanup tests |
-| `PF-07` approved-plan binding and one owner | signed expiring claims plus `CloudImageBuildOperation.lease_key` | tamper, drift, expiry, replay, concurrent lease, and release tests in `tests/test_packer_execution_binding.py` |
-| `PF-08` verified durable execution | async stream drain, fixed systemd unit, cancellation, journal transitions, and final API verification | bounded counter, cancellation, verified completion, forced recovery, and no-success-without-artifact tests |
+| `PF-06` persisted execution authority and exact cleanup | refreshed endpoint/node SSH binding, pinned host key, descriptor-pinned private key, ambient-config isolation, and cancellation-safe session cleanup | concurrent endpoint edit, symlink/mode/owner/path-swap, exact SSH argv, fingerprint, repeated cancellation, and exact-close tests |
+| `PF-07` approved-plan binding and one owner | domain-separated endpoint/recipe HMACs, signed expiring claims, and retained `CloudImageBuildOperation.lease_key` blockers | credential/recipe oracle, tamper, drift, expiry, replay, concurrent lease, and fail-closed recovery tests |
+| `PF-08` verified durable execution | async stream drain, fixed systemd unit, repeated-cancellation cleanup, CAS journal transitions, and final API verification | bounded counter, double/triple cancellation, cancel/completion races, verified completion, forced recovery, and no-success-without-artifact tests |
 
 Image storage requires `iso` only for `proxmox_iso`; release/source providers
 use private host staging and make no image-storage claim. VM storage always

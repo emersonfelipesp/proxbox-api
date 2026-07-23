@@ -78,11 +78,15 @@ valida a capacidade configurada real `images` e nao exige uma entrada
 ### Privacidade da resposta de build
 
 O fluxo executavel possui tres etapas: renderizar com `execute=false` para
-obter `recipe_digest`; executar o preflight com esse digest para obter o
-`plan_token`; e enviar `execute=true` com `preflight_plan_token`. A ultima etapa
-revalida assinatura, expiracao, configuracao e receita, repete o preflight e
-adquire atomicamente o lease exclusivo `endpoint_id:vmid`. Replay, drift,
-expiracao e lease ocupado retornam codigos fixos.
+obter `recipe_digest`, um HMAC opaco com dominio separado e nunca um hash bruto
+do script; executar o preflight com esse binding para obter o `plan_token`; e
+enviar `execute=true` com `preflight_plan_token`. A ultima etapa revalida
+assinatura, expiracao, binding de configuracao com chave separada e receita,
+repete o preflight, atualiza autoritativamente endpoint/SSH imediatamente antes
+da escrita e adquire atomicamente o bloqueador exclusivo `endpoint_id:vmid`.
+Replay, drift e expiracao retornam codigos fixos; recovery, cancelamento, estado
+desconhecido ou lease de execucao expirado retornam
+`build_target_recovery_required` e continuam bloqueados sem release automatico.
 
 `POST /cloud/templates/images` retorna o contrato v2. Respostas padrao e de
 execucao omitem URLs de imagem/source, cloud-init gerado, scripts de first boot
@@ -108,6 +112,10 @@ usar `access_methods="api_ssh"` e conter `ssh_target_node`, `ssh_host`,
 assercoes; qualquer divergencia retorna `409` antes de subprocesso. A chave do
 servidor e escaneada, comparada ao fingerprint SHA-256 persistido e entregue ao
 OpenSSH com verificacao estrita.
+O arquivo de identidade precisa ser regular, nao symlink, pertencer a root/conta
+do servico e nao ter permissoes de grupo/mundo. Ele e aberto uma vez com
+`O_NOFOLLOW`, verificado com `fstat` e herdado como `/proc/self/fd/<fd>`, de modo
+que troca concorrente do pathname nao substitui a chave.
 O processo SSH usa binarios absolutos, `-F none`, `ProxyCommand=none`,
 `ProxyJump=none` e `CanonicalizeHostname=no`, impedindo que configuracao
 ambiente redirecione a conexao.
@@ -117,9 +125,14 @@ Stdout/stderr sao drenados continuamente apenas para contadores, sem acumular,
 registrar ou persistir conteudo. Timeout, cancelamento do request ou `POST
 /cloud/templates/images/operations/{id}/cancel` interrompem a unidade exata;
 `GET /cloud/templates/images/operations/{id}` expoe o journal sem segredos. Um
+cleanup local/remoto, transicao do journal e fechamento da sessao terminam mesmo
+sob cancelamento repetido. Cancelamento e completion usam compare-and-swap para
+que um request stale nao sobrescreva o vencedor. Um
 exit code zero permanece `verification_pending` ate a API Proxmox confirmar o
 artefato. Estado parcial ou desconhecido vira `recovery_required` e nunca e
-apagado automaticamente.
+apagado automaticamente. Recovery, cancelamento, estado desconhecido e lease
+expirado retêm o bloqueador ate um futuro fluxo explicito de reconciliacao; este
+escopo nao expoe recovery destrutivo.
 
 ### Bloqueio de rollout do consumidor
 
