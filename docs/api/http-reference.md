@@ -341,6 +341,19 @@ Implemented in `proxbox_api/routes/proxmox/access.py`.
 - `GET /proxmox/access/tokens/{userid}/{tokenid}?cluster_name=` — Retrieve info for a Proxmox API token. Returns `AccessTokenInfoSchema | null`. `value` is only set on regenerate responses.
 - `PUT /proxmox/access/tokens/{userid}/{tokenid}/regenerate?cluster_name=` — Regenerate the secret of an existing API token in-place (PVE 9.2+). All ACL entries are preserved. Returns `TokenRegenerateResponseSchema`. **Store the returned `value` immediately** — it cannot be retrieved again.
 
+### Service Monitoring
+
+Implemented in `proxbox_api/routes/proxmox/services.py`. Read-only, agentless
+systemd service-monitoring pulled over SSH using the endpoint's own registered
+SSH credential — no Proxmox-side agent required. `endpoint_id` is the
+**NetBox-side** `ProxmoxEndpoint` id (same id space as the SSH Terminal below),
+not proxbox-api's own SQLite endpoint id.
+
+- `GET /proxmox/services/systemd?endpoint_id=&units=` — Read current `systemctl show` state for one or more systemd units. `units` is optional and repeatable/comma-separated; when omitted, the endpoint's NetBox `service_monitoring_units` value is used, falling back to the default 11-unit Proxmox set (`pve-cluster.service`, `corosync.service`, `pvedaemon.service`, `pveproxy.service`, `pvestatd.service`, `pve-firewall.service`, `pvescheduler.service`, `spiceproxy.service`, `qmeventd.service`, `pve-ha-lrm.service`, `pve-ha-crm.service`). Unit names must match `^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, contain no `..`, be ≤100 characters, and at most 32 units may be requested per call (`422` on violation). Returns `ProxmoxServicesResponse` (`endpoint_id`, `host`, `collected_at`, `reachable`, `services: list[ProxmoxServiceRecord]`, optional `error`). `reachable=false` (SSH transport unreachable) is a legitimate monitoring result returned as HTTP 200, not an error.
+  - **Gated** on the NetBox `ProxmoxEndpoint` being `enabled`, `service_monitoring_enabled=true`, `allow_writes=true`, `access_methods="api_ssh"`, having complete SSH credentials, and netbox-rpc not disabled for the endpoint; otherwise `403` with a `service_monitoring_*` reason code. Unknown `endpoint_id` returns `404`.
+  - Executes a fixed-argv `systemctl show --no-pager -p <prop> ... -- <unit> ...` command (no `sudo`); each unit name is additionally `shlex.quote`'d as defense in depth. Bounded by a 10-second SSH command timeout (`error.reason="command_timeout"` with `reachable=true` on expiry, not an exception).
+  - Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure; not intended to be called directly by end users.
+
 ### SSH Terminal
 
 Implemented in `proxbox_api/routes/ssh_terminal.py`. Provides a browser-based SSH terminal backed by `asyncssh`.
