@@ -97,18 +97,30 @@ RBD syncs also include reflected inventory in `raw` for `netbox-ceph`.
 | `GET` | `/ceph/sync/rbd` | Fetch RBD pool, image, and snapshot inventory |
 
 The v2 `/ceph/v2` routes are the desired-state orchestration surface. They can
-validate payloads, build plans, apply approved operations, stream operation
-events, reconcile state, and manage external metric/dashboard provider records.
+validate payloads, persist endpoint-bound plans, issue independent approvals,
+apply approved operations, stream operation events, reconcile state, and manage
+external metric/dashboard provider records. See
+[Ceph v2 Write Approval and Recovery](../operations/ceph-write-approvals.md) for
+the security contract and rollout procedure. Proxmox mutations require one
+exact plan-bound node, a strict payload for the `(kind, action)` pair, a live
+owner-bound run lease, and one new node-consistent full UPID. Dashboard and
+external provider records remain read/plan/reconcile-only; their apply and
+destructive capabilities are false until durable provider authority exists.
+Task references are unique globally within a provider, not merely within an
+endpoint. Repeated cancellation cannot interrupt task-claim, completion, or
+cancellation evidence once its durability task starts.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/ceph/v2/capabilities` | Report provider capabilities for UI gating |
+| `GET` | `/ceph/v2/capabilities` | Report endpoint-scoped provider capabilities for UI gating |
 | `POST` | `/ceph/v2/validate` | Validate one desired object or a full desired-state bundle |
-| `POST` | `/ceph/v2/plans` | Build and remember a plan |
-| `GET` | `/ceph/v2/plans/{plan_id}` | Inspect a remembered plan |
-| `POST` | `/ceph/v2/plans/{plan_id}/apply` | Apply a remembered plan |
+| `POST` | `/ceph/v2/plans` | Build and persist a canonical endpoint-bound plan |
+| `GET` | `/ceph/v2/plans/{plan_id}` | Inspect a persisted plan |
+| `POST` | `/ceph/v2/plans/{plan_id}/approvals` | Issue one short-lived approval to an actor distinct from the requester |
+| `GET` | `/ceph/v2/approvals/{approval_id}` | Recover safe approval/linked-run metadata without exposing token/hash |
+| `POST` | `/ceph/v2/plans/{plan_id}/apply` | Atomically consume approval and apply the persisted plan |
 | `POST` | `/ceph/v2/plan` | Compatibility alias for `POST /ceph/v2/plans` |
-| `POST` | `/ceph/v2/apply` | Build then apply a plan from one payload |
+| `POST` | `/ceph/v2/apply` | Compatibility alias requiring a persisted plan ID and approval token; inline apply is closed |
 | `GET` | `/ceph/v2/operations/{operation_id}` | Inspect an operation run |
 | `GET` | `/ceph/v2/operations/{operation_id}/events` | Stream operation progress as SSE |
 | `POST` | `/ceph/v2/reconcile` | Reconcile desired state against provider state |
@@ -122,6 +134,23 @@ events, reconcile state, and manage external metric/dashboard provider records.
 | `GET` | `/ceph/v2/external/clusters` | List external Ceph clusters |
 | `POST` | `/ceph/v2/external/clusters` | Create an external Ceph cluster |
 | `POST` | `/ceph/v2/external/clusters/{cluster_id}/capabilities` | Probe capabilities for an external cluster |
+
+Proxmox plan/approval/apply requires an explicit local endpoint ID and exactly
+one request-private session created from it. `netbox-ceph` obtains this backend
+ID through its durable netbox-proxbox endpoint mapping; the NetBox plugin PK is
+not accepted as an equivalent selector. A stable server-keyed revision of
+the full mutation-relevant endpoint schema is persisted with the plan,
+approval, and run. That revision, the endpoint/session schema, `enabled`, and
+`allow_writes` are checked again immediately before every SDK mutation. Both
+`PROXBOX_ENABLE_CEPH_V2_WRITES` and
+`PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY` default false and must be explicitly true
+before capability/approval/apply can authorize a mutation. Dispatch intent is
+durable before the call; a syntactically valid UPID is submitted until terminal
+polling proves completed/failed, otherwise the run is `outcome_unknown`.
+Expired in-flight leases are atomically recovered to the same conservative
+state. The raw approval token is returned once and stored only as a hash.
+Reconcile is read-only, and non-Proxmox apply remains closed until an equivalent
+durable selector and fresh write gate exist.
 
 ## Intent (`/intent`)
 

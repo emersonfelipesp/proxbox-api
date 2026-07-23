@@ -8,7 +8,7 @@ import pytest
 
 from proxbox_api.ceph.dashboard_client import DashboardEndpointConfig
 from proxbox_api.ceph.v2_providers import dashboard as dash_mod
-from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported
+from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephWriteGateDenied
 from proxbox_api.ceph.v2_providers.dashboard import DashboardCephProviderAdapter
 from proxbox_api.ceph.v2_schemas import DesiredStateBundle, ProviderOperation
 
@@ -73,10 +73,33 @@ async def test_capabilities_inactive_without_sdk(monkeypatch) -> None:
 async def test_capabilities_active_with_sdk(monkeypatch) -> None:
     monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: True)
     caps = await DashboardCephProviderAdapter().capabilities()
-    assert caps.apply is True and caps.read_state is True
-    assert caps.operation_kinds.get("pool:create") is True
-    assert caps.operation_kinds.get("rbd_image:create") is True
+    assert caps.apply is False and caps.destructive_operations is False
+    assert caps.read_state is True and caps.plan is True
+    assert caps.operation_kinds.get("pool:create") is False
+    assert caps.operation_kinds.get("rbd_image:create") is False
     assert caps.operation_kinds.get("rgw_bucket:create") is False  # via rgw_admin/external
+    assert caps.operation_kinds.get("pool:noop") is True
+    assert "noop" not in caps.operation_kinds
+    assert any("durably bound" in note for note in caps.notes)
+
+
+async def test_capabilities_and_apply_are_default_off_without_trusted_gateway(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: True)
+    monkeypatch.delenv("PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY", raising=False)
+    client = _FakeDashboardClient()
+    adapter = _adapter(client)
+
+    caps = await adapter.capabilities()
+    assert caps.apply is False
+    assert caps.operation_kinds["pool:create"] is False
+    with pytest.raises(CephWriteGateDenied, match="durable endpoint"):
+        await adapter.apply(
+            ProviderOperation(kind="pool", target_ref="rbd", action="create"),
+            confirm_destructive=False,
+        )
+    assert client.calls == []
 
 
 async def test_read_state_collects_inventory_and_closes(monkeypatch) -> None:
@@ -109,6 +132,30 @@ async def test_read_state_partial_failure_is_isolated(monkeypatch) -> None:
     assert state["resources"]
 
 
+async def test_read_state_and_close_diagnostics_never_expose_url_or_exception(
+    monkeypatch,
+    caplog,
+) -> None:
+    monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: True)
+    canary = "https://operator:dashboard-secret@ceph.invalid?token=dashboard-canary"
+    client = _FakeDashboardClient(fail={"health"})
+
+    async def fail_close() -> None:
+        raise RuntimeError(canary)
+
+    client.close = fail_close  # type: ignore[method-assign]
+    config = DashboardEndpointConfig(base_url=canary, username="admin", password="x")
+    state = await _adapter(client, endpoint=config).read_state({})
+    serialized = repr(state)
+
+    assert "dashboard-secret" not in serialized
+    assert "dashboard-canary" not in serialized
+    assert "RuntimeError" not in serialized
+    assert "health down" not in serialized
+    assert "dashboard-secret" not in caplog.text
+    assert "dashboard-canary" not in caplog.text
+
+
 async def test_diff_classifies_create_update_noop_delete(monkeypatch) -> None:
     monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: True)
     adapter = _adapter(_FakeDashboardClient())
@@ -134,23 +181,41 @@ async def test_diff_classifies_create_update_noop_delete(monkeypatch) -> None:
     assert ("old", "delete") in by_target
 
 
-async def test_apply_pool_create_dispatches(monkeypatch) -> None:
+async def test_apply_pool_create_stays_closed_without_durable_authority(monkeypatch) -> None:
     monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: True)
     client = _FakeDashboardClient()
     adapter = _adapter(client)
     op = ProviderOperation(
         kind="pool", target_ref="rbd", action="create", after_summary={"pool_name": "rbd"}
     )
-    result = await adapter.apply(op, confirm_destructive=False)
-    assert result["result"] == "applied"
-    assert client.calls[0][0] == "pool_create"
+    with pytest.raises(CephWriteGateDenied, match="durable endpoint"):
+        await adapter.apply(op, confirm_destructive=False)
+    assert client.calls == []
+
+
+async def test_apply_unknown_noop_is_rejected_before_client_creation(monkeypatch) -> None:
+    monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: True)
+    client_created = False
+
+    def client_factory(_config):
+        nonlocal client_created
+        client_created = True
+        return _FakeDashboardClient()
+
+    adapter = DashboardCephProviderAdapter(endpoint=CONFIG, client_factory=client_factory)
+    op = ProviderOperation(kind="unknown", target_ref="target", action="noop")
+
+    with pytest.raises(CephCapabilityUnsupported, match="unsupported operation"):
+        await adapter.apply(op, confirm_destructive=False)
+
+    assert client_created is False
 
 
 async def test_apply_blocked_without_sdk(monkeypatch) -> None:
     monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: False)
     adapter = _adapter(_FakeDashboardClient())
     op = ProviderOperation(kind="pool", target_ref="rbd", action="create")
-    with pytest.raises(CephCapabilityUnsupported, match="0.0.11"):
+    with pytest.raises(CephWriteGateDenied, match="durable endpoint"):
         await adapter.apply(op, confirm_destructive=False)
 
 
@@ -158,5 +223,5 @@ async def test_apply_blocked_without_endpoint(monkeypatch) -> None:
     monkeypatch.setattr(dash_mod, "dashboard_sdk_importable", lambda: True)
     adapter = DashboardCephProviderAdapter(endpoint=None)
     op = ProviderOperation(kind="pool", target_ref="rbd", action="create")
-    with pytest.raises(CephCapabilityUnsupported, match="endpoint"):
+    with pytest.raises(CephWriteGateDenied, match="durable endpoint"):
         await adapter.apply(op, confirm_destructive=False)

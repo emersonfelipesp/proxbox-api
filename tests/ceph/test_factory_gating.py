@@ -2,6 +2,29 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
+
+def test_ceph_v2_endpoint_binding_and_routes_import_in_a_cold_process():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from proxbox_api.ceph.endpoint_binding import BoundProxmoxSession; "
+                "from proxbox_api.ceph.v2_routes import router; "
+                "assert BoundProxmoxSession and router"
+            ),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
 
 def _join_mount_path(prefix: str, path: str) -> str:
     if not prefix:
@@ -40,6 +63,7 @@ def test_default_app_mounts_ceph_alongside_existing_surfaces():
     app = create_app()
     paths = _registered_paths(app)
     assert "/ceph/status" in paths
+    assert "/ceph/v2/capabilities" in paths
     assert "/ceph/sync/full" in paths
     assert "/ceph/sync/rgw" in paths
     assert "/ceph/sync/rbd" in paths
@@ -55,6 +79,7 @@ def test_ceph_only_feature_flag_hides_other_feature_and_core_routers(monkeypatch
     app = create_app()
     paths = _registered_paths(app)
     assert "/ceph/status" in paths
+    assert "/ceph/v2/capabilities" in paths
     assert "/ceph/sync/full" in paths
     assert "/ceph/sync/rgw" in paths
     assert "/ceph/sync/rbd" in paths
@@ -74,6 +99,7 @@ def test_pbs_ceph_feature_flag_mounts_only_sidecar_routers(monkeypatch):
     assert "/pbs/status" in paths
     assert "/pbs/endpoints" in paths
     assert "/ceph/status" in paths
+    assert "/ceph/v2/capabilities" in paths
     assert "/ceph/sync/full" in paths
     assert "/ceph/sync/rgw" in paths
     assert "/ceph/sync/rbd" in paths

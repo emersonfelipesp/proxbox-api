@@ -308,11 +308,11 @@ async def test_ceph_sync_records_client_errors(monkeypatch):
     assert any("connection refused" in err for err in item.errors)
 
 
-async def test_ceph_sync_falls_back_to_localhost_for_unknown_nodes(_patched_client):
+async def test_ceph_sync_keeps_unknown_nodes_empty_without_localhost_fallback(_patched_client):
     session = _fake_session()
     session.cluster_status = []
     session.node_name = None
     response = await ceph_routes.ceph_sync_osds([session])
     item = response.items[0]
-    assert item.nodes == ["localhost"]
-    assert item.fetched == 2
+    assert item.nodes == []
+    assert item.fetched == 0

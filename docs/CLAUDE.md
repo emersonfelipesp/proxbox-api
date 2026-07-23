@@ -37,6 +37,7 @@ docs/
 │   └── scheduler-container.md
 ├── operations/                 # Operational guides
 │   ├── custom-fields.md        # Custom-field reconcile and recovery procedure
+│   ├── ceph-write-approvals.md # Ceph v2 approval, recovery, rollout, NPR evidence
 │   ├── firecracker.md          # Firecracker host-agent provisioning
 │   └── hardware-discovery.md   # Hardware discovery and DCIM sync
 └── pt-BR/                      # Brazilian Portuguese translations
@@ -65,6 +66,12 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
+- Ceph v2 write behavior, failure recovery, deployment/rollback, and bounded
+  NPR 7150.2D feature evidence live in `operations/ceph-write-approvals.md`;
+  keep its Portuguese translation aligned, never document legacy inline apply
+  as authorized, preserve exact node/typed-payload/lease-owner/unique-UPID and
+  non-Proxmox capability constraints, and never promote feature evidence to a
+  project compliance or certification claim.
 - API reference in `docs/api/` should match the actual route signatures in `proxbox_api/routes/`.
 - VM interface sync docs must describe `vm_interface_sync_strategy` with
   `guest_os_model` as the default and `legacy_rename` as deprecated

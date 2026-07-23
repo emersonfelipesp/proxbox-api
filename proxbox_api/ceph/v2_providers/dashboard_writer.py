@@ -29,7 +29,12 @@ WRITE_OPERATION_KINDS: dict[str, bool] = {
     "rbd_image:trash": True,
     "rbd_snapshot:create": True,
     "rbd_snapshot:delete": True,
-    "noop": True,
+    "pool:noop": True,
+    "rbd_image:noop": True,
+    "rbd_snapshot:noop": True,
+    "rgw_bucket:noop": True,
+    "rgw_user:noop": True,
+    "crush_rule:noop": True,
     # Reported unsupported (handled by rgw_admin / external providers).
     "rgw_bucket:create": False,
     "rgw_bucket:delete": False,
@@ -46,7 +51,8 @@ _CONTROL_KEYS = frozenset({"node", "confirm_destroy", "confirm_destructive"})
 def operation_kinds(writes_enabled: bool) -> dict[str, bool]:
     """Resolve the advertised ``operation_kinds`` given Dashboard availability."""
     return {
-        key: bool(supported and writes_enabled) for key, supported in WRITE_OPERATION_KINDS.items()
+        key: bool(supported and (writes_enabled or key.endswith(":noop")))
+        for key, supported in WRITE_OPERATION_KINDS.items()
     }
 
 
@@ -106,9 +112,9 @@ async def execute_dashboard_operation(
     """Execute one planned operation through the Dashboard client."""
     kind = operation.kind
     action = operation.action
-    op_key = "noop" if action == "noop" else f"{kind}:{action}"
+    op_key = f"{kind}:{action}"
 
-    if WRITE_OPERATION_KINDS.get(op_key) is False:
+    if WRITE_OPERATION_KINDS.get(op_key) is not True:
         raise _gap(kind, action)
     if action == "noop":
         return _result(operation, None, "noop")

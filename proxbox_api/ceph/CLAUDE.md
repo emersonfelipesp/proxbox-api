@@ -33,11 +33,12 @@ Both routers are mounted in `proxbox_api/app/factory.py` (`/ceph` and `/ceph/v2`
 
 | File | Role |
 |------|------|
-| `v2_schemas.py` | Pydantic contract: `DesiredObject`/`DesiredStateBundle`, `PlanRequest`/`PlanResponse`, `ProviderOperation`, `ValidationResult`/`ValidationResponse`, `ApplyRequest`, `ReconcileRequest`, `OperationRun`, `ProviderCapabilities`/`CapabilitiesResponse`, `MetricsResponse`, `SSEEvent`. Requests expose a `branch_schema_id` property = `netbox_branch_schema_id or source_branch_schema_id`. `PlanRequest`/`ApplyRequest` before-validators accept the **netbox-ceph `CephOperation` shape** (`_coerce_netbox_operation_payload`): `{operation_type, target_kind, target_ref, desired, provider_kind, confirmed, ...}` is adapted into a one-object `DesiredStateBundle` (`kind=target_kind`, `action=operation_type`, `payload=desired`, `provider=provider_kind`); `ApplyRequest` also maps `confirmed`→`confirm_destructive`. (#226) |
-| `v2_engine.py` | Plan/apply engine: `validate_payload`, `build_plan`, `remember_plan`/`get_plan` (in-process plan store), `apply_plan`, `reconcile_provider`, `record_to_operation_run`, `redact_secrets`. Deterministic ordered plans, capability-aware (unsupported ops are **blocked with a reason**, never silently skipped), destructive-op confirmation gating, idempotent re-apply (`completed_run_for_plan`), and run persistence. |
-| `v2_providers/base.py` | `CephProviderAdapter` ABC (`capabilities`, `read_state`, `diff`, `plan`, `apply`, `reconcile`, `metrics`) + `CephCapabilityUnsupported`. |
-| `v2_providers/proxmox.py` | `ProxmoxCephProviderAdapter` — reads/diffs/plans **and applies** PVE-managed Ceph writes. `apply()` resolves a per-node `CephClient` and dispatches through `proxmox_writer`. Write capability is guarded: `capabilities().apply` and the write `operation_kinds` are `True` only when the installed proxmox-sdk ships `CephWrite` (`cephwrite_importable()`), so an older pin degrades cleanly instead of silently no-op'ing. |
-| `v2_providers/proxmox_writer.py` | `(kind, action) -> CephWrite` mapping (#224): `execute_operation()`, `resolve_node()`, `operation_kinds()`, `cephwrite_importable()`. Supports pool create/update/delete, flag set/unset, OSD create/delete/in/out, MON/MGR/MDS create/delete, CephFS create. Destructive ops thread `confirm_destructive` into `CephWrite(confirm_destroy=)`. `filesystem:delete` and `crush_rule:*` are reported unsupported (no silent gaps). Returns `{upid, operation_id, result, target_ref, ...}`; the engine harvests `upid`. |
+| `v2_schemas.py` | Pydantic contract: desired state, exact operation-node binding, endpoint-bound plan/approval/apply, safe approval status, ordered operation events, run, provider, validation, metric, and SSE schemas. It recursively normalizes/redacts secret aliases. Legacy apply fields remain parseable only for stable rejection; they are not write authority. |
+| `v2_engine.py` | Durable plan/approval/apply engine: canonical digests, expiring hashed approvals, atomic consumption, owner-bound live leases, append-only pre-dispatch/task checkpoints, permanent provider-global atomic task claims, repeated-cancellation-safe task/synchronous/cancellation evidence, unique node-consistent UPID handling, replay recovery, recursive secret/fallback redaction, and read-only reconciliation. There is no process-local plan authority. |
+| `endpoint_binding.py` | Resolves exactly one local DB endpoint, creates exactly one request-private session, persists only a stable server-keyed revision of the complete mutation-relevant endpoint configuration, and binds endpoint/session connection/auth/TLS/timeout/retry schemas with a second per-request secret HMAC. No endpoint secret or ephemeral key/tag is persisted or exposed. |
+| `v2_providers/base.py` | Adapter contract plus fail-closed capability, provider-boundary and write-gate errors and terminal-task polling hook. |
+| `v2_providers/proxmox.py` | Reads/diffs/plans and applies through the privately bound endpoint session. Every mutation keeps one exact node outside the SDK payload, reloads `enabled`/`allow_writes`, and constant-time compares both HMAC-bound schemas immediately before dispatch. The endpoint gate and run heartbeat serialize database access; UPIDs are polled on the same node/session. Never restore `_pxs[0]`, first-node, or `localhost` mutation fallback. |
+| `v2_providers/proxmox_writer.py` | Explicit-default-deny `(kind, action) -> CephWrite` table plus strict Pydantic payload schemas used at planning and dispatch. Supports pool, flag, OSD, MON/MGR/MDS and CephFS operations listed in the map; unsupported pairs, unknown keys, and missing required fields are blocked rather than filtered. A returned UPID is `submitted`, never proof of completion. Only SDK-proven flag create/update/delete and OSD update return explicit typed synchronous completion after a successful `None`. |
 | `v2_providers/__init__.py` | Adapter registry: `adapter_for_provider(provider, pxs)`, `provider_names()`. Stub adapters for `dashboard` (#98), `rgw_admin` (#12), `rbd` (#12), `prometheus` (#94), `external` (#97). |
 | `v2_routes.py` | FastAPI router for all `/ceph/v2/*` endpoints (thin; delegates to the engine). |
 
@@ -45,44 +46,112 @@ Both routers are mounted in `proxbox_api/app/factory.py` (`/ceph` and `/ceph/v2`
 
 | Method + Path | Purpose |
 |---|---|
-| `GET /capabilities` | Per-provider capability flags for UI gating |
+| `GET /capabilities` | Endpoint-scoped provider flags; unscoped Proxmox apply is false |
 | `POST /validate` | Validate a desired object or full bundle |
-| `POST /plans`, `GET /plans/{id}`, `POST /plans/{id}/apply` | Resource-style plan build / inspect / apply |
-| `POST /plan`, `POST /apply` | Flat client-contract aliases the `netbox-ceph` orchestrator calls |
+| `POST /plans`, `GET /plans/{id}` | Build/persist and inspect a canonical endpoint-bound plan |
+| `POST /plans/{id}/approvals` | Issue one short-lived opaque approval to a distinct actor |
+| `GET /approvals/{id}` | Safe approval/recovery metadata only; never raw token/hash |
+| `POST /plans/{id}/apply` | Atomically consume approval and apply only the persisted plan |
+| `POST /plan`, `POST /apply` | Flat aliases; `/apply` still requires a persisted plan/token |
 | `GET /operations/{id}` | Operation run status, task refs, warnings, errors, result |
 | `GET /operations/{id}/events` | SSE operation-progress stream (`text/event-stream`) |
 | `POST /reconcile` | Reconcile provider state back into NetBox summaries |
 | `GET /metrics` | Latest provider metrics for a scope |
 
-Persistence: `CephOperationRunRecord` (SQLModel, `ceph_operation_run` table in
-`proxbox_api/database.py`), created by the standard `SQLModel.metadata.create_all`.
+Persistence: `ceph_plan`, `ceph_approval`, `ceph_operation_run`, and the
+append-only `ceph_operation_event` ledger in `proxbox_api/database.py`. Startup
+creates new tables and additively migrates legacy run fields without changing
+endpoint `allow_writes` values.
 
 ## Rules
 
 - **Secrets never reach NetBox.** Providers resolve real credentials behind the
-  adapter layer; the engine runs `redact_secrets()` on stored/logged payloads.
-  NetBox passes only opaque `credential_ref` pointers.
+  adapter layer; the engine runs recursive `redact_secrets()` on persistence,
+  API, and SSE payloads. Normalize snake/camel/kebab/space aliases so fields
+  such as `access_key`, `rgw_access_key`, `accessKey`, `apiKey`, and
+  `privateKey` are always redacted. Logger handlers must sanitize deferred
+  arguments and exception objects too. NetBox passes only opaque
+  `credential_ref` pointers.
+- **Every plan/approval/apply names one durable endpoint.** Resolve exactly one
+  local DB row and create exactly one private session from it. Generic query
+  selectors, generic session dependencies, colliding IDs, bare fake sessions,
+  missing/disabled/duplicate rows and schema drift fail closed.
+- **Write execution is default-off.** Capability/approval/apply and provider
+  sinks require both `PROXBOX_ENABLE_CEPH_V2_WRITES=true` and
+  `PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY=true`. The gateway must authenticate and
+  overwrite `X-Proxbox-Actor`; a flag is only the operator attestation.
+- **Bind the stable endpoint revision through every authority record.** Persist
+  it with plan, approval, and run; legacy missing revisions and same-ID
+  retargeting fail closed. Keep the per-request endpoint/session HMAC as the
+  adjacent dispatch check.
+- **Every provider mutation reloads write authority.** Check the persisted
+  endpoint's `enabled` and `allow_writes` and compare the endpoint/session HMAC
+  immediately before every non-noop SDK call. Planning, metrics, and reconcile
+  remain read-only.
+- **Every Proxmox mutation has an immutable node and typed payload.** Keep node
+  outside SDK arguments in `ProviderOperation.node`, preserve it for deletes,
+  verify it belongs to the selected endpoint, and reject ambiguity. Validate
+  the exact per-kind/action schema at planning and sink; never silently drop
+  unsupported keys.
+- **Task UPID means submitted.** Persist intent before dispatch, require the complete
+  Proxmox UPID structure, atomically claim exactly one globally new reference
+  whose returned and embedded nodes match the plan node, then persist submission and poll the exact
+  node/session. Only stopped/OK is completed; failure is failed, and
+  crash/transport/timeout/cancellation is `outcome_unknown` and must not be
+  blindly retried. The pre-SDK state stays nonterminal `dispatching` while the
+  worker heartbeats a renewable lease. Every later live checkpoint CASes the
+  unexposed lease owner and expiry; a stale status/SSE read atomically records
+  `run_lease_expired`, clears ownership, preserves task references for operator
+  recovery, and prevents a late worker from appending or overwriting recovery.
+  The claim/submission transaction and SDK-proven synchronous completion
+  checkpoints repeatedly re-enter cancellation shielding until the inner
+  durability task finishes, then re-raise the remembered cancellation before
+  conservative recovery returns control.
+  Endpoint freshness queries and heartbeat renewal share one database lock.
+- **No legacy confirmation authority.** Boolean/predictable confirmation and
+  inline apply remain parseable only for explicit rejection. Only the hashed,
+  expiring, single-use, two-person approval bound to the canonical plan,
+  endpoint, requester, and approver authorizes apply.
 - **No silent capability gaps.** Unsupported operations are surfaced as blocked
-  with a reason; destructive operations require explicit confirmation.
+  with a reason. Dashboard/external advertise false apply, destructive, and
+  mutation-kind capabilities and their sinks reject mutations until each has a
+  durable selector, revision, credential authority, and fresh mutation gate.
 - **Thread the branch id.** Pass `netbox_branch_schema_id` through
   plan/apply/reconcile so branch-aware NetBox staging stays consistent.
 - v2 is additive; do not change v1 `/ceph` behavior.
 - The Proxmox adapter now executes PVE Ceph writes through `proxmox_writer` +
   proxmox-sdk `CephWrite` (#12 part 1 / #224). The current `proxmox-sdk`
-  pin (`0.0.11.post2`) ships the `CephWrite` domain, so the adapter advertises
-  `apply=True` and live execution is enabled; an older pin without `CephWrite`
-  degrades cleanly via `cephwrite_importable()` to `apply=False` and blocks
-  writes with a clear reason rather than silently no-op'ing.
+  pin (`0.0.13`) ships the `CephWrite` domain, so the adapter advertises
+    the SDK write surface, but live execution remains default-off behind the two
+    Ceph safety flags. An older pin without `CephWrite` degrades cleanly via
+    `cephwrite_importable()` to `apply=False` and blocks writes with a clear
+    reason rather than silently no-op'ing.
   Dashboard/RGW/RBD/Prometheus/external adapters arrive with #98/#12/#94/#97.
 
 ## Tests
 
-`tests/ceph/test_v2_orchestration.py` — capabilities, validate, plan
-build/get/404, happy-path apply, destructive-confirmation gating,
-capability-blocked apply, idempotent re-apply, operation lookup/404, SSE shape,
-reconcile, metrics (fake adapter; no live cluster).
+`tests/ceph/test_v2_orchestration.py` — HTTP contract and adversarial security
+coverage for exact private endpoint/session/node binding and drift,
+`allow_writes`, strict typed payload rejection, canonical persistence, actor
+binding, token races/replay, recursive persistence/API/SSE secret canaries,
+unique node-consistent UPIDs, approval recovery, terminal task states, ordered
+events and read-only reconcile.
+
+`tests/ceph/test_v2_approval_concurrency.py` — concurrent single-use approval
+consumption plus live dispatching/lease-owner CAS, sequential/concurrent durable
+task-claim uniqueness, shielded task/synchronous cancellation checkpoints,
+heartbeat/session serialization, crash/cancellation ambiguity,
+expiry recovery, and stale-worker nonterminalization checkpoints. The exact AsyncSession/gather path runs on the CI Python 3.12
+toolchain; it is narrowly skipped on local Python 3.14 where the aiosqlite
+connection worker does not complete. A two-connection SQLite race remains live
+locally and proves one winner, one run, and one provider call.
 
 `tests/ceph/test_v2_proxmox_writer.py` — the `(kind, action) -> CephWrite`
-mapping, destructive-confirmation threading, node resolution, UPID surfacing,
-capability gating, and `ProxmoxCephProviderAdapter.apply()` integration (fake
-`CephWrite`; no live cluster).
+mapping, strict per-pair payload schemas, exact no-fallback node resolution,
+UPID submission/polling, SDK-proven synchronous result typing, timeout handling,
+heartbeat/session overlap rejection, every declared write kind crossing the common fresh gate,
+and `ProxmoxCephProviderAdapter.apply()` integration (fake `CephWrite`; no live
+cluster).
+
+Operational flow, failure recovery, rollout/rollback, and NPR 7150.2D Chapter 4
+traceability live in `docs/operations/ceph-write-approvals.md`.

@@ -13,10 +13,14 @@ Covers the three compounding bugs documented in
 
 from __future__ import annotations
 
+import io
+import logging
+
 import pytest
 from proxmox_sdk.sdk.exceptions import ResourceException
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import SensitiveDataFilter
 from proxbox_api.session.proxmox import ProxmoxSession
 
 
@@ -92,6 +96,20 @@ class FakeDomainFailsThenIpSucceedsAPI(FakePve9ProxmoxAPI):
 
     def get(self):  # only used for the domain attempt
         raise RuntimeError("simulated domain DNS failure")
+
+
+class FakeSecretDomainFailureThenIpSucceedsAPI(FakePve9ProxmoxAPI):
+    """Domain probe carries a canary that must never reach a log handler."""
+
+    def __init__(self, host, **kwargs):
+        super().__init__(host, **kwargs)
+        if host == "pve9.example.com":
+            self.version = self
+
+    def get(self):
+        raise RuntimeError(
+            "https://operator:session-log-canary@pve.invalid?accessKey=raw-access-canary"
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -192,3 +210,38 @@ def test_abandoned_sdk_is_closed_when_both_attempts_fail(monkeypatch):
 
     assert len(FakePve9ProxmoxAPI.instances) == 2
     assert all(sdk.closed for sdk in FakePve9ProxmoxAPI.instances)
+
+
+@pytest.mark.asyncio
+async def test_create_domain_fallback_never_emits_raw_sdk_exception_to_real_handler(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "proxbox_api.session.proxmox.ProxmoxAPI",
+        FakeSecretDomainFailureThenIpSucceedsAPI,
+    )
+    app_logger = logging.getLogger("proxbox")
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.addFilter(SensitiveDataFilter())
+    app_logger.addHandler(handler)
+    try:
+        session = await ProxmoxSession.create(
+            {
+                "ip_address": "10.0.30.10",
+                "domain": "pve9.example.com",
+                "http_port": 8006,
+                "user": "root@pam",
+                "password": None,
+                "token": {"name": "proxbox", "value": "pve9-secret"},
+                "ssl": False,
+            }
+        )
+    finally:
+        app_logger.removeHandler(handler)
+
+    assert session.CONNECTED is True
+    rendered = output.getvalue()
+    assert "session-log-canary" not in rendered
+    assert "raw-access-canary" not in rendered
+    assert "trying configured IP" in rendered

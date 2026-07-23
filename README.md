@@ -51,7 +51,12 @@ uv sync --extra docs --group dev
 ```bash
 uv run ruff check .
 uv run ruff format .
-uv run ty check proxbox_api/types proxbox_api/utils/retry.py
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py \
+  proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py \
+  proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/v2_schemas.py \
+  proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py \
+  proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py \
+  proxbox_api/ceph/v2_providers/proxmox_writer.py
 uv run pytest tests
 uv run mkdocs serve   # after syncing with --extra docs
 ```
@@ -68,6 +73,20 @@ opt-in testing.
 Firecracker host-agent provisioning is documented in
 [`docs/operations/firecracker.md`](docs/operations/firecracker.md), including
 the Cloud endpoints, SSE events, request shape, and response shape.
+
+The fail-closed Ceph v2 write flow is documented in
+[`docs/operations/ceph-write-approvals.md`](docs/operations/ceph-write-approvals.md):
+private full-schema endpoint/session binding, current `allow_writes`, canonical
+plans with a stable server-keyed endpoint revision, two-person one-time
+approval, exact plan-bound nodes, strict per-operation SDK payloads, append-only
+dispatch/task evidence, owner-bound durable run leases, atomic permanent
+provider-global task claims, explicit SDK-proven synchronous completions,
+repeated-cancellation-safe checkpoints, serialized heartbeat/session use,
+unique node-consistent UPIDs, recursive secret/fallback redaction,
+cross-endpoint legacy-collision refusal, ambiguity-safe recovery, and staged
+rollout/rollback. Mutation remains default-off until both Ceph write and
+trusted-actor-gateway flags are enabled; Dashboard/external apply remains
+closed until durable provider authority exists.
 
 PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
 indexed in [`docs/api/service-routes.md`](docs/api/service-routes.md), including

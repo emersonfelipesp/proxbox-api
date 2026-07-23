@@ -140,8 +140,10 @@ async def collect_snapshot(
     async def _run(promql: str) -> float | None:
         try:
             return await client.query_scalar(promql)
-        except httpx.HTTPError as exc:
-            warnings.append(f"query failed ({promql}): {exc}")
+        except httpx.HTTPError:
+            # Transport exceptions can contain URLs, credentials, or response
+            # fragments. Keep only the fixed query identifier at this boundary.
+            warnings.append(f"query failed ({promql})")
             return None
 
     values = await asyncio.gather(*(_run(SNAPSHOT_QUERIES[k]) for k in keys))
@@ -208,5 +210,5 @@ async def validate_source(config: PrometheusSourceConfig) -> tuple[bool, str | N
         async with PrometheusClient(config) as client:
             await client.query("ceph_health_status")
         return True, None
-    except httpx.HTTPError as exc:
-        return False, str(exc)
+    except httpx.HTTPError:
+        return False, "Prometheus source validation failed."

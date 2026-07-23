@@ -27,6 +27,7 @@
   - `/proxmox`
   - `/proxmox/cluster/ha/*` — leitura agregada de High-Availability entre clusters; ver [API de HA do cluster](../api/cluster-ha.md).
   - `/proxmox/{qemu,lxc}/{vmid}/{start,stop,snapshot,migrate}` — verbos operacionais de escrita (mais DELETE-para-cancelar e GET-stream para migrate). Gate em `ProxmoxEndpoint.allow_writes`. Ver [Referencia HTTP — Verbos Operacionais de VM](../api/http-reference.md#verbos-operacionais-de-vm).
+  - `/ceph/*` e `/ceph/v2/*` — rotas opcionais. Ceph v2 persiste planos, revisoes de endpoint calculadas com chave do servidor, hashes de aprovacoes, runs com lease vinculado a um dono, eventos append-only e claims de tarefa globais ao provider; vincula cada escrita a uma sessao privada do endpoint e a um node exato da operacao; valida estritamente o payload; revalida politica/revisao/binding; conclui checkpoints duraveis mesmo sob cancelamento repetido; e trata UPID ausente/reutilizado/inconsistente com node, colisao legada entre endpoints ou lease expirado como resultado desconhecido. Mutacao e default-off por flags separados de execucao e gateway confiavel; apply de Dashboard/external permanece fechado sem autoridade duravel do provider. Ver [Aprovacao e Recuperacao de Escritas Ceph v2](../operations/ceph-write-approvals.md).
   - `/dcim`
   - `/virtualization`
   - `/extras`

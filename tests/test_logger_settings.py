@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 
 import proxbox_api.logger as logger_module
@@ -276,6 +277,89 @@ def test_sensitive_data_filter_redacts_string_args():
     assert "arg-token" not in message
     assert "arg-password" not in message
     assert "Bearer [REDACTED]" in message
+
+    mapping_record = logging.LogRecord(
+        name="proxbox",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg="password=%(password)s",
+        args=({"password": "mapping-arg-canary"},),
+        exc_info=None,
+    )
+    SensitiveDataFilter().filter(mapping_record)
+    assert "mapping-arg-canary" not in mapping_record.getMessage()
+
+
+def test_sensitive_data_filter_scrubs_nested_extras_urls_and_tracebacks_through_handler():
+    """A real handler/formatter must never render nested or exception canaries."""
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SensitiveDataFilter())
+    handler.setFormatter(logging.Formatter("%(message)s details=%(details)s"))
+    test_logger = logging.getLogger("proxbox.test.recursive-redaction")
+    original_handlers = list(test_logger.handlers)
+    original_level = test_logger.level
+    original_propagate = test_logger.propagate
+    test_logger.handlers = [handler]
+    test_logger.setLevel(logging.ERROR)
+    test_logger.propagate = False
+
+    direct_url = (
+        "https://operator:url-canary@pve.invalid?api_token=query-canary"
+        "&accessToken=query-access-token-canary&client-secret=query-client-secret-canary"
+    )
+    try:
+        try:
+            raise RuntimeError(
+                "https://trace-user:trace-canary@pve.invalid?password=trace-query-canary"
+            )
+        except RuntimeError:
+            test_logger.error(
+                "payload=%s url=%s assignments=%s",
+                {
+                    "outer": {
+                        "clientSecret": "nested-canary",
+                        "failure": RuntimeError("exception-canary"),
+                    }
+                },
+                direct_url,
+                (
+                    "apiToken: assignment-api-token-canary "
+                    "access_token=assignment-access-token-canary "
+                    "clientSecret: assignment-client-secret-canary"
+                ),
+                exc_info=True,
+                extra={
+                    "details": {
+                        "access-key": "extra-canary",
+                        "safe": direct_url,
+                    }
+                },
+            )
+    finally:
+        test_logger.handlers = original_handlers
+        test_logger.setLevel(original_level)
+        test_logger.propagate = original_propagate
+
+    rendered = stream.getvalue()
+    for canary in (
+        "url-canary",
+        "query-canary",
+        "query-access-token-canary",
+        "query-client-secret-canary",
+        "assignment-api-token-canary",
+        "assignment-access-token-canary",
+        "assignment-client-secret-canary",
+        "nested-canary",
+        "exception-canary",
+        "trace-canary",
+        "trace-query-canary",
+        "extra-canary",
+    ):
+        assert canary not in rendered
+    assert rendered.count("[REDACTED]") >= 5
 
 
 def test_setup_logger_attaches_sensitive_data_filter_to_console_and_file(monkeypatch):

@@ -36,7 +36,17 @@ All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. 
 PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
 documented in [Service Routes](./service-routes.md). That page also explains
 `PROXBOX_FEATURES` sidecar-only mounting and the write gates used by cloud and
-intent routes.
+intent routes. Ceph v2 mutations additionally require the durable, two-person,
+single-use flow in
+[Ceph v2 Write Approval and Recovery](../operations/ceph-write-approvals.md),
+including both default-off execution flags, a stable endpoint configuration
+revision, exact operation-node and typed-payload binding, owner-bound leases,
+provider-global unique node-consistent UPIDs, repeated-cancellation-safe durable
+checkpoints, and unknown-outcome recovery. `netbox-ceph` supplies the canonical
+proxbox-api endpoint ID resolved from its plugin endpoint; it never substitutes
+the plugin primary key. Dashboard and
+external providers are read/plan/reconcile-only until durable write authority
+exists.
 
 ## Cloud Firecracker (`/cloud/firecracker`)
 

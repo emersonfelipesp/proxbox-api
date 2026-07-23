@@ -6,7 +6,8 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable
+import traceback
+from collections.abc import Callable, Mapping
 from functools import wraps
 from logging.handlers import TimedRotatingFileHandler
 from typing import ParamSpec, TypeVar
@@ -23,6 +24,15 @@ _THIRD_PARTY_NOISY = [
 ]
 
 _VALID_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+_URL_USERINFO_RE = re.compile(
+    r"(?P<scheme>[a-z][a-z0-9+.-]*://)[^/@\s]+@",
+    re.IGNORECASE,
+)
+_QUERY_SECRET_RE = re.compile(
+    r"(?P<prefix>[?&](?:api[_-]?key|(?:api|access)[_-]?token|client[_-]?secret|auth(?:entication|orization)?|cookie|credential|key|pass(?:phrase|word|wd)?|pwd|secret|token|(?:rgw[_-]?)?access[_-]?key|private[_-]?key)=)[^&\s]+",
+    re.IGNORECASE,
+)
 
 _SENSITIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -44,7 +54,7 @@ _SENSITIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
             r"((?:[A-Za-z0-9_-]*(?:token|key|password|secret)[A-Za-z0-9_-]*)"
-            r"\s*=\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)",
+            r"\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)",
             re.IGNORECASE,
         ),
         r"\1[REDACTED]",
@@ -59,31 +69,137 @@ _SENSITIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
+_SECRET_KEY_MARKERS = (
+    "password",
+    "passphrase",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "credential",
+    "authorization",
+    "cookie",
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "xproxboxapikey",
+)
+_STANDARD_LOG_RECORD_ATTRIBUTES = frozenset(logging.makeLogRecord({}).__dict__) | {
+    "asctime",
+    "message",
+}
+
 
 def _redact(text: str) -> str:
+    text = _URL_USERINFO_RE.sub(r"\g<scheme>[REDACTED]@", text)
+    text = _QUERY_SECRET_RE.sub(r"\g<prefix>[REDACTED]", text)
     for pattern, replacement in _SENSITIVE_PATTERNS:
         text = pattern.sub(replacement, text)
     return text
+
+
+def _normalized_log_key(value: object) -> str:
+    """Normalize snake/camel/kebab/space-separated keys for secret matching."""
+
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
+    return re.sub(r"[^a-z0-9]", "", text.casefold())
+
+
+def _is_sensitive_log_key(value: object) -> bool:
+    normalized = _normalized_log_key(value)
+    return any(marker in normalized for marker in _SECRET_KEY_MARKERS)
+
+
+def _safe_log_value(value: object, *, _seen: set[int] | None = None) -> object:
+    """Recursively normalize values before a handler or formatter sees them."""
+
+    if isinstance(value, BaseException):
+        return f"{type(value).__name__}: [REDACTED]"
+    if isinstance(value, str):
+        return _redact(value)
+    if value is None or isinstance(value, bool | int | float):
+        return value
+
+    seen = _seen if _seen is not None else set()
+    identity = id(value)
+    if identity in seen:
+        return "[REDACTED_RECURSION]"
+
+    if isinstance(value, Mapping):
+        seen.add(identity)
+        try:
+            return {
+                key: (
+                    "[REDACTED]"
+                    if _is_sensitive_log_key(key)
+                    else _safe_log_value(item, _seen=seen)
+                )
+                for key, item in value.items()
+            }
+        finally:
+            seen.remove(identity)
+    if isinstance(value, list | tuple | set | frozenset):
+        seen.add(identity)
+        try:
+            safe_items = [_safe_log_value(item, _seen=seen) for item in value]
+        finally:
+            seen.remove(identity)
+        return tuple(safe_items) if isinstance(value, tuple) else safe_items
+
+    attributes = getattr(value, "__dict__", None)
+    if isinstance(attributes, Mapping):
+        return _safe_log_value(attributes, _seen=seen)
+    return _redact(str(value))
+
+
+def _safe_log_argument(value: object) -> object:
+    """Prevent deferred logging interpolation from exposing nested values."""
+
+    return _safe_log_value(value)
+
+
+def _safe_traceback(record: logging.LogRecord) -> None:
+    """Keep stack locations while removing all exception values and messages."""
+
+    if record.exc_info is not None:
+        exc_type, _exc_value, exc_tb = record.exc_info
+        frames = "".join(traceback.format_tb(exc_tb)) if exc_tb is not None else ""
+        type_name = getattr(exc_type, "__name__", "Exception")
+        record.exc_text = f"{_redact(frames)}{type_name}: [REDACTED]"
+        record.exc_info = None
+    elif record.exc_text:
+        record.exc_text = "[REDACTED EXCEPTION]"
+    if record.stack_info:
+        record.stack_info = _redact(record.stack_info)
 
 
 class SensitiveDataFilter(logging.Filter):
     """Redact known credential patterns from log records before output."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = _redact(record.msg)
-        if record.args:
-            if isinstance(record.args, tuple):
-                record.args = tuple(
-                    _redact(arg) if isinstance(arg, str) else arg for arg in record.args
-                )
-            elif isinstance(record.args, dict):
-                record.args = {
-                    key: _redact(value) if isinstance(value, str) else value
-                    for key, value in record.args.items()
-                }
-            elif isinstance(record.args, str):
-                record.args = _redact(record.args)
+        record.msg = _safe_log_value(record.msg)
+        args: object = record.args
+        if args:
+            if isinstance(args, tuple):
+                record.args = tuple(_safe_log_argument(arg) for arg in args)
+            elif isinstance(args, Mapping):
+                setattr(record, "args", _safe_log_value(args))
+            elif isinstance(args, str):
+                # LogRecord's annotation permits only tuple/mapping arguments,
+                # but logging accepts arbitrary values at runtime.
+                setattr(record, "args", _redact(args))
+            elif isinstance(args, BaseException):
+                setattr(record, "args", _safe_log_argument(args))
+            else:
+                setattr(record, "args", _safe_log_argument(args))
+
+        for key, value in list(record.__dict__.items()):
+            if key in _STANDARD_LOG_RECORD_ATTRIBUTES:
+                continue
+            record.__dict__[key] = (
+                "[REDACTED]" if _is_sensitive_log_key(key) else _safe_log_value(value)
+            )
+        _safe_traceback(record)
         return True
 
 
@@ -353,7 +469,8 @@ def timed_operation(func: Callable[P, R]) -> Callable[P, R]:
         except Exception as error:
             elapsed = time.time() - start_time
             logger.error(
-                f"Failed {operation_name} after {elapsed:.3f}s: {error}",
+                f"Failed {operation_name} after {elapsed:.3f}s: %s",
+                error,
                 exc_info=True,
                 extra={"elapsed_seconds": round(elapsed, 3)},
             )
@@ -389,7 +506,8 @@ def async_timed_operation(func: Callable[P, R]) -> Callable[P, R]:
         except Exception as error:
             elapsed = time.time() - start_time
             logger.error(
-                f"Failed {operation_name} after {elapsed:.3f}s: {error}",
+                f"Failed {operation_name} after {elapsed:.3f}s: %s",
+                error,
                 exc_info=True,
                 extra={"elapsed_seconds": round(elapsed, 3)},
             )

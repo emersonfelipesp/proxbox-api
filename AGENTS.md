@@ -43,7 +43,12 @@ rtk ruff format --check .
 uv run python -m compileall proxbox_api tests
 uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py \
+  proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py \
+  proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/v2_schemas.py \
+  proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py \
+  proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py \
+  proxbox_api/ceph/v2_providers/proxmox_writer.py
 rtk pytest tests
 ```
 
@@ -70,6 +75,45 @@ L2VPNTermination, RouteTarget, Prefix, plugin metadata objects, and optional
 rollback, lock, or mutate Proxmox SDN configuration. Unsupported older clusters
 and missing optional `netbox_bgp` APIs should emit skipped warnings rather than
 failing healthy endpoints.
+
+Ceph v2 writes live in `proxbox_api/ceph/`. Every Proxmox plan/approval/apply
+must name one durable local endpoint and create one private full-schema
+HMAC-bound session; generic selectors/session lists and first-session fallback
+are forbidden. Bind every non-noop operation to one exact persisted node; never
+select the first node or invent `localhost`. Strictly validate the payload for
+the exact `(kind, action)` during planning and again at dispatch; reject unknown
+or missing fields instead of filtering them. Persist/digest the plan plus a
+stable server-keyed endpoint configuration revision, bind that revision through
+approval/run records, and reject same-ID retargeting. Require a distinct
+delegated actor to issue one hashed/expiring/single-use approval, consume it
+atomically, append a live `dispatching` intent before every SDK call, and reload
+`enabled`, `allow_writes`, revision, endpoint/session binding, and node
+immediately before every mutation. Every live checkpoint must retain the same
+unexposed lease-owner nonce and non-expired lease. Serialize endpoint freshness
+checks and lease heartbeats on the request's database session. For task-based
+mutations, UPID means submitted until terminal polling; atomically claim exactly
+one provider-globally unseen complete UPID whose returned and embedded nodes equal the
+plan node. Only `flag:create/update/delete` and `osd:update` are SDK-proven
+synchronous completions; no other missing task ID means success. Shield task
+claim/submission, synchronous-completion, and cancellation checkpoints through
+repeated cancellation until the inner durability task finishes, then propagate
+the remembered cancellation. Refuse startup with
+`ceph_provider_task_claim_cross_endpoint_collision` rather than selecting or
+discarding ambiguous cross-endpoint legacy evidence.
+Missing/multiple/reused or node-inconsistent task IDs, expired run leases, crashes, and cancellation become
+`outcome_unknown` and are not retried or overwritten by a late worker. Recursively
+redact normalized secret aliases, exception values, and non-JSON fallback text
+across persistence, API, SSE, and logs. `netbox-ceph` must resolve the plugin
+endpoint to the canonical proxbox-api endpoint ID; a plugin PK is never a
+substitute. Ceph
+writes remain default-off unless both `PROXBOX_ENABLE_CEPH_V2_WRITES=true` and
+`PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY=true`; the trusted authenticated gateway
+must overwrite `X-Proxbox-Actor`. Legacy confirmation and non-Proxmox apply stay
+closed; Dashboard/external apply and destructive capabilities remain false until
+durable provider authority exists; reconcile stays read-only. Run the focused Ceph
+security/concurrency/migration suites and keep
+`docs/operations/ceph-write-approvals.md` plus its Portuguese translation
+aligned.
 
 If you edit `nextjs-ui/`, also run:
 
@@ -180,7 +224,7 @@ All violations block CI. Fix before pushing.
 
 **Type Checking (Pyright strict):**
 ```bash
-uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/v2_schemas.py proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py proxbox_api/ceph/v2_providers/proxmox_writer.py
 ```
 Type mismatches block merge. Use `# type: ignore` only with justification.
 

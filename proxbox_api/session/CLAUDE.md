@@ -34,5 +34,10 @@ Session management utilities for NetBox and Proxmox API clients.
 
 - Keep connection bootstrapping deterministic and avoid hidden global state.
 - Normalize upstream connection errors into `ProxboxException`.
+- Never pass raw SDK exception objects or their text to loggers. Emit a fixed,
+  redacted error class/status diagnostic, and keep the handler-level
+  `SensitiveDataFilter` effective for deferred string, mapping, and exception
+  arguments so access keys, private keys, URLs, and provider response bodies
+  cannot be rendered after the call site.
 - Keep dependency aliases in this package rather than duplicating them in route modules.
 - When adjusting NetBox client timeouts, update the root docs and any setup documentation that mentions the environment variable.

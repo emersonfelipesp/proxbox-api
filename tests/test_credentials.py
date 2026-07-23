@@ -220,6 +220,36 @@ def test_encryption_key_is_cached_after_first_call(monkeypatch):
     assert first is second
 
 
+def test_stable_keyed_fingerprint_is_stable_and_domain_separated(monkeypatch):
+    monkeypatch.setattr(
+        creds_mod,
+        "_resolve_raw_key_with_source",
+        lambda: ("binding-root-key", "env"),
+    )
+
+    first = creds_mod.stable_keyed_fingerprint(b"endpoint-schema", purpose="ceph-v2")
+    creds_mod.reset_encryption_cache()
+    same = creds_mod.stable_keyed_fingerprint(b"endpoint-schema", purpose="ceph-v2")
+    different_payload = creds_mod.stable_keyed_fingerprint(b"retargeted", purpose="ceph-v2")
+    different_purpose = creds_mod.stable_keyed_fingerprint(
+        b"endpoint-schema",
+        purpose="other-authority",
+    )
+
+    assert first == same
+    assert len(first) == 64
+    assert first not in {different_payload, different_purpose}
+
+
+def test_stable_keyed_fingerprint_fails_closed_without_server_key(monkeypatch):
+    from proxbox_api.exception import ProxboxException
+
+    monkeypatch.setattr(creds_mod, "_resolve_raw_key_with_source", lambda: ("", None))
+
+    with pytest.raises(ProxboxException, match="Credential encryption must be configured"):
+        creds_mod.stable_keyed_fingerprint(b"endpoint-schema", purpose="ceph-v2")
+
+
 def test_settings_lookup_can_reenter_decryption_without_deadlock():
     """Missing env key must not deadlock when plugin settings lookup decrypts tokens."""
     context = multiprocessing.get_context("fork")

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import os
 import threading
 from pathlib import Path
@@ -166,6 +167,26 @@ def assert_encryption_configured() -> None:
 def is_encryption_enabled() -> bool:
     """Check if credential encryption is enabled."""
     return _get_encryption_key() is not None
+
+
+def stable_keyed_fingerprint(payload: bytes, *, purpose: str) -> str:
+    """Return a stable, purpose-separated HMAC without exposing server key material.
+
+    Safety-sensitive durable bindings use the already configured credential
+    encryption key as their server-held root. Rotating that key intentionally
+    invalidates outstanding bindings. Callers must fail closed when encryption
+    is not configured; an unkeyed digest is not a substitute.
+    """
+
+    key = _get_encryption_key()
+    if key is None:
+        raise ProxboxException(
+            message=(
+                "Credential encryption must be configured before creating durable safety bindings."
+            )
+        )
+    context_key = hmac.new(key, purpose.encode("utf-8"), hashlib.sha256).digest()
+    return hmac.new(context_key, payload, hashlib.sha256).hexdigest()
 
 
 def get_encryption_source() -> KeySource | None:

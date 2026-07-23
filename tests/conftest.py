@@ -230,7 +230,10 @@ def db_engine(tmp_path: Path):
         connect_args={"check_same_thread": False},
     )
     SQLModel.metadata.create_all(engine)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

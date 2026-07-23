@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
+import os
 from typing import Any
 
-from fastapi import HTTPException
-
+from proxbox_api.ceph.endpoint_binding import BoundProxmoxSession
 from proxbox_api.ceph.routes import _client_for, _node_names, _session_host, _session_name
-from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephProviderAdapter
+from proxbox_api.ceph.v2_providers.base import (
+    CephCapabilityUnsupported,
+    CephProviderAdapter,
+    CephProviderBoundaryError,
+    CephWriteGateDenied,
+    TaskHeartbeat,
+    ceph_write_execution_enabled,
+)
 from proxbox_api.ceph.v2_providers.proxmox_writer import (
+    SYNCHRONOUS_OPERATION_KINDS,
     cephwrite_importable,
     execute_operation,
     operation_kinds,
     resolve_node,
+    validate_operation_payload,
 )
 from proxbox_api.ceph.v2_schemas import (
     DesiredObject,
@@ -20,7 +31,40 @@ from proxbox_api.ceph.v2_schemas import (
     ProviderCapabilities,
     ProviderOperation,
 )
+from proxbox_api.database_protocols import DatabaseSessionProtocol
 from proxbox_api.logger import logger
+from proxbox_api.services.proxmox_helpers import get_node_task_status
+from proxbox_api.session.proxmox_core import ProxmoxSession
+
+
+def _bounded_float_env(
+    name: str,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    if not math.isfinite(value):
+        return default
+    return min(maximum, max(minimum, value))
+
+
+_TASK_POLL_TIMEOUT_SECONDS = _bounded_float_env(
+    "PROXBOX_CEPH_TASK_TIMEOUT",
+    default=300.0,
+    minimum=1.0,
+    maximum=3600.0,
+)
+_TASK_POLL_INTERVAL_SECONDS = _bounded_float_env(
+    "PROXBOX_CEPH_TASK_POLL_INTERVAL",
+    default=1.0,
+    minimum=0.1,
+    maximum=60.0,
+)
 
 
 def _plain(value: Any) -> Any:
@@ -74,6 +118,15 @@ def _desired_target(desired: DesiredObject) -> str:
     return payload_name or ""
 
 
+def _desired_node(desired: DesiredObject) -> str | None:
+    """Read an explicit desired node without inventing a cluster fallback."""
+
+    for source in (desired.payload, desired.metadata, desired.model_extra or {}):
+        if isinstance(source, dict) and source.get("node") not in (None, ""):
+            return str(source["node"])
+    return None
+
+
 def _payload_matches(desired_payload: dict[str, Any], live_summary: dict[str, Any]) -> bool:
     if not desired_payload:
         return True
@@ -86,40 +139,87 @@ def _payload_matches(desired_payload: dict[str, Any], live_summary: dict[str, An
 
 
 class ProxmoxCephProviderAdapter(CephProviderAdapter):
-    """Read-only Ceph v2 adapter backed by resolved Proxmox sessions."""
+    """Ceph v2 adapter bound to one explicitly selected Proxmox endpoint."""
 
     provider = "proxmox"
+    supports_task_heartbeat = True
 
-    def __init__(self, pxs: list[object] | None = None) -> None:
-        self._pxs = list(pxs or [])
+    def __init__(
+        self,
+        read_sessions: list[ProxmoxSession] | None = None,
+        *,
+        bound_session: BoundProxmoxSession | None = None,
+        database_session: DatabaseSessionProtocol | None = None,
+        writes_authorized: bool = False,
+        task_poll_timeout: float = _TASK_POLL_TIMEOUT_SECONDS,
+        task_poll_interval: float = _TASK_POLL_INTERVAL_SECONDS,
+    ) -> None:
+        self._bound_session = bound_session
+        self._database_session = database_session
+        self._database_session_lock = asyncio.Lock()
+        self._read_sessions = (
+            [bound_session.raw_session()]
+            if bound_session is not None
+            else list(read_sessions or [])
+        )
+        self._writes_authorized = writes_authorized
+        self._task_poll_timeout = max(0.0, task_poll_timeout)
+        self._task_poll_interval = max(0.0, task_poll_interval)
+
+    def _selected_session(self) -> ProxmoxSession:
+        if not isinstance(self._bound_session, BoundProxmoxSession):
+            raise CephWriteGateDenied(
+                "endpoint_session_untagged",
+                "Ceph writes require one privately bound local endpoint session.",
+            )
+        return self._bound_session.raw_session()
+
+    @property
+    def database_session_lock(self) -> asyncio.Lock:
+        """Serialize the endpoint gate with engine lease heartbeats."""
+
+        return self._database_session_lock
+
+    @property
+    def endpoint_id(self) -> int | None:
+        return self._bound_session.endpoint_id if self._bound_session is not None else None
 
     async def capabilities(self) -> ProviderCapabilities:
-        writes = cephwrite_importable()
-        kinds: dict[str, bool] = {
-            "noop": True,
-            "pool:noop": True,
-            "osd:noop": True,
-            "filesystem:noop": True,
-            "crush_rule:noop": True,
-            "flag:noop": True,
-        }
-        kinds.update(operation_kinds(writes))
+        sdk_writes = cephwrite_importable()
+        writes = (
+            sdk_writes
+            and ceph_write_execution_enabled()
+            and isinstance(self._bound_session, BoundProxmoxSession)
+            and self._database_session is not None
+            and self._writes_authorized
+        )
+        kinds = operation_kinds(writes)
         if writes:
             notes = [
                 "Proxmox Ceph v2 adapter reads, plans, and applies PVE-managed Ceph "
                 "writes (pools, flags, OSD/MON/MGR/MDS lifecycle, CephFS) through the "
-                "proxmox-sdk CephWrite helpers. Destructive operations require "
-                "confirm_destructive."
+                "proxmox-sdk CephWrite helpers. Every mutation rechecks the persisted "
+                "endpoint write gate."
             ]
         else:
+            reasons: list[str] = []
+            if self.endpoint_id is None:
+                reasons.append("no endpoint_id was selected")
+            elif not isinstance(self._bound_session, BoundProxmoxSession):
+                reasons.append("the selected endpoint has no privately bound session")
+            if not self._writes_authorized:
+                reasons.append("the selected endpoint is disabled or allow_writes is false")
+            if not sdk_writes:
+                reasons.append("the installed proxmox-sdk has no CephWrite domain")
+            if not ceph_write_execution_enabled():
+                reasons.append("the Ceph write execution/trusted-gateway gate is disabled")
             notes = [
-                "Proxmox Ceph v2 adapter reads and plans from PVE Ceph state. Write "
-                "execution is unavailable: the installed proxmox-sdk does not ship the "
-                "CephWrite domain. Pin proxmox-sdk to a release that includes it to "
-                "enable Proxmox-backed Ceph writes."
+                "Proxmox Ceph writes are unavailable: "
+                + "; ".join(reasons or ["write gate denied"])
             ]
         return ProviderCapabilities(
             provider=self.provider,
+            endpoint_id=self.endpoint_id,
             supported=True,
             read_state=True,
             diff=True,
@@ -137,7 +237,7 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         resources: list[dict[str, Any]] = []
         errors: list[str] = []
 
-        for px in self._pxs:
+        for px in self._read_sessions:
             cluster = {
                 "provider": self.provider,
                 "name": _session_name(px),
@@ -150,14 +250,6 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
             }
             try:
                 client = _client_for(px)
-            except HTTPException as exc:
-                message = str(exc.detail)
-                cluster["errors"].append(message)
-                errors.append(message)
-                clusters.append(cluster)
-                continue
-
-            try:
                 cluster["status"] = _plain(await client.cluster.status())
                 cluster["metadata"] = _plain(await client.cluster.metadata())
                 cluster["flags"] = _plain(await client.cluster.flags())
@@ -175,11 +267,17 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
 
                 for node in cluster["nodes"]:
                     await self._read_node_resources(client, node, cluster["name"], resources)
-            except Exception as exc:  # noqa: BLE001
-                message = f"{type(exc).__name__}: {exc}"
-                cluster["errors"].append(message)
-                errors.append(message)
-                logger.info("Ceph v2 state read failed for %s: %s", cluster["name"], exc)
+            except Exception:  # noqa: BLE001
+                failure = CephProviderBoundaryError(
+                    "provider_state_unavailable",
+                    "The Proxmox Ceph state could not be read safely.",
+                )
+                logger.warning(
+                    "Ceph v2 state unavailable correlation_id=%s endpoint_id=%s",
+                    failure.correlation_id,
+                    self.endpoint_id,
+                )
+                raise failure from None
             clusters.append(cluster)
 
         return {
@@ -196,7 +294,7 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
 
     async def _read_node_resources(
         self,
-        client: object,
+        client: Any,
         node: str,
         cluster_name: str,
         resources: list[dict[str, Any]],
@@ -222,36 +320,64 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
                     }
                 )
 
-    async def diff(
+    async def diff(  # noqa: C901 - explicit node ambiguity handling
         self,
         desired: DesiredStateBundle,
         live: dict[str, Any],
     ) -> list[ProviderOperation]:
-        live_index = {
-            (
+        live_index: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for item in live.get("resources", []):
+            if not isinstance(item, dict):
+                continue
+            key = (
                 _normalize_kind(str(item.get("kind", ""))),
                 str(item.get("target_ref") or ""),
-            ): item
-            for item in live.get("resources", [])
-            if isinstance(item, dict)
-        }
+            )
+            live_index.setdefault(key, []).append(item)
 
         operations: list[ProviderOperation] = []
         for desired_object in desired.objects:
             kind = _normalize_kind(desired_object.kind)
             target_ref = _desired_target(desired_object)
             action = desired_object.action.strip().lower() or "ensure"
-            live_item = live_index.get((kind, target_ref))
+            requested_node = _desired_node(desired_object)
+            candidates = live_index.get((kind, target_ref), [])
+            node_candidates = {
+                str(item["node"]) for item in candidates if item.get("node") not in (None, "")
+            }
+            blocked_reason: str | None = None
+            if requested_node is not None:
+                matching = [
+                    item for item in candidates if item.get("node") in (None, requested_node)
+                ]
+                live_item = matching[0] if matching else (candidates[0] if candidates else None)
+                if candidates and not matching:
+                    blocked_reason = "The requested node does not match the live resource node."
+                operation_node = requested_node
+            elif len(node_candidates) == 1:
+                operation_node = next(iter(node_candidates))
+                live_item = candidates[0] if candidates else None
+            elif len(node_candidates) > 1:
+                operation_node = None
+                live_item = candidates[0]
+                blocked_reason = (
+                    "The live resource is present on multiple nodes; an exact node is required."
+                )
+            else:
+                operation_node = None
+                live_item = candidates[0] if candidates else None
             before_summary = (
                 _plain(live_item.get("summary", {})) if isinstance(live_item, dict) else {}
             )
-            after_summary = _plain(desired_object.payload)
+            after_summary = {
+                key: value for key, value in _plain(desired_object.payload).items() if key != "node"
+            }
 
             if action in {"delete", "destroy", "remove", "purge"}:
                 planned_action = "delete"
             elif live_item is None:
                 planned_action = "create"
-            elif _payload_matches(desired_object.payload, before_summary):
+            elif _payload_matches(after_summary, before_summary):
                 planned_action = "noop"
             else:
                 planned_action = "update"
@@ -262,6 +388,9 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
                     kind=kind,
                     target_ref=target_ref,
                     action=planned_action,
+                    node=operation_node,
+                    supported=blocked_reason is None,
+                    blocked_reason=blocked_reason,
                     before_summary=before_summary,
                     after_summary={} if planned_action == "delete" else after_summary,
                 )
@@ -269,7 +398,23 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         return operations
 
     async def plan(self, operations: list[ProviderOperation]) -> list[ProviderOperation]:
-        return operations
+        node_names = _node_names(self._selected_session())
+        planned: list[ProviderOperation] = []
+        for operation in operations:
+            item = operation.model_copy(deep=True)
+            if not item.supported or item.action == "noop":
+                planned.append(item)
+                continue
+            try:
+                item.node = resolve_node(item, node_names)
+                item.after_summary = validate_operation_payload(item)
+            except CephCapabilityUnsupported:
+                item.supported = False
+                item.blocked_reason = (
+                    "The Proxmox operation lacks an exact valid node or typed payload."
+                )
+            planned.append(item)
+        return planned
 
     async def apply(
         self,
@@ -277,17 +422,28 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         *,
         confirm_destructive: bool,
     ) -> dict[str, Any]:
+        operation_key = f"{operation.kind}:{operation.action}"
+        if operation_kinds(True).get(operation_key) is not True:
+            raise CephCapabilityUnsupported(
+                "The Proxmox Ceph operation pair is not explicitly allowlisted."
+            )
         if operation.action == "noop":
             return {
                 "operation_id": operation.id,
                 "result": "noop",
                 "target_ref": operation.target_ref,
             }
-        if not self._pxs:
-            raise CephCapabilityUnsupported(
-                "No Proxmox session is available to apply Ceph write operations."
+        if not ceph_write_execution_enabled():
+            raise CephWriteGateDenied(
+                "ceph_write_execution_disabled",
+                "Ceph writes require explicit operator and trusted actor gateway gates.",
             )
-        px = self._pxs[0]
+        if not self._writes_authorized or self._database_session is None:
+            raise CephWriteGateDenied(
+                "endpoint_write_gate_unavailable",
+                "The selected endpoint is not authorized for Ceph writes.",
+            )
+        px = self._selected_session()
         client = _client_for(px)
         write = getattr(client, "write", None)
         if write is None:
@@ -297,8 +453,80 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
                 "Proxmox-backed Ceph writes."
             )
         node = resolve_node(operation, _node_names(px))
-        return await execute_operation(
+        if self._bound_session is None:
+            raise CephWriteGateDenied(
+                "endpoint_session_untagged",
+                "Ceph writes require one privately bound local endpoint session.",
+            )
+        # This HMAC-backed database/session comparison is deliberately adjacent
+        # to dispatch and repeats for every operation in a multi-operation plan.
+        async with self._database_session_lock:
+            await self._bound_session.verify_fresh(self._database_session)
+        result = await execute_operation(
             write, operation, node, confirm_destructive=confirm_destructive
+        )
+        return {**result, "node": node}
+
+    async def wait_for_terminal(
+        self,
+        node: str,
+        upid: str,
+        *,
+        heartbeat: TaskHeartbeat | None = None,
+    ) -> dict[str, str]:
+        """Poll one submitted task using the same privately bound session."""
+
+        px = self._selected_session()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._task_poll_timeout
+        while True:
+            if heartbeat is not None:
+                await heartbeat()
+            try:
+                status = await get_node_task_status(px, node, upid)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - transport details are secret-bearing
+                return {
+                    "state": "outcome_unknown",
+                    "code": "provider_task_status_unavailable",
+                }
+            raw_state = (
+                status.get("status")
+                if isinstance(status, dict)
+                else getattr(status, "status", None)
+            )
+            raw_exit = (
+                status.get("exitstatus")
+                if isinstance(status, dict)
+                else getattr(status, "exitstatus", None)
+            )
+            if str(raw_state or "").casefold() == "stopped":
+                if str(raw_exit or "").casefold() == "ok":
+                    return {"state": "completed", "code": "provider_task_completed"}
+                return {"state": "failed", "code": "provider_task_failed"}
+            if loop.time() >= deadline:
+                return {"state": "outcome_unknown", "code": "provider_task_timeout"}
+            await asyncio.sleep(self._task_poll_interval)
+
+    def declares_synchronous_success(
+        self,
+        operation: ProviderOperation,
+        result: dict[str, Any],
+    ) -> bool:
+        """Accept only the exact synchronous result shape proven by the SDK."""
+
+        operation_key = f"{operation.kind}:{operation.action}"
+        has_task_reference = any(
+            result.get(key) for key in ("upid", "provider_task_ref", "provider_task_refs")
+        )
+        return bool(
+            operation_key in SYNCHRONOUS_OPERATION_KINDS
+            and result.get("result") == "completed"
+            and result.get("completion_mode") == "synchronous"
+            and bool(operation.node)
+            and result.get("node") == operation.node
+            and not has_task_reference
         )
 
     async def reconcile(self, scope: dict[str, Any]) -> dict[str, Any]:

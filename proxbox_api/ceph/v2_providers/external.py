@@ -22,7 +22,12 @@ from proxbox_api.ceph.rgw_client import (
     build_rgw_client,
     rgw_sdk_importable,
 )
-from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephProviderAdapter
+from proxbox_api.ceph.v2_providers.base import (
+    CephCapabilityUnsupported,
+    CephProviderAdapter,
+    CephProviderBoundaryError,
+    CephWriteGateDenied,
+)
 from proxbox_api.ceph.v2_providers.dashboard import DashboardCephProviderAdapter
 from proxbox_api.ceph.v2_providers.dashboard_writer import operation_kinds as dashboard_kinds
 from proxbox_api.ceph.v2_providers.prometheus import PrometheusCephProviderAdapter
@@ -34,7 +39,6 @@ from proxbox_api.ceph.v2_schemas import (
 from proxbox_api.logger import logger
 
 _RGW_KINDS = {"rgw_user", "rgw_bucket", "rgw_realm", "rgw_zone"}
-_DASHBOARD_KINDS = {"pool", "rbd_image", "rbd_snapshot"}
 _RGW_OPERATION_KINDS = {
     "rgw_user:create": True,
     "rgw_user:update": True,
@@ -84,10 +88,12 @@ class ExternalCephProviderAdapter(CephProviderAdapter):
         dash = self._dashboard_active()
         rgw = self._rgw_active()
         metrics = self._prometheus_cfg is not None or dash
-        kinds: dict[str, bool] = {"noop": True}
-        kinds.update(dashboard_kinds(dash))
-        for key, supported in _RGW_OPERATION_KINDS.items():
-            kinds[key] = bool(supported and rgw)
+        kinds: dict[str, bool] = {}
+        kinds.update(dashboard_kinds(False))
+        for key in _RGW_OPERATION_KINDS:
+            kinds[key] = False
+        for kind in _RGW_KINDS:
+            kinds[f"{kind}:noop"] = True
         configured = []
         if self._dashboard_cfg:
             configured.append("dashboard" + ("" if dash else " (needs proxmox-sdk>=0.0.11)"))
@@ -102,17 +108,22 @@ class ExternalCephProviderAdapter(CephProviderAdapter):
         ]
         if not configured:
             notes.append("Configure a Dashboard, Prometheus, or RGW provider to enable operations.")
+        notes.append(
+            "External Ceph apply and destructive capabilities remain false until the "
+            "cluster selector, provider credentials/revisions, and write authority are "
+            "durably bound to the canonical plan."
+        )
         return ProviderCapabilities(
             provider=self.provider,
             supported=True,
             read_state=dash or rgw,
             diff=dash or rgw,
             plan=dash or rgw,
-            apply=dash or rgw,
+            apply=False,
             reconcile=dash or rgw,
             metrics=metrics,
             operation_kinds=kinds,
-            destructive_operations=dash or rgw,
+            destructive_operations=False,
             notes=notes,
         )
 
@@ -168,8 +179,8 @@ class ExternalCephProviderAdapter(CephProviderAdapter):
                         resources.append(
                             {"kind": "rgw_user", "target_ref": str(ref), "summary": summary}
                         )
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"rgw_user: {type(exc).__name__}: {exc}")
+            except Exception:  # noqa: BLE001 - raw diagnostics are secret-bearing
+                errors.append(_safe_diagnostic("rgw_user"))
             try:
                 for bucket in await client.list_buckets():
                     resources.append(
@@ -179,8 +190,8 @@ class ExternalCephProviderAdapter(CephProviderAdapter):
                             "summary": {"bucket": bucket},
                         }
                     )
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"rgw_bucket: {type(exc).__name__}: {exc}")
+            except Exception:  # noqa: BLE001 - raw diagnostics are secret-bearing
+                errors.append(_safe_diagnostic("rgw_bucket"))
         finally:
             await _safe_close(client)
 
@@ -206,25 +217,37 @@ class ExternalCephProviderAdapter(CephProviderAdapter):
         *,
         confirm_destructive: bool,
     ) -> dict[str, Any]:
+        kind = operation.kind
+        action = operation.action
+        op_key = f"{kind}:{action}"
+        known_dashboard_operation = dashboard_kinds(True).get(op_key) is True
+        known_rgw_operation = _RGW_OPERATION_KINDS.get(op_key) is True or (
+            action == "noop" and kind in _RGW_KINDS
+        )
+        if not known_dashboard_operation and not known_rgw_operation:
+            raise CephCapabilityUnsupported(
+                "External Ceph provider rejected an unsupported operation."
+            )
         if operation.action == "noop":
             return {
                 "operation_id": operation.id,
                 "result": "noop",
                 "target_ref": operation.target_ref,
             }
-        kind = operation.kind
-        if kind in _DASHBOARD_KINDS:
-            if not self._dashboard_active():
-                raise CephCapabilityUnsupported(
-                    "External cluster has no active Ceph Dashboard provider for "
-                    f"{kind} writes (configure a Dashboard endpoint and pin "
-                    "proxmox-sdk>=0.0.11)."
-                )
-            return await self._dashboard.apply(operation, confirm_destructive=confirm_destructive)
-        if kind in _RGW_KINDS:
-            return await self._apply_rgw(operation, confirm_destructive=confirm_destructive)
-        raise CephCapabilityUnsupported(
-            f"External cluster does not support {kind}:{operation.action}."
+        raise CephWriteGateDenied(
+            "durable_provider_write_gate_unavailable",
+            "External Ceph writes require durable selector and write authority binding.",
+        )
+
+    def declares_synchronous_success(
+        self,
+        operation: ProviderOperation,  # noqa: ARG002
+        result: dict[str, Any],
+    ) -> bool:
+        """External writes complete synchronously only on an explicit applied result."""
+
+        return result.get("result") == "applied" and not (
+            result.get("provider_task_ref") or result.get("upid")
         )
 
     async def _apply_rgw(
@@ -276,13 +299,7 @@ class ExternalCephProviderAdapter(CephProviderAdapter):
         return build_rgw_client(self._rgw_cfg)
 
     def _cluster_name(self) -> str:
-        if self._dashboard_cfg:
-            return self._dashboard_cfg.base_url
-        if self._rgw_cfg:
-            return self._rgw_cfg.base_url
-        if self._prometheus_cfg:
-            return self._prometheus_cfg.url
-        return "external"
+        return "configured-external-ceph"
 
 
 async def _dispatch_rgw(  # noqa: C901, PLR0911, PLR0912 - explicit kind/action table
@@ -339,8 +356,16 @@ async def _safe_close(client: Any) -> None:
         return
     try:
         await close()
-    except Exception as exc:  # noqa: BLE001 - best-effort cleanup
-        logger.debug("RGW client close failed: %s", exc)
+    except Exception:  # noqa: BLE001 - best-effort cleanup
+        logger.debug("RGW client close failed")
+
+
+def _safe_diagnostic(kind: str) -> str:
+    failure = CephProviderBoundaryError(
+        "provider_read_unavailable",
+        "Ceph provider data could not be read safely.",
+    )
+    return f"{kind}: {failure.reason} correlation_id={failure.correlation_id}"
 
 
 __all__ = ["ExternalCephProviderAdapter"]

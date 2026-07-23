@@ -29,6 +29,24 @@ Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Pro
 - `GET /admin/logs` - Buffer de logs em memoria com filtros opcionais para `level`, `limit`, `offset`, `since` e `operation_id`.
 - `GET /admin/logs/stream` - Stream SSE de logs em tempo real. Suporta os parametros `level`, `errors_only`, `operation_id` e `newer_than_id`.
 
+## Escritas Ceph v2
+
+Mutacoes Ceph v2 exigem endpoint Proxmox exato, `allow_writes` atual, plano
+canonico persistido com revisao estavel da configuracao, aprovador diferente e
+token opaco de uso unico. Os flags `PROXBOX_ENABLE_CEPH_V2_WRITES` e
+`PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY` sao falsos por padrao e ambos devem ser
+habilitados. Apply inline e confirmacoes booleanas/previsiveis nao autorizam
+escrita; leases expirados e UPIDs ausentes/invalidos viram `outcome_unknown`.
+Cada operacao Proxmox vincula um node exato, usa payload tipado por kind/action
+e exige um UPID completo, globalmente unico no provider e consistente com esse
+node. Checkpoints duraveis sobrevivem a cancelamentos repetidos. `netbox-ceph`
+resolve o ID canonico do endpoint backend; a PK do plugin nao o substitui. Dashboard e
+external permanecem somente leitura/plan/reconcile ate existir autoridade
+duravel de escrita.
+Consulte
+[Aprovacao e Recuperacao de Escritas Ceph v2](../operations/ceph-write-approvals.md)
+para contratos, erros, recuperacao, rollout e rollback.
+
 ## Rotas NetBox (`/netbox`)
 
 - `POST /netbox/endpoint` - Cria o endpoint NetBox singleton.

@@ -69,7 +69,16 @@ jobs:
           uv run ty check \
             proxbox_api/types \
             proxbox_api/utils/retry.py \
-            proxbox_api/schemas/sync.py
+            proxbox_api/schemas/sync.py \
+            proxbox_api/database_protocols.py \
+            proxbox_api/utils/async_compat.py \
+            proxbox_api/ceph/endpoint_binding.py \
+            proxbox_api/ceph/v2_schemas.py \
+            proxbox_api/ceph/v2_engine.py \
+            proxbox_api/ceph/v2_routes.py \
+            proxbox_api/ceph/v2_providers/base.py \
+            proxbox_api/ceph/v2_providers/proxmox.py \
+            proxbox_api/ceph/v2_providers/proxmox_writer.py
 
       - name: Compile and import smoke checks
         shell: bash

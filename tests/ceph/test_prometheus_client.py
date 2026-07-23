@@ -116,6 +116,23 @@ async def test_collect_snapshot_records_query_errors_as_warnings() -> None:
     assert any("query failed" in w for w in snap.warnings)
 
 
+async def test_collect_snapshot_never_exposes_transport_exception_text() -> None:
+    secret_canary = "prometheus-transport-secret-canary"
+
+    def err_handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        raise httpx.ConnectError(secret_canary)
+
+    inner = httpx.AsyncClient(transport=httpx.MockTransport(err_handler))
+    client = PrometheusClient(PrometheusSourceConfig(url="http://prom:9090"), client=inner)
+    snap = await collect_snapshot(client)
+    await client.aclose()
+
+    serialized = snap.model_dump_json()
+    assert secret_canary not in serialized
+    assert snap.warnings
+    assert all(warning.startswith("query failed (") for warning in snap.warnings)
+
+
 async def test_bearer_token_sent_as_authorization_header() -> None:
     seen: dict[str, str] = {}
 

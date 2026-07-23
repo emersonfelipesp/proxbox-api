@@ -11,7 +11,7 @@ from typing import Annotated, Any, ClassVar
 
 import bcrypt
 from fastapi import Depends
-from sqlalchemy import JSON, Column, event, inspect, text
+from sqlalchemy import JSON, Column, UniqueConstraint, event, inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -258,6 +258,12 @@ class CephOperationRunRecord(SQLModel, table=True):
 
     id: str = Field(primary_key=True)
     plan_id: str | None = Field(default=None, index=True)
+    endpoint_id: int | None = Field(default=None, index=True)
+    endpoint_config_revision: str | None = Field(default=None, index=True)
+    plan_digest: str | None = Field(default=None, index=True)
+    requester: str | None = Field(default=None, index=True)
+    approver: str | None = Field(default=None, index=True)
+    approval_id: str | None = Field(default=None, index=True)
     status: str = Field(default="pending", index=True)
     actor: str | None = Field(default=None, index=True)
     source_branch_schema_id: str | None = Field(default=None, index=True)
@@ -272,12 +278,115 @@ class CephOperationRunRecord(SQLModel, table=True):
     )
     created_at: float = Field(default_factory=time.time, index=True)
     updated_at: float = Field(default_factory=time.time, index=True)
+    lease_expires_at: float | None = Field(default=None, index=True)
+    lease_owner: str | None = Field(default=None, index=True)
     warnings: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     errors: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     result_summary: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSON, nullable=False),
     )
+
+
+class CephOperationEventRecord(SQLModel, table=True):
+    """Append-only dispatch and provider-task evidence for one Ceph run."""
+
+    __tablename__: ClassVar[str] = "ceph_operation_event"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_ceph_operation_event_run_sequence"),
+        {"extend_existing": True},
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    sequence: int = Field(index=True)
+    operation_index: int | None = Field(default=None, index=True)
+    operation_id: str | None = Field(default=None, index=True)
+    event: str = Field(index=True)
+    status: str = Field(index=True)
+    code: str
+    message: str
+    kind: str | None = Field(default=None, index=True)
+    action: str | None = Field(default=None, index=True)
+    target_ref: str | None = Field(default=None, index=True)
+    provider_task_ref: str | None = Field(default=None, index=True)
+    payload: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    created_at: float = Field(default_factory=time.time, index=True)
+
+
+class CephProviderTaskClaimRecord(SQLModel, table=True):
+    """Globally unique ownership claim for one provider task reference.
+
+    A provider task may produce several audit events, so uniqueness belongs in
+    this dedicated table rather than on ``CephOperationEventRecord``.  Claims
+    are never recycled: a reference observed in any earlier run can therefore
+    never be polled as evidence for a later mutation.
+    """
+
+    __tablename__: ClassVar[str] = "ceph_provider_task_claim"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_task_ref",
+            name="uq_ceph_provider_task_claim_provider_ref",
+        ),
+        {"extend_existing": True},
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    provider: str = Field(index=True)
+    endpoint_id: int = Field(index=True)
+    endpoint_config_revision: str | None = Field(default=None, index=True)
+    provider_task_ref: str = Field(index=True)
+    run_id: str = Field(index=True)
+    operation_index: int = Field(index=True)
+    operation_id: str | None = Field(default=None, index=True)
+    claimed_at: float = Field(default_factory=time.time, index=True)
+
+
+class CephPlanRecord(SQLModel, table=True):
+    """Canonical persisted Ceph v2 plan used as the only apply authority."""
+
+    __tablename__: ClassVar[str] = "ceph_plan"
+    __table_args__ = {"extend_existing": True}
+
+    id: str = Field(primary_key=True)
+    provider: str = Field(index=True)
+    endpoint_id: int | None = Field(default=None, index=True)
+    endpoint_config_revision: str | None = Field(default=None, index=True)
+    requester: str = Field(index=True)
+    source_branch_schema_id: str | None = Field(default=None, index=True)
+    digest: str = Field(index=True)
+    plan_payload: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    created_at: float = Field(default_factory=time.time, index=True)
+    expires_at: float = Field(index=True)
+
+
+class CephApprovalRecord(SQLModel, table=True):
+    """Hashed, expiring, single-use two-person approval for one Ceph plan."""
+
+    __tablename__: ClassVar[str] = "ceph_approval"
+    __table_args__ = {"extend_existing": True}
+
+    id: str = Field(primary_key=True)
+    plan_id: str = Field(index=True, unique=True)
+    plan_digest: str = Field(index=True)
+    endpoint_id: int | None = Field(default=None, index=True)
+    endpoint_config_revision: str | None = Field(default=None, index=True)
+    requester: str = Field(index=True)
+    approver: str = Field(index=True)
+    token_hash: str = Field(index=True, unique=True)
+    created_at: float = Field(default_factory=time.time, index=True)
+    expires_at: float = Field(index=True)
+    consumed_at: float | None = Field(default=None, index=True)
+    consumed_by: str | None = Field(default=None, index=True)
+    operation_run_id: str | None = Field(default=None, index=True)
 
 
 class PrometheusSource(SQLModel, table=True):
@@ -727,6 +836,12 @@ def _migrate_ceph_operation_run_columns() -> None:
         return
     column_specs: dict[str, str] = {
         "plan_id": "VARCHAR",
+        "endpoint_id": "INTEGER",
+        "endpoint_config_revision": "VARCHAR",
+        "plan_digest": "VARCHAR",
+        "requester": "VARCHAR",
+        "approver": "VARCHAR",
+        "approval_id": "VARCHAR",
         "status": "VARCHAR NOT NULL DEFAULT 'pending'",
         "actor": "VARCHAR",
         "source_branch_schema_id": "VARCHAR",
@@ -735,6 +850,8 @@ def _migrate_ceph_operation_run_columns() -> None:
         "provider_task_refs": "JSON NOT NULL DEFAULT '[]'",
         "created_at": "REAL NOT NULL DEFAULT 0",
         "updated_at": "REAL NOT NULL DEFAULT 0",
+        "lease_expires_at": "REAL",
+        "lease_owner": "VARCHAR",
         "warnings": "JSON NOT NULL DEFAULT '[]'",
         "errors": "JSON NOT NULL DEFAULT '[]'",
         "result_summary": "JSON NOT NULL DEFAULT '{}'",
@@ -755,6 +872,220 @@ def _migrate_ceph_operation_run_columns() -> None:
         )
         conn.execute(
             text(f"UPDATE {table} SET updated_at = :now WHERE updated_at = 0"), {"now": now}
+        )
+        conn.execute(
+            text(
+                f"UPDATE {table} SET lease_expires_at = updated_at "
+                "WHERE lease_expires_at IS NULL AND status IN ('running', 'dispatching')"
+            )
+        )
+
+
+def _migrate_ceph_authority_columns() -> None:
+    """Add durable endpoint-revision bindings to existing plan/approval tables."""
+
+    tables = {
+        CephPlanRecord.__tablename__: {"endpoint_config_revision": "VARCHAR"},
+        CephApprovalRecord.__tablename__: {"endpoint_config_revision": "VARCHAR"},
+    }
+    for table, column_specs in tables.items():
+        try:
+            insp = inspect(engine)
+            if not insp.has_table(table):
+                continue
+            existing = {column["name"] for column in insp.get_columns(table)}
+        except Exception:
+            continue
+        statements = [
+            f"ALTER TABLE {table} ADD COLUMN {column} {spec}"
+            for column, spec in column_specs.items()
+            if column not in existing
+        ]
+        if not statements:
+            continue
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+
+
+class CephProviderTaskClaimMigrationError(RuntimeError):
+    """Legacy task evidence cannot be represented by the global claim key."""
+
+
+def _migrate_ceph_provider_task_claim_table() -> None:
+    """Install global task claims and deterministically backfill legacy evidence.
+
+    Provider task identifiers are provider-global, not endpoint-local.  Older
+    databases used ``(provider, endpoint_id, provider_task_ref)`` uniqueness.
+    A reference already observed on more than one endpoint is ambiguous and is
+    therefore never auto-selected or discarded: startup fails with a stable
+    migration reason while the original table remains intact for operator
+    investigation.  Collision-free legacy tables are rebuilt transactionally
+    with the global ``(provider, provider_task_ref)`` key.
+    """
+
+    run_table = CephOperationRunRecord.__tablename__
+    event_table = CephOperationEventRecord.__tablename__
+    claim_table = CephProviderTaskClaimRecord.__tablename__
+    inspector = inspect(engine)
+    claim_exists = inspector.has_table(claim_table)
+    if not claim_exists:
+        CephProviderTaskClaimRecord.__table__.create(engine, checkfirst=True)
+        inspector = inspect(engine)
+
+    has_legacy_events = inspector.has_table(run_table) and inspector.has_table(event_table)
+    unique_column_sets = {
+        tuple(constraint.get("column_names") or ())
+        for constraint in inspector.get_unique_constraints(claim_table)
+    }
+    requires_global_rebuild = ("provider", "provider_task_ref") not in unique_column_sets
+
+    candidate_queries = [
+        f"""
+        SELECT provider, endpoint_id, provider_task_ref
+        FROM {claim_table}
+        WHERE provider_task_ref IS NOT NULL
+          AND TRIM(provider_task_ref) != ''
+        """
+    ]
+    if has_legacy_events:
+        candidate_queries.append(
+            f"""
+            SELECT
+                run.provider AS provider,
+                COALESCE(run.endpoint_id, 0) AS endpoint_id,
+                event.provider_task_ref AS provider_task_ref
+            FROM {event_table} AS event
+            JOIN {run_table} AS run ON run.id = event.run_id
+            WHERE event.provider_task_ref IS NOT NULL
+              AND TRIM(event.provider_task_ref) != ''
+            """
+        )
+
+    with engine.begin() as connection:
+        collision = connection.execute(
+            text(
+                """
+                WITH candidates AS (
+                """
+                + " UNION ALL ".join(candidate_queries)
+                + """
+                )
+                SELECT provider, provider_task_ref
+                FROM candidates
+                GROUP BY provider, provider_task_ref
+                HAVING COUNT(DISTINCT endpoint_id) > 1
+                ORDER BY provider, provider_task_ref
+                LIMIT 1
+                """
+            )
+        ).first()
+        if collision is not None:
+            raise CephProviderTaskClaimMigrationError(
+                "ceph_provider_task_claim_cross_endpoint_collision"
+            )
+
+        if requires_global_rebuild:
+            replacement = f"{claim_table}_global_key"
+            connection.execute(text(f"DROP TABLE IF EXISTS {replacement}"))
+            connection.execute(
+                text(
+                    f"""
+                    CREATE TABLE {replacement} (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        provider VARCHAR NOT NULL,
+                        endpoint_id INTEGER NOT NULL,
+                        endpoint_config_revision VARCHAR,
+                        provider_task_ref VARCHAR NOT NULL,
+                        run_id VARCHAR NOT NULL,
+                        operation_index INTEGER NOT NULL,
+                        operation_id VARCHAR,
+                        claimed_at FLOAT NOT NULL,
+                        CONSTRAINT uq_ceph_provider_task_claim_provider_ref
+                            UNIQUE (provider, provider_task_ref)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    f"""
+                    INSERT INTO {replacement} (
+                        id,
+                        provider,
+                        endpoint_id,
+                        endpoint_config_revision,
+                        provider_task_ref,
+                        run_id,
+                        operation_index,
+                        operation_id,
+                        claimed_at
+                    )
+                    SELECT
+                        id,
+                        provider,
+                        endpoint_id,
+                        endpoint_config_revision,
+                        provider_task_ref,
+                        run_id,
+                        operation_index,
+                        operation_id,
+                        claimed_at
+                    FROM {claim_table}
+                    ORDER BY claimed_at, id
+                    """
+                )
+            )
+            connection.execute(text(f"DROP TABLE {claim_table}"))
+            connection.execute(text(f"ALTER TABLE {replacement} RENAME TO {claim_table}"))
+            for column in (
+                "provider",
+                "endpoint_id",
+                "endpoint_config_revision",
+                "provider_task_ref",
+                "run_id",
+                "operation_index",
+                "operation_id",
+                "claimed_at",
+            ):
+                connection.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS ix_{claim_table}_{column} "
+                        f"ON {claim_table} ({column})"
+                    )
+                )
+
+        if not has_legacy_events:
+            return
+        connection.execute(
+            text(
+                f"""
+                INSERT OR IGNORE INTO {claim_table} (
+                    provider,
+                    endpoint_id,
+                    endpoint_config_revision,
+                    provider_task_ref,
+                    run_id,
+                    operation_index,
+                    operation_id,
+                    claimed_at
+                )
+                SELECT
+                    run.provider,
+                    COALESCE(run.endpoint_id, 0),
+                    run.endpoint_config_revision,
+                    event.provider_task_ref,
+                    event.run_id,
+                    COALESCE(event.operation_index, -1),
+                    event.operation_id,
+                    event.created_at
+                FROM {event_table} AS event
+                JOIN {run_table} AS run ON run.id = event.run_id
+                WHERE event.provider_task_ref IS NOT NULL
+                  AND TRIM(event.provider_task_ref) != ''
+                ORDER BY event.created_at, event.id
+                """
+            )
         )
 
 
@@ -866,6 +1197,8 @@ def create_db_and_tables() -> None:
     _migrate_pbs_endpoint_columns()
     _migrate_pdm_endpoint_columns()
     _migrate_ceph_operation_run_columns()
+    _migrate_ceph_authority_columns()
+    _migrate_ceph_provider_task_claim_table()
     _migrate_prometheus_source_columns()
     _migrate_ceph_dashboard_endpoint_columns()
     _migrate_ceph_external_cluster_columns()

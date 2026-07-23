@@ -25,6 +25,9 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_bridge_interfaces.py` | VM bridge interface mapping and reconciliation |
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
+| `ceph/test_v2_orchestration.py` | Ceph v2 HTTP safety contract: exact endpoint/session/node, real mapped `netbox-ceph` request, strict per-pair payloads, durable plan, actor/approval binding, recursive persistence/API/SSE exception/non-JSON redaction, unique node-consistent UPIDs, expiry/tamper/replay, audit recovery, and read-only reconcile |
+| `ceph/test_v2_proxmox_writer.py` | Proxmox Ceph writer mapping, exact no-fallback node binding, canonical node-free no-op detection, strict payload rejection, SDK-proven synchronous completion typing, heartbeat/session serialization, and exhaustive common per-mutation gate coverage |
+| `ceph/test_v2_approval_concurrency.py` | Atomic approval race, same/cross-endpoint sequential/concurrent provider-global task-claim uniqueness, double/triple-cancellation-safe dispatch/task/synchronous/cancellation evidence, live dispatching lease ownership, expiry recovery, and stale-worker rejection; exact AsyncSession path runs on CI Python 3.12 and has a narrow local Python 3.14 aiosqlite skip |
 | `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
 | `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
 | `test_ensure_device_overwrite_flags.py` | `_ensure_device` overwrite-flag plumbing for cluster/storage/node-interface/IP tag groups |
@@ -34,12 +37,13 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_health.py` | Health check and root metadata endpoints |
 | `test_individual_sync.py` | Individual per-object sync service and dry-run workflows |
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
-| `test_logger_settings.py` | Logger configuration via env vars |
+| `test_logger_settings.py` | Logger configuration plus real-handler recursive key/URL/extra/exception/traceback redaction canaries |
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
 | `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
+| `test_proxmox_auth_pve9.py` | PVE 9 authentication/session fallback plus an effective logger-handler canary proving raw SDK exception secrets are not rendered |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
 | `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
@@ -139,6 +143,15 @@ on protected branches. The long-term target is 85%.
 - Reconciliation fixtures must stay deterministic. Include `vm_type` in VM
   identity expectations so QEMU and LXC resources with the same VMID do not
   collide.
+- Ceph approval concurrency must retain the real AsyncSession/gather proof for
+  the pinned Python 3.12 CI runtime. Python 3.14 may skip only that exact test
+  because its local aiosqlite connection worker does not complete; keep the
+  independent two-connection SQLite race active on every runtime.
+- Provider task claims must remain permanent, provider-global, and atomically
+  committed with the first submission event. Retain same/cross-endpoint
+  sequential and independent-connection concurrent reuse tests, deterministic
+  legacy-collision migration refusal, plus double/triple cancellation injection
+  at dispatch, claim, completion, and cancellation checkpoints.
 
 ## TestClient Fixtures (conftest.py)
 

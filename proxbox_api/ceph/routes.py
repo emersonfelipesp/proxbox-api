@@ -70,7 +70,9 @@ def _node_names(px: ProxmoxSession) -> list[str]:
     node_name = getattr(px, "node_name", None)
     if node_name:
         return [str(node_name)]
-    return ["localhost"]
+    # An invented localhost is unsafe for any consumer that later persists a
+    # node as mutation authority. Unknown discovery stays unknown.
+    return []
 
 
 def _client_class() -> Any:
