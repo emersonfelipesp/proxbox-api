@@ -544,6 +544,7 @@ it is an operator assertion like `allow_writes`.
 - `proxbox_api/routes/proxmox/access_gate.py::require_ssh_access` / `gate_ssh_access` — the 403 SSH gate
 - `proxbox_api/routes/cloud/template_images.py` and `proxbox_api/routes/cloud/azure_vhd_imports.py` — Cloud Image Build Pipeline / Azure VHD import SSH execution gated here
 - The **browser SSH terminal** uses a NetBox-side id space, so its access-method gate lives in the `netbox-proxbox` plugin (credential-serving endpoint), not here. proxbox-api's `/ssh/sessions` route is intentionally not SQLite-gated.
+- **Systemd service monitoring** (`proxbox_api/routes/proxmox/services.py::get_systemd_services`, `GET /proxmox/services/systemd`) is read-only but shares this same NetBox-side gate: it refuses to fetch SSH credentials and run `systemctl show` unless the NetBox `ProxmoxEndpoint` is `enabled`, `service_monitoring_enabled`, `allow_writes=True`, `access_methods="api_ssh"`, has complete SSH credentials, and netbox-rpc is not disabled for the endpoint (`_require_service_monitoring_authorized`). No `DELETE`/write verb is exposed here — the command is a fixed-argv `systemctl show` with `shlex.quote`'d, regex-validated unit names (`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, ≤100 chars, ≤32 units/request) and a bounded 10s timeout — but it still executes a remote shell command over SSH, so the same "never autonomously flip `allow_writes`/`access_methods`" rule applies to keeping this route reachable.
 
 ### Destructive Routes — Explicit Human Confirmation Required
 
