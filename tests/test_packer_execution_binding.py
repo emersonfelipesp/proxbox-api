@@ -1000,3 +1000,100 @@ def test_producer_owned_netbox_packer_shape_accepts_v1_fixture() -> None:
     assert consumer_view.plan_digest == producer_view.plan_digest
     assert consumer_view.plan_token == producer_view.plan_token
     assert len(consumer_view.capabilities) == len(producer_view.capabilities)
+
+
+@pytest.mark.asyncio
+async def test_cancel_route_journals_even_when_the_stop_task_is_force_cancelled(
+    db_engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A force-cancelled remote-stop task must not skip the durable journal.
+
+    Regression: the cancel route called ``cancel_task.result()`` inside its
+    ``except CancelledError`` branch without checking ``task.cancelled()``.
+    When the inner stop task was itself genuinely cancelled (event-loop
+    shutdown force-cancels independently created tasks), ``.result()``
+    re-raised immediately and the durable cancel-journal write never ran —
+    contradicting the documented guarantee that journal updates complete
+    through repeated cancellation on this exact route.
+    """
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    endpoint = _endpoint(id=None)
+    journal_calls: list[dict[str, object]] = []
+
+    async def force_cancelled_stop(*_args: object, **_kwargs: object) -> bool:
+        # A coroutine that raises CancelledError marks its task cancelled —
+        # the same terminal state a force-cancel during loop shutdown yields.
+        raise asyncio.CancelledError
+
+    async def fake_gate(_session: object, _endpoint_id: object):
+        return endpoint
+
+    async def fake_ssh_gate(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def fake_ssh_target(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def spy_record(
+        _session: object,
+        operation_row: object,
+        *,
+        cancellation_succeeded: bool,
+    ) -> bool:
+        journal_calls.append(
+            {
+                "operation_id": getattr(operation_row, "id", None),
+                "cancellation_succeeded": cancellation_succeeded,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(template_images, "cancel_pipeline_operation", force_cancelled_stop)
+    monkeypatch.setattr(template_images, "_gate", fake_gate)
+    monkeypatch.setattr(template_images, "gate_ssh_access", fake_ssh_gate)
+    monkeypatch.setattr(template_images, "_resolve_execution_ssh_target", fake_ssh_target)
+    monkeypatch.setattr(template_images, "_record_cancel_request_durably", spy_record)
+
+    async with factory() as session:
+        session.add(endpoint)
+        await session.commit()
+        await session.refresh(endpoint)
+        operation = CloudImageBuildOperation(
+            id="cancel-route-force-cancel",
+            plan_digest="d" * 64,
+            recipe_digest="e" * 64,
+            endpoint_config_digest="f" * 64,
+            endpoint_id=int(endpoint.id or 0),
+            target_node="pve01",
+            vmid=9010,
+            provider="release_image",
+            state="running",
+            lease_key=f"{endpoint.id}:9010",
+            remote_unit="proxbox-image-build-cancel-route.service",
+            plan_expires_at=time.time() + 300,
+            lease_expires_at=time.time() + 3600,
+            attempted=True,
+        )
+        session.add(operation)
+        await session.commit()
+
+        with pytest.raises(asyncio.CancelledError):
+            await template_images.cancel_cloud_image_build_operation(
+                operation.id,
+                session,
+            )
+
+        # The durable journal write ran before the cancellation was re-raised,
+        # and journalled a *failed* stop attempt: a force-cancelled stop task
+        # proves nothing about the remote unit.
+        assert journal_calls == [
+            {
+                "operation_id": operation.id,
+                "cancellation_succeeded": False,
+            }
+        ]
+
+    await engine.dispose()

@@ -551,11 +551,18 @@ async def cancel_cloud_image_build_operation(
         )
     )
     cancellation_requested = False
+    cancellation_succeeded = False
     try:
         cancellation_succeeded = await await_task_through_repeated_cancellation(cancel_task)
     except asyncio.CancelledError:
+        # The remote-stop task can be force-cancelled itself (event-loop
+        # shutdown cancels independently created tasks). The durable journal
+        # write below must still run, so remember the cancellation instead of
+        # re-raising — and never call .result() on a cancelled task, which
+        # would re-raise here and skip the journal entirely.
         cancellation_requested = True
-        cancellation_succeeded = cancel_task.result()
+        if cancel_task.done() and not cancel_task.cancelled():
+            cancellation_succeeded = cancel_task.result()
     try:
         await _record_cancel_request_durably(
             session,
