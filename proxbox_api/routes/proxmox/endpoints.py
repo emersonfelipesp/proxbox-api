@@ -5,12 +5,19 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlmodel import select
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.enum.proxmox import ProxmoxAccessMethod
+from proxbox_api.schemas.cloud_image_security import (
+    CloudImageSSHExecutionTarget,
+    normalize_ssh_fingerprint,
+    normalize_ssh_host,
+    normalize_ssh_identity_file,
+    normalize_ssh_user,
+)
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
@@ -18,6 +25,45 @@ from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 router = APIRouter()
 
 _ACCESS_METHOD_VALUES = tuple(m.value for m in ProxmoxAccessMethod)
+_SSH_BINDING_FIELDS = (
+    "ssh_target_node",
+    "ssh_host",
+    "ssh_username",
+    "ssh_identity_file",
+    "ssh_known_host_fingerprint",
+)
+
+
+def _validate_complete_ssh_binding(values: dict[str, object]) -> None:
+    """Require the Cloud Image Pipeline SSH binding to be complete or absent."""
+
+    populated = [field for field in _SSH_BINDING_FIELDS if values.get(field)]
+    if not populated:
+        return
+    missing = [field for field in _SSH_BINDING_FIELDS if not values.get(field)]
+    if missing:
+        raise ValueError(
+            "Cloud Image Pipeline SSH binding is incomplete; missing " + ", ".join(missing)
+        )
+    port = values.get("ssh_port", 22)
+    if isinstance(port, bool) or not isinstance(port, int):
+        raise ValueError("Cloud Image Pipeline SSH port must be an integer.")
+    CloudImageSSHExecutionTarget(
+        host=str(values["ssh_host"]),
+        user=str(values["ssh_username"]),
+        port=port,
+        identity_file=str(values["ssh_identity_file"]),
+        known_host_fingerprint=str(values["ssh_known_host_fingerprint"]),
+    )
+
+
+def _normalize_ssh_target_node(value: str | None) -> str | None:
+    if value is None:
+        return None
+    node = value.strip()
+    if not node:
+        raise ValueError("ssh_target_node must not be blank.")
+    return node
 
 
 def _validate_access_methods(value: str | None) -> str | None:
@@ -48,6 +94,12 @@ class ProxmoxEndpointCreate(BaseModel):
     enabled: bool = True
     allow_writes: bool = False
     access_methods: str = ProxmoxAccessMethod.api.value
+    ssh_target_node: str | None = Field(default=None, min_length=1, max_length=255)
+    ssh_host: str | None = Field(default=None, max_length=255)
+    ssh_username: str | None = Field(default=None, max_length=64)
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    ssh_identity_file: str | None = Field(default=None, max_length=4096)
+    ssh_known_host_fingerprint: str | None = Field(default=None, max_length=128)
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
     site_id: int | None = Field(default=None, ge=1)
@@ -66,6 +118,36 @@ class ProxmoxEndpointCreate(BaseModel):
         validated = _validate_access_methods(value)
         return validated if validated is not None else ProxmoxAccessMethod.api.value
 
+    @field_validator("ssh_host")
+    @classmethod
+    def _check_ssh_host(cls, value: str | None) -> str | None:
+        return normalize_ssh_host(value) if value is not None else None
+
+    @field_validator("ssh_target_node")
+    @classmethod
+    def _check_ssh_target_node(cls, value: str | None) -> str | None:
+        return _normalize_ssh_target_node(value)
+
+    @field_validator("ssh_username")
+    @classmethod
+    def _check_ssh_username(cls, value: str | None) -> str | None:
+        return normalize_ssh_user(value) if value is not None else None
+
+    @field_validator("ssh_identity_file")
+    @classmethod
+    def _check_ssh_identity_file(cls, value: str | None) -> str | None:
+        return normalize_ssh_identity_file(value) if value is not None else None
+
+    @field_validator("ssh_known_host_fingerprint")
+    @classmethod
+    def _check_ssh_fingerprint(cls, value: str | None) -> str | None:
+        return normalize_ssh_fingerprint(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def _check_complete_ssh_binding(self) -> "ProxmoxEndpointCreate":
+        _validate_complete_ssh_binding(self.model_dump())
+        return self
+
 
 class ProxmoxEndpointUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
@@ -78,6 +160,12 @@ class ProxmoxEndpointUpdate(BaseModel):
     enabled: bool | None = None
     allow_writes: bool | None = None
     access_methods: str | None = None
+    ssh_target_node: str | None = Field(default=None, min_length=1, max_length=255)
+    ssh_host: str | None = Field(default=None, max_length=255)
+    ssh_username: str | None = Field(default=None, max_length=64)
+    ssh_port: int | None = Field(default=None, ge=1, le=65535)
+    ssh_identity_file: str | None = Field(default=None, max_length=4096)
+    ssh_known_host_fingerprint: str | None = Field(default=None, max_length=128)
     token_name: str | None = Field(default=None, max_length=255)
     token_value: str | None = Field(default=None, max_length=1000)
     site_id: int | None = Field(default=None, ge=1)
@@ -95,6 +183,38 @@ class ProxmoxEndpointUpdate(BaseModel):
     def _check_access_methods(cls, value: str | None) -> str | None:
         return _validate_access_methods(value)
 
+    @field_validator("ssh_host")
+    @classmethod
+    def _check_ssh_host(cls, value: str | None) -> str | None:
+        return normalize_ssh_host(value) if value is not None else None
+
+    @field_validator("ssh_target_node")
+    @classmethod
+    def _check_ssh_target_node(cls, value: str | None) -> str | None:
+        return _normalize_ssh_target_node(value)
+
+    @field_validator("ssh_username")
+    @classmethod
+    def _check_ssh_username(cls, value: str | None) -> str | None:
+        return normalize_ssh_user(value) if value is not None else None
+
+    @field_validator("ssh_identity_file")
+    @classmethod
+    def _check_ssh_identity_file(cls, value: str | None) -> str | None:
+        return normalize_ssh_identity_file(value) if value is not None else None
+
+    @field_validator("ssh_known_host_fingerprint")
+    @classmethod
+    def _check_ssh_fingerprint(cls, value: str | None) -> str | None:
+        return normalize_ssh_fingerprint(value) if value is not None else None
+
+    @field_validator("ssh_port")
+    @classmethod
+    def _reject_null_ssh_port(cls, value: int | None) -> int | None:
+        if value is None:
+            raise ValueError("ssh_port cannot be null; omit it or provide an integer port.")
+        return value
+
 
 class ProxmoxEndpointPublic(BaseModel):
     """Public Proxmox endpoint shape with credentials redacted."""
@@ -111,6 +231,12 @@ class ProxmoxEndpointPublic(BaseModel):
     enabled: bool
     allow_writes: bool
     access_methods: str = ProxmoxAccessMethod.api.value
+    ssh_target_node: str | None = None
+    ssh_host: str | None = None
+    ssh_username: str | None = None
+    ssh_port: int = 22
+    ssh_identity_file: str | None = None
+    ssh_known_host_fingerprint: str | None = None
     site_id: int | None = None
     site_slug: str | None = None
     site_name: str | None = None
@@ -226,6 +352,15 @@ async def update_proxmox_endpoint(  # noqa: C901
         raise HTTPException(status_code=404, detail="Proxmox Endpoint not found")
 
     update_data = endpoint.model_dump(exclude_unset=True)
+
+    merged_ssh_binding = {
+        field: update_data.get(field, getattr(db_endpoint, field))
+        for field in (*_SSH_BINDING_FIELDS, "ssh_port")
+    }
+    try:
+        _validate_complete_ssh_binding(merged_ssh_binding)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Auto-allow any new addresses so they pass SSRF validation below.
     pre_allow_endpoint_hosts(

@@ -82,6 +82,31 @@ Toggle the flag from the NetBox plugin's ProxmoxEndpoint detail page; the
 column was added by migration `0037_proxmoxendpoint_allow_writes` and is
 backfilled to `false` for existing rows.
 
+### Cloud Image SSH binding
+
+Executable Cloud Image Pipeline builds require `access_methods="api_ssh"` and
+a complete persisted endpoint/node binding: `ssh_target_node`, `ssh_host`,
+`ssh_username`, `ssh_port`, `ssh_identity_file`, and
+`ssh_known_host_fingerprint`. Configure all binding fields together or leave
+all optional binding fields absent; partial bindings are rejected. The identity
+path must resolve below `PROXBOX_SSH_KEY_DIR`, and the fingerprint must use the
+canonical `SHA256:<43 base64 characters>` OpenSSH form.
+`ssh_port` may be omitted on update, but explicit JSON `null` is rejected so a
+database `NOT NULL` failure cannot occur after validation.
+
+The build request's `target_node` must match `ssh_target_node`. Legacy request
+SSH fields are optional assertions only: they cannot redirect execution, and a
+mismatch is rejected before `ssh-keyscan` or `ssh` runs. The scanned server key
+must match the persisted fingerprint exactly. Execution uses absolute OpenSSH
+binaries with `-F none` and disables ProxyCommand, ProxyJump, and hostname
+canonicalization; operator SSH config cannot redirect the connection.
+
+Executable preflight plans are HMAC-signed with a purpose-derived key rooted in
+`PROXBOX_ENCRYPTION_KEY`. Configure that key on every production worker so a
+five-minute plan can be verified across workers and restarts. Without a
+configured key, development mode uses a process-local seed and intentionally
+invalidates outstanding plans on restart or worker change.
+
 ### Password-based example
 
 ```json
@@ -195,7 +220,7 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_TRUSTED_PROXIES` | (empty) | Comma-separated list of CIDRs or IP addresses for trusted reverse proxies. When a request arrives from a trusted proxy, `X-Forwarded-For` is trusted to resolve the originating client IP for rate-limiting and brute-force lockout. Without this, the peer IP is always used (prevents spoofed-header bypass). |
 | `PROXBOX_FEATURES` | (empty) | Comma-separated list of optional sidecar-only feature flags: `pbs`, `ceph`, `pdm`. When set, only the listed sidecar route groups are mounted and all core Proxmox/NetBox/sync routes are skipped. Leave unset (or empty) to mount all route groups. |
 | `PROXBOX_ENSURE_NETBOX_OBJECTS` | `true` | When `false`, the NetBox bootstrap pass (custom fields, tags, etc.) is skipped at startup. Useful for read-only deployments or when NetBox is unavailable at boot. |
-| `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` | unset | When set to `1`, `true`, or `yes`, remote SSH command execution is permitted inside the Cloud Image Build Pipeline (`routes/cloud/pipeline_scripts.py`). Off by default for security. |
+| `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` | unset | When set to `1`, `true`, or `yes`, remote SSH command execution is permitted inside the Cloud Image Build Pipeline (`routes/cloud/pipeline_scripts.py`). Off by default for security. Keep unset/false in staging and production until netbox-packer owns and validates its real consumer contract; the local consumer-shaped fixture is producer-owned and does not clear that rollout hold. |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `5` | Number of VM interfaces synced per NetBox write batch. Reduce to lower write pressure. Mapped to `ProxboxPluginSettings.interface_batch_size`. |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `100` | Milliseconds to wait between interface write batches. Mapped to `ProxboxPluginSettings.interface_batch_delay_ms`. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Backup sync batch size. Reduce to lower NetBox write pressure during backup sync. |
@@ -215,8 +240,8 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_STRICT_STARTUP` | unset | When set to `1`, `true`, or `yes`, startup fails if generated Proxmox routes cannot be mounted. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | unset | When set to `1`, `true`, or `yes`, skips creating the default NetBox client during app startup. |
 | `PROXBOX_ENCRYPTION_KEY` | unset | Secret key for encrypting credentials at rest. See [Credential Encryption](#credential-encryption) below. |
-| `PROXBOX_ENCRYPTION_KEY_FILE` | unset | Path to a file containing the Fernet encryption key. Takes precedence over `PROXBOX_ENCRYPTION_KEY` when set; lets operators mount the key as a file/secret instead of an environment variable. |
-| `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | unset | When set to `1`, `true`, or `yes`, the backend boots even with no encryption key configured. Off by default — the backend refuses to start so credentials are never written plaintext in production. |
+| `PROXBOX_ENCRYPTION_KEY_FILE` | unset | Optional path to a local key file used only after the environment and plugin-setting sources are empty. Lets operators mount a process-level fallback secret; the default path is `<repo_root>/data/encryption.key`. |
+| `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | unset | Explicitly permits credential writes when no encryption key is configured. Off by default: startup and non-credential operations remain available, but credential writes fail closed. Use only in isolated labs. |
 
 ### NetBox OpenAPI schema cache
 
@@ -341,7 +366,8 @@ proxbox-api resolves the encryption key using the following priority chain:
 
 1. **`PROXBOX_ENCRYPTION_KEY` environment variable** — highest priority, takes effect immediately on startup.
 2. **`ProxboxPluginSettings.encryption_key`** — fetched from the NetBox plugin settings API (configurable on the `/plugins/proxbox/settings/` page in NetBox). Checked only if the env var is not set.
-3. **None** — no key configured. Credentials are stored in plaintext and a `CRITICAL` warning is logged. Never use this in production.
+3. **Local key file** — `PROXBOX_ENCRYPTION_KEY_FILE`, or the default `<repo_root>/data/encryption.key`, after the first two sources are empty.
+4. **None** — no key configured. Startup and non-credential operations remain available, but credential writes are refused unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` explicitly opts into lab-only plaintext storage. A `CRITICAL` warning is logged.
 
 ### Setting the key
 

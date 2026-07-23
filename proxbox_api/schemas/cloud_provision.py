@@ -1,35 +1,27 @@
 """Cloud-init driven VM provisioning schemas."""
 
 import ipaddress
-import os
-import re
+from collections.abc import Mapping
 from enum import Enum
-from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from proxbox_api.routes.intent.cloud_init import CloudInitPayload
+from proxbox_api.schemas.cloud_image_security import (
+    CloudImageSSHExecutionTarget as CloudImageSSHExecutionTarget,
+)
+from proxbox_api.schemas.cloud_image_security import (
+    is_valid_hostname as _is_valid_hostname,
+)
+from proxbox_api.schemas.cloud_image_security import (
+    normalize_ssh_fingerprint,
+    normalize_ssh_host,
+    normalize_ssh_identity_file,
+    normalize_ssh_user,
+)
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import validate_endpoint_url
-
-_DEFAULT_SSH_KEY_DIR = Path("/etc/proxbox/ssh_keys")
-_HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
-_SSH_USER_RE = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$")
-
-
-def _is_valid_hostname(value: str) -> bool:
-    if not value or len(value) > 253:
-        return False
-    hostname = value[:-1] if value.endswith(".") else value
-    if not hostname:
-        return False
-    return all(_HOST_LABEL_RE.fullmatch(label) for label in hostname.split("."))
-
-
-def _ssh_key_dir() -> Path:
-    configured = os.environ.get("PROXBOX_SSH_KEY_DIR", "").strip()
-    return Path(configured).resolve() if configured else _DEFAULT_SSH_KEY_DIR.resolve()
 
 
 class ProxmoxProductType(str, Enum):
@@ -60,7 +52,113 @@ class CloudImageBuildProvider(str, Enum):
     SOURCE_TREE = "source_tree"
 
 
+class CloudImageSourceBuildCommand(str, Enum):
+    """Allowlisted source-build recipes exposed at the HTTP boundary."""
+
+    pfsense_memstickserial = "pfsense_memstickserial"
+    opnsense_dvd = "opnsense_dvd"
+    PFSENSE_MEMSTICKSERIAL = "pfsense_memstickserial"
+    OPNSENSE_DVD = "opnsense_dvd"
+
+    @property
+    def argv(self) -> tuple[str, ...]:
+        """Return the fixed, server-installed recipe wrapper argv."""
+
+        if self == CloudImageSourceBuildCommand.pfsense_memstickserial:
+            return ("/usr/local/libexec/proxbox/build-pfsense-memstickserial",)
+        return ("/usr/local/libexec/proxbox/build-opnsense-dvd",)
+
+    @property
+    def source_root(self) -> str:
+        """Return the canonical, root-owned source root for this recipe."""
+
+        if self == CloudImageSourceBuildCommand.pfsense_memstickserial:
+            return "/opt/proxbox/image-sources/pfsense"
+        return "/opt/proxbox/image-sources/opnsense"
+
+    @property
+    def artifact_relative_path(self) -> str:
+        """Return the fixed recipe output path beneath :attr:`source_root`."""
+
+        if self == CloudImageSourceBuildCommand.pfsense_memstickserial:
+            return "artifacts/pfsense-memstickserial.img"
+        return "artifacts/opnsense-dvd.img"
+
+    @property
+    def product_type(self) -> "ProxmoxProductType":
+        if self == CloudImageSourceBuildCommand.pfsense_memstickserial:
+            return ProxmoxProductType.pfsense
+        return ProxmoxProductType.opnsense
+
+
+def provider_requires_snippets(provider: CloudImageBuildProvider) -> bool:
+    """Return the single provider-derived snippet requirement."""
+
+    return provider != CloudImageBuildProvider.proxmox_iso
+
+
 CloudImageProductType = ProxmoxProductType
+
+
+class CloudImageBuildTarget(BaseModel):
+    """Canonical target shared by planning, preflight, and execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_node: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    vmid: int = Field(..., ge=100)
+    provider: CloudImageBuildProvider
+    image_storage: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    vm_storage: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    snippets_storage: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+
+    @model_validator(mode="after")
+    def validate_snippets_target(self) -> "CloudImageBuildTarget":
+        if self.snippets_required and not self.snippets_storage:
+            raise ValueError("snippets_storage is required for this provider.")
+        return self
+
+    @property
+    def snippets_required(self) -> bool:
+        return provider_requires_snippets(self.provider)
+
+    @property
+    def image_content_type(self) -> str | None:
+        """Configured image-storage content, if the provider persists source media."""
+
+        if self.provider == CloudImageBuildProvider.proxmox_iso:
+            return "iso"
+        return None
+
+    def storage_requirements(self) -> tuple[tuple[str, str, str], ...]:
+        """Return normalized (role, storage, content) requirements."""
+
+        requirements: list[tuple[str, str, str]] = [("vm", self.vm_storage, "images")]
+        if self.image_content_type is not None:
+            requirements.insert(0, ("image", self.image_storage, self.image_content_type))
+        if self.snippets_required and self.snippets_storage:
+            requirements.append(("snippets", self.snippets_storage, "snippets"))
+        return tuple(requirements)
 
 
 class AzureVmGeneration(str, Enum):
@@ -91,7 +189,7 @@ class CloudImageVersionEntry(BaseModel):
     sha256: str | None = None
     compression: str | None = None
     source_tree_path: str | None = None
-    source_build_command: str | None = None
+    source_build_command: CloudImageSourceBuildCommand | None = None
     debian_codename: str | None = None
     os_codename: str | None = None
     package_name: str | None = None
@@ -218,8 +316,18 @@ class CloudImageTemplateBuildRequest(BaseModel):
 
     endpoint_id: int | None = Field(None, description="ProxmoxEndpoint primary key")
     vmid: int = Field(9000, ge=100, description="Template VMID to create")
-    name: str = Field("cloud-image-template", min_length=1, max_length=128)
-    target_node: str | None = Field(None, min_length=1)
+    name: str = Field(
+        "cloud-image-template",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    target_node: str | None = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
     image_url: str | None = Field(
         "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
         description="HTTP(S) URL for the source cloud image",
@@ -228,15 +336,23 @@ class CloudImageTemplateBuildRequest(BaseModel):
         None,
         description="Filename to store in Proxmox import storage; .img is normalized to .qcow2",
     )
-    image_storage: str = Field("local", min_length=1)
-    vm_storage: str = Field("local-zfs", min_length=1)
-    storage: str = Field("local-lvm", min_length=1)
-    snippets_storage: str = Field("local", min_length=1)
+    image_storage: str = Field(
+        "local", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+    vm_storage: str = Field(
+        "local-zfs",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    snippets_storage: str = Field(
+        "local", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
     snippets_dir: str = Field("/var/lib/vz/snippets", min_length=1)
     memory_mb: int = Field(512, ge=64)
     cores: int = Field(1, ge=1)
     disk_size_gb: int | None = Field(None, ge=1)
-    bridge: str = Field("vmbr0", min_length=1)
+    bridge: str = Field("vmbr0", min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
     ciuser: str = Field("ubuntu", min_length=1, max_length=64)
     hostname: str = Field("cloud-image-template", min_length=1, max_length=128)
     domain: str = Field("nmulti.local", min_length=1, max_length=128)
@@ -291,15 +407,63 @@ class CloudImageTemplateBuildRequest(BaseModel):
     provider: CloudImageBuildProvider | None = None
     checksum_url: str | None = None
     sha256: str | None = None
-    source_tree_path: str | None = None
-    source_build_command: str | None = None
-    source_artifact_path: str | None = None
+    source_tree_path: str | None = Field(
+        None,
+        max_length=512,
+        description=(
+            "Deprecated assertion only. Source builds use the server-owned canonical recipe root."
+        ),
+    )
+    source_build_command: CloudImageSourceBuildCommand | None = Field(
+        None,
+        description=(
+            "Allowlisted source-build recipe. Arbitrary shell command strings are rejected."
+        ),
+    )
+    source_artifact_path: str | None = Field(
+        None,
+        max_length=512,
+        description=(
+            "Deprecated assertion only. Source builds use the server-owned recipe artifact."
+        ),
+    )
     execute: bool | None = None
+    preflight_plan_token: str | None = Field(
+        None,
+        min_length=64,
+        max_length=4096,
+        repr=False,
+        description="Signed, expiring plan returned by the exact preflight endpoint.",
+    )
+    include_sensitive_preview: bool = Field(
+        False,
+        description=(
+            "Return the generated script and source material for an explicitly non-executing "
+            "review request. The preview can contain credentials from cloud-init or signed URLs; "
+            "it is rejected unless execute is explicitly false."
+        ),
+    )
     ssh_host: str | None = None
     ssh_user: str = "root"
     ssh_port: int = Field(22, ge=1, le=65535)
     ssh_identity_file: str | None = None
+    ssh_known_host_fingerprint: str | None = None
     ssh_authorized_keys: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_storage_alias(cls, value: object) -> object:
+        """Accept ``storage`` in v0.0.21 while keeping ``vm_storage`` authoritative."""
+
+        if not isinstance(value, Mapping) or "storage" not in value:
+            return value
+        normalized = dict(value)
+        legacy = normalized.pop("storage")
+        current = normalized.get("vm_storage")
+        if current is not None and str(current) != str(legacy):
+            raise ValueError("storage and vm_storage must match during the 0.0.21 transition.")
+        normalized["vm_storage"] = legacy
+        return normalized
 
     @model_validator(mode="after")
     def validate_product_provider_contract(self) -> "CloudImageTemplateBuildRequest":
@@ -311,7 +475,29 @@ class CloudImageTemplateBuildRequest(BaseModel):
                 "PVE products must use provider=proxmox_iso; "
                 "debian_cloud_image builds are not supported for Proxmox VE."
             )
+        if self.include_sensitive_preview and self.execute is not False:
+            raise ValueError(
+                "include_sensitive_preview requires execute=false explicitly; "
+                "sensitive previews are unavailable to executable requests."
+            )
+        if self.source_build_command is not None:
+            if self.provider != CloudImageBuildProvider.source_tree:
+                raise ValueError("source_build_command requires provider=source_tree.")
+            if self.source_build_command.product_type != self.product_type:
+                raise ValueError(
+                    "source_build_command is not compatible with the selected product_type."
+                )
         return self
+
+    @field_validator("snippets_dir")
+    @classmethod
+    def validate_legacy_snippets_dir(cls, value: str) -> str:
+        if value != "/var/lib/vz/snippets":
+            raise ValueError(
+                "Custom snippets_dir mappings are unsupported; snippet paths are resolved "
+                "from snippets_storage with pvesm path."
+            )
+        return value
 
     @field_validator("image_url")
     @classmethod
@@ -367,46 +553,246 @@ class CloudImageTemplateBuildRequest(BaseModel):
     def validate_ssh_host(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        host = value.strip()
-        if not host:
-            raise ValueError("ssh_host must be a non-empty hostname or IP address.")
-        if host.startswith("-"):
-            raise ValueError("ssh_host must not start with '-' or resemble an ssh option.")
-        if "%" in host:
-            raise ValueError("ssh_host must not include an IPv6 zone identifier.")
-        try:
-            ipaddress.ip_address(host)
-            return host
-        except ValueError:
-            pass
-        if not _is_valid_hostname(host):
-            raise ValueError("ssh_host must be a valid hostname, IPv4 address, or IPv6 address.")
-        return host
+        return normalize_ssh_host(value)
 
     @field_validator("ssh_user")
     @classmethod
     def validate_ssh_user(cls, value: str) -> str:
-        if not _SSH_USER_RE.fullmatch(value):
-            raise ValueError("ssh_user must match ^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$.")
-        return value
+        return normalize_ssh_user(value)
 
     @field_validator("ssh_identity_file")
     @classmethod
     def validate_ssh_identity_file(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        resolved = Path(value).resolve()
-        allowed_dir = _ssh_key_dir()
-        try:
-            resolved.relative_to(allowed_dir)
-        except ValueError as exc:
-            raise ValueError(
-                f"ssh_identity_file must resolve under PROXBOX_SSH_KEY_DIR ({allowed_dir})."
-            ) from exc
-        return str(resolved)
+        return normalize_ssh_identity_file(value)
+
+    @field_validator("ssh_known_host_fingerprint")
+    @classmethod
+    def validate_ssh_known_host_fingerprint(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return normalize_ssh_fingerprint(value)
+
+    def build_target(
+        self,
+        *,
+        provider: CloudImageBuildProvider,
+    ) -> CloudImageBuildTarget:
+        """Return the canonical target consumed by preflight and rendering."""
+
+        snippets_required = provider_requires_snippets(provider)
+        return CloudImageBuildTarget(
+            target_node=self.target_node or "pve-host",
+            vmid=self.vmid,
+            provider=provider,
+            image_storage=self.image_storage,
+            vm_storage=self.vm_storage,
+            snippets_storage=self.snippets_storage if snippets_required else None,
+        )
+
+
+class PackerFindingSeverity(str, Enum):
+    """Severity shared by Packer preflight and build diagnostics."""
+
+    info = "info"
+    warning = "warning"
+    error = "error"
+
+
+class PackerPreflightCapability(str, Enum):
+    """Read-only capabilities verified before a Cloud Image Pipeline build."""
+
+    endpoint_session = "endpoint_session"
+    node_online = "node_online"
+    image_storage_images = "image_storage_images"
+    image_storage_iso = "image_storage_iso"
+    vm_storage_images = "vm_storage_images"
+    snippets_storage_snippets = "snippets_storage_snippets"
+    vmid_available = "vmid_available"
+
+
+class PackerPreflightCapabilityStatus(str, Enum):
+    passed = "passed"
+    failed = "failed"
+    unsupported = "unsupported"
+
+
+class PackerFinding(BaseModel):
+    """Stable, secret-free diagnostic returned at the Packer API boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=1, max_length=64)
+    severity: PackerFindingSeverity
+    target: str = Field(..., min_length=1, max_length=320)
+    message: str = Field(..., min_length=1, max_length=512)
+
+
+class PackerPreflightCapabilityResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability: PackerPreflightCapability
+    status: PackerPreflightCapabilityStatus
+    target: str = Field(..., min_length=1, max_length=320)
+
+
+class CloudImageTemplatePreflightRequest(BaseModel):
+    """Versioned, read-only validation request for a Cloud Image Pipeline target."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["1.0"] = "1.0"
+    endpoint_id: int = Field(..., ge=1, description="Persisted proxbox-api endpoint primary key.")
+    target_node: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    vmid: int = Field(..., ge=100)
+    provider: CloudImageBuildProvider = CloudImageBuildProvider.release_image
+    image_storage: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    vm_storage: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    snippets_storage: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    recipe_digest: str | None = Field(
+        None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "Digest returned by a non-executing server-rendered build plan. Required to issue "
+            "an executable signed plan; omission retains read-only v1 readiness compatibility."
+        ),
+    )
+    snippets_required: bool | None = Field(
+        None,
+        description=(
+            "Deprecated compatibility assertion. The provider is authoritative for whether "
+            "snippet storage is required."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_snippets_target(self) -> "CloudImageTemplatePreflightRequest":
+        expected = provider_requires_snippets(self.provider)
+        if self.snippets_required is not None and self.snippets_required != expected:
+            raise ValueError("snippets_required must match the provider-derived requirement.")
+        if expected and not self.snippets_storage:
+            raise ValueError("snippets_storage is required for this provider.")
+        return self
+
+    def build_target(self) -> CloudImageBuildTarget:
+        return CloudImageBuildTarget(
+            target_node=self.target_node,
+            vmid=self.vmid,
+            provider=self.provider,
+            image_storage=self.image_storage,
+            vm_storage=self.vm_storage,
+            snippets_storage=(
+                self.snippets_storage if provider_requires_snippets(self.provider) else None
+            ),
+        )
+
+
+class CloudImageTemplatePreflightResponse(BaseModel):
+    """Typed result for the Packer preflight v1 contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["1.0"] = "1.0"
+    endpoint_id: int
+    target_node: str
+    vmid: int
+    ready: bool
+    writes_enabled: bool
+    recipe_digest: str | None = None
+    plan_id: str | None = None
+    plan_digest: str | None = None
+    plan_token: str | None = Field(default=None, repr=False)
+    expires_at: float | None = None
+    capabilities: list[PackerPreflightCapabilityResult] = Field(default_factory=list)
+    findings: list[PackerFinding] = Field(default_factory=list)
+
+
+class CloudImageTemplateSensitivePreview(BaseModel):
+    """Opt-in preview that can contain caller secrets and must not be logged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    warning: Literal[
+        "Sensitive preview: may contain credentials, signed URLs, keys, and cloud-init secrets."
+    ] = "Sensitive preview: may contain credentials, signed URLs, keys, and cloud-init secrets."
+    image_url: str | None = None
+    source_tree_path: str | None = None
+    source_artifact_path: str | None = None
+    generated_userdata: str | None = None
+    first_boot_script: str | None = None
+    build_script: str
+    commands: list[str] = Field(default_factory=list)
+
+
+class CloudImageTemplateExecutionSummary(BaseModel):
+    """Bounded execution metadata; raw process output is deliberately excluded."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempted: bool = False
+    enabled: bool = False
+    exit_code: int | None = None
+    stdout_bytes: int = Field(0, ge=0)
+    stderr_bytes: int = Field(0, ge=0)
+    stdout_lines: int = Field(0, ge=0)
+    stderr_lines: int = Field(0, ge=0)
+    cancellation_attempted: bool = False
+    cancellation_succeeded: bool | None = None
+
+
+class CloudImageBuildOperationResponse(BaseModel):
+    """Secret-free durable operation state returned to operators."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str
+    endpoint_id: int
+    target_node: str
+    vmid: int
+    provider: CloudImageBuildProvider
+    state: Literal["leased", "running", "completed", "failed", "cancelled", "recovery_required"]
+    recipe_digest: str
+    plan_digest: str
+    verified: bool
+    recovery_required: bool
+    cancel_requested: bool
+    cancellation_succeeded: bool | None = None
+    error_code: str | None = None
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+    updated_at: float
 
 
 class CloudImageTemplateBuildResponse(BaseModel):
+    """Secret-safe v2 build response for the Cloud Image Pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["2.0"] = "2.0"
     endpoint_id: Optional[int] = None
     target_node: Optional[str] = None
     vmid: int
@@ -420,22 +806,22 @@ class CloudImageTemplateBuildResponse(BaseModel):
     boot: Optional[str] = None
     scsi0: Optional[str] = None
     ide2: Optional[str] = None
-    generated_userdata: Optional[str] = None
     pipeline_name: str = "Cloud Image Build Pipeline"
     product_type: Optional[ProxmoxProductType] = None
     product_version: Optional[str] = None
     provider: Optional[CloudImageBuildProvider] = None
-    image_url: Optional[str] = None
-    source_tree_path: Optional[str] = None
-    source_artifact_path: Optional[str] = None
-    first_boot_script: Optional[str] = None
-    build_script: str = ""
-    commands: list[str] = Field(default_factory=list)
+    recipe_digest: str = ""
+    operation_id: str | None = None
+    verified: bool = False
+    recovery_required: bool = False
     operator_instructions: str = ""
     execution_enabled: bool = False
     returncode: Optional[int] = None
-    stdout: Optional[str] = None
-    stderr: Optional[str] = None
+    execution: CloudImageTemplateExecutionSummary = Field(
+        default_factory=CloudImageTemplateExecutionSummary
+    )
+    diagnostics: list[PackerFinding] = Field(default_factory=list)
+    sensitive_preview: CloudImageTemplateSensitivePreview | None = None
 
 
 class AzureVhdImportRequest(BaseModel):
@@ -484,43 +870,19 @@ class AzureVhdImportRequest(BaseModel):
     def validate_ssh_host(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        host = value.strip()
-        if not host:
-            raise ValueError("ssh_host must be a non-empty hostname or IP address.")
-        if host.startswith("-"):
-            raise ValueError("ssh_host must not start with '-' or resemble an ssh option.")
-        if "%" in host:
-            raise ValueError("ssh_host must not include an IPv6 zone identifier.")
-        try:
-            ipaddress.ip_address(host)
-            return host
-        except ValueError:
-            pass
-        if not _is_valid_hostname(host):
-            raise ValueError("ssh_host must be a valid hostname, IPv4 address, or IPv6 address.")
-        return host
+        return normalize_ssh_host(value)
 
     @field_validator("ssh_user")
     @classmethod
     def validate_ssh_user(cls, value: str) -> str:
-        if not _SSH_USER_RE.fullmatch(value):
-            raise ValueError("ssh_user must match ^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$.")
-        return value
+        return normalize_ssh_user(value)
 
     @field_validator("ssh_identity_file")
     @classmethod
     def validate_ssh_identity_file(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        resolved = Path(value).resolve()
-        allowed_dir = _ssh_key_dir()
-        try:
-            resolved.relative_to(allowed_dir)
-        except ValueError as exc:
-            raise ValueError(
-                f"ssh_identity_file must resolve under PROXBOX_SSH_KEY_DIR ({allowed_dir})."
-            ) from exc
-        return str(resolved)
+        return normalize_ssh_identity_file(value)
 
 
 class AzureVhdImportResponse(BaseModel):

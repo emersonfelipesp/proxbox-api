@@ -107,9 +107,18 @@ def test_proxmox_endpoint_migration_backfills_existing_rows_to_api_ssh(tmp_path,
 
     database._migrate_proxmox_endpoint_columns()
 
-    assert "access_methods" in _columns(engine, table)
+    assert {
+        "access_methods",
+        "ssh_target_node",
+        "ssh_host",
+        "ssh_username",
+        "ssh_port",
+        "ssh_identity_file",
+        "ssh_known_host_fingerprint",
+    } <= _columns(engine, table)
     with engine.begin() as conn:
-        value = conn.execute(text(f"SELECT access_methods FROM {table}")).scalar_one()
+        value, ssh_port = conn.execute(text(f"SELECT access_methods, ssh_port FROM {table}")).one()
     # NON-BREAKING backfill: pre-existing rows keep the SSH transport.
     assert value == "api_ssh"
+    assert ssh_port == 22
     engine.dispose()

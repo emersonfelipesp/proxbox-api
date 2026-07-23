@@ -69,6 +69,44 @@ Firecracker host-agent provisioning is documented in
 [`docs/operations/firecracker.md`](docs/operations/firecracker.md), including
 the Cloud endpoints, SSE events, request shape, and response shape.
 
+The Cloud Image Pipeline exposes a versioned, endpoint-scoped read-only
+preflight at `POST /cloud/templates/images/preflight`. Its v1 findings validate
+the exact persisted endpoint session, node, provider-derived storage content
+(`iso` only for ISO media, VM `images`, plus provider-derived `snippets`), and VMID through the
+authoritative `cluster/nextid?vmid=` read without requiring `allow_writes`;
+malformed upstream collections, denied VMID checks, and missing storage health
+state fail closed as `unsupported`.
+An executable workflow first renders a non-executing build plan to obtain its
+`recipe_digest`, submits that digest to preflight, and receives a signed
+five-minute `plan_token`. Execution must present the token; proxbox-api
+revalidates endpoint configuration and the exact target, reruns preflight,
+then consumes the plan into a durable single-owner `endpoint_id:vmid` lease.
+Operation state is available at `GET /cloud/templates/images/operations/{id}`
+and a running unit can be stopped through the corresponding `/cancel` route.
+Build responses use the secret-safe v2 contract; raw scripts, cloud-init, URLs, and process output
+are omitted unless a protected operator explicitly requests a sensitive
+preview with `execute=false`. Execution additionally requires one complete
+enabled persisted endpoint/node SSH binding; caller SSH fields cannot retarget
+the request, and the persisted host-key fingerprint is verified before strict
+OpenSSH execution isolated from ambient SSH config and proxies. The executor
+uses an async, uniquely named `systemd-run` unit, drains output into bounded
+counts without retaining it, and never reports completion until a final
+Proxmox API read verifies the expected artifact. Cancellation, timeout, or
+failed verification leaves a durable `recovery_required` record and never
+deletes a partial artifact. Generated
+snippet files use encoded fixed writes and exact `pvesm path` volume targets;
+source-tree builds use fixed root-owned server recipes and artifacts rather
+than caller paths or shell commands; all providers stage in private randomized
+`mktemp` directories.
+Validation errors never reflect Pydantic request input or cloud-image secrets. See
+[`docs/api/http-reference.md`](docs/api/http-reference.md#cloud-image-pipeline-cloudtemplatesimages).
+
+Remote Cloud Image execution is a fail-closed rollout. The checked-in
+netbox-packer-shaped fixture is producer-owned compatibility intent, not proof
+from the downstream consumer. Keep `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION`
+unset/false in staging and production until netbox-packer lands its own parser
+contract and validates it against the released proxbox-api contract.
+
 PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
 indexed in [`docs/api/service-routes.md`](docs/api/service-routes.md), including
 `PROXBOX_FEATURES` sidecar-only behavior.

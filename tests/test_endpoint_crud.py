@@ -7,6 +7,19 @@ and DB persistence via the overridden get_session dependency.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
+from proxbox_api.routes.proxmox.endpoints import ProxmoxEndpointUpdate
+
+
+def test_proxmox_endpoint_update_rejects_explicit_null_ssh_port() -> None:
+    with pytest.raises(ValidationError, match="ssh_port cannot be null"):
+        ProxmoxEndpointUpdate.model_validate({"ssh_port": None})
+
+    omitted = ProxmoxEndpointUpdate.model_validate({"enabled": True})
+    assert "ssh_port" not in omitted.model_fields_set
+
 
 class TestAuthBoundary:
     """Verify that protected routes reject unauthenticated callers."""
@@ -149,6 +162,86 @@ class TestProxmoxEndpointCRUD:
         assert data["max_retries"] == 2
         assert data["retry_backoff"] == 1.5
         assert "password" not in data
+
+    def test_create_proxmox_endpoint_persists_complete_cloud_image_ssh_binding(
+        self,
+        auth_test_client,
+    ):
+        payload = {
+            "name": "pve-packer-bound",
+            "ip_address": "192.168.1.120",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+            "enabled": True,
+            "allow_writes": True,
+            "access_methods": "api_ssh",
+            "ssh_target_node": "pve01",
+            "ssh_host": "192.168.1.120",
+            "ssh_username": "root",
+            "ssh_port": 22,
+            "ssh_identity_file": "/etc/proxbox/ssh_keys/id_ed25519",
+            "ssh_known_host_fingerprint": ("SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        }
+
+        response = auth_test_client.post("/proxmox/endpoints", json=payload)
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["ssh_target_node"] == "pve01"
+        assert data["ssh_host"] == "192.168.1.120"
+        assert data["ssh_username"] == "root"
+        assert data["ssh_identity_file"] == "/etc/proxbox/ssh_keys/id_ed25519"
+        assert data["ssh_known_host_fingerprint"].startswith("SHA256:")
+
+    def test_create_proxmox_endpoint_rejects_partial_cloud_image_ssh_binding(
+        self,
+        auth_test_client,
+    ):
+        response = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "pve-packer-partial",
+                "ip_address": "192.168.1.121",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+                "ssh_target_node": "pve01",
+                "ssh_host": "192.168.1.121",
+            },
+        )
+
+        assert response.status_code == 422
+        assert "request_validation_error" in response.text
+        assert "ssh_host" not in response.text
+
+    def test_create_proxmox_endpoint_rejects_blank_cloud_image_node_binding(
+        self,
+        auth_test_client,
+    ):
+        response = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "pve-packer-blank-node",
+                "ip_address": "192.168.1.122",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+                "ssh_target_node": "   ",
+                "ssh_host": "192.168.1.122",
+                "ssh_username": "root",
+                "ssh_port": 22,
+                "ssh_identity_file": "/etc/proxbox/ssh_keys/id_ed25519",
+                "ssh_known_host_fingerprint": (
+                    "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                ),
+            },
+        )
+
+        assert response.status_code == 422
+        assert "request_validation_error" in response.text
+        assert "ssh_target_node" not in response.text
 
     def test_get_created_endpoint_by_id(self, auth_test_client):
         payload = {

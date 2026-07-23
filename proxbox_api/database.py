@@ -115,6 +115,15 @@ class ProxmoxEndpoint(SQLModel, table=True):
     # ProxmoxAccessMethod and the SSH-access gate in routes/ssh_terminal.py.
     access_methods: str = Field(default="api")
     enabled: bool = Field(default=True)
+    # Cloud Image Pipeline SSH authority. Execution is refused unless all six
+    # fields form one complete endpoint/node binding. Caller-supplied SSH
+    # values are assertions only and never become execution authority.
+    ssh_target_node: str | None = Field(default=None, index=True)
+    ssh_host: str | None = Field(default=None)
+    ssh_username: str | None = Field(default=None)
+    ssh_port: int = Field(default=22)
+    ssh_identity_file: str | None = Field(default=None)
+    ssh_known_host_fingerprint: str | None = Field(default=None)
     token_name: str | None = Field(default=None)
     token_value: str | None = Field(default=None)
     timeout: int | None = Field(default=None)
@@ -135,6 +144,20 @@ class ProxmoxEndpoint(SQLModel, table=True):
     def ssh_enabled(self) -> bool:
         """True when this endpoint permits the SSH transport (``api_ssh``)."""
         return self.access_methods == "api_ssh"
+
+    @property
+    def has_cloud_image_ssh_binding(self) -> bool:
+        """True only for a complete persisted endpoint/node SSH binding."""
+
+        return bool(
+            self.enabled
+            and self.ssh_target_node
+            and self.ssh_host
+            and self.ssh_username
+            and self.ssh_identity_file
+            and self.ssh_known_host_fingerprint
+            and 1 <= self.ssh_port <= 65535
+        )
 
     @property
     def host(self) -> str:
@@ -182,6 +205,47 @@ class FirewallIntentRequestRecord(SQLModel, table=True):
     )
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
+
+
+class CloudImageBuildOperation(SQLModel, table=True):
+    """Secret-free durable journal and exclusive lease for one image build.
+
+    The rendered script, URLs, cloud-init, SSH material, and subprocess output
+    are deliberately absent. ``lease_key`` is nullable so completed history can
+    coexist with a unique active ``endpoint_id:vmid`` owner.
+    """
+
+    __tablename__: ClassVar[str] = "cloud_image_build_operation"
+    __table_args__ = {"extend_existing": True}
+
+    id: str = Field(primary_key=True)
+    plan_digest: str = Field(index=True)
+    recipe_digest: str = Field(index=True)
+    endpoint_config_digest: str = Field(index=True)
+    endpoint_id: int = Field(index=True)
+    target_node: str = Field(index=True)
+    vmid: int = Field(index=True)
+    provider: str = Field(index=True)
+    state: str = Field(default="leased", index=True)
+    lease_key: str | None = Field(default=None, index=True, unique=True)
+    remote_unit: str = Field()
+    plan_expires_at: float = Field()
+    lease_expires_at: float = Field()
+    attempted: bool = Field(default=False)
+    exit_code: int | None = Field(default=None)
+    stdout_bytes: int = Field(default=0)
+    stderr_bytes: int = Field(default=0)
+    stdout_lines: int = Field(default=0)
+    stderr_lines: int = Field(default=0)
+    verified: bool = Field(default=False)
+    recovery_required: bool = Field(default=False)
+    cancel_requested: bool = Field(default=False)
+    cancellation_succeeded: bool | None = Field(default=None)
+    error_code: str | None = Field(default=None, index=True)
+    created_at: float = Field(default_factory=time.time, index=True)
+    started_at: float | None = Field(default=None)
+    finished_at: float | None = Field(default=None)
+    updated_at: float = Field(default_factory=time.time, index=True)
 
 
 class PBSEndpoint(SQLModel, table=True):
@@ -573,6 +637,18 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
         )
     if "enabled" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
+    if "ssh_target_node" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN ssh_target_node VARCHAR")
+    if "ssh_host" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN ssh_host VARCHAR")
+    if "ssh_username" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN ssh_username VARCHAR")
+    if "ssh_port" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN ssh_port INTEGER NOT NULL DEFAULT 22")
+    if "ssh_identity_file" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN ssh_identity_file VARCHAR")
+    if "ssh_known_host_fingerprint" not in existing:
+        stmts.append(f"ALTER TABLE {table} ADD COLUMN ssh_known_host_fingerprint VARCHAR")
     if "verify_ssl" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN verify_ssl BOOLEAN NOT NULL DEFAULT 1")
     if not stmts:

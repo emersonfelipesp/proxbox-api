@@ -113,15 +113,47 @@ class ProxmoxSession:
 
     @classmethod
     async def create(
-        cls, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str
+        cls,
+        cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str,
+        *,
+        initialize_metadata: bool = True,
     ) -> "ProxmoxSession":
         """Async factory method to create and initialize a ProxmoxSession."""
         instance = cls()
-        await instance._initialize(cluster_config)
+        try:
+            await instance._initialize(cluster_config, initialize_metadata=initialize_metadata)
+        except BaseException:
+            await instance._cleanup_failed_create()
+            raise
         return instance
 
+    async def _cleanup_failed_create(self) -> None:
+        """Finish one shielded close without replacing the initialization error."""
+
+        cleanup_task = asyncio.create_task(self.aclose())
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            # The caller may already be cancelled. The cleanup task owns the
+            # close, so awaiting that same task cannot dispatch a second close.
+            try:
+                await cleanup_task
+            except BaseException as cleanup_error:  # noqa: BLE001
+                logger.warning(
+                    "Failed Proxmox session initialization cleanup error_type=%s",
+                    type(cleanup_error).__name__,
+                )
+        except BaseException as cleanup_error:  # noqa: BLE001
+            logger.warning(
+                "Failed Proxmox session initialization cleanup error_type=%s",
+                type(cleanup_error).__name__,
+            )
+
     async def _initialize(
-        self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str
+        self,
+        cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str,
+        *,
+        initialize_metadata: bool = True,
     ) -> None:
         """Async initialization of the session."""
         config = self._parse_config(cluster_config)
@@ -137,8 +169,13 @@ class ProxmoxSession:
             self.session = self.proxmox
             self.CONNECTED = True
 
-        if self.CONNECTED:
+        if self.CONNECTED and initialize_metadata:
             await self._post_connect_init()
+        elif self.CONNECTED:
+            # Preflight needs only the authenticated SDK and its explicit GETs.
+            # Avoid broad cluster/fingerprint discovery outside that contract.
+            self.name = self.domain or self.ip_address
+            self.mode = "restricted"
 
     def _parse_config(
         self, cluster_config: ProxmoxSessionSchema | Mapping[str, object] | str
@@ -160,6 +197,7 @@ class ProxmoxSession:
                     ),
                     detail="ProxmoxSession failed to parse string input as JSON.",
                     python_exception=str(error),
+                    redact_log_details=True,
                 ) from error
 
         if isinstance(cluster_config, Mapping):
@@ -168,6 +206,7 @@ class ProxmoxSession:
 
         raise ProxboxException(
             message=f"INPUT of ProxmoxSession() must be a pydantic model or dict (either one will work). Input type provided: {type(cluster_config)}",
+            redact_log_details=True,
         )
 
     def _set_attributes_from_config(self, config: dict[str, object]) -> None:
@@ -209,6 +248,7 @@ class ProxmoxSession:
             raise ProxboxException(
                 message="ProxmoxSession class wasn't able to find all required parameters to establish Proxmox connection. Check if you provided all required parameters.",
                 detail="Python KeyError raised",
+                redact_log_details=True,
             )
 
     async def _post_connect_init(self) -> None:
@@ -232,6 +272,7 @@ class ProxmoxSession:
                     ),
                     detail="Unknown error.",
                     python_exception=f"{__name__}: {error}",
+                    redact_log_details=True,
                 )
 
         self.name = self.domain or self.ip_address
@@ -268,12 +309,14 @@ class ProxmoxSession:
                 proxmox_session = _proxmox_api_factory()(self.domain, **kwargs)
                 self.version = await resolve_async(proxmox_session.version.get())
                 return proxmox_session
-            except Exception as error:
+            except BaseException as error:
                 await self._close_abandoned_sdk(proxmox_session)
+                if not isinstance(error, Exception):
+                    raise
                 logger.info(
-                    "Proxmox connection using domain failed, trying IP %s: %s",
+                    "Proxmox connection using domain failed, trying IP %s error_type=%s",
                     self.ip_address,
-                    error,
+                    type(error).__name__,
                 )
 
         # Fallback to IP address
@@ -283,13 +326,16 @@ class ProxmoxSession:
             proxmox_session = _proxmox_api_factory()(self.ip_address, **kwargs)
             self.version = await resolve_async(proxmox_session.version.get())
             return proxmox_session
-        except Exception as error:
+        except BaseException as error:
             await self._close_abandoned_sdk(proxmox_session)
+            if not isinstance(error, Exception):
+                raise
             detail = self._describe_auth_error(error)
             raise ProxboxException(
                 message=error_message,
                 detail=detail,
                 python_exception=f"{error}",
+                redact_log_details=True,
             ) from error
 
     @staticmethod
@@ -306,8 +352,11 @@ class ProxmoxSession:
             close_result = sdk.close()
             if inspect.isawaitable(close_result):
                 await close_result
-        except Exception as close_error:  # pragma: no cover - defensive
-            logger.debug("Error closing abandoned Proxmox SDK session: %s", close_error)
+        except BaseException as close_error:  # pragma: no cover - defensive
+            logger.debug(
+                "Error closing abandoned Proxmox SDK session error_type=%s",
+                type(close_error).__name__,
+            )
 
     @staticmethod
     def _describe_auth_error(error: Exception) -> str:
@@ -426,6 +475,7 @@ class ProxmoxSession:
             raise ProxboxException(
                 message="Could not get Proxmox Cluster Mode (Standalone or Cluster)",
                 python_exception=f"{error}",
+                redact_log_details=True,
             ) from error
 
     def _get_cluster_name(self) -> str | None:
@@ -439,6 +489,7 @@ class ProxmoxSession:
             raise ProxboxException(
                 message="Could not get Proxmox Cluster Name and Nodes Fingerprints",
                 python_exception=f"{error}",
+                redact_log_details=True,
             ) from error
 
     def _get_standalone_name(self) -> str | None:
@@ -451,6 +502,7 @@ class ProxmoxSession:
             raise ProxboxException(
                 message="Could not get Proxmox Standalone Node Name",
                 python_exception=f"{error}",
+                redact_log_details=True,
             ) from error
 
     async def _get_node_fingerprints_async(self, px: ProxmoxSDK) -> list[str]:
@@ -466,16 +518,21 @@ class ProxmoxSession:
             raise ProxboxException(
                 message="Could not get Nodes Fingerprints",
                 python_exception=f"{error}",
+                redact_log_details=True,
             ) from error
 
     async def aclose(self) -> None:
         """Async close for session cleanup."""
-        sdk_session = getattr(self, "session", None)
+        sdk_session = getattr(self, "session", None) or getattr(self, "proxmox", None)
+        # Clear ownership before calling into the SDK so retries and concurrent
+        # cleanup paths cannot dispatch a second close after an exception.
+        self.session = None
+        self.proxmox = None
+        self.CONNECTED = False
         if sdk_session is not None and hasattr(sdk_session, "close"):
             close_result = sdk_session.close()
             if inspect.isawaitable(close_result):
                 await close_result
-        self.session = None
 
     def close(self) -> None:
         """Sync close - logs warning if called (use aclose() in async contexts)."""

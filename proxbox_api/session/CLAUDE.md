@@ -34,5 +34,14 @@ Session management utilities for NetBox and Proxmox API clients.
 
 - Keep connection bootstrapping deterministic and avoid hidden global state.
 - Normalize upstream connection errors into `ProxboxException`.
+- Preserve structured connection details for callers while setting
+  `redact_log_details=True` for session-created exceptions so raw SDK error text
+  never enters constructor debug logs; owned log sites should emit error types only.
+- `ProxmoxSession.create()` owns every SDK client acquired during
+  initialization. Any `BaseException` from authentication or post-connect
+  metadata discovery must trigger one shielded `aclose()` before the original
+  failure is re-raised. Clear SDK ownership before invoking `close()` so cleanup
+  failure, cancellation, or repeated cleanup cannot dispatch a second close;
+  cleanup logs may contain only the exception type.
 - Keep dependency aliases in this package rather than duplicating them in route modules.
 - When adjusting NetBox client timeouts, update the root docs and any setup documentation that mentions the environment variable.

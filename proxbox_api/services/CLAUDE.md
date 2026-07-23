@@ -20,6 +20,14 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
+- `packer_preflight.py`: endpoint-scoped Cloud Image Pipeline readiness checks.
+  It accepts one already-resolved Proxmox session, performs only GET calls for
+  node status, provider-derived storage capabilities, and VMID availability,
+  and returns typed, secret-free findings. `cluster/nextid?vmid=` is the VMID
+  authority; `cluster/resources` is supplemental because RBAC can hide rows.
+  It preserves valid-empty versus malformed collection semantics so malformed
+  payloads fail closed, and it requires affirmative storage health state. It
+  must remain usable when endpoint writes are disabled.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue
   Python fallback and optional Rust bridge.
@@ -57,3 +65,11 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   best-effort for provisioning rollback.
 - Keep reconciliation seams pure: no HTTP clients, async I/O, database writes,
   retry loops, or stream emission inside queue builders.
+- Keep Packer preflight strictly read-only: no POST/PUT/PATCH/DELETE helpers,
+  task dispatch, SSH, database mutation, or `allow_writes` rejection. Treat
+  image storage as `iso` only for `proxmox_iso`; release/source providers use
+  private host staging and make no image-storage claim. Treat VM storage as
+  `images`, and derive snippets solely from the normalized provider target.
+  `content=import` belongs to the separate download-url POST and is not a
+  storage capability. Never promote a denied or malformed authoritative VMID
+  probe to success based on resource enumeration.

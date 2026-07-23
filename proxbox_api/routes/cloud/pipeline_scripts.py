@@ -8,37 +8,70 @@ an appliance source tree that must be built on a Proxmox-capable host.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import hashlib
 import os
 import shlex
-import subprocess
+import tempfile
+from contextlib import suppress
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
+from proxbox_api.logger import logger
 from proxbox_api.routes.cloud.catalog import find_product_version
 from proxbox_api.routes.cloud.display import display_config_for_product
 from proxbox_api.schemas.cloud_provision import (
     CloudImageBuildProvider,
+    CloudImageBuildTarget,
+    CloudImageSourceBuildCommand,
+    CloudImageSSHExecutionTarget,
     CloudImageTemplateBuildRequest,
     CloudImageTemplateBuildResponse,
+    CloudImageTemplateExecutionSummary,
+    CloudImageTemplateSensitivePreview,
     CloudImageVersionEntry,
+    PackerFinding,
+    PackerFindingSeverity,
 )
+
+_SSH_BINARY = "/usr/bin/ssh"
+_SSH_KEYSCAN_BINARY = "/usr/bin/ssh-keyscan"
+_LEGACY_PIPELINE_VM_STORAGE = "local-lvm"
 
 
 def _q(value: object) -> str:
     return shlex.quote(str(value))
 
 
-def _storage(request: CloudImageTemplateBuildRequest) -> str:
-    return request.storage or request.vm_storage
+def _encoded_write_command(target: str, content: str, *, target_is_expression: bool = False) -> str:
+    """Render a delimiter-proof file write using a base64 data argument."""
+
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    destination = target if target_is_expression else _q(target)
+    return f"printf '%s' {_q(encoded)} | /usr/bin/base64 -d > {destination}"
 
 
-def _target_node(request: CloudImageTemplateBuildRequest) -> str:
-    return request.target_node or request.ssh_host or "pve-host"
+def _render_source_build_command(command: CloudImageSourceBuildCommand) -> str:
+    """Render one allowlisted command from fixed argv."""
+
+    return shlex.join(command.argv)
 
 
 def _artifact_from_url(url: str) -> str:
-    name = url.rstrip("/").rsplit("/", 1)[-1]
-    return name or "cloud-image-artifact"
+    name = PurePosixPath(urlsplit(url).path).name
+    candidate = name or "cloud-image-artifact"
+    if not all(character.isalnum() or character in "._-" for character in candidate):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "image_artifact_name_invalid",
+                "message": "The catalog image URL does not have a safe artifact filename.",
+            },
+        )
+    return candidate
 
 
 def _catalog_image_url(
@@ -265,33 +298,37 @@ def generate_appliance_first_boot_script(
 ) -> str:
     nameservers = " ".join(request.nameservers)
     ssh_keys = "\n".join(request.ssh_authorized_keys)
-    return f"""#!/bin/sh
-set -eu
-MARKER="/var/db/nmulticloud-cloud-image-bootstrap.done"
-[ -f "$MARKER" ] && exit 0
-
-mkdir -p /usr/local/etc/nmulticloud /root/.ssh /var/db
-chmod 700 /root/.ssh
-cat > /usr/local/etc/nmulticloud/cloud-image.env <<'EOF'
-PIPELINE_NAME="Cloud Image Build Pipeline"
-PRODUCT="{entry.product_type.value}"
-PRODUCT_VERSION="{entry.version}"
-HOSTNAME="{request.hostname}"
-DOMAIN="{request.domain}"
-NODE_CIDR="{request.node_cidr or ""}"
-GATEWAY="{request.gateway or ""}"
-NAMESERVERS="{nameservers}"
-EOF
-
-cat > /root/.ssh/authorized_keys <<'EOF'
-{ssh_keys}
-EOF
-chmod 600 /root/.ssh/authorized_keys
-
-hostname "{request.hostname}"
-echo "{request.hostname}" > /etc/myname 2>/dev/null || true
-touch "$MARKER"
-"""
+    environment = (
+        "\n".join(
+            [
+                'PIPELINE_NAME="Cloud Image Build Pipeline"',
+                f'PRODUCT="{entry.product_type.value}"',
+                f'PRODUCT_VERSION="{entry.version}"',
+                f'HOSTNAME="{request.hostname}"',
+                f'DOMAIN="{request.domain}"',
+                f'NODE_CIDR="{request.node_cidr or ""}"',
+                f'GATEWAY="{request.gateway or ""}"',
+                f'NAMESERVERS="{nameservers}"',
+            ]
+        )
+        + "\n"
+    )
+    authorized_keys = f"{ssh_keys}\n" if ssh_keys else ""
+    commands = [
+        "#!/bin/sh",
+        "set -eu",
+        'MARKER="/var/db/nmulticloud-cloud-image-bootstrap.done"',
+        '[ -f "$MARKER" ] && exit 0',
+        "mkdir -p /usr/local/etc/nmulticloud /root/.ssh /var/db",
+        "chmod 700 /root/.ssh",
+        _encoded_write_command("/usr/local/etc/nmulticloud/cloud-image.env", environment),
+        _encoded_write_command("/root/.ssh/authorized_keys", authorized_keys),
+        "chmod 600 /root/.ssh/authorized_keys",
+        f"hostname {_q(request.hostname)}",
+        f"printf '%s\\n' {_q(request.hostname)} > /etc/myname 2>/dev/null || true",
+        'touch "$MARKER"',
+    ]
+    return "\n".join(commands) + "\n"
 
 
 def _append_template_import_commands(
@@ -301,9 +338,11 @@ def _append_template_import_commands(
     qcow_path: str,
     first_boot_script: str | None,
     user_data: str | None,
+    *,
+    qcow_path_is_expression: bool = False,
 ) -> None:
     snippet_name = f"{request.name}-{entry.product_type.value}-{entry.version}".replace("/", "-")
-    storage = _storage(request)
+    storage = request.vm_storage
     commands.extend(
         [
             (
@@ -311,14 +350,17 @@ def _append_template_import_commands(
                 f"--memory {_q(request.memory_mb)} --cores {_q(request.cores)} "
                 f"--net0 {_q('virtio,bridge=' + request.bridge)}"
             ),
-            f"qm importdisk {_q(request.vmid)} {_q(qcow_path)} {_q(storage)}",
+            (
+                f"qm importdisk {_q(request.vmid)} "
+                f"{qcow_path if qcow_path_is_expression else _q(qcow_path)} {_q(storage)}"
+            ),
             (
                 f"IMPORTED_VOLID=$(pvesm list {_q(storage)} --vmid {_q(request.vmid)} "
                 "| awk 'NR == 2 {print $1}')"
             ),
             'test -n "${IMPORTED_VOLID}"',
             f"qm set {_q(request.vmid)} --scsihw virtio-scsi-pci --scsi0 " + '"${IMPORTED_VOLID}"',
-            f"qm set {_q(request.vmid)} --ide2 {_q(request.image_storage + ':cloudinit')}",
+            f"qm set {_q(request.vmid)} --ide2 {_q(request.vm_storage + ':cloudinit')}",
             f"qm set {_q(request.vmid)} --boot order=scsi0",
             f"qm set {_q(request.vmid)} --agent enabled=1",
         ]
@@ -335,24 +377,29 @@ def _append_template_import_commands(
 
     snippet_refs: list[str] = []
     if user_data:
-        user_snippet = f"{request.snippets_dir}/{snippet_name}-user-data.yml"
-        commands.append(f"cat > {_q(user_snippet)} <<'EOF_USER_DATA'\n{user_data}EOF_USER_DATA")
-        snippet_refs.append(
-            f"user={request.snippets_storage}:snippets/{snippet_name}-user-data.yml"
-        )
-    if first_boot_script:
-        boot_snippet = f"{request.snippets_dir}/{snippet_name}-first-boot.sh"
+        user_volid = f"{request.snippets_storage}:snippets/{snippet_name}-user-data.yml"
+        commands.append(f"USER_SNIPPET_PATH=$(pvesm path {_q(user_volid)})")
         commands.append(
-            f"cat > {_q(boot_snippet)} <<'EOF_FIRST_BOOT'\n{first_boot_script}EOF_FIRST_BOOT"
+            _encoded_write_command('"$USER_SNIPPET_PATH"', user_data, target_is_expression=True)
         )
-        commands.append(f"chmod 600 {_q(boot_snippet)}")
-        snippet_refs.append(
-            f"vendor={request.snippets_storage}:snippets/{snippet_name}-first-boot.sh"
+        snippet_refs.append(f"user={user_volid}")
+    if first_boot_script:
+        boot_volid = f"{request.snippets_storage}:snippets/{snippet_name}-first-boot.sh"
+        commands.append(f"BOOT_SNIPPET_PATH=$(pvesm path {_q(boot_volid)})")
+        commands.append(
+            _encoded_write_command(
+                '"$BOOT_SNIPPET_PATH"', first_boot_script, target_is_expression=True
+            )
         )
-    meta_snippet = f"{request.snippets_dir}/{snippet_name}-meta-data.yml"
+        commands.append('chmod 600 "$BOOT_SNIPPET_PATH"')
+        snippet_refs.append(f"vendor={boot_volid}")
+    meta_volid = f"{request.snippets_storage}:snippets/{snippet_name}-meta-data.yml"
     meta_data = f"instance-id: {snippet_name}\nlocal-hostname: {request.hostname}\n"
-    commands.append(f"cat > {_q(meta_snippet)} <<'EOF_META'\n{meta_data}EOF_META")
-    snippet_refs.append(f"meta={request.snippets_storage}:snippets/{snippet_name}-meta-data.yml")
+    commands.append(f"META_SNIPPET_PATH=$(pvesm path {_q(meta_volid)})")
+    commands.append(
+        _encoded_write_command('"$META_SNIPPET_PATH"', meta_data, target_is_expression=True)
+    )
+    snippet_refs.append(f"meta={meta_volid}")
     commands.append(f"qm set {_q(request.vmid)} --cicustom {_q(','.join(snippet_refs))}")
     commands.append(
         f"qm set {_q(request.vmid)} --description {_q('Built by Cloud Image Build Pipeline')}"
@@ -372,24 +419,36 @@ def _release_image_script(
             status_code=422, detail="image_url is required for release image builds."
         )
     filename = _artifact_from_url(image_url)
-    cache_path = f"/var/lib/vz/template/cache/{filename}"
-    raw_path = f"/var/lib/vz/template/cache/{_decompressed_name(filename, entry.compression)}"
-    qcow_path = f"/var/lib/vz/template/cache/{request.name}-{entry.version}.qcow2"
+    raw_filename = _decompressed_name(filename, entry.compression)
     commands = [
         "set -euo pipefail",
-        "install -d /var/lib/vz/template/cache",
-        f"install -d {_q(request.snippets_dir)}",
-        f"curl -fL --retry 3 -o {_q(cache_path)} {_q(image_url)}",
+        "umask 077",
+        f"STAGING_DIR=$(mktemp -d {_q(f'/var/tmp/proxbox-cloud-image-{request.vmid}.XXXXXX')})",
+        "trap 'rm -rf -- \"$STAGING_DIR\"' EXIT",
+        f'CACHE_PATH="$STAGING_DIR/{filename}"',
+        f'RAW_PATH="$STAGING_DIR/{raw_filename}"',
+        'QCOW_PATH="$STAGING_DIR/template.qcow2"',
+        f"if qm status {_q(request.vmid)} >/dev/null 2>&1; then exit 73; fi",
+        f'curl -fL --retry 3 -o "$CACHE_PATH" {_q(image_url)}',
     ]
     sha256 = request.sha256 or entry.sha256
     if sha256:
-        commands.append(f"printf '%s  %s\\n' {_q(sha256)} {_q(cache_path)} | sha256sum -c -")
-    decompress = _decompress_command(cache_path, entry.compression)
-    if decompress:
-        commands.append(decompress)
-    commands.append(f"qemu-img convert -O qcow2 {_q(raw_path)} {_q(qcow_path)}")
+        commands.append(f"printf '%s  %s\\n' {_q(sha256)} \"$CACHE_PATH\" | sha256sum -c -")
+    if entry.compression == "gz" or filename.endswith(".gz"):
+        commands.append('gunzip -kf "$CACHE_PATH"')
+    elif entry.compression == "bz2" or filename.endswith(".bz2"):
+        commands.append('bunzip2 -kf "$CACHE_PATH"')
+    elif entry.compression == "xz" or filename.endswith(".xz"):
+        commands.append('xz -dkf "$CACHE_PATH"')
+    commands.append('qemu-img convert -O qcow2 "$RAW_PATH" "$QCOW_PATH"')
     _append_template_import_commands(
-        commands, request, entry, qcow_path, first_boot_script, user_data
+        commands,
+        request,
+        entry,
+        '"$QCOW_PATH"',
+        first_boot_script,
+        user_data,
+        qcow_path_is_expression=True,
     )
     return "\n".join(commands) + "\n", commands, image_url
 
@@ -408,13 +467,20 @@ def _proxmox_iso_script(
         )
 
     filename = _artifact_from_url(image_url)
-    iso_path = f"/var/lib/vz/template/iso/{filename}"
-    storage = _storage(request)
+    iso_volid = f"{request.image_storage}:iso/{filename}"
+    storage = request.vm_storage
     display = display_config_for_product(entry.product_type)
     commands = [
         "set -euo pipefail",
-        "install -d /var/lib/vz/template/iso",
-        f"curl -fL --retry 3 -o {_q(iso_path)} {_q(image_url)}",
+        "umask 077",
+        f"STAGING_DIR=$(mktemp -d {_q(f'/var/tmp/proxbox-cloud-image-{request.vmid}.XXXXXX')})",
+        "trap 'rm -rf -- \"$STAGING_DIR\"' EXIT",
+        'DOWNLOADED_ISO="$STAGING_DIR/installer.iso"',
+        f"if qm status {_q(request.vmid)} >/dev/null 2>&1; then exit 73; fi",
+        f"ISO_PATH=$(pvesm path {_q(iso_volid)})",
+        'install -d "$(dirname -- "$ISO_PATH")"',
+        f'curl -fL --retry 3 -o "$DOWNLOADED_ISO" {_q(image_url)}',
+        'install -m 600 "$DOWNLOADED_ISO" "$ISO_PATH"',
         (
             f"qm create {_q(request.vmid)} --name {_q(request.name)} "
             f"--memory {_q(request.memory_mb)} --cores {_q(request.cores)} "
@@ -422,7 +488,7 @@ def _proxmox_iso_script(
         ),
         f"qm set {_q(request.vmid)} --ostype {_q(request.os_type)}",
         f"qm set {_q(request.vmid)} --scsihw virtio-scsi-pci --scsi0 {_q(storage + ':0')}",
-        f"qm set {_q(request.vmid)} --ide2 {_q(request.image_storage + ':iso/' + filename + ',media=cdrom')}",
+        f"qm set {_q(request.vmid)} --ide2 {_q(iso_volid + ',media=cdrom')}",
         f"qm set {_q(request.vmid)} --boot {_q('order=ide2;scsi0')}",
         f"qm set {_q(request.vmid)} --agent enabled=1",
     ]
@@ -448,33 +514,78 @@ def _source_tree_script(
     entry: CloudImageVersionEntry,
     first_boot_script: str | None,
 ) -> tuple[str, list[str]]:
-    source_tree = request.source_tree_path or entry.source_tree_path
-    build_command = request.source_build_command or entry.source_build_command
-    if not source_tree:
-        raise HTTPException(status_code=422, detail="source_tree_path is required.")
+    build_command = entry.source_build_command
+    if build_command is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "source_recipe_unavailable",
+                "message": "No server-owned source recipe exists for this catalog entry.",
+            },
+        )
+    source_tree = build_command.source_root
+    artifact_path = f"{source_tree}/{build_command.artifact_relative_path}"
+    if request.source_build_command is not None and request.source_build_command != build_command:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_recipe_assertion_mismatch",
+                "message": "The caller recipe assertion does not match the server catalog.",
+            },
+        )
+    if request.source_tree_path is not None and request.source_tree_path != source_tree:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_root_assertion_mismatch",
+                "message": "The caller source-root assertion does not match the server recipe.",
+            },
+        )
+    if request.source_artifact_path is not None and request.source_artifact_path != artifact_path:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_artifact_assertion_mismatch",
+                "message": "The caller artifact assertion does not match the server recipe.",
+            },
+        )
     commands = [
         "set -euo pipefail",
-        "install -d /var/lib/vz/template/cache",
-        f"install -d {_q(request.snippets_dir)}",
-        f"cd {_q(source_tree)}",
+        "umask 077",
+        f"EXPECTED_SOURCE_ROOT={_q(source_tree)}",
+        'SOURCE_ROOT=$(realpath -e -- "$EXPECTED_SOURCE_ROOT")',
+        'test "$SOURCE_ROOT" = "$EXPECTED_SOURCE_ROOT"',
+        'test "$(stat -c %U -- "$SOURCE_ROOT")" = root',
+        'SOURCE_MODE=$(stat -c %a -- "$SOURCE_ROOT")',
+        'test "$((0$SOURCE_MODE & 0022))" -eq 0',
+        f"RECIPE_COMMAND={_q(build_command.argv[0])}",
+        'test -x "$RECIPE_COMMAND"',
+        'test "$(stat -c %U -- "$RECIPE_COMMAND")" = root',
+        'RECIPE_MODE=$(stat -c %a -- "$RECIPE_COMMAND")',
+        'test "$((0$RECIPE_MODE & 0022))" -eq 0',
+        f"if qm status {_q(request.vmid)} >/dev/null 2>&1; then exit 73; fi",
+        'cd -- "$SOURCE_ROOT"',
+        _render_source_build_command(build_command),
+        (f'ARTIFACT_PATH=$(realpath -e -- "$SOURCE_ROOT/{build_command.artifact_relative_path}")'),
+        'case "$ARTIFACT_PATH" in "$SOURCE_ROOT"/*) ;; *) exit 74 ;; esac',
+        'test -f "$ARTIFACT_PATH"',
+        'test "$(stat -c %U -- "$ARTIFACT_PATH")" = root',
+        'ARTIFACT_MODE=$(stat -c %a -- "$ARTIFACT_PATH")',
+        'test "$((0$ARTIFACT_MODE & 0022))" -eq 0',
+        f"STAGING_DIR=$(mktemp -d {_q(f'/var/tmp/proxbox-cloud-image-{request.vmid}.XXXXXX')})",
+        "trap 'rm -rf -- \"$STAGING_DIR\"' EXIT",
+        'QCOW_PATH="$STAGING_DIR/template.qcow2"',
+        'qemu-img convert -O qcow2 "$ARTIFACT_PATH" "$QCOW_PATH"',
     ]
-    if build_command:
-        commands.append(build_command)
-    if request.source_artifact_path:
-        qcow_path = f"/var/lib/vz/template/cache/{request.name}-{entry.version}.qcow2"
-        commands.extend(
-            [
-                f"test -f {_q(request.source_artifact_path)}",
-                f"qemu-img convert -O qcow2 {_q(request.source_artifact_path)} {_q(qcow_path)}",
-            ]
-        )
-        _append_template_import_commands(
-            commands, request, entry, qcow_path, first_boot_script, None
-        )
-    else:
-        commands.append(
-            "# Set source_artifact_path to the image emitted by the source build to import it."
-        )
+    _append_template_import_commands(
+        commands,
+        request,
+        entry,
+        '"$QCOW_PATH"',
+        first_boot_script,
+        None,
+        qcow_path_is_expression=True,
+    )
     return "\n".join(commands) + "\n", commands
 
 
@@ -506,8 +617,14 @@ def _catalog_pipeline_inputs(
     """Resolve (entry, provider, user_data, first_boot_script) from the product catalog."""
     try:
         entry = find_product_version(request.product_type, request.product_version)
-    except KeyError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "catalog_entry_not_found",
+                "message": "No catalog entry matches the requested product and version.",
+            },
+        ) from None
 
     provider = request.provider or entry.default_provider
     if entry.product_type.value == "pve" and provider == CloudImageBuildProvider.DEBIAN_CLOUD_IMAGE:
@@ -521,9 +638,10 @@ def _catalog_pipeline_inputs(
     if provider not in entry.supported_providers:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"{provider.value} is not supported for {entry.product_type.value} {entry.version}."
-            ),
+            detail={
+                "code": "provider_not_supported",
+                "message": "The selected provider is not supported by the catalog entry.",
+            },
         )
 
     user_data: str | None = None
@@ -555,15 +673,474 @@ def _resolve_pipeline_inputs(
     return _catalog_pipeline_inputs(request)
 
 
-def build_pipeline_response(
-    request: CloudImageTemplateBuildRequest,
-) -> CloudImageTemplateBuildResponse:
-    entry, provider, user_data, first_boot_script = _resolve_pipeline_inputs(request)
+class _SSHHostKeyVerificationError(RuntimeError):
+    """Internal fixed-message boundary for a failed pinned-host-key check."""
 
-    if provider == CloudImageBuildProvider.SOURCE_TREE:
+
+class PipelineExecutionCancelled(asyncio.CancelledError):
+    """Cancellation carrying only bounded, secret-free execution metadata."""
+
+    def __init__(self, execution: CloudImageTemplateExecutionSummary) -> None:
+        super().__init__("Cloud Image Pipeline execution cancelled")
+        self.execution = execution
+
+
+def _fingerprint_from_known_host_line(line: str) -> str | None:
+    fields = line.split()
+    if len(fields) < 3 or fields[0].startswith("#"):
+        return None
+    try:
+        key_bytes = base64.b64decode(fields[2], validate=True)
+    except (ValueError, TypeError):
+        return None
+    digest = base64.b64encode(hashlib.sha256(key_bytes).digest()).decode().rstrip("=")
+    return f"SHA256:{digest}"
+
+
+async def _read_bounded_stream(
+    stream: asyncio.StreamReader,
+    *,
+    limit: int,
+) -> bytes:
+    """Read a small control-plane stream and reject it once the bound is exceeded."""
+
+    chunks: list[bytes] = []
+    size = 0
+    while chunk := await stream.read(4096):
+        size += len(chunk)
+        if size > limit:
+            raise _SSHHostKeyVerificationError
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _pinned_known_hosts_file(target: CloudImageSSHExecutionTarget) -> Path:
+    """Scan once, verify the persisted fingerprint, and pin that exact key."""
+
+    scan: asyncio.subprocess.Process | None = None
+    try:
+        scan = await asyncio.create_subprocess_exec(
+            _SSH_KEYSCAN_BINARY,
+            "-T",
+            "10",
+            "-p",
+            str(target.port),
+            target.host,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        if scan.stdout is None:
+            raise _SSHHostKeyVerificationError
+        stdout = await asyncio.wait_for(_read_bounded_stream(scan.stdout, limit=65536), 15)
+        returncode = await asyncio.wait_for(scan.wait(), 15)
+    except asyncio.CancelledError:
+        if scan is not None:
+            await asyncio.shield(_stop_process(scan))
+        raise
+    except (OSError, TimeoutError, _SSHHostKeyVerificationError) as error:
+        if scan is not None:
+            await _stop_process(scan)
+        raise _SSHHostKeyVerificationError from error
+    if returncode != 0:
+        raise _SSHHostKeyVerificationError
+    matching_line = next(
+        (
+            line
+            for line in stdout.decode("utf-8", errors="replace").splitlines()
+            if _fingerprint_from_known_host_line(line) == target.known_host_fingerprint
+        ),
+        None,
+    )
+    if matching_line is None:
+        raise _SSHHostKeyVerificationError
+
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix="proxbox-packer-known-hosts-",
+        delete=False,
+    )
+    try:
+        handle.write(f"{matching_line}\n")
+    finally:
+        handle.close()
+    return Path(handle.name)
+
+
+def _remove_known_hosts_file(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        logger.warning(
+            "Cloud Image Pipeline known-hosts cleanup failed error_type=%s",
+            type(error).__name__,
+        )
+
+
+def _ssh_argv(
+    target: CloudImageSSHExecutionTarget,
+    known_hosts_file: Path,
+    *remote_argv: str,
+) -> list[str]:
+    """Build fixed SSH transport options with no ambient config or proxy authority."""
+
+    return [
+        _SSH_BINARY,
+        "-F",
+        "none",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        f"UserKnownHostsFile={known_hosts_file}",
+        "-o",
+        "GlobalKnownHostsFile=/dev/null",
+        "-o",
+        "ProxyCommand=none",
+        "-o",
+        "ProxyJump=none",
+        "-o",
+        "CanonicalizeHostname=no",
+        "-p",
+        str(target.port),
+        "-i",
+        target.identity_file,
+        f"{target.user}@{target.host}",
+        *remote_argv,
+    ]
+
+
+async def _stream_stats(stream: asyncio.StreamReader) -> tuple[int, int]:
+    """Drain arbitrary output without retaining its secret-bearing contents."""
+
+    byte_count = 0
+    line_count = 0
+    final_byte = b""
+    while chunk := await stream.read(65536):
+        byte_count += len(chunk)
+        line_count += chunk.count(b"\n")
+        final_byte = chunk[-1:]
+    if byte_count and final_byte != b"\n":
+        line_count += 1
+    return byte_count, line_count
+
+
+async def _stop_process(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    with suppress(ProcessLookupError):
+        process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), 10)
+    except TimeoutError:
+        with suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+
+
+async def _cancel_remote_unit(
+    target: CloudImageSSHExecutionTarget,
+    known_hosts_file: Path,
+    remote_unit: str,
+) -> bool:
+    """Stop the fixed systemd unit used to isolate a remote build."""
+
+    process: asyncio.subprocess.Process | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *_ssh_argv(
+                target,
+                known_hosts_file,
+                "/usr/bin/systemctl",
+                "stop",
+                remote_unit,
+            ),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return await asyncio.wait_for(process.wait(), 30) == 0
+    except asyncio.CancelledError:
+        if process is not None:
+            await asyncio.shield(_stop_process(process))
+        raise
+    except TimeoutError:
+        if process is not None:
+            await _stop_process(process)
+        return False
+    except OSError:
+        return False
+
+
+async def _completed_stream_stats(
+    task: asyncio.Task[tuple[int, int]] | None,
+) -> tuple[int, int]:
+    """Join one drain task without letting a pipe failure expose or mask state."""
+
+    if task is None:
+        return 0, 0
+    try:
+        return await task
+    except asyncio.CancelledError:
+        return 0, 0
+    except Exception as error:  # noqa: BLE001 - report only the fixed safe summary
+        logger.warning(
+            "Cloud Image Pipeline stream drain failed error_type=%s",
+            type(error).__name__,
+        )
+        return 0, 0
+
+
+async def cancel_pipeline_operation(
+    target: CloudImageSSHExecutionTarget,
+    *,
+    remote_unit: str,
+) -> bool:
+    """Stop one server-generated remote unit with pinned host-key verification."""
+
+    known_hosts_file: Path | None = None
+    try:
+        known_hosts_file = await _pinned_known_hosts_file(target)
+        return await _cancel_remote_unit(target, known_hosts_file, remote_unit)
+    except _SSHHostKeyVerificationError:
+        return False
+    finally:
+        _remove_known_hosts_file(known_hosts_file)
+
+
+async def _pipeline_execution_result(  # noqa: C901
+    request: CloudImageTemplateBuildRequest,
+    build_script: str,
+    *,
+    execution_allowed: bool,
+    execution_target: CloudImageSSHExecutionTarget | None,
+    remote_unit: str,
+) -> tuple[
+    str,
+    int | None,
+    CloudImageTemplateExecutionSummary,
+    list[PackerFinding],
+    str | None,
+]:
+    """Execute a rendered script and expose only bounded, secret-free metadata."""
+    if not execution_allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "cloud_image_execution_disabled",
+                "message": "Remote Cloud Image Pipeline execution is disabled.",
+            },
+        )
+    if execution_target is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "endpoint_ssh_binding_required",
+                "message": "A complete persisted endpoint/node SSH binding is required.",
+            },
+        )
+
+    known_hosts_file: Path | None = None
+    process: asyncio.subprocess.Process | None = None
+    stdout_task: asyncio.Task[tuple[int, int]] | None = None
+    stderr_task: asyncio.Task[tuple[int, int]] | None = None
+    try:
+        known_hosts_file = await _pinned_known_hosts_file(execution_target)
+        process = await asyncio.create_subprocess_exec(
+            *_ssh_argv(
+                execution_target,
+                known_hosts_file,
+                "/usr/bin/systemd-run",
+                "--quiet",
+                "--wait",
+                "--pipe",
+                "--collect",
+                "--unit",
+                remote_unit,
+                "/bin/bash",
+                "-s",
+            ),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        if process.stdin is None or process.stdout is None or process.stderr is None:
+            raise OSError("subprocess pipes unavailable")
+        stdout_task = asyncio.create_task(_stream_stats(process.stdout))
+        stderr_task = asyncio.create_task(_stream_stats(process.stderr))
+        process.stdin.write(build_script.encode("utf-8"))
+        await process.stdin.drain()
+        process.stdin.close()
+        await process.stdin.wait_closed()
+        returncode = await asyncio.wait_for(process.wait(), 3600)
+    except _SSHHostKeyVerificationError:
+        return (
+            "failed",
+            None,
+            CloudImageTemplateExecutionSummary(attempted=True, enabled=True),
+            [
+                PackerFinding(
+                    code="ssh_host_key_unverified",
+                    severity=PackerFindingSeverity.error,
+                    target=f"endpoint:{request.endpoint_id}",
+                    message="The persisted SSH host-key fingerprint could not be verified.",
+                )
+            ],
+            "ssh_host_key_unverified",
+        )
+    except TimeoutError:
+        if process is not None:
+            await _stop_process(process)
+        cancellation_succeeded = bool(
+            known_hosts_file is not None
+            and await _cancel_remote_unit(execution_target, known_hosts_file, remote_unit)
+        )
+        stdout_bytes, stdout_lines = await _completed_stream_stats(stdout_task)
+        stderr_bytes, stderr_lines = await _completed_stream_stats(stderr_task)
+        return (
+            "failed",
+            None,
+            CloudImageTemplateExecutionSummary(
+                attempted=True,
+                enabled=True,
+                stdout_bytes=stdout_bytes,
+                stderr_bytes=stderr_bytes,
+                stdout_lines=stdout_lines,
+                stderr_lines=stderr_lines,
+                cancellation_attempted=True,
+                cancellation_succeeded=cancellation_succeeded,
+            ),
+            [
+                PackerFinding(
+                    code="execution_timeout",
+                    severity=PackerFindingSeverity.error,
+                    target=f"endpoint:{request.endpoint_id}",
+                    message="Remote Cloud Image Pipeline execution exceeded its time limit.",
+                )
+            ],
+            "execution_timeout",
+        )
+    except asyncio.CancelledError:
+        if process is not None:
+            await asyncio.shield(_stop_process(process))
+        cancellation_succeeded = bool(
+            known_hosts_file is not None
+            and await asyncio.shield(
+                _cancel_remote_unit(execution_target, known_hosts_file, remote_unit)
+            )
+        )
+        stdout_bytes, stdout_lines = await asyncio.shield(_completed_stream_stats(stdout_task))
+        stderr_bytes, stderr_lines = await asyncio.shield(_completed_stream_stats(stderr_task))
+        raise PipelineExecutionCancelled(
+            CloudImageTemplateExecutionSummary(
+                attempted=True,
+                enabled=True,
+                stdout_bytes=stdout_bytes,
+                stderr_bytes=stderr_bytes,
+                stdout_lines=stdout_lines,
+                stderr_lines=stderr_lines,
+                cancellation_attempted=True,
+                cancellation_succeeded=cancellation_succeeded,
+            )
+        ) from None
+    except Exception as error:  # noqa: BLE001 - response and logs must never expose raw output
+        if process is not None:
+            await _stop_process(process)
+        stdout_bytes, stdout_lines = await _completed_stream_stats(stdout_task)
+        stderr_bytes, stderr_lines = await _completed_stream_stats(stderr_task)
+        logger.warning(
+            "Cloud Image Pipeline execution could not start error_type=%s",
+            type(error).__name__,
+        )
+        return (
+            "failed",
+            None,
+            CloudImageTemplateExecutionSummary(
+                attempted=True,
+                enabled=True,
+                stdout_bytes=stdout_bytes,
+                stderr_bytes=stderr_bytes,
+                stdout_lines=stdout_lines,
+                stderr_lines=stderr_lines,
+            ),
+            [
+                PackerFinding(
+                    code="execution_unavailable",
+                    severity=PackerFindingSeverity.error,
+                    target=f"endpoint:{request.endpoint_id}",
+                    message="Remote Cloud Image Pipeline execution could not be started.",
+                )
+            ],
+            "execution_unavailable",
+        )
+    finally:
+        _remove_known_hosts_file(known_hosts_file)
+
+    stdout_bytes, stdout_lines = await _completed_stream_stats(stdout_task)
+    stderr_bytes, stderr_lines = await _completed_stream_stats(stderr_task)
+    succeeded = returncode == 0
+    execution = CloudImageTemplateExecutionSummary(
+        attempted=True,
+        enabled=True,
+        exit_code=returncode,
+        stdout_bytes=stdout_bytes,
+        stderr_bytes=stderr_bytes,
+        stdout_lines=stdout_lines,
+        stderr_lines=stderr_lines,
+    )
+    diagnostic = PackerFinding(
+        code="execution_awaiting_verification" if succeeded else "execution_failed",
+        severity=PackerFindingSeverity.warning if succeeded else PackerFindingSeverity.error,
+        target=f"endpoint:{request.endpoint_id}",
+        message=(
+            "Remote execution finished and is awaiting Proxmox artifact verification."
+            if succeeded
+            else "Remote Cloud Image Pipeline execution failed; inspect protected host logs."
+        ),
+    )
+    return (
+        "verification_pending" if succeeded else "failed",
+        returncode,
+        execution,
+        [diagnostic],
+        None if succeeded else "execution_failed",
+    )
+
+
+def _render_pipeline(
+    request: CloudImageTemplateBuildRequest,
+) -> tuple[
+    CloudImageTemplateBuildRequest,
+    CloudImageVersionEntry,
+    CloudImageBuildProvider,
+    str | None,
+    str | None,
+    str,
+    list[str],
+    str | None,
+]:
+    entry, provider, user_data, first_boot_script = _resolve_pipeline_inputs(request)
+    if "vm_storage" not in request.model_fields_set:
+        request = request.model_copy(update={"vm_storage": _LEGACY_PIPELINE_VM_STORAGE})
+    build_target = request.build_target(provider=provider)
+    request = request.model_copy(
+        update={
+            "target_node": build_target.target_node,
+            "image_storage": build_target.image_storage,
+            "vm_storage": build_target.vm_storage,
+            "snippets_storage": build_target.snippets_storage or request.snippets_storage,
+        }
+    )
+
+    if provider == CloudImageBuildProvider.source_tree:
         build_script, commands = _source_tree_script(request, entry, first_boot_script)
         image_url = _catalog_image_url(request, entry)
-    elif provider == CloudImageBuildProvider.PROXMOX_ISO:
+    elif provider == CloudImageBuildProvider.proxmox_iso:
         build_script, commands, image_url = _proxmox_iso_script(request, entry)
     else:
         build_script, commands, image_url = _release_image_script(
@@ -572,68 +1149,204 @@ def build_pipeline_response(
             first_boot_script,
             user_data,
         )
+    return (
+        request,
+        entry,
+        provider,
+        user_data,
+        first_boot_script,
+        build_script,
+        commands,
+        image_url,
+    )
 
+
+def pipeline_recipe_digest(request: CloudImageTemplateBuildRequest) -> str:
+    """Digest the exact server-rendered, execution-independent recipe."""
+
+    planned_request = request.model_copy(
+        update={"execute": False, "include_sensitive_preview": False, "preflight_plan_token": None}
+    )
+    *_unused, build_script, _commands, _image_url = _render_pipeline(planned_request)
+    return hashlib.sha256(build_script.encode("utf-8")).hexdigest()
+
+
+def pipeline_execution_contract(
+    request: CloudImageTemplateBuildRequest,
+) -> tuple[CloudImageBuildTarget, str]:
+    """Return the normalized target and exact recipe digest used by execution."""
+
+    planned_request = request.model_copy(
+        update={"execute": False, "include_sensitive_preview": False, "preflight_plan_token": None}
+    )
+    normalized, _entry, provider, _user_data, _first_boot, script, _commands, _url = (
+        _render_pipeline(planned_request)
+    )
+    return normalized.build_target(provider=provider), hashlib.sha256(script.encode()).hexdigest()
+
+
+def _pipeline_response(
+    request: CloudImageTemplateBuildRequest,
+    *,
+    entry: CloudImageVersionEntry,
+    provider: CloudImageBuildProvider,
+    user_data: str | None,
+    first_boot_script: str | None,
+    build_script: str,
+    commands: list[str],
+    image_url: str | None,
+    status: str,
+    returncode: int | None,
+    execution: CloudImageTemplateExecutionSummary,
+    diagnostics: list[PackerFinding],
+    operation_id: str | None = None,
+) -> CloudImageTemplateBuildResponse:
     execution_allowed = os.environ.get("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "").lower() in {
         "1",
         "true",
         "yes",
     }
-    status = "planned"
-    returncode = None
-    stdout = None
-    stderr = None
-    if request.execute:
-        if not execution_allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Remote Cloud Image Build Pipeline execution is disabled. "
-                    "Set PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true to enable it."
-                ),
-            )
-        if not request.ssh_host:
-            raise HTTPException(status_code=422, detail="ssh_host is required when execute=true.")
-        ssh_command = ["ssh", "-p", str(request.ssh_port)]
-        if request.ssh_identity_file:
-            ssh_command.extend(["-i", request.ssh_identity_file])
-        ssh_command.extend([f"{request.ssh_user}@{request.ssh_host}", "bash -s"])
-        proc = subprocess.run(
-            ssh_command,
-            input=build_script,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=3600,
+    recipe_digest = hashlib.sha256(build_script.encode("utf-8")).hexdigest()
+    sensitive_preview = None
+    if request.include_sensitive_preview:
+        source_command = entry.source_build_command
+        sensitive_preview = CloudImageTemplateSensitivePreview(
+            image_url=image_url,
+            source_tree_path=(source_command.source_root if source_command else None),
+            source_artifact_path=(
+                f"{source_command.source_root}/{source_command.artifact_relative_path}"
+                if source_command
+                else None
+            ),
+            generated_userdata=user_data,
+            first_boot_script=first_boot_script,
+            build_script=build_script,
+            commands=commands,
         )
-        status = "completed" if proc.returncode == 0 else "failed"
-        returncode = proc.returncode
-        stdout = proc.stdout
-        stderr = proc.stderr
 
     return CloudImageTemplateBuildResponse(
         status=status,
         endpoint_id=request.endpoint_id,
-        target_node=_target_node(request),
+        target_node=request.target_node,
         vmid=request.vmid,
         template_vmid=request.vmid,
         name=request.name,
         product_type=entry.product_type,
         product_version=entry.version,
         provider=provider,
-        image_url=image_url,
+        recipe_digest=recipe_digest,
+        operation_id=operation_id,
         image_volid="",
-        source_tree_path=request.source_tree_path or entry.source_tree_path,
-        source_artifact_path=request.source_artifact_path,
-        generated_userdata=user_data,
-        first_boot_script=first_boot_script,
-        build_script=build_script,
-        commands=commands,
         operator_instructions=(
-            "Review the generated Cloud Image Build Pipeline script, enable snippets on the "
-            "target Proxmox storage, then rerun with execute=true after remote execution is enabled."
+            "Submit recipe_digest to the endpoint-scoped preflight, then present its signed "
+            "plan_token for execution before it expires. Raw output remains in protected host logs."
         ),
         execution_enabled=execution_allowed,
         returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
+        execution=execution,
+        diagnostics=diagnostics,
+        sensitive_preview=sensitive_preview,
+    )
+
+
+def build_pipeline_response(
+    request: CloudImageTemplateBuildRequest,
+    *,
+    execution_target: CloudImageSSHExecutionTarget | None = None,
+) -> CloudImageTemplateBuildResponse:
+    if request.execute:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "bound_async_execution_required",
+                "message": "Executable builds require the bound asynchronous route workflow.",
+            },
+        )
+    del execution_target  # compatibility-only parameter; plans never consume SSH authority
+    (
+        request,
+        entry,
+        provider,
+        user_data,
+        first_boot_script,
+        build_script,
+        commands,
+        image_url,
+    ) = _render_pipeline(request)
+    execution_allowed = os.environ.get("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    return _pipeline_response(
+        request,
+        entry=entry,
+        provider=provider,
+        user_data=user_data,
+        first_boot_script=first_boot_script,
+        build_script=build_script,
+        commands=commands,
+        image_url=image_url,
+        status="planned",
+        returncode=None,
+        execution=CloudImageTemplateExecutionSummary(enabled=execution_allowed),
+        diagnostics=[
+            PackerFinding(
+                code="pipeline_planned",
+                severity=PackerFindingSeverity.info,
+                target=f"vmid:{request.vmid}",
+                message="The Cloud Image Pipeline plan was rendered without execution.",
+            )
+        ],
+    )
+
+
+async def execute_pipeline_response(
+    request: CloudImageTemplateBuildRequest,
+    *,
+    execution_target: CloudImageSSHExecutionTarget,
+    operation_id: str,
+    remote_unit: str,
+) -> tuple[CloudImageTemplateBuildResponse, str | None]:
+    """Run one leased operation; completion still requires API verification."""
+
+    (
+        request,
+        entry,
+        provider,
+        user_data,
+        first_boot_script,
+        build_script,
+        commands,
+        image_url,
+    ) = _render_pipeline(request)
+    execution_allowed = os.environ.get("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    status_value, returncode, execution, diagnostics, error_code = await _pipeline_execution_result(
+        request,
+        build_script,
+        execution_allowed=execution_allowed,
+        execution_target=execution_target,
+        remote_unit=remote_unit,
+    )
+    return (
+        _pipeline_response(
+            request,
+            entry=entry,
+            provider=provider,
+            user_data=user_data,
+            first_boot_script=first_boot_script,
+            build_script=build_script,
+            commands=commands,
+            image_url=image_url,
+            status=status_value,
+            returncode=returncode,
+            execution=execution,
+            diagnostics=diagnostics,
+            operation_id=operation_id,
+        ),
+        error_code,
     )

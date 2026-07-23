@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -1447,6 +1448,130 @@ def test_proxmox_session_aclose_awaits_async_close():
 
     assert calls["closed"] == 1
     assert session.session is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_path", ["cluster/status", "cluster/config/join"])
+async def test_proxmox_session_create_closes_once_after_post_connect_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_path: str,
+) -> None:
+    failure_canary = f"SESSION-POST-CONNECT-{failure_path}-SECRET"
+    close_canary = f"SESSION-CLOSE-{failure_path}-SECRET"
+    calls = {"closed": 0}
+
+    class FailingResource(FakeProxmoxResource):
+        def get(self, *args, **kwargs):
+            raise RuntimeError(failure_canary)
+
+    class PostConnectFailureAPI(FakeProxmoxAPI):
+        async def close(self) -> None:
+            calls["closed"] += 1
+            raise RuntimeError(close_canary)
+
+        def __call__(self, path):
+            if path == failure_path:
+                return FailingResource(None)
+            return super().__call__(path)
+
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(caplog.handler)
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", PostConnectFailureAPI)
+    try:
+        with pytest.raises(ProxboxException):
+            await ProxmoxSession.create(
+                {
+                    "ip_address": "10.0.0.10",
+                    "domain": None,
+                    "http_port": 8006,
+                    "user": "root@pam",
+                    "password": "password",
+                    "token": {"name": None, "value": None},
+                    "ssl": False,
+                }
+            )
+    finally:
+        proxbox_logger.removeHandler(caplog.handler)
+
+    assert calls == {"closed": 1}
+    assert close_canary not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_proxmox_session_create_cancellation_shields_exact_once_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = asyncio.Event()
+    blocker = asyncio.Event()
+    calls = {"closed": 0}
+    close_canary = "SESSION-CANCEL-CLOSE-SECRET"
+
+    class BlockingClusterResource:
+        async def get(self) -> object:
+            started.set()
+            await blocker.wait()
+            return []
+
+    class BlockingAPI(FakeProxmoxAPI):
+        def __call__(self, path):
+            if path == "cluster/status":
+                return BlockingClusterResource()
+            return super().__call__(path)
+
+        async def close(self) -> None:
+            calls["closed"] += 1
+            raise RuntimeError(close_canary)
+
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(caplog.handler)
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", BlockingAPI)
+    task = asyncio.create_task(
+        ProxmoxSession.create(
+            {
+                "ip_address": "10.0.0.10",
+                "domain": None,
+                "http_port": 8006,
+                "user": "root@pam",
+                "password": "password",
+                "token": {"name": None, "value": None},
+                "ssl": False,
+            }
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        proxbox_logger.removeHandler(caplog.handler)
+
+    assert calls == {"closed": 1}
+    assert close_canary not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_proxmox_session_aclose_is_exact_once_after_close_failure() -> None:
+    calls = {"closed": 0}
+
+    class FailingCloseSession:
+        async def close(self) -> None:
+            calls["closed"] += 1
+            raise RuntimeError("close failed")
+
+    session = ProxmoxSession()
+    session.session = FailingCloseSession()
+    session.proxmox = session.session
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        await session.aclose()
+    await session.aclose()
+
+    assert calls == {"closed": 1}
 
 
 def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):

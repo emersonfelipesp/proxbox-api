@@ -75,6 +75,33 @@ Regras de autenticacao para create/update:
 
 `ProxmoxEndpoint.allow_writes` (boolean, padrao `false`) atua como um gate de confianca para os [Verbos Operacionais de VM](../api/http-reference.md#verbos-operacionais-de-vm). Quando `false`, qualquer `POST` para `/proxmox/{qemu|lxc}/{vmid}/{start,stop,snapshot,migrate}` retorna `403` com `reason="writes_disabled_for_endpoint"`, mesmo que a chave de API e o `X-Proxbox-Actor` sejam validos. O campo so pode ser alterado por administradores e e auditado via journal entry. Adicionado na migracao `0037_proxmoxendpoint_allow_writes`.
 
+### Binding SSH para Cloud Image
+
+Builds executaveis do Cloud Image Pipeline exigem
+`access_methods="api_ssh"` e um binding persistido e completo de endpoint/node:
+`ssh_target_node`, `ssh_host`, `ssh_username`, `ssh_port`,
+`ssh_identity_file` e `ssh_known_host_fingerprint`. Configure todos os campos
+do binding juntos ou deixe todos os campos opcionais ausentes; bindings
+parciais sao rejeitados. O caminho da identidade deve resolver dentro de
+`PROXBOX_SSH_KEY_DIR`, e o fingerprint deve usar a forma canonica OpenSSH
+`SHA256:<43 caracteres base64>`.
+`ssh_port` pode ser omitido no update, mas JSON `null` explicito e rejeitado
+antes que uma falha `NOT NULL` possa chegar ao banco.
+
+O `target_node` do request deve corresponder a `ssh_target_node`. Campos SSH
+legados no request sao apenas assertions opcionais: eles nao podem redirecionar
+a execucao, e divergencias sao rejeitadas antes de `ssh-keyscan` ou `ssh`. A
+chave do servidor obtida pelo scan deve corresponder exatamente ao fingerprint
+persistido. A execucao usa binarios OpenSSH absolutos com `-F none` e desabilita
+ProxyCommand, ProxyJump e canonicalizacao de hostname; configuracao SSH do
+operador nao pode redirecionar a conexao.
+
+Planos executaveis de preflight usam HMAC com uma chave derivada de
+`PROXBOX_ENCRYPTION_KEY`. Configure a mesma chave em todos os workers de
+producao para validar o plano de cinco minutos entre workers e restarts. Sem a
+chave, o modo de desenvolvimento usa uma seed local ao processo e invalida
+planos pendentes quando o processo muda.
+
 ### Exemplo com senha
 
 ```json
@@ -174,6 +201,7 @@ Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (maioria dos fluxos) / `4` (task-history) | Maximo de operacoes concorrentes de leitura no Proxmox. O padrao varia por servico de sync. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Override legado de concorrencia usado por alguns entrypoints de sync. |
 | `PROXBOX_RATE_LIMIT` | `60` | Maximo de requisicoes por minuto por endereco IP. |
+| `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` | nao definido | Quando `1`, `true` ou `yes`, permite execucao SSH remota no Cloud Image Pipeline. Desabilitado por padrao. Mantenha ausente/falso em staging e producao ate o netbox-packer possuir e validar seu contrato real de consumidor; a fixture consumer-shaped local pertence ao produtor e nao remove este HOLD. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Tamanho do lote de sync de backups. Reduza para diminuir a pressao de escrita no NetBox. |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup. |
 | `PROXBOX_BULK_BATCH_SIZE` | `50` | Tamanho do lote para requisicoes em massa relacionadas a VMs (volumes, backups). |
@@ -189,8 +217,8 @@ Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes
 | `PROXBOX_STRICT_STARTUP` | nao definido | Quando `1`, `true` ou `yes`, falha no mount de rotas Proxmox geradas interrompe o startup. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | nao definido | Quando `1`, `true` ou `yes`, nao cria o cliente NetBox padrao no startup. |
 | `PROXBOX_ENCRYPTION_KEY` | nao definido | Chave secreta para criptografar credenciais em repouso. Veja [Criptografia de credenciais](#criptografia-de-credenciais) abaixo. |
-| `PROXBOX_ENCRYPTION_KEY_FILE` | nao definido | Caminho para um arquivo contendo a chave Fernet. Alternativa a `PROXBOX_ENCRYPTION_KEY` para deploys onde a chave nao deve ficar no ambiente. |
-| `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | nao definido | Quando `1`, `true` ou `yes`, permite startup mesmo sem chave de criptografia configurada. Apenas para labs — emite log `CRITICAL` e nunca deve ser usado em producao. |
+| `PROXBOX_ENCRYPTION_KEY_FILE` | nao definido | Caminho opcional para arquivo local usado somente quando env e configuracao do plugin estao vazias. O fallback padrao e `<repo_root>/data/encryption.key`. |
+| `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | nao definido | Permite explicitamente writes de credenciais sem chave. Desligado por padrao: startup e operacoes sem credencial continuam disponiveis, mas writes de credenciais falham fechado. Use apenas em lab isolado. |
 
 ### Tratando erros de NetBox sobrecarregado
 
@@ -217,7 +245,8 @@ O proxbox-api resolve a chave de criptografia na seguinte ordem de prioridade:
 
 1. **Variavel de ambiente `PROXBOX_ENCRYPTION_KEY`** — prioridade maxima, aplicada imediatamente no startup.
 2. **`ProxboxPluginSettings.encryption_key`** — buscada na API de configuracoes do plugin no NetBox (configuravel na pagina `/plugins/proxbox/settings/`). So e consultada quando a env var nao esta definida.
-3. **Nenhuma** — sem chave configurada. Credenciais ficam armazenadas em texto puro e um log `CRITICAL` e emitido. Nunca use em producao.
+3. **Arquivo local** — `PROXBOX_ENCRYPTION_KEY_FILE`, ou o padrao `<repo_root>/data/encryption.key`, somente depois que as duas fontes anteriores estiverem vazias.
+4. **Nenhuma** — sem chave configurada. Startup e operacoes sem credencial continuam disponiveis, mas writes de credenciais sao recusados, exceto quando `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` habilita explicitamente armazenamento plaintext apenas para lab. Um log `CRITICAL` e emitido.
 
 ### Definindo a chave
 

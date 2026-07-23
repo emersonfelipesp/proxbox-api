@@ -2,30 +2,59 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
+from proxbox_api.database import CloudImageBuildOperation, ProxmoxEndpoint
+from proxbox_api.logger import logger
 from proxbox_api.routes.cloud.cloud_init_templates import (
     find_product_version,
     generate_cloud_init_userdata,
     generate_firecracker_userdata,
 )
 from proxbox_api.routes.cloud.display import qemu_display_create_kwargs
-from proxbox_api.routes.cloud.pipeline_scripts import build_pipeline_response
+from proxbox_api.routes.cloud.pipeline_scripts import (
+    PipelineExecutionCancelled,
+    build_pipeline_response,
+    cancel_pipeline_operation,
+    execute_pipeline_response,
+    pipeline_execution_contract,
+)
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
 from proxbox_api.routes.proxmox.access_gate import gate_ssh_access
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.schemas.cloud_provision import (
+    CloudImageBuildOperationResponse,
+    CloudImageBuildProvider,
+    CloudImageSSHExecutionTarget,
     CloudImageTemplateBuildRequest,
     CloudImageTemplateBuildResponse,
+    CloudImageTemplateExecutionSummary,
+    CloudImageTemplatePreflightRequest,
+    CloudImageTemplatePreflightResponse,
+    PackerFinding,
+    PackerFindingSeverity,
     ProxmoxProductType,
 )
+from proxbox_api.services.packer_plans import (
+    PackerPlanError,
+    acquire_operation_lease,
+    finish_operation,
+    issue_packer_plan,
+    mark_operation_running,
+    operation_response,
+    record_cancel_request,
+    verify_packer_plan,
+)
+from proxbox_api.services.packer_preflight import run_packer_preflight
 from proxbox_api.session.proxmox import ProxmoxSession
+from proxbox_api.session.proxmox_providers import load_proxmox_session_schemas
 from proxbox_api.ssrf import validate_endpoint_url
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
@@ -40,7 +69,7 @@ _PIPELINE_PRODUCT_TYPES = frozenset(
 def _filename_from_request(req: CloudImageTemplateBuildRequest) -> str:
     raw = (req.image_filename or "").strip()
     if not raw:
-        raw = PurePosixPath(urlsplit(req.image_url).path).name
+        raw = PurePosixPath(urlsplit(req.image_url or "").path).name
     if not raw:
         raise HTTPException(status_code=422, detail="image_filename could not be derived.")
     path = PurePosixPath(raw)
@@ -58,11 +87,12 @@ def _filename_from_request(req: CloudImageTemplateBuildRequest) -> str:
 def _is_ready_template(config: object) -> bool:
     if not isinstance(config, dict):
         return False
+    values = cast(dict[str, object], config)
     return (
-        str(config.get("template")) in {"1", "True", "true"}
-        and "scsi0" in config
-        and "cloudinit" in str(config.get("ide2", "")).lower()
-        and "scsi0" in str(config.get("boot", ""))
+        str(values.get("template")) in {"1", "True", "true"}
+        and "scsi0" in values
+        and "cloudinit" in str(values.get("ide2", "")).lower()
+        and "scsi0" in str(values.get("boot", ""))
     )
 
 
@@ -72,11 +102,77 @@ async def _vm_config_or_none(
     node: str,
     vmid: int,
 ) -> dict[str, Any] | None:
+    sdk_session = proxmox.session
+    if sdk_session is None:
+        return None
     try:
-        config = await _maybe_await(proxmox.session.nodes(node).qemu(vmid).config.get())
+        config = await _maybe_await(sdk_session.nodes(node).qemu(vmid).config.get())
     except Exception:  # noqa: BLE001
         return None
-    return config if isinstance(config, dict) else {}
+    return cast(dict[str, Any], config) if isinstance(config, dict) else {}
+
+
+async def _verify_pipeline_artifact(
+    proxmox: ProxmoxSession,
+    *,
+    node: str,
+    vmid: int,
+    provider: CloudImageBuildProvider,
+) -> tuple[bool, bool]:
+    """Return ``(verified, possible_partial_state)`` from a final API read."""
+
+    config = await _vm_config_or_none(proxmox, node=node, vmid=vmid)
+    if config is None:
+        # The API boundary deliberately hides whether a lookup failed or the VM
+        # is absent. After an attempted write, either outcome needs inspection.
+        return False, True
+    if provider == CloudImageBuildProvider.proxmox_iso:
+        ide2 = str(config.get("ide2") or "")
+        verified = bool(config.get("scsi0") and ":iso/" in ide2 and "media=cdrom" in ide2)
+        return verified, not verified
+    verified = _is_ready_template(config)
+    return verified, not verified
+
+
+def _plan_error(error: PackerPlanError) -> HTTPException:
+    messages = {
+        "preflight_plan_invalid": "The signed preflight plan is invalid.",
+        "preflight_plan_expired": "The signed preflight plan has expired.",
+        "preflight_plan_mismatch": "The signed preflight plan does not match this build.",
+        "preflight_plan_already_consumed": "The signed preflight plan was already consumed.",
+        "build_target_leased": "Another operation owns the endpoint and VMID lease.",
+    }
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": error.code,
+            "message": messages.get(error.code, "The signed preflight plan cannot be used."),
+        },
+    )
+
+
+async def _close_proxmox_session(proxmox: ProxmoxSession, *, context: str) -> None:
+    """Complete exactly one shielded close, including under request cancellation."""
+
+    close_task = asyncio.create_task(proxmox.aclose())
+    try:
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError:
+        try:
+            await close_task
+        except Exception as error:  # noqa: BLE001 - cleanup must not reveal internals
+            logger.warning(
+                "%s session cleanup failed error_type=%s",
+                context,
+                type(error).__name__,
+            )
+        raise
+    except Exception as error:  # noqa: BLE001 - cleanup must not replace route results
+        logger.warning(
+            "%s session cleanup failed error_type=%s",
+            context,
+            type(error).__name__,
+        )
 
 
 async def _image_exists(
@@ -86,14 +182,19 @@ async def _image_exists(
     storage: str,
     volid: str,
 ) -> bool:
+    sdk_session = proxmox.session
+    if sdk_session is None:
+        return False
     try:
         content = await _maybe_await(
-            proxmox.session.nodes(node).storage(storage).content.get(content="import")
+            sdk_session.nodes(node).storage(storage).content.get(content="import")
         )
     except Exception:  # noqa: BLE001
         return False
     rows = content if isinstance(content, list) else []
-    return any(isinstance(row, dict) and row.get("volid") == volid for row in rows)
+    return any(
+        isinstance(row, dict) and cast(dict[str, object], row).get("volid") == volid for row in rows
+    )
 
 
 async def _wait_for_task(
@@ -108,9 +209,486 @@ async def _wait_for_task(
     return upid
 
 
+async def _resolve_preflight_target(
+    session: SessionDep,
+    endpoint_id: int,
+) -> tuple[ProxmoxEndpoint, ProxmoxSession]:
+    """Resolve exactly one enabled, database-backed session for ``endpoint_id``."""
+
+    endpoint = await _maybe_await(session.get(ProxmoxEndpoint, endpoint_id))
+    if not isinstance(endpoint, ProxmoxEndpoint):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "endpoint_not_found",
+                "endpoint_id": endpoint_id,
+                "message": "The persisted Proxmox endpoint does not exist.",
+            },
+        )
+    if not endpoint.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "endpoint_disabled",
+                "endpoint_id": endpoint_id,
+                "message": "The persisted Proxmox endpoint is disabled.",
+            },
+        )
+
+    try:
+        schemas = await load_proxmox_session_schemas(
+            database_session=session,
+            source="database",
+            endpoint_ids=[endpoint_id],
+        )
+    except Exception:  # noqa: BLE001 - never expose endpoint credentials upstream
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "endpoint_session_unavailable",
+                "endpoint_id": endpoint_id,
+                "message": "The selected Proxmox endpoint session is unavailable.",
+            },
+        ) from None
+    matches = [schema for schema in schemas if schema.db_endpoint_id == endpoint_id]
+    if len(matches) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": (
+                    "endpoint_session_missing" if not matches else "endpoint_session_ambiguous"
+                ),
+                "endpoint_id": endpoint_id,
+                "message": "Exactly one enabled Proxmox session must match endpoint_id.",
+            },
+        )
+    (schema,) = matches
+    try:
+        proxmox = await ProxmoxSession.create(schema, initialize_metadata=False)
+    except Exception:  # noqa: BLE001 - never expose endpoint credentials upstream
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "endpoint_session_unavailable",
+                "endpoint_id": endpoint_id,
+                "message": "The selected Proxmox endpoint session is unavailable.",
+            },
+        ) from None
+    return endpoint, proxmox
+
+
+def _resolve_execution_ssh_target(
+    endpoint: ProxmoxEndpoint,
+    request: CloudImageTemplateBuildRequest,
+) -> CloudImageSSHExecutionTarget:
+    """Derive one executable SSH target exclusively from persisted authority."""
+
+    endpoint_id = int(endpoint.id or 0)
+    if not endpoint.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "endpoint_disabled",
+                "endpoint_id": endpoint_id,
+                "message": "The persisted Proxmox endpoint is disabled.",
+            },
+        )
+    if not request.target_node:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "target_node_required",
+                "endpoint_id": endpoint_id,
+                "message": "target_node is required for executable builds.",
+            },
+        )
+    if not endpoint.has_cloud_image_ssh_binding:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "endpoint_ssh_binding_incomplete",
+                "endpoint_id": endpoint_id,
+                "message": "The endpoint has no complete persisted Cloud Image SSH binding.",
+            },
+        )
+    if request.target_node != endpoint.ssh_target_node:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "endpoint_node_mismatch",
+                "endpoint_id": endpoint_id,
+                "message": "target_node does not match the endpoint's persisted SSH node.",
+            },
+        )
+
+    try:
+        target = CloudImageSSHExecutionTarget(
+            host=str(endpoint.ssh_host),
+            user=str(endpoint.ssh_username),
+            port=endpoint.ssh_port,
+            identity_file=str(endpoint.ssh_identity_file),
+            known_host_fingerprint=str(endpoint.ssh_known_host_fingerprint),
+        )
+    except Exception:  # noqa: BLE001 - return only a stable, non-secret boundary error
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "endpoint_ssh_binding_invalid",
+                "endpoint_id": endpoint_id,
+                "message": "The endpoint's persisted Cloud Image SSH binding is invalid.",
+            },
+        ) from None
+
+    assertions = {
+        "ssh_host": target.host,
+        "ssh_user": target.user,
+        "ssh_port": target.port,
+        "ssh_identity_file": target.identity_file,
+        "ssh_known_host_fingerprint": target.known_host_fingerprint,
+    }
+    for field, expected in assertions.items():
+        if field not in request.model_fields_set:
+            continue
+        if getattr(request, field) != expected:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "endpoint_ssh_binding_mismatch",
+                    "endpoint_id": endpoint_id,
+                    "field": field,
+                    "message": "Caller SSH assertions do not match the persisted endpoint binding.",
+                },
+            )
+    return target
+
+
+@router.post(
+    "/templates/images/preflight",
+    response_model=CloudImageTemplatePreflightResponse,
+    response_model_exclude_none=True,
+)
+async def preflight_cloud_image_template(
+    req: CloudImageTemplatePreflightRequest,
+    session: SessionDep,
+) -> CloudImageTemplatePreflightResponse:
+    """Validate one persisted Packer target using Proxmox GET requests only."""
+
+    endpoint, proxmox = await _resolve_preflight_target(session, req.endpoint_id)
+    try:
+        response = await run_packer_preflight(
+            req,
+            proxmox,
+            writes_enabled=endpoint.allow_writes,
+        )
+        if not response.ready or req.recipe_digest is None:
+            return response
+        claims, plan_digest, plan_token = issue_packer_plan(
+            endpoint=endpoint,
+            target=req.build_target(),
+            recipe_digest=req.recipe_digest,
+        )
+        return response.model_copy(
+            update={
+                "plan_id": claims.plan_id,
+                "plan_digest": plan_digest,
+                "plan_token": plan_token,
+                "expires_at": claims.expires_at,
+            }
+        )
+    finally:
+        await _close_proxmox_session(proxmox, context="Packer preflight")
+
+
+@router.get(
+    "/templates/images/operations/{operation_id}",
+    response_model=CloudImageBuildOperationResponse,
+    response_model_exclude_none=True,
+)
+async def get_cloud_image_build_operation(
+    operation_id: str,
+    session: SessionDep,
+) -> CloudImageBuildOperationResponse:
+    """Return the durable, secret-free state of one build operation."""
+
+    operation = await session.get(CloudImageBuildOperation, operation_id)
+    if operation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "cloud_image_operation_not_found",
+                "message": "The Cloud Image Pipeline operation does not exist.",
+            },
+        )
+    return operation_response(operation)
+
+
+@router.post(
+    "/templates/images/operations/{operation_id}/cancel",
+    response_model=CloudImageBuildOperationResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def cancel_cloud_image_build_operation(
+    operation_id: str,
+    session: SessionDep,
+) -> CloudImageBuildOperationResponse | JSONResponse:
+    """Request cancellation of one running, endpoint-bound remote unit."""
+
+    operation = await session.get(CloudImageBuildOperation, operation_id)
+    if operation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "cloud_image_operation_not_found",
+                "message": "The Cloud Image Pipeline operation does not exist.",
+            },
+        )
+    if operation.state != "running":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "cloud_image_operation_not_running",
+                "message": "Only a running Cloud Image Pipeline operation can be cancelled.",
+            },
+        )
+
+    gated = await _gate(session, operation.endpoint_id)
+    if isinstance(gated, JSONResponse):
+        return gated
+    await gate_ssh_access(session, operation.endpoint_id)
+    execution_target = _resolve_execution_ssh_target(
+        gated,
+        CloudImageTemplateBuildRequest(
+            endpoint_id=operation.endpoint_id,
+            target_node=operation.target_node,
+            vmid=operation.vmid,
+            execute=True,
+        ),
+    )
+    cancellation_succeeded = await cancel_pipeline_operation(
+        execution_target,
+        remote_unit=operation.remote_unit,
+    )
+    await record_cancel_request(
+        session,
+        operation,
+        cancellation_succeeded=cancellation_succeeded,
+    )
+    await session.refresh(operation)
+    return operation_response(operation)
+
+
+async def _execute_bound_pipeline(
+    req: CloudImageTemplateBuildRequest,
+    session: SessionDep,
+    endpoint: ProxmoxEndpoint,
+) -> CloudImageTemplateBuildResponse:
+    """Revalidate one signed plan, lease it, execute it, and verify its artifact."""
+
+    if not req.preflight_plan_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "preflight_plan_required",
+                "message": "A signed preflight plan is required for execution.",
+            },
+        )
+    target, recipe_digest = pipeline_execution_contract(req)
+    execution_target = _resolve_execution_ssh_target(endpoint, req)
+    try:
+        plan, plan_digest = verify_packer_plan(
+            req.preflight_plan_token,
+            endpoint=endpoint,
+            target=target,
+            recipe_digest=recipe_digest,
+        )
+    except PackerPlanError as error:
+        raise _plan_error(error) from None
+
+    resolved_endpoint, proxmox = await _resolve_preflight_target(session, int(endpoint.id or 0))
+    operation: CloudImageBuildOperation | None = None
+    try:
+        # Re-check after session resolution so a concurrent endpoint edit cannot
+        # change API or SSH authority between plan verification and execution.
+        try:
+            plan, plan_digest = verify_packer_plan(
+                req.preflight_plan_token,
+                endpoint=resolved_endpoint,
+                target=target,
+                recipe_digest=recipe_digest,
+            )
+        except PackerPlanError as error:
+            raise _plan_error(error) from None
+
+        preflight = await run_packer_preflight(
+            CloudImageTemplatePreflightRequest(
+                endpoint_id=plan.endpoint_id,
+                target_node=plan.target_node,
+                vmid=plan.vmid,
+                provider=CloudImageBuildProvider(plan.provider),
+                image_storage=plan.image_storage,
+                vm_storage=plan.vm_storage,
+                snippets_storage=plan.snippets_storage,
+                recipe_digest=plan.recipe_digest,
+            ),
+            proxmox,
+            writes_enabled=resolved_endpoint.allow_writes,
+        )
+        if not preflight.ready:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "preflight_no_longer_ready",
+                    "message": "The target no longer passes the exact read-only preflight.",
+                },
+            )
+
+        try:
+            operation = await acquire_operation_lease(
+                session,
+                plan=plan,
+                plan_digest=plan_digest,
+            )
+        except PackerPlanError as error:
+            raise _plan_error(error) from None
+        await mark_operation_running(session, operation)
+
+        try:
+            response, execution_error = await execute_pipeline_response(
+                req,
+                execution_target=execution_target,
+                operation_id=operation.id,
+                remote_unit=operation.remote_unit,
+            )
+        except PipelineExecutionCancelled as cancelled:
+            await asyncio.shield(
+                finish_operation(
+                    session,
+                    operation,
+                    state="recovery_required",
+                    execution=cancelled.execution,
+                    verified=False,
+                    recovery_required=True,
+                    error_code="execution_cancelled",
+                )
+            )
+            raise asyncio.CancelledError from None
+        except HTTPException as error:
+            detail = error.detail if isinstance(error.detail, dict) else {}
+            await finish_operation(
+                session,
+                operation,
+                state="failed",
+                execution=CloudImageTemplateExecutionSummary(enabled=False),
+                verified=False,
+                recovery_required=False,
+                error_code=str(detail.get("code") or "execution_rejected"),
+            )
+            raise
+        except Exception as error:  # noqa: BLE001 - never expose the execution boundary
+            logger.warning(
+                "Cloud Image Pipeline execution failed error_type=%s",
+                type(error).__name__,
+            )
+            await finish_operation(
+                session,
+                operation,
+                state="recovery_required",
+                execution=CloudImageTemplateExecutionSummary(attempted=True, enabled=True),
+                verified=False,
+                recovery_required=True,
+                error_code="execution_unavailable",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "execution_unavailable",
+                    "message": "The remote Cloud Image Pipeline execution failed.",
+                },
+            ) from None
+
+        await session.refresh(operation)
+        verified, possible_partial = await _verify_pipeline_artifact(
+            proxmox,
+            node=target.target_node,
+            vmid=target.vmid,
+            provider=target.provider,
+        )
+        if (
+            response.status == "verification_pending"
+            and verified
+            and not operation.cancel_requested
+        ):
+            completion_finding = PackerFinding(
+                code="artifact_verified",
+                severity=PackerFindingSeverity.info,
+                target=f"vmid:{target.vmid}",
+                message="The expected Proxmox artifact passed final API verification.",
+            )
+            response = response.model_copy(
+                update={
+                    "status": "completed",
+                    "verified": True,
+                    "diagnostics": [*response.diagnostics, completion_finding],
+                }
+            )
+            await finish_operation(
+                session,
+                operation,
+                state="completed",
+                execution=response.execution,
+                verified=True,
+                recovery_required=False,
+                error_code=None,
+            )
+            return response
+
+        recovery_required = possible_partial or response.execution.attempted
+        error_code = (
+            "execution_cancel_requested"
+            if operation.cancel_requested
+            else execution_error or "artifact_verification_failed"
+        )
+        failure_finding = PackerFinding(
+            code=(
+                "execution_cancel_requested"
+                if operation.cancel_requested
+                else "artifact_verification_failed"
+            ),
+            severity=PackerFindingSeverity.error,
+            target=f"vmid:{target.vmid}",
+            message=(
+                "The operation was cancelled; preserve any partial artifact for recovery."
+                if operation.cancel_requested
+                else "The expected artifact was not verified; preserve it for operator recovery."
+            ),
+        )
+        response = response.model_copy(
+            update={
+                "status": "recovery_required" if recovery_required else "failed",
+                "verified": False,
+                "recovery_required": recovery_required,
+                "diagnostics": [*response.diagnostics, failure_finding],
+            }
+        )
+        await finish_operation(
+            session,
+            operation,
+            state="recovery_required" if recovery_required else "failed",
+            execution=response.execution,
+            verified=False,
+            recovery_required=recovery_required,
+            error_code=error_code,
+        )
+        return response
+    finally:
+        await _close_proxmox_session(proxmox, context="Cloud Image Pipeline")
+
+
 @router.post(
     "/templates/images",
     response_model=CloudImageTemplateBuildResponse,
+    response_model_exclude_none=True,
     status_code=status.HTTP_201_CREATED,
 )
 async def build_cloud_image_template(
@@ -136,6 +714,7 @@ async def build_cloud_image_template(
             # Remote execution writes to a Proxmox host over SSH, so enforce both
             # the write trust gate and the orthogonal SSH-transport gate.
             await gate_ssh_access(session, req.endpoint_id)
+            return await _execute_bound_pipeline(req, session, gated)
         return build_pipeline_response(req)
 
     if req.endpoint_id is None or not req.target_node or not req.image_url:
@@ -151,11 +730,14 @@ async def build_cloud_image_template(
     filename = _filename_from_request(req)
     image_volid = f"{req.image_storage}:import/{filename}"
 
-    safe, reason = validate_endpoint_url(req.image_url)
+    safe, _reason = validate_endpoint_url(req.image_url)
     if not safe:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"image_url rejected by SSRF protection: {reason}",
+            detail={
+                "code": "image_url_rejected",
+                "message": "The image URL was rejected by endpoint safety policy.",
+            },
         )
 
     generated_userdata: str | None = None
@@ -169,10 +751,10 @@ async def build_cloud_image_template(
         if pv is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"No catalog entry for product_type={req.product_type.value!r}"
-                    f" version={req.product_version!r}."
-                ),
+                detail={
+                    "code": "catalog_entry_not_found",
+                    "message": "No catalog entry matches the requested product and version.",
+                },
             )
         generated_userdata = generate_cloud_init_userdata(
             req.product_type,
@@ -204,13 +786,21 @@ async def build_cloud_image_template(
                     boot=existing.get("boot"),
                     scsi0=existing.get("scsi0"),
                     ide2=existing.get("ide2"),
-                    generated_userdata=generated_userdata,
                 )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"VMID {req.vmid} already exists and is not a ready cloud-init template.",
             )
 
+        sdk_session = proxmox.session
+        if sdk_session is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "proxmox_session_unavailable",
+                    "message": "The Proxmox API session is unavailable.",
+                },
+            )
         download_upid = None
         if not await _image_exists(
             proxmox,
@@ -219,7 +809,7 @@ async def build_cloud_image_template(
             volid=image_volid,
         ):
             download_result = await _maybe_await(
-                proxmox.session.nodes(req.target_node)
+                sdk_session.nodes(req.target_node)
                 .storage(f"{req.image_storage}/download-url")
                 .post(
                     content="import",
@@ -259,12 +849,12 @@ async def build_cloud_image_template(
         if description_parts:
             create_kwargs["description"] = "\n\n".join(description_parts)
         create_result = await _maybe_await(
-            proxmox.session.nodes(req.target_node).qemu.post(**create_kwargs)
+            sdk_session.nodes(req.target_node).qemu.post(**create_kwargs)
         )
         create_upid = await _wait_for_task(proxmox, node=req.target_node, response=create_result)
 
         template_result = await _maybe_await(
-            proxmox.session.nodes(req.target_node).qemu(req.vmid).template.post(disk="scsi0")
+            sdk_session.nodes(req.target_node).qemu(req.vmid).template.post(disk="scsi0")
         )
         template_upid = await _wait_for_task(
             proxmox,
@@ -291,8 +881,28 @@ async def build_cloud_image_template(
             boot=config.get("boot"),
             scsi0=config.get("scsi0"),
             ide2=config.get("ide2"),
-            generated_userdata=generated_userdata,
         )
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001 - normalize the secret-bearing SDK boundary
+        logger.warning(
+            "Direct Cloud Image Template build failed error_type=%s",
+            type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "proxmox_build_failed",
+                "endpoint_id": req.endpoint_id,
+                "message": "The Proxmox image-template build failed.",
+            },
+        ) from None
     finally:
         if proxmox is not None:
-            await proxmox.aclose()
+            try:
+                await proxmox.aclose()
+            except Exception as error:  # noqa: BLE001 - cleanup must not mask the route result
+                logger.warning(
+                    "Direct Cloud Image Template session cleanup failed error_type=%s",
+                    type(error).__name__,
+                )

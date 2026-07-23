@@ -29,6 +29,138 @@ Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Pro
 - `GET /admin/logs` - Buffer de logs em memoria com filtros opcionais para `level`, `limit`, `offset`, `since` e `operation_id`.
 - `GET /admin/logs/stream` - Stream SSE de logs em tempo real. Suporta os parametros `level`, `errors_only`, `operation_id` e `newer_than_id`.
 
+## Pipeline de imagens Cloud (`/cloud/templates/images`)
+
+### Preflight somente leitura
+
+`POST /cloud/templates/images/preflight` aceita os campos do contrato v1
+`contract_version` (`"1.0"`), `endpoint_id`, `target_node`, `vmid`,
+`image_storage`, `vm_storage` e os campos aditivos `provider`,
+`snippets_required`, `snippets_storage` e `recipe_digest`. O provider e a unica autoridade para
+o requisito de snippets: providers release/source exigem snippets e
+`proxmox_iso` nao. `snippets_required` permanece somente como assercao de
+compatibilidade v1 obsoleta; valores divergentes sao rejeitados. Clientes v1
+antigos que omitem os campos aditivos preservam o readiness de
+`provider="release_image"`, mas somente um request com o `recipe_digest`
+renderizado pelo servidor recebe um plano executavel assinado.
+
+A rota resolve o endpoint persistido habilitado exato e exige exatamente uma
+sessao Proxmox originada do banco com o mesmo id; nunca usa a primeira sessao
+como fallback. Em seguida faz somente leituras de status do node, storage do
+node, `GET /cluster/nextid?vmid=...` autoritativo e recursos VM suplementares.
+Assim, o preflight funciona com
+`allow_writes=false`; `writes_enabled` e apenas informativo e nenhuma mutacao
+Proxmox ou de banco ocorre.
+
+A resposta v1 contem `ready`, `capabilities`, `findings` e o `recipe_digest`
+recebido. Quando o readiness passa com digest, a resposta inclui `plan_id`,
+`plan_digest`, `plan_token` e `expires_at`. O token assinado expira em cinco
+minutos e vincula configuracao do endpoint, node, provider, storages, VMID e a
+receita exata. Emitir o plano nao altera o banco; a execucao o consome uma unica
+vez no journal duravel. O status de cada
+capacidade e `passed`, `failed` ou `unsupported`. Cada finding contem somente
+`code`, `severity`, `target` e `message`; excecoes upstream e credenciais do
+endpoint nunca sao retornadas. Payloads de colecao malformados falham de forma
+fechada como `unsupported`, e o storage so passa quando `enabled` e `active`
+estao explicitamente saudaveis. As verificacoes cobrem sessao exata, node
+online, `images` no storage de VM, `iso` no storage de imagem para
+`provider="proxmox_iso"`; builds release/source usam staging privado em
+`/var/tmp` e nao declaram capacidade de storage de imagem. `snippets` e
+verificado quando o provider exige, junto com a disponibilidade do VMID pelo probe
+autoritativo. A enumeracao de recursos pode confirmar uma colisao visivel, mas
+nunca transforma negacao ou payload malformado de `nextid` em sucesso.
+
+`import` nao e um tipo de conteudo configurado do storage Proxmox. O pipeline
+envia `content=import` apenas no POST separado de `download-url`; o preflight
+valida a capacidade configurada real `images` e nao exige uma entrada
+`import`.
+
+### Privacidade da resposta de build
+
+O fluxo executavel possui tres etapas: renderizar com `execute=false` para
+obter `recipe_digest`; executar o preflight com esse digest para obter o
+`plan_token`; e enviar `execute=true` com `preflight_plan_token`. A ultima etapa
+revalida assinatura, expiracao, configuracao e receita, repete o preflight e
+adquire atomicamente o lease exclusivo `endpoint_id:vmid`. Replay, drift,
+expiracao e lease ocupado retornam codigos fixos.
+
+`POST /cloud/templates/images` retorna o contrato v2. Respostas padrao e de
+execucao omitem URLs de imagem/source, cloud-init gerado, scripts de first boot
+e build, lista de comandos, stdout e stderr. A execucao expoe somente
+diagnosticos tipados fixos, exit code e contadores limitados de bytes/linhas.
+Falhas inesperadas de execucao ou do SDK Proxmox direto sao normalizadas sem
+retornar ou registrar o texto bruto da excecao. Falhas diretas do SDK retornam
+um detalhe `502` fixo com codigo `proxmox_build_failed`; falhas de cleanup nao
+substituem uma resposta valida.
+
+Material renderizado bruto so pode ser retornado em preview nao executavel com
+`execute=false` e `include_sensitive_preview=true`. Ele fica em
+`sensitive_preview`, e marcado como sensivel e pode conter credenciais, URLs
+assinadas, chaves ou segredos de cloud-init; nao registre nem persista esse
+objeto. A validacao rejeita preview sensivel com `execute=true` ou `execute`
+omitido, tornando-o impossivel durante a execucao normal.
+
+Requests executaveis derivam a autoridade SSH exclusivamente do
+`ProxmoxEndpoint` persistido. Ele precisa estar habilitado, permitir escrita,
+usar `access_methods="api_ssh"` e conter `ssh_target_node`, `ssh_host`,
+`ssh_username`, `ssh_port`, `ssh_identity_file` e
+`ssh_known_host_fingerprint`. Campos SSH legados do request sao apenas
+assercoes; qualquer divergencia retorna `409` antes de subprocesso. A chave do
+servidor e escaneada, comparada ao fingerprint SHA-256 persistido e entregue ao
+OpenSSH com verificacao estrita.
+O processo SSH usa binarios absolutos, `-F none`, `ProxyCommand=none`,
+`ProxyJump=none` e `CanonicalizeHostname=no`, impedindo que configuracao
+ambiente redirecione a conexao.
+
+A execucao usa `asyncio` e uma unidade `systemd-run` unica gerada pelo servidor.
+Stdout/stderr sao drenados continuamente apenas para contadores, sem acumular,
+registrar ou persistir conteudo. Timeout, cancelamento do request ou `POST
+/cloud/templates/images/operations/{id}/cancel` interrompem a unidade exata;
+`GET /cloud/templates/images/operations/{id}` expoe o journal sem segredos. Um
+exit code zero permanece `verification_pending` ate a API Proxmox confirmar o
+artefato. Estado parcial ou desconhecido vira `recovery_required` e nunca e
+apagado automaticamente.
+
+### Bloqueio de rollout do consumidor
+
+A fixture `tests/fixtures/netbox_packer_preflight_v1.json` pertence ao
+proxbox-api. Ela valida um parser com shape de consumidor mantido neste repo
+produtor e, portanto, registra apenas a intencao de compatibilidade; nao prova
+que o netbox-packer implementou ou validou o contrato. Ate existir contrato e
+teste reais no consumidor, staging e producao devem manter
+`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` ausente ou falso. Planejamento e
+preflight somente leitura permanecem disponiveis enquanto a execucao falha de
+forma fechada.
+
+User-data, first-boot, metadata e authorized keys sao codificados em base64 em
+comandos de escrita fixos, portanto conteudo do caller nao pode encerrar um
+delimitador shell. Caminhos de snippets e ISO sao resolvidos pelo volume ID
+exato com `pvesm path`; mappings customizados de `snippets_dir` sao rejeitados.
+`source_build_command` aceita somente as assercoes tipadas
+`pfsense_memstickserial` e `opnsense_dvd`. O catalogo controla wrappers fixos em
+`/usr/local/libexec/proxbox`, roots canonicos em
+`/opt/proxbox/image-sources` e artefatos fixos dentro desses roots. Caminhos do
+caller sao apenas assercoes. O script valida `realpath`, owner root e ausencia
+de escrita por grupo/outros. Todos os providers usam staging aleatorio privado
+via `mktemp`.
+
+`vm_storage` e a unica autoridade para o storage de disco. O nome legado
+`storage` continua aceito como alias durante `0.0.21.x`, e normalizado para
+`vm_storage`; enviar os dois com valores diferentes e rejeitado. O alias nao e
+emitido no OpenAPI nem nas respostas. Quando ambos sao omitidos, o pipeline
+preserva o destino legado `local-lvm`; valores explicitos nunca sao trocados.
+
+Respostas de validacao de request sao genericas e nunca incluem `input` ou
+contexto do Pydantic, campos do request, URLs assinadas, chaves ou user-data. O
+caller recebe um `422` estavel com `request_validation_error` e deve validar
+detalhes localmente contra o OpenAPI.
+
+Janela de compatibilidade: preflight v1 e resposta segura v2 permanecem
+suportados ate `0.0.21.x`. Uma substituicao breaking nao pode chegar antes de
+`0.0.22.0` e deve ser documentada primeiro. Campos brutos legados de
+build/output foram removidos imediatamente das respostas padrao como correcao
+de seguranca e nao fazem parte dessa janela.
+
 ## Rotas NetBox (`/netbox`)
 
 - `POST /netbox/endpoint` - Cria o endpoint NetBox singleton.

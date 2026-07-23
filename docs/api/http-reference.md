@@ -38,6 +38,168 @@ documented in [Service Routes](./service-routes.md). That page also explains
 `PROXBOX_FEATURES` sidecar-only mounting and the write gates used by cloud and
 intent routes.
 
+## Cloud Image Pipeline (`/cloud/templates/images`)
+
+### Read-only preflight
+
+`POST /cloud/templates/images/preflight` accepts the v1 request fields
+`contract_version` (`"1.0"`), `endpoint_id`, `target_node`, `vmid`,
+`image_storage`, `vm_storage`, and the additive `provider`,
+`snippets_required`, `snippets_storage`, and `recipe_digest` fields. The provider is the sole
+authority for snippet readiness: release/source providers require snippets and
+`proxmox_iso` does not. `snippets_required` remains only as a deprecated v1
+compatibility assertion and a disagreeing value is rejected. Older v1 callers
+that omit the additive fields retain `provider="release_image"` readiness
+behavior, but only a request carrying the server-rendered `recipe_digest` can
+receive an executable signed plan.
+
+The endpoint resolves the exact enabled persisted endpoint and requires exactly
+one matching database-backed Proxmox session. It never falls back to the first
+configured session. It then performs only read calls for node status, node
+storage, authoritative `GET /cluster/nextid?vmid=...`, and supplemental cluster
+VM resources. Consequently, preflight works when
+`allow_writes=false`; the response's `writes_enabled` field is informational
+and no Proxmox or database mutation occurs.
+
+The v1 response contains `ready`, `capabilities`, `findings`, and the submitted
+`recipe_digest`. When readiness passes and a digest was supplied, it also
+contains `plan_id`, `plan_digest`, `plan_token`, and `expires_at`. The signed
+token expires after five minutes and binds endpoint configuration, node,
+provider, all storage roles, VMID, and the exact rendered recipe. Issuing it
+does not mutate the database; execution consumes it once into the durable
+operation journal. Capability
+status is `passed`, `failed`, or `unsupported`. Every finding has exactly
+`code`, `severity`, `target`, and `message`; upstream exceptions and endpoint
+credentials are not returned. Malformed collection payloads fail closed as
+`unsupported`, and storage readiness passes only when both `enabled` and
+`active` are explicitly healthy. Checks cover:
+
+- the exact endpoint session and online target node;
+- `images` configured on VM storage;
+- `iso` configured on image storage only for `provider="proxmox_iso"`; release
+  and source builds use a private `/var/tmp` staging directory and do not claim
+  an image-storage capability;
+- `snippets` configured on snippet storage when the provider requires it; and
+- VMID availability from the authoritative `cluster/nextid?vmid=` probe. The
+  resource enumeration can identify a visible collision but can never turn a
+  denied or malformed authoritative result into a pass.
+
+Proxmox storage configuration does not define `import` as a content type. The
+pipeline passes `content=import` only to the separate `download-url` POST.
+Preflight therefore validates the actual configured `images` capability and
+does not require an `import` entry.
+
+### Build response privacy
+
+The executable sequence is intentionally three-step:
+
+1. `POST /cloud/templates/images` with `execute=false` returns the exact
+   `recipe_digest` (and no sensitive material unless the separately protected
+   preview was requested).
+2. `POST /cloud/templates/images/preflight` with that digest returns a signed
+   plan only when every read-only capability passes.
+3. `POST /cloud/templates/images` with `execute=true` and
+   `preflight_plan_token=<plan_token>` revalidates the signature, expiry,
+   endpoint configuration, and recipe; reruns the exact preflight; then
+   atomically acquires the one-time `endpoint_id:vmid` lease.
+
+Reusing a plan returns `preflight_plan_already_consumed`; an active target lease
+returns `build_target_leased`; drift and expiry return fixed
+`preflight_plan_mismatch` and `preflight_plan_expired` details.
+
+`POST /cloud/templates/images` returns build-response contract v2. Default and
+executed responses omit image/source URLs, generated cloud-init, first-boot and
+build scripts, command lists, stdout, and stderr. Execution exposes only fixed
+typed diagnostics, the exit code, and bounded output byte/line counts.
+Unexpected execution or direct Proxmox SDK failures are normalized without
+returning or logging raw exception text. Direct SDK failures return a fixed
+`502` detail with code `proxmox_build_failed`; cleanup failures cannot replace
+an otherwise valid response.
+
+Raw rendered material can be returned only for a non-executable preview by
+sending both `execute=false` and `include_sensitive_preview=true`. It appears
+under `sensitive_preview`, is explicitly marked sensitive, and may contain
+credentials, signed URLs, keys, or cloud-init secrets. Do not log or persist
+it. Validation rejects sensitive preview when `execute=true` or when `execute`
+is omitted, so normal execution can never return it.
+
+Executable pipeline requests derive SSH authority exclusively from the selected
+persisted `ProxmoxEndpoint`. The endpoint must be enabled, writable, use
+`access_methods="api_ssh"`, and have a complete binding:
+`ssh_target_node`, `ssh_host`, `ssh_username`, `ssh_port`,
+`ssh_identity_file`, and `ssh_known_host_fingerprint`. The identity path must
+resolve under `PROXBOX_SSH_KEY_DIR`. Legacy request fields `ssh_host`,
+`ssh_user`, `ssh_port`, `ssh_identity_file`, and
+`ssh_known_host_fingerprint` are assertions only: omission uses the persisted
+binding and any supplied mismatch returns `409` before a subprocess starts.
+The route scans the server key, verifies the persisted SHA-256 fingerprint, and
+passes the exact verified key to OpenSSH with strict host checking.
+The SSH process uses absolute client binaries, `-F none`, and explicit
+`ProxyCommand=none`, `ProxyJump=none`, and `CanonicalizeHostname=no` options,
+so ambient user/system configuration cannot redirect the connection.
+
+Execution runs inside a unique server-generated `systemd-run` unit through
+`asyncio` subprocess APIs. Stdout and stderr are continuously drained into
+byte/line counters and never accumulated, returned, logged, or persisted. A
+timeout, request cancellation, or operator `POST
+/cloud/templates/images/operations/{operation_id}/cancel` stops the fixed unit.
+`GET /cloud/templates/images/operations/{operation_id}` returns the secret-free
+durable journal state. The service marks an operation `completed` only after a
+final Proxmox API read verifies the expected template or ISO-backed installer
+VM. Otherwise it preserves all possible partial artifacts and records
+`recovery_required`; it never performs cleanup deletion.
+
+### Consumer rollout hold
+
+The fixture at `tests/fixtures/netbox_packer_preflight_v1.json` is owned by
+proxbox-api. It exercises a consumer-shaped parser maintained in this producer
+repository, so it records compatibility intent only; it is not evidence that
+netbox-packer has implemented or validated the contract. Until a real
+consumer-owned contract and downstream test land, operators must leave
+`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` unset or false in staging and
+production. Planning and GET-only preflight remain available while execution
+fails closed.
+
+Rendered user-data, first-boot, metadata, and authorized-key files are
+base64-encoded into fixed write commands, so caller content cannot terminate a
+shell delimiter. Snippet and ISO paths are resolved from their exact storage
+volume IDs with `pvesm path`; custom `snippets_dir` mappings are rejected.
+`source_build_command` accepts only the typed `pfsense_memstickserial` and
+`opnsense_dvd` assertions. The catalog selects fixed root-owned wrappers under
+`/usr/local/libexec/proxbox`, canonical source roots under
+`/opt/proxbox/image-sources`, and fixed root-contained artifacts. Caller
+`source_tree_path` and `source_artifact_path` values are compatibility
+assertions and any mismatch is rejected. The script verifies canonical paths,
+root ownership, and non-group/world-writable modes before use. Release, source,
+and ISO providers create randomized mode-0700 staging with `mktemp`; no
+predictable caller-derived staging path is used.
+
+### Durable operation state
+
+`CloudImageBuildOperation` stores plan/recipe/config digests, endpoint, node,
+VMID, provider, lease and timestamps, bounded counters, cancellation result,
+verification state, and a fixed error code. It deliberately does not store the
+rendered script, URL, cloud-init, SSH material, stdout, or stderr. An expired
+lease is retained as `recovery_required` before a new owner can acquire the
+target, preserving operator history and possible partial state.
+
+`vm_storage` is the single VM-disk storage authority. The legacy input name
+`storage` is accepted during the `0.0.21.x` window as an alias, is normalized to
+`vm_storage`, and is rejected when both names disagree. It is not emitted in
+OpenAPI or responses. Pipeline requests that omit both names retain the legacy
+`local-lvm` destination; an explicitly supplied value is never replaced.
+
+Application-level request-validation responses are deliberately generic and
+contain no Pydantic `input`, validation context, request fields, signed URLs,
+keys, or user-data. Callers receive a stable `422` `request_validation_error`
+shape and should validate detailed input locally against OpenAPI.
+
+Compatibility window: preflight v1 and secret-safe build response v2 remain
+supported through `0.0.21.x`. A breaking replacement cannot be introduced
+before `0.0.22.0` and must be documented first. Legacy raw build/output fields
+were removed immediately from default responses as a security correction and
+are not covered by this compatibility window.
+
 ## Cloud Firecracker (`/cloud/firecracker`)
 
 These endpoints are called by `nms-backend` after it resolves the selected

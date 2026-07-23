@@ -187,7 +187,8 @@ def test_firecracker_route_rejects_ssrf_host_agent_base_url(auth_test_client, mo
     response = auth_test_client.post("/cloud/firecracker/provision", json=payload)
 
     assert response.status_code == 422
-    assert "host_agent_base_url" in response.text
+    assert "request_validation_error" in response.text
+    assert "host_agent_base_url" not in response.text
 
 
 @pytest.mark.asyncio

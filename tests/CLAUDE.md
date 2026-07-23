@@ -38,6 +38,9 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
 | `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
+| `test_cloud_image_pipeline.py` | Cloud Image Pipeline catalog/rendering, delimiter-proof encoded writes, typed source recipes, legacy storage, secret-safe ASGI validation, exact isolated SSH argv/host-key pinning, HTTP auth, endpoint-write, and execution/direct-SDK boundaries |
+| `test_packer_preflight.py` | Provider-derived preflight storage/snippet behavior, clean-process import boundary, exact-session/read-only behavior, fail-closed payload/storage-state findings, real session/log canaries, preview rules, OpenAPI contracts, and producer fixture validation |
+| `test_packer_execution_binding.py` | Signed plan tamper/drift/expiry rejection, one-time operation leases, final artifact verification, recipe stability, minimal session authority, and a producer-owned consumer-shaped fixture that does not claim downstream validation |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
@@ -139,6 +142,26 @@ on protected branches. The long-term target is 85%.
 - Reconciliation fixtures must stay deterministic. Include `vm_type` in VM
   identity expectations so QEMU and LXC resources with the same VMID do not
   collide.
+- Packer preflight fakes must reject every non-GET method. Use realistic
+  Proxmox configured content (`images`, `rootdir`, `iso`, `vztmpl`, `backup`,
+  `snippets`); never model `import` as configured storage content because it is
+  the separate download-url POST request value. Treat malformed collection
+  shapes and absent active/enabled storage state as `unsupported`, never as an
+  empty or healthy result. Exercise `cluster/nextid?vmid=` as the authoritative
+  allocation check, including RBAC-hidden collisions, denial, and malformed
+  payloads; resource enumeration is supplemental only. Put credential-bearing
+  canaries in subprocess, session, direct-SDK, and cleanup failures and assert
+  absence from both serialized responses and the explicitly attached
+  non-propagating app logger.
+- Route security tests for preflight must include the deployed FastAPI/Starlette
+  middleware stack through `test_client` or `auth_test_client`; helper-level
+  invocation alone does not prove authentication or exception-middleware
+  behavior. Cover auth failure, success, disabled endpoint, malformed upstream
+  payloads, and exact-once cleanup.
+- Session lifecycle tests must cover post-version failures in cluster status
+  and fingerprint discovery, cancellation, cleanup failure, and repeat-close
+  behavior while proving the original exception survives and each acquired SDK
+  closes exactly once.
 
 ## TestClient Fixtures (conftest.py)
 

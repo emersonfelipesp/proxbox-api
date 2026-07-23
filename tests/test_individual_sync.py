@@ -236,7 +236,15 @@ async def test_individual_ip_route_requires_cluster_name(test_api_key):
         )
 
     assert response.status_code == 422
-    assert any(error["loc"][-1] == "cluster_name" for error in response.json()["detail"])
+    assert response.json() == {
+        "detail": [
+            {
+                "type": "request_validation_error",
+                "loc": ["body"],
+                "msg": "Request validation failed.",
+            }
+        ]
+    }
 
 
 @pytest.mark.asyncio

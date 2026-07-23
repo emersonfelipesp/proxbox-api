@@ -19,6 +19,7 @@ class ProxboxException(Exception):
         python_exception: str | None = None,
         *,
         http_status_code: int | None = None,
+        redact_log_details: bool = False,
     ):
         super().__init__(message)
         self.message = message
@@ -33,10 +34,16 @@ class ProxboxException(Exception):
         log_message = f"ProxboxException: {self.message}"
 
         if self.detail:
-            log_message += f"\n > Detail: {self.detail}"
+            log_message += (
+                "\n > Detail: [REDACTED]" if redact_log_details else f"\n > Detail: {self.detail}"
+            )
 
         if self.python_exception:
-            log_message += f"\n > Python Exception: {self.python_exception}"
+            log_message += (
+                "\n > Python Exception: [REDACTED]"
+                if redact_log_details
+                else f"\n > Python Exception: {self.python_exception}"
+            )
 
         logger.debug(log_message)
 

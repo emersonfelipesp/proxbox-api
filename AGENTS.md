@@ -338,14 +338,78 @@ The Cloud Image Build Pipeline's SSH execution path sets `qm ... --agent
 enabled=1` before converting the VM to a template, so clones inherit the
 Proxmox-side QEMU guest agent setting.
 
+Cloud Image Pipeline hardening invariants: derive snippet/storage readiness
+from the resolved provider; stage every provider in randomized private
+`/var/tmp` directories; resolve ISO/snippet paths from exact `pvesm path`
+volume IDs; encode generated file content instead of interpolating it into
+shell delimiters; use only server-owned, canonical-root, root-verified source
+recipes and treat caller paths as assertions; preserve the
+legacy `local-lvm` destination when storage is omitted; reject explicit-null
+endpoint `ssh_port`; and invoke absolute SSH binaries with ambient config and
+proxies disabled. Generic request-validation 422 responses must never reflect
+Pydantic input or cloud-image secrets. SSH normalization belongs in the
+route-neutral `schemas/cloud_image_security.py` boundary.
+
 Execution rules:
 
 - `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` is mandatory for remote execution.
+- The checked-in netbox-packer-shaped fixture is producer-owned compatibility
+  intent, not downstream validation. Keep the execution flag unset/false in
+  staging and production until netbox-packer owns and validates its real
+  consumer contract.
 - `endpoint_id` is required when `execute=true`; requests without it fail closed
   with 422 before a script is rendered or SSH is attempted.
 - The route runs `_gate()` first so `ProxmoxEndpoint.allow_writes=True` is
   required, then `gate_ssh_access()` so `access_methods="api_ssh"` is required
-  before the pipeline can start `ssh ... bash -s`.
+  before resolving execution authority. The endpoint must also be enabled and
+  carry a complete persisted binding (`ssh_target_node`, `ssh_host`,
+  `ssh_username`, `ssh_port`, `ssh_identity_file`,
+  `ssh_known_host_fingerprint`). Derive execution exclusively from that row;
+  caller SSH fields are compatibility assertions and any mismatch must fail.
+  Verify the persisted host-key fingerprint and pass the exact scanned key to
+  OpenSSH with strict host checking before the isolated systemd unit starts.
+- Require the signed, five-minute `preflight_plan_token` produced for the exact
+  server-rendered `recipe_digest`. Revalidate endpoint configuration, target,
+  storage, VMID, and recipe; rerun preflight; consume the plan once; and acquire
+  the durable unique `endpoint_id:vmid` lease before SSH.
+- Execute asynchronously in a unique server-generated `systemd-run` unit,
+  continuously draining stdout/stderr into counters without retaining output.
+  Support timeout, request, and operator cancellation. A zero exit code is not
+  success until the final Proxmox API artifact check passes; preserve unknown
+  or partial state as `recovery_required` and never auto-delete it.
+
+Read-only preflight and response privacy rules:
+
+- `POST /cloud/templates/images/preflight` v1 resolves the exact enabled
+  persisted endpoint to exactly one database-backed session; never select the
+  first session or use a write gate as the resolver.
+- Preflight uses GET-only node/storage/VMID checks and must work when
+  `allow_writes=False`. Malformed collections and missing `enabled`/`active`
+  storage state fail closed as `unsupported`. Use the normalized target:
+  image storage requires `iso` only for `proxmox_iso`; release/source providers
+  use private staging. VM storage requires `images`, and snippet storage is
+  checked only when the provider-derived plan needs it.
+  `cluster/nextid?vmid=` is authoritative; resource enumeration is supplemental
+  and cannot turn a denied/malformed probe into success. `content=import` is the
+  separate download-url POST value, not a configured storage capability.
+- Preflight session creation uses the minimal authenticated SDK mode and must
+  not trigger generic cluster/join/fingerprint discovery. A v1 readiness caller
+  may omit `recipe_digest`; only a digest-bound request can receive an
+  executable signed plan, and plan issuance itself remains database-read-only.
+- Findings contain only `code`, `severity`, `target`, and `message`. Session
+  creation/upstream failures must be fixed diagnostics without credentials or
+  raw exceptions in responses or logs.
+- Build response v2 omits URLs, cloud-init, scripts, commands, stdout, and
+  stderr by default and during execution. Sensitive preview requires both
+  `execute=false` and `include_sensitive_preview=true` and must never be logged
+  or persisted. Unexpected execution/direct-SDK/cleanup exception text must be
+  normalized into fixed diagnostics and type-only application logs. Tests must
+  cover cleanup failures and cancellation so this remains evidence, not an
+  assumption.
+- Preflight v1 and build response v2 remain supported through `0.0.21.x`; a
+  breaking replacement is no earlier than `0.0.22.0` and must be documented.
+  During that window, accept `storage` only as a compatibility alias for the
+  canonical `vm_storage`; reject conflicts and do not emit `storage` in OpenAPI.
 
 ## Azure VHD Import Pipeline
 
