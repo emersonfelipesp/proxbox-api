@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
+from proxbox_api.exception import ProxboxException
+from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines, sync_vm
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
@@ -32,6 +33,24 @@ def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
             "behavior_flags",
             SyncBehaviorFlags(custom_fields_enabled=True),
         )
+
+    async def _legacy_vm_snapshot_bridge(
+        netbox_session,
+        path,
+        *,
+        base_query=None,
+        page_size=200,
+        max_offset=None,
+    ):
+        del max_offset
+        query = dict(base_query or {})
+        query["limit"] = page_size
+        query.setdefault("offset", 0)
+        return await sync_vm.rest_list_async(netbox_session, path, query=query)
+
+    # Production now uses the shared exhaustive paginator. These focused tests
+    # provide a one-page path-aware fake, so bridge the new dependency to it.
+    monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _legacy_vm_snapshot_bridge)
 
 
 def _vm_sync_inputs(vm_config: dict):
@@ -133,6 +152,9 @@ def _install_common_sync_patches(  # noqa: C901
     async def _fake_resolve_netbox_vm(*args, **kwargs):
         return {"id": 55, "name": "vm01"}
 
+    async def _fake_task_history(**_kwargs):
+        return {"count": 1, "created": 0, "skipped": 0}
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
         _fake_get_vm_config,
@@ -193,6 +215,10 @@ def _install_common_sync_patches(  # noqa: C901
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
         _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
+        _fake_task_history,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.network.rest_reconcile_async",
@@ -283,7 +309,7 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
         _fake_rest_create,
     )
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
         _fake_task_history,
     )
     monkeypatch.setattr(
@@ -535,10 +561,10 @@ def test_vm_sync_populates_task_history(monkeypatch):
 
     async def _fake_task_history(**kwargs):
         task_history_calls.append(kwargs)
-        return 2
+        return {"count": 1, "created": 2, "skipped": 0}
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
         _fake_task_history,
     )
 
@@ -554,8 +580,196 @@ def test_vm_sync_populates_task_history(monkeypatch):
     )
 
     assert len(result) == 1
-    assert task_history_calls and task_history_calls[0]["virtual_machine_id"] == 55
-    assert task_history_calls[0]["vm_type"] == "qemu"
+    assert len(task_history_calls) == 1
+    assert task_history_calls[0]["netbox_vm_ids"] == [55]
+
+
+def test_rest_selected_vm_sync_keeps_reused_vmid_on_requested_owner(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 0,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    data["pxs"][0].db_endpoint_id = 11
+    data["pxs"].append(
+        SimpleNamespace(
+            name="other-lab",
+            cluster_name="other-lab",
+            db_endpoint_id=22,
+            session=object(),
+        )
+    )
+    data["cluster_status"].append(
+        SimpleNamespace(
+            name="other-lab",
+            mode="cluster",
+            node_list=[SimpleNamespace(name="pve02")],
+        )
+    )
+    data["cluster_resources"].append(
+        {
+            "other-lab": [
+                {
+                    **data["cluster_resources"][0]["lab"][0],
+                    "node": "pve02",
+                }
+            ]
+        }
+    )
+    _install_common_sync_patches(
+        monkeypatch,
+        vm_config=data["vm_config"],
+        ip_payloads=[],
+    )
+    fetched_nodes: list[str] = []
+    task_history_calls: list[dict[str, object]] = []
+
+    async def _selected_vm_list(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        assert query == {"id": ["55"]}
+        return [
+            {
+                "id": 55,
+                "name": "vm01",
+                "cluster": {"id": 1, "name": "LAB"},
+                "custom_fields": {
+                    "proxmox_endpoint_id": 11,
+                    "proxmox_vm_id": 101,
+                    "proxmox_vm_type": "qemu",
+                },
+            }
+        ]
+
+    async def _fake_get_vm_config(**kwargs):
+        fetched_nodes.append(str(kwargs["node"]))
+        return data["vm_config"]
+
+    async def _fake_task_history(**kwargs):
+        task_history_calls.append(kwargs)
+        return {"count": 1, "created": 0, "skipped": 0}
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vm_list)
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "sync_all_virtual_machine_task_histories", _fake_task_history)
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            netbox_vm_ids="55",
+        )
+    )
+
+    assert len(result) == 1
+    assert fetched_nodes == ["pve01"]
+    assert len(task_history_calls) == 1
+    assert task_history_calls[0]["netbox_vm_ids"] == [55]
+
+
+def test_vm_sync_propagates_owned_task_history_fatal_error(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 0,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=[])
+
+    async def _fatal_task_history(**_kwargs):
+        raise ProxboxException(
+            message="Unable to verify VM identity for task-history sync",
+            http_status_code=502,
+        )
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
+        _fatal_task_history,
+    )
+
+    with pytest.raises(ProxboxException, match="Unable to verify VM identity") as exc_info:
+        asyncio.run(
+            create_virtual_machines(
+                netbox_session=data["netbox_session"],
+                pxs=data["pxs"],
+                cluster_status=data["cluster_status"],
+                cluster_resources=data["cluster_resources"],
+                custom_fields=data["custom_fields"],
+                tag=data["tag"],
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+
+
+def test_rest_vm_sync_with_network_raises_502_for_degraded_task_history(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 0,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=[])
+
+    async def _degraded_task_history(**_kwargs):
+        return {"count": 1, "created": 2, "skipped": 0, "degraded": True, "errors": 1}
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
+        _degraded_task_history,
+    )
+
+    with pytest.raises(ProxboxException, match="degraded coverage") as exc_info:
+        asyncio.run(
+            create_virtual_machines(
+                netbox_session=data["netbox_session"],
+                pxs=data["pxs"],
+                cluster_status=data["cluster_status"],
+                cluster_resources=data["cluster_resources"],
+                custom_fields=data["custom_fields"],
+                tag=data["tag"],
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert exc_info.value.detail == {"errors": 1, "reconciled": 2, "skipped": 0}
+
+
+def test_vm_sync_can_disable_task_history_for_dedicated_followup_stage(monkeypatch):
+    data = _vm_sync_inputs(
+        {
+            "agent": 0,
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+        }
+    )
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=[])
+
+    async def _unexpected_task_history(**_kwargs):
+        raise AssertionError("disabled task history must not run")
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
+        _unexpected_task_history,
+        raising=False,
+    )
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            sync_task_history=False,
+        )
+    )
+
+    assert len(result) == 1
 
 
 def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):

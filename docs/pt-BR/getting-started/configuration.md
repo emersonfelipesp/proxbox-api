@@ -71,6 +71,18 @@ Regras de autenticacao para create/update:
 - `token_name` e `token_value` devem ser enviados juntos.
 - Os nomes dos endpoints devem ser unicos.
 
+Os campos opcionais do endpoint no banco `timeout`, `max_retries` e
+`retry_backoff` herdam os valores efetivos de `ProxboxPluginSettings` quando
+estao nulos. Valores explicitos no endpoint prevalecem, inclusive zero retries
+ou zero retry backoff. Uma carga do banco sem endpoints, ou com valores
+concretos em todos eles, nao faz requisicao de configuracoes ao plugin. Quando
+a heranca e necessaria, uma unica busca compartilhada usa um limite total de
+tempo e retorna aos valores padrao documentados sem armazenar esse fallback
+temporario no cache. Credenciais criptografadas no banco usam a mesma busca
+limitada para obter a chave do plugin; se nenhuma chave de ambiente, plugin ou
+arquivo local puder descriptografa-las, a carga falha com `503` e nunca envia o
+ciphertext como credencial do Proxmox.
+
 ### Campo `allow_writes`
 
 `ProxmoxEndpoint.allow_writes` (boolean, padrao `false`) atua como um gate de confianca para os [Verbos Operacionais de VM](../api/http-reference.md#verbos-operacionais-de-vm). Quando `false`, qualquer `POST` para `/proxmox/{qemu|lxc}/{vmid}/{start,stop,snapshot,migrate}` retorna `403` com `reason="writes_disabled_for_endpoint"`, mesmo que a chave de API e o `X-Proxbox-Actor` sejam validos. O campo so pode ser alterado por administradores e e auditado via journal entry. Adicionado na migracao `0037_proxmoxendpoint_allow_writes`.
@@ -170,7 +182,7 @@ Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximo de fetches concorrentes de configuracao de VM Proxmox durante o sync de VMs e discos. |
 | `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Timeout por chamada (segundos, intervalo 1-600) para a requisicao `network-get-interfaces` do guest-agent QEMU. Guests com muitas interfaces (VRRP/alias) podem demorar a enumerar; aumente este valor se as buscas de interface via guest-agent expirarem. Mapeia para o campo `ProxboxPluginSettings.guest_agent_timeout`. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Override opcional para `ProxboxPluginSettings.reconciliation_engine`. Valores validos: `python`, `compare` e `rust`. |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (sync de VM, discos) / `4` (task-history, snapshots) | Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (sync de VM, discos) / `4` (snapshots) | Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync. A reconciliacao de task history usa requisicoes bulk limitadas em vez de dispatch de escrita por VM. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (maioria dos fluxos) / `4` (task-history) | Maximo de operacoes concorrentes de leitura no Proxmox. O padrao varia por servico de sync. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Override legado de concorrencia usado por alguns entrypoints de sync. |
 | `PROXBOX_RATE_LIMIT` | `60` | Maximo de requisicoes por minuto por endereco IP. |

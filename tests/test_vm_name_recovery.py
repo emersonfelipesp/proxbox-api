@@ -3,8 +3,8 @@
 These cover the fix for VMs that fail to synchronize when they have many
 interfaces, and for NetBox VM rows that end up with a blank ``name``:
 
-1. A blank-name NetBox VM is still matchable by its ``proxmox_vm_id`` custom
-   field instead of being rejected with HTTP 422.
+1. A blank-name NetBox VM is still matchable by its complete stored Proxmox
+   ownership identity instead of being rejected because its name is blank.
 2. Only a VM with neither a name nor a ``proxmox_vm_id`` is rejected.
 3. A blank Proxmox VM name is normalized to a deterministic ``vm-<vmid>`` so a
    nameless NetBox record is never created in the first place.
@@ -21,13 +21,32 @@ import pytest
 from fastapi import HTTPException
 
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmResourceInput
-from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
+from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines, sync_vm
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_virtual_machine_by_netbox_id,
 )
 from proxbox_api.services.sync import sync_state_reader
 
 _TAG = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
+
+
+@pytest.fixture(autouse=True)
+def _bridge_vm_snapshot_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _legacy_vm_snapshot_bridge(
+        netbox_session,
+        path,
+        *,
+        base_query=None,
+        page_size=200,
+        max_offset=None,
+    ):
+        del max_offset
+        query = dict(base_query or {})
+        query["limit"] = page_size
+        query.setdefault("offset", 0)
+        return await sync_vm.rest_list_async(netbox_session, path, query=query)
+
+    monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _legacy_vm_snapshot_bridge)
 
 
 def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
@@ -49,7 +68,11 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
             "id": 551,
             "name": "",
             "cluster": {"id": 10, "name": "cluster-a"},
-            "custom_fields": {"proxmox_vm_id": 9551},
+            "custom_fields": {
+                "proxmox_endpoint_id": 11,
+                "proxmox_vm_id": 9551,
+                "proxmox_vm_type": "qemu",
+            },
         }
     )
 
@@ -71,8 +94,8 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
         create_virtual_machine_by_netbox_id(
             netbox_vm_id=551,
             netbox_session=fake_nb,
-            pxs=[],
-            cluster_status=[],
+            pxs=[SimpleNamespace(db_endpoint_id=11)],
+            cluster_status=[SimpleNamespace(name="cluster-a")],
             cluster_resources=cluster_resources,
             custom_fields=[],
             tag=_TAG,
@@ -197,7 +220,7 @@ def _full_vm_sync_scaffold(monkeypatch, interface_impl):
     )
     monkeypatch.setattr(f"{base}._create_vm_interface_parallel", interface_impl)
     monkeypatch.setattr(f"{base}._create_vm_disk_parallel", _fake_create_vm_disk_parallel)
-    monkeypatch.setattr(f"{base}.sync_virtual_machine_task_history", _fake_task_history)
+    monkeypatch.setattr(f"{base}.sync_all_virtual_machine_task_histories", _fake_task_history)
     monkeypatch.setattr("proxbox_api.services.sync.vm_network.set_primary_ip", _fake_set_primary_ip)
 
     return asyncio.run(

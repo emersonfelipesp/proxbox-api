@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 from proxbox_api import runtime_settings, settings_client
 
 
@@ -264,6 +267,39 @@ def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypa
         assert context.check_hostname is False
 
 
+def test_fetch_settings_fallback_paths_share_one_total_timeout_budget(monkeypatch):
+    class _Config:
+        base_url = "https://netbox.local"
+        token_secret = "test-token"
+        token_version = "v1"
+        token_key = None
+        ssl_verify = True
+
+    class _Client:
+        config = _Config()
+
+    class _Session:
+        client = _Client()
+
+    monotonic_values = iter((100.0, 100.0, 100.3))
+    request_timeouts: list[float] = []
+
+    def _request(**kwargs):
+        request_timeouts.append(kwargs["request_timeout_seconds"])
+        return None, 404
+
+    monkeypatch.setattr(settings_client.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(settings_client, "_request_settings_json", _request)
+
+    settings = settings_client.fetch_settings_from_netbox(
+        _Session(),
+        request_timeout_seconds=0.5,
+    )
+
+    assert settings is None
+    assert [round(timeout, 3) for timeout in request_timeouts] == [0.5, 0.2]
+
+
 def test_fetch_settings_from_netbox_disables_tls_verification_when_configured(monkeypatch):
     import json
     import ssl
@@ -419,3 +455,164 @@ def test_get_settings_falls_back_when_raw_session_unavailable(monkeypatch):
     settings_client.invalidate_settings_cache()
     result = settings_client.get_settings(netbox_session=None, use_cache=False)
     assert result == {"fallback": True}
+
+
+def test_bounded_settings_fallback_does_not_poison_shared_cache(monkeypatch):
+    sentinel = object()
+    fetch_calls = 0
+
+    def _fetch(_session, **_kwargs):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        if fetch_calls == 1:
+            return None
+        return {
+            "proxmox_timeout": 29,
+            "proxmox_max_retries": 3,
+            "proxmox_retry_backoff": 1.25,
+        }
+
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", _fetch)
+    settings_client.invalidate_settings_cache()
+
+    fallback = settings_client.get_settings(
+        netbox_session=sentinel,
+        use_cache=False,
+        request_timeout_seconds=0.5,
+        cache_fallback=False,
+    )
+    recovered = settings_client.get_settings(
+        netbox_session=sentinel,
+        use_cache=True,
+        request_timeout_seconds=0.5,
+        cache_fallback=False,
+    )
+    cached = settings_client.get_settings(netbox_session=sentinel, use_cache=True)
+
+    assert fallback["proxmox_timeout"] == 5
+    assert recovered["proxmox_timeout"] == 29
+    assert cached["proxmox_timeout"] == 29
+    assert fetch_calls == 2
+
+
+def test_bounded_settings_wait_does_not_inherit_unbounded_fetch(monkeypatch):
+    sentinel = object()
+    fetch_started = threading.Event()
+    release_fetch = threading.Event()
+    owner_result: list[dict[str, object]] = []
+    fetch_calls = 0
+
+    def _fetch(_session, **_kwargs):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        fetch_started.set()
+        if not release_fetch.wait(timeout=2):
+            raise TimeoutError("test did not release settings fetch")
+        return {
+            "proxmox_timeout": 41,
+            "proxmox_max_retries": 2,
+            "proxmox_retry_backoff": 0.5,
+        }
+
+    def _load_owner() -> None:
+        owner_result.append(
+            dict(settings_client.get_settings(netbox_session=sentinel, use_cache=True))
+        )
+
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", _fetch)
+    settings_client.invalidate_settings_cache()
+    owner = threading.Thread(target=_load_owner)
+    owner.start()
+    assert fetch_started.wait(timeout=1)
+    started_at = time.perf_counter()
+    fallback = settings_client.get_settings(
+        netbox_session=sentinel,
+        use_cache=True,
+        request_timeout_seconds=0.05,
+        cache_fallback=False,
+    )
+    elapsed = time.perf_counter() - started_at
+    release_fetch.set()
+    owner.join(timeout=2)
+
+    assert not owner.is_alive()
+    assert elapsed < 0.25
+    assert fallback["proxmox_timeout"] == 5
+    assert owner_result[0]["proxmox_timeout"] == 41
+    assert fetch_calls == 1
+
+
+def test_concurrent_cross_thread_settings_loads_share_one_result(monkeypatch):
+    sentinel = object()
+    fetch_started = threading.Event()
+    release_fetch = threading.Event()
+    second_started = threading.Event()
+    second_waiting = threading.Event()
+    fetch_calls = 0
+    results: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+    result_lock = threading.Lock()
+
+    def _fetch(_session):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        fetch_started.set()
+        if not release_fetch.wait(timeout=2):
+            raise TimeoutError("test did not release settings fetch")
+        return {
+            "proxmox_timeout": 37,
+            "proxmox_max_retries": 4,
+            "proxmox_retry_backoff": 0.75,
+        }
+
+    def _load(*, mark_second: bool = False) -> None:
+        if mark_second:
+            second_started.set()
+        try:
+            result = settings_client.get_settings(
+                netbox_session=sentinel,
+                use_cache=True,
+            )
+            with result_lock:
+                results.append(dict(result))
+        except BaseException as error:  # pragma: no cover - assertion aid
+            with result_lock:
+                errors.append(error)
+
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", _fetch)
+    original_condition = settings_client._SETTINGS_CONDITION
+
+    class _RecordingCondition:
+        def __enter__(self):
+            return original_condition.__enter__()
+
+        def __exit__(self, *args):
+            return original_condition.__exit__(*args)
+
+        def wait(self, timeout=None):
+            second_waiting.set()
+            return original_condition.wait(timeout=timeout)
+
+        def notify_all(self):
+            return original_condition.notify_all()
+
+    monkeypatch.setattr(settings_client, "_SETTINGS_CONDITION", _RecordingCondition())
+    settings_client.invalidate_settings_cache()
+    first = threading.Thread(target=_load)
+    second = threading.Thread(target=_load, kwargs={"mark_second": True})
+    first.start()
+    assert fetch_started.wait(timeout=1)
+    second.start()
+    assert second_started.wait(timeout=1)
+    assert second_waiting.wait(timeout=1)
+    release_fetch.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert fetch_calls == 1
+    assert len(results) == 2
+    assert results[0] == results[1]
+    assert results[0]["proxmox_timeout"] == 37

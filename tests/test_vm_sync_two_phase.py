@@ -15,6 +15,25 @@ from proxbox_api.utils.streaming import WebSocketSSEBridge
 from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
 
+@pytest.fixture(autouse=True)
+def _bridge_vm_snapshot_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _legacy_vm_snapshot_bridge(
+        netbox_session,
+        path,
+        *,
+        base_query=None,
+        page_size=200,
+        max_offset=None,
+    ):
+        del max_offset
+        query = dict(base_query or {})
+        query["limit"] = page_size
+        query.setdefault("offset", 0)
+        return await sync_vm.rest_list_async(netbox_session, path, query=query)
+
+    monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _legacy_vm_snapshot_bridge)
+
+
 class _CapturingBridge(WebSocketSSEBridge):
     def __init__(self) -> None:
         super().__init__()
@@ -129,7 +148,7 @@ def _install_full_update_stubs(
         return None
 
     async def _fake_task_history(*_args, **_kwargs):
-        return 0
+        return {"count": 0, "created": 0, "skipped": 0}
 
     monkeypatch.setattr(sync_vm, "detect_netbox_version", _fake_detect_netbox_version)
     monkeypatch.setattr(sync_vm, "rest_list_async", _fake_rest_list)
@@ -164,7 +183,12 @@ def _install_full_update_stubs(
     monkeypatch.setattr(sync_vm, "build_netbox_virtual_machine_payload", _fake_build_payload)
     monkeypatch.setattr(sync_vm, "rest_create_async", _fake_rest_create)
     monkeypatch.setattr(sync_vm, "stamp_vm_last_run_id", _fake_stamp)
-    monkeypatch.setattr(sync_vm, "sync_virtual_machine_task_history", _fake_task_history)
+    monkeypatch.setattr(
+        sync_vm,
+        "sync_all_virtual_machine_task_histories",
+        _fake_task_history,
+        raising=False,
+    )
 
     return fetch_calls
 
@@ -396,6 +420,155 @@ def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
     assert sorted(fetch_calls) == [101, 102]
     assert bridge.phase_summaries[-1]["created"] == 1
     assert bridge.phase_summaries[-1]["failed"] == 1
+
+
+def test_batch_vm_sync_runs_one_scoped_task_history_aggregate(monkeypatch):
+    _install_full_update_stubs(monkeypatch)
+    task_history_calls: list[dict[str, object]] = []
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _fake_task_history(**kwargs):
+        task_history_calls.append(kwargs)
+        return {"count": 2, "created": 0, "skipped": 0}
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(
+        sync_vm,
+        "sync_all_virtual_machine_task_histories",
+        _fake_task_history,
+        raising=False,
+    )
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[{"cluster-a": [_resource(101), _resource(102)]}],
+            custom_fields=[],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    assert [record["id"] for record in result] == [101, 102]
+    assert len(task_history_calls) == 1
+    assert task_history_calls[0]["netbox_vm_ids"] == [101, 102]
+
+
+def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(monkeypatch):
+    processed_nodes: list[str] = []
+
+    async def _inline_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    def _capture_owner(kwargs):
+        processed_nodes.append(str(kwargs["proxmox_resource"]["node"]))
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
+    _install_full_update_stubs(monkeypatch, payload_side_effect=_capture_owner)
+    task_history_calls: list[dict[str, object]] = []
+
+    async def _selected_vm_list(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        assert query == {"id": ["501"]}
+        return [
+            {
+                "id": 501,
+                "name": "shared-name",
+                "cluster": {"id": 41, "name": "cluster-a"},
+                "custom_fields": {
+                    "proxmox_endpoint_id": 11,
+                    "proxmox_vm_id": 101,
+                    "proxmox_vm_type": "qemu",
+                },
+            }
+        ]
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _fake_rest_create(_nb, _path, payload, *, lookup=None):
+        assert lookup == {"cf_proxmox_vm_id": 101, "cf_proxmox_endpoint_id": 11}
+        return {"id": 501, **payload}
+
+    async def _fake_task_history(**kwargs):
+        task_history_calls.append(kwargs)
+        return {"count": 1, "created": 0, "skipped": 0}
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vm_list)
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "rest_create_async", _fake_rest_create)
+    monkeypatch.setattr(sync_vm, "sync_all_virtual_machine_task_histories", _fake_task_history)
+
+    resource_a = {**_resource(101), "name": "shared-name", "node": "pve-a"}
+    resource_b = {**_resource(101), "name": "shared-name", "node": "pve-b"}
+    px_a = SimpleNamespace(
+        name="cluster-a",
+        cluster_name="cluster-a",
+        db_endpoint_id=11,
+    )
+    px_b = SimpleNamespace(
+        name="cluster-b",
+        cluster_name="cluster-b",
+        db_endpoint_id=22,
+    )
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[px_a, px_b],
+            cluster_status=[
+                SimpleNamespace(name="cluster-a", mode="cluster"),
+                SimpleNamespace(name="cluster-b", mode="cluster"),
+            ],
+            cluster_resources=[{"cluster-a": [resource_a]}, {"cluster-b": [resource_b]}],
+            custom_fields=[],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            netbox_vm_ids="501",
+            sync_vm_network=False,
+        )
+    )
+
+    assert [record["id"] for record in result] == [501]
+    assert processed_nodes == ["pve-a"]
+    assert len(task_history_calls) == 1
+    assert task_history_calls[0]["netbox_vm_ids"] == [501]
+
+
+def test_rest_vm_sync_without_network_raises_502_for_degraded_task_history(monkeypatch):
+    _install_full_update_stubs(monkeypatch)
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _degraded_task_history(**_kwargs):
+        return {"count": 1, "created": 3, "skipped": 2, "degraded": True, "errors": 1}
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(
+        sync_vm,
+        "sync_all_virtual_machine_task_histories",
+        _degraded_task_history,
+    )
+
+    with pytest.raises(ProxboxException, match="degraded coverage") as exc_info:
+        asyncio.run(
+            sync_vm.create_virtual_machines(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+                cluster_resources=[{"cluster-a": [_resource(101)]}],
+                custom_fields=[],
+                tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+                sync_vm_network=False,
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert exc_info.value.detail == {"errors": 1, "reconciled": 3, "skipped": 2}
 
 
 def test_full_update_finishes_all_config_fetches_before_processing(monkeypatch):

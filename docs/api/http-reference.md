@@ -477,6 +477,13 @@ Test coverage:
 - `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
+- `GET /virtualization/virtual-machines/task-history/create/stream` - Dedicated
+  task-history SSE stage; accepts comma-separated `netbox_vm_ids`. Omitted means
+  all VMs, while an explicitly empty/invalid value selects none. The optional
+  `fetch_max_concurrency` must be at least 1. Each request resets and re-probes
+  cached optional-sidecar unavailability. Internally, selected IDs are sent to
+  NetBox as repeated values in deduplicated groups of at most 100; any failed
+  group aborts the explicit selection.
 
 ### VM stream overwrite query parameters
 
@@ -485,6 +492,14 @@ Every VM stream endpoint listed above (`/virtualization/virtual-machines/...crea
 - `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
 - `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, `overwrite_ip_tags`
 - `sync_vm_network` - when `false`, skips the VM-network sub-step.
+- `sync_task_history` - defaults to `true`; when `false`, skips the single
+  post-VM task-history aggregate because a dedicated stage owns it. This flag
+  is also declared on both targeted VM create routes and their SSE variants.
+  A degraded owned aggregate retains reconciled rows but returns HTTP 502 from
+  standalone REST; SSE reports the degraded task-history phase summary.
+
+Task-history result field `created` is compatibility-named and counts all
+reconciled rows (created, updated, and unchanged), not only POST operations.
 
 See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaults.
 
@@ -495,6 +510,10 @@ query parameter to override the Proxmox VM-config fetch width for that request.
 
 - `GET /full-update` - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.
 - `GET /full-update/stream` - SSE streaming variant.
+
+Both full-update variants pass `sync_task_history=false` to the VM stage and
+then run the dedicated task-history stage exactly once. Their optional
+`fetch_max_concurrency` query override must be at least 1.
 
 ## Sync State Probe
 

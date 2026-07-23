@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from netbox_sdk.client import ApiResponse
 from proxmox_sdk.sdk.exceptions import ResourceException
 from sqlmodel import Session
 
+from proxbox_api import netbox_rest as netbox_rest_module
 from proxbox_api.app.netbox_session import get_raw_netbox_session
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.dependencies import proxbox_tag
@@ -22,6 +24,7 @@ from proxbox_api.netbox_rest import (
     rest_create_async,
     rest_ensure_async,
     rest_list_async,
+    rest_list_paginated_async,
     rest_patch_async,
     rest_reconcile_async,
 )
@@ -56,6 +59,7 @@ from proxbox_api.services.proxmox_helpers import (
     get_vm_config as get_typed_vm_config,
 )
 from proxbox_api.session import netbox as netbox_session_module
+from proxbox_api.session import proxmox_providers as proxmox_providers_module
 from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox import ProxmoxSession, proxmox_sessions
 
@@ -131,6 +135,553 @@ class RestClientStub:
 class AsyncNetBoxRestFacade:
     def __init__(self, responses):
         self.client = RestClientStub(responses)
+
+
+def test_rest_list_paginated_async_follows_server_capped_pages_without_duplicates():
+    """A requested 200-row page must tolerate NetBox enforcing a 50-row cap."""
+
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        if offset < 0 or offset >= 450 or offset % 50:
+            raise AssertionError(f"unexpected offset {offset}")
+        end = min(offset + 50, 450)
+        next_link = f"https://netbox.local/api/items/?limit=50&offset={end}" if end < 450 else None
+        return 200, {
+            "count": 450,
+            "next": next_link,
+            "results": [{"id": value} for value in range(offset + 1, end + 1)],
+        }
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    records = asyncio.run(rest_list_paginated_async(session, "/api/items/", page_size=200))
+
+    assert [record.id for record in records] == list(range(1, 451))
+    assert [int((call[2] or {}).get("offset", 0)) for call in session.client.calls] == list(
+        range(0, 450, 50)
+    )
+    assert session.client.calls[0][2] == {"limit": 200}
+    assert all(call[2]["limit"] == "50" for call in session.client.calls[1:])
+
+
+def test_rest_list_async_rejects_repeated_next_link_instead_of_partial_results():
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        record_id = 1 if offset == 0 else 2
+        return 200, {
+            "count": 3,
+            "next": "https://netbox.local/api/items/?limit=1&offset=1",
+            "results": [{"id": record_id}],
+        }
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    with pytest.raises(ProxboxException, match="pagination did not advance"):
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+    assert len(session.client.calls) == 2
+    assert all(call[0] == "GET" for call in session.client.calls)
+
+
+def test_rest_list_async_rejects_advancing_links_with_repeated_page_content():
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        return 200, {
+            "count": 150,
+            "next": f"https://netbox.local/api/items/?limit=50&offset={offset + 50}",
+            "results": [{"id": value} for value in range(1, 51)],
+        }
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    with pytest.raises(ProxboxException, match="pagination did not advance"):
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 200}))
+
+    assert len(session.client.calls) == 2
+    assert all(call[0] == "GET" for call in session.client.calls)
+
+
+def test_rest_list_async_rejects_partially_overlapping_pages():
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        if offset == 0:
+            return 200, {
+                "count": 4,
+                "next": "https://netbox.local/api/items/?limit=2&offset=2",
+                "results": [{"id": 1}, {"id": 2}],
+            }
+        return 200, {"count": 4, "next": None, "results": [{"id": 2}, {"id": 3}]}
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    with pytest.raises(ProxboxException, match="Overlapping record content") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 2}))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "body,match",
+    [
+        ({"count": 1, "next": None}, "without a results field"),
+        (
+            {"results": [{"id": 1}], "next": None},
+            "non-negative integer count",
+        ),
+        (
+            {"count": -1, "results": [{"id": 1}], "next": None},
+            "non-negative integer count",
+        ),
+        (
+            {"count": True, "results": [{"id": 1}], "next": None},
+            "non-negative integer count",
+        ),
+        (
+            {"count": "1", "results": [{"id": 1}], "next": None},
+            "non-negative integer count",
+        ),
+        ({"count": 1, "results": [{"id": 1}], "next": ""}, "invalid next link"),
+        ({"count": 1, "results": [{"id": 1}], "next": 123}, "invalid next link"),
+    ],
+)
+def test_rest_list_async_rejects_malformed_paginated_objects(body, match):
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): (200, body)})
+
+    with pytest.raises(ProxboxException, match=match) as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/"))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_async_rejects_empty_page_with_next_link():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 1,
+                    "next": "https://netbox.local/api/items/?limit=50&offset=50",
+                    "results": [],
+                },
+            )
+        }
+    )
+
+    with pytest.raises(ProxboxException, match="empty page with a next link") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/"))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_async_hard_page_bound_raises_before_extra_request(monkeypatch):
+    monkeypatch.setattr(netbox_rest_module, "NETBOX_REST_LIST_HARD_MAX_PAGES", 2)
+
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        return 200, {
+            "count": 3,
+            "next": f"https://netbox.local/api/items/?limit=1&offset={offset + 1}",
+            "results": [{"id": offset + 1}],
+        }
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    with pytest.raises(ProxboxException, match="hard limit of 2 pages") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 2
+
+
+def test_rest_list_async_hard_record_bound_raises_before_next_request(monkeypatch):
+    monkeypatch.setattr(netbox_rest_module, "NETBOX_REST_LIST_HARD_MAX_RECORDS", 2)
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 3,
+                    "next": "https://netbox.local/api/items/?limit=2&offset=2",
+                    "results": [{"id": 1}, {"id": 2}],
+                },
+            )
+        }
+    )
+
+    with pytest.raises(ProxboxException, match="hard record limit") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 2}))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_paginated_async_max_offset_raises_before_extra_request():
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        return 200, {
+            "count": 5,
+            "next": f"https://netbox.local/api/items/?limit=2&offset={offset + 2}",
+            "results": [{"id": offset + 1}, {"id": offset + 2}],
+        }
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    with pytest.raises(ProxboxException, match="next offset 4") as exc_info:
+        asyncio.run(
+            rest_list_paginated_async(
+                session,
+                "/api/items/",
+                page_size=2,
+                max_offset=2,
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 2
+    assert [call[2] for call in session.client.calls] == [
+        {"limit": 2},
+        {"limit": "2", "offset": "2"},
+    ]
+
+
+def test_rest_list_async_preserves_repeated_filters_from_next_link():
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        if offset == 0:
+            return 200, {
+                "count": 2,
+                "next": (
+                    "https://netbox.local/api/items/?id=11&id=22&status=active&limit=1&offset=1"
+                ),
+                "results": [{"id": 11}],
+            }
+        return 200, {"count": 2, "next": None, "results": [{"id": 22}]}
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    records = asyncio.run(
+        rest_list_async(
+            session,
+            "/api/items/",
+            query={"id": ["11", "22"], "status": "active", "limit": 1},
+        )
+    )
+
+    assert [record.id for record in records] == [11, 22]
+    assert session.client.calls[1][2] == {
+        "id": ["11", "22"],
+        "status": "active",
+        "limit": "1",
+        "offset": "1",
+    }
+
+
+def test_rest_list_async_rejects_next_link_for_a_different_resource_before_request():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 2,
+                    "next": "https://netbox.local/api/other/?limit=1&offset=1",
+                    "results": [{"id": 1}],
+                },
+            )
+        }
+    )
+
+    with pytest.raises(ProxboxException, match="changed resource path") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_async_accepts_equivalent_normalized_next_path():
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        if offset == 0:
+            return 200, {
+                "count": 2,
+                "next": "https://netbox.local/api/items?limit=1&offset=1",
+                "results": [{"id": 1}],
+            }
+        return 200, {"count": 2, "next": None, "results": [{"id": 2}]}
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    records = asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+    assert [record.id for record in records] == [1, 2]
+    assert [call[1] for call in session.client.calls] == ["/api/items/", "/api/items/"]
+
+
+@pytest.mark.parametrize(
+    "next_query",
+    [
+        "id=11&status=active&limit=1&offset=1",
+        "id=11&id=22&status=inactive&limit=1&offset=1",
+        "id=11&id=22&id=22&status=active&limit=1&offset=1",
+        "id=11&id=22&status=active&site=dc1&limit=1&offset=1",
+    ],
+)
+def test_rest_list_async_rejects_changed_filter_multimap_before_request(next_query):
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 2,
+                    "next": f"https://netbox.local/api/items/?{next_query}",
+                    "results": [{"id": 11}],
+                },
+            )
+        }
+    )
+
+    with pytest.raises(ProxboxException, match="changed non-pagination query") as exc_info:
+        asyncio.run(
+            rest_list_async(
+                session,
+                "/api/items/",
+                query={"id": ["11", "22"], "status": "active", "limit": 1},
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "next_query",
+    [
+        "limit=1",
+        "limit=1&offset=",
+        "limit=1&offset=-1",
+        "limit=1&offset=not-an-integer",
+        "limit=1&offset=1&offset=1",
+    ],
+)
+def test_rest_list_async_rejects_malformed_next_offset_before_request(next_query):
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 2,
+                    "next": f"https://netbox.local/api/items/?{next_query}",
+                    "results": [{"id": 1}],
+                },
+            )
+        }
+    )
+
+    with pytest.raises(ProxboxException, match="non-negative integer offset") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [-1, "-1", "", "not-an-integer", True, 1.5, [], ["1", "1"]],
+)
+def test_rest_list_async_rejects_malformed_initial_offset_before_request(offset):
+    session = AsyncNetBoxRestFacade({})
+
+    with pytest.raises(ProxboxException, match="non-negative integer offset") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"offset": offset}))
+
+    assert exc_info.value.http_status_code == 502
+    assert session.client.calls == []
+
+
+def test_rest_list_async_rejects_offset_gap_before_request():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 3,
+                    "next": "https://netbox.local/api/items/?limit=1&offset=2",
+                    "results": [{"id": 1}],
+                },
+            )
+        }
+    )
+
+    with pytest.raises(ProxboxException, match="expected 1") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_async_rejects_count_change_between_pages():
+    def _page(query, _payload):
+        offset = int((query or {}).get("offset", 0))
+        if offset == 0:
+            return 200, {
+                "count": 2,
+                "next": "https://netbox.local/api/items/?limit=1&offset=1",
+                "results": [{"id": 1}],
+            }
+        return 200, {"count": 3, "next": None, "results": [{"id": 2}]}
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+
+    with pytest.raises(ProxboxException, match="changed pagination count") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 2
+
+
+def test_rest_list_async_rejects_final_aggregate_count_mismatch():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {"count": 2, "next": None, "results": [{"id": 1}]},
+            )
+        }
+    )
+
+    with pytest.raises(ProxboxException, match="Final aggregate length") as exc_info:
+        asyncio.run(rest_list_async(session, "/api/items/"))
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_async_validates_final_count_relative_to_initial_offset():
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 4,
+                    "next": None,
+                    "results": [{"id": 3}, {"id": 4}],
+                },
+            )
+        }
+    )
+
+    records = asyncio.run(rest_list_async(session, "/api/items/", query={"offset": 2}))
+
+    assert [record.id for record in records] == [3, 4]
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_async_does_not_cache_a_failed_pagination_chain(monkeypatch):
+    clear_rest_get_cache()
+    monkeypatch.setattr(netbox_rest_module, "_resolve_get_cache_ttl_seconds", lambda: 60)
+    fail_second_page = True
+
+    def _page(query, _payload):
+        nonlocal fail_second_page
+        offset = int((query or {}).get("offset", 0))
+        if offset == 0:
+            return 200, {
+                "count": 2,
+                "next": "https://netbox.local/api/items/?limit=1&offset=1",
+                "results": [{"id": 1}],
+            }
+        return 200, {
+            "count": 3 if fail_second_page else 2,
+            "next": None,
+            "results": [{"id": 2}],
+        }
+
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): _page})
+    try:
+        with pytest.raises(ProxboxException, match="changed pagination count"):
+            asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+        fail_second_page = False
+        records = asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+        cached_records = asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 1}))
+
+        assert [record.id for record in records] == [1, 2]
+        assert [record.id for record in cached_records] == [1, 2]
+        assert len(session.client.calls) == 4
+    finally:
+        clear_rest_get_cache()
+
+
+def test_rest_list_async_allows_a_bare_array_as_one_page():
+    session = AsyncNetBoxRestFacade({("GET", "/api/items/"): (200, [{"id": 1}, {"id": 2}])})
+
+    records = asyncio.run(rest_list_async(session, "/api/items/"))
+
+    assert [record.id for record in records] == [1, 2]
+    assert len(session.client.calls) == 1
+
+
+def test_rest_list_paginated_async_rejects_initial_offset_above_max_before_request():
+    session = AsyncNetBoxRestFacade({})
+
+    with pytest.raises(ProxboxException, match="Initial offset 3") as exc_info:
+        asyncio.run(
+            rest_list_paginated_async(
+                session,
+                "/api/items/",
+                base_query={"offset": 3},
+                page_size=2,
+                max_offset=2,
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert session.client.calls == []
+
+
+def test_rest_list_async_preserves_cancellation():
+    class CancelledClient:
+        async def request(self, *_args, **_kwargs):
+            raise asyncio.CancelledError
+
+    session = SimpleNamespace(client=CancelledClient())
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(rest_list_async(session, "/api/items/"))
+
+
+def test_rest_list_paginated_async_cached_collection_honors_lower_bound(monkeypatch):
+    clear_rest_get_cache()
+    monkeypatch.setattr(netbox_rest_module, "_resolve_get_cache_ttl_seconds", lambda: 60)
+    session = AsyncNetBoxRestFacade(
+        {
+            ("GET", "/api/items/"): (
+                200,
+                {
+                    "count": 3,
+                    "next": None,
+                    "results": [{"id": 1}, {"id": 2}, {"id": 3}],
+                },
+            )
+        }
+    )
+    asyncio.run(rest_list_async(session, "/api/items/", query={"limit": 2}))
+
+    with pytest.raises(ProxboxException, match="Cached collection exceeded") as exc_info:
+        asyncio.run(
+            rest_list_paginated_async(
+                session,
+                "/api/items/",
+                page_size=2,
+                max_offset=0,
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert len(session.client.calls) == 1
+    clear_rest_get_cache()
 
 
 class FakeProxmoxResource:
@@ -1460,8 +2011,11 @@ def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
                 domain="pve.local",
                 port=8006,
                 username="root@pam",
-                password="password",
+                password=None,
                 verify_ssl=False,
+                timeout=5,
+                max_retries=0,
+                retry_backoff=0.5,
             )
         )
         session.commit()
@@ -1469,6 +2023,419 @@ def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
 
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"
+
+
+def test_database_proxmox_schemas_inherit_effective_transport_settings_once(
+    monkeypatch,
+    db_engine,
+):
+    settings_calls: list[dict[str, object]] = []
+
+    def _settings(**kwargs):
+        settings_calls.append(kwargs)
+        return {
+            "proxmox_timeout": 47,
+            "proxmox_max_retries": 6,
+            "proxmox_retry_backoff": 1.75,
+        }
+
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _settings)
+
+    with Session(db_engine) as session:
+        session.add_all(
+            [
+                ProxmoxEndpoint(
+                    name=name,
+                    ip_address=ip_address,
+                    username="root@pam",
+                    password=None,
+                    verify_ssl=False,
+                    timeout=None,
+                    max_retries=None,
+                    retry_backoff=None,
+                )
+                for name, ip_address in (("pve01", "10.0.0.10"), ("pve02", "10.0.0.11"))
+            ]
+        )
+        session.commit()
+        schemas = asyncio.run(proxmox_providers_module.load_proxmox_session_schemas(session))
+
+    assert len(schemas) == 2
+    assert {(schema.timeout, schema.max_retries, schema.retry_backoff) for schema in schemas} == {
+        (47, 6, 1.75)
+    }
+    assert settings_calls == [
+        {
+            "netbox_session": None,
+            "use_cache": True,
+            "request_timeout_seconds": (
+                proxmox_providers_module._DB_SETTINGS_REQUEST_TIMEOUT_SECONDS
+            ),
+            "cache_fallback": False,
+        }
+    ]
+
+
+def test_database_proxmox_schema_empty_result_skips_settings_and_offloads_sync_exec(
+    monkeypatch,
+    db_engine,
+):
+    main_thread_id = threading.get_ident()
+    exec_thread_ids: list[int] = []
+    original_exec = Session.exec
+
+    def _recording_exec(self, *args, **kwargs):
+        exec_thread_ids.append(threading.get_ident())
+        return original_exec(self, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "exec", _recording_exec)
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "get_settings",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an empty endpoint result must not load settings")
+        ),
+    )
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "get_default_settings",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("an empty endpoint result must not load settings defaults")
+        ),
+    )
+
+    with Session(db_engine) as session:
+        schemas = asyncio.run(proxmox_providers_module.load_proxmox_session_schemas(session))
+
+    assert schemas == []
+    assert exec_thread_ids
+    assert all(thread_id != main_thread_id for thread_id in exec_thread_ids)
+
+
+def test_async_database_proxmox_schema_preserves_endpoint_overrides_and_retry_zero(
+    monkeypatch,
+):
+    endpoint = ProxmoxEndpoint(
+        id=91,
+        name="pve-override",
+        ip_address="10.0.0.91",
+        username="root@pam",
+        password="legacy-plaintext-password",
+        verify_ssl=False,
+        timeout=83,
+        max_retries=0,
+        retry_backoff=0.0,
+    )
+
+    class _Result:
+        def all(self):
+            return [endpoint]
+
+    class _AsyncDatabaseSession:
+        async def exec(self, _query):
+            return _Result()
+
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "get_settings",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("concrete endpoint fields must not fetch plugin settings")
+        ),
+    )
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "get_default_settings",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("concrete endpoint fields must not load settings defaults")
+        ),
+    )
+
+    schemas = asyncio.run(
+        proxmox_providers_module.load_proxmox_session_schemas(_AsyncDatabaseSession())
+    )
+
+    assert len(schemas) == 1
+    assert schemas[0].password == "legacy-plaintext-password"
+    assert schemas[0].timeout == 83
+    assert schemas[0].max_retries == 0
+    assert schemas[0].retry_backoff == 0.0
+
+
+def test_database_proxmox_schema_timeout_uses_defaults_without_caching_fallback(
+    monkeypatch,
+):
+    endpoint = ProxmoxEndpoint(
+        id=92,
+        name="pve-timeout",
+        ip_address="10.0.0.92",
+        username="root@pam",
+        password=None,
+        verify_ssl=False,
+    )
+
+    class _Result:
+        def all(self):
+            return [endpoint]
+
+    class _AsyncDatabaseSession:
+        async def exec(self, _query):
+            return _Result()
+
+    calls: list[dict[str, object]] = []
+
+    def _timed_out(**kwargs):
+        calls.append(kwargs)
+        raise TimeoutError("settings request exceeded its budget")
+
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _timed_out)
+
+    schemas = asyncio.run(
+        proxmox_providers_module.load_proxmox_session_schemas(_AsyncDatabaseSession())
+    )
+
+    assert [(schema.timeout, schema.max_retries, schema.retry_backoff) for schema in schemas] == [
+        (5, 0, 0.5)
+    ]
+    assert calls == [
+        {
+            "netbox_session": None,
+            "use_cache": True,
+            "request_timeout_seconds": (
+                proxmox_providers_module._DB_SETTINGS_REQUEST_TIMEOUT_SECONDS
+            ),
+            "cache_fallback": False,
+        }
+    ]
+
+
+def test_concurrent_database_proxmox_schema_loads_share_one_cold_settings_fetch(
+    monkeypatch,
+):
+    endpoint = ProxmoxEndpoint(
+        id=93,
+        name="pve-concurrent",
+        ip_address="10.0.0.93",
+        username="root@pam",
+        password=None,
+        verify_ssl=False,
+    )
+
+    class _Result:
+        def all(self):
+            return [endpoint]
+
+    class _AsyncDatabaseSession:
+        async def exec(self, _query):
+            await asyncio.sleep(0)
+            return _Result()
+
+    settings_calls = 0
+    calls_lock = threading.Lock()
+
+    def _settings(**_kwargs):
+        nonlocal settings_calls
+        with calls_lock:
+            settings_calls += 1
+            call_number = settings_calls
+        return {
+            "proxmox_timeout": 30 + call_number,
+            "proxmox_max_retries": call_number,
+            "proxmox_retry_backoff": float(call_number),
+        }
+
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _settings)
+
+    async def _load_concurrently():
+        first, second = await asyncio.gather(
+            proxmox_providers_module.load_proxmox_session_schemas(_AsyncDatabaseSession()),
+            proxmox_providers_module.load_proxmox_session_schemas(_AsyncDatabaseSession()),
+        )
+        await asyncio.sleep(0)
+        assert asyncio.get_running_loop() not in proxmox_providers_module._DB_SETTINGS_INFLIGHT
+        return first, second
+
+    first, second = asyncio.run(_load_concurrently())
+
+    assert settings_calls == 1
+    assert [(row.timeout, row.max_retries, row.retry_backoff) for row in first] == [(31, 1, 1.0)]
+    assert [(row.timeout, row.max_retries, row.retry_backoff) for row in second] == [(31, 1, 1.0)]
+
+
+def test_database_transport_settings_singleflight_survives_waiter_cancellation(
+    monkeypatch,
+):
+    started = threading.Event()
+    release = threading.Event()
+    settings_calls = 0
+
+    def _settings(**_kwargs):
+        nonlocal settings_calls
+        settings_calls += 1
+        started.set()
+        if not release.wait(timeout=2):
+            raise TimeoutError("test did not release settings fetch")
+        return {
+            "proxmox_timeout": 19,
+            "proxmox_max_retries": 2,
+            "proxmox_retry_backoff": 0.25,
+        }
+
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _settings)
+
+    async def _cancel_one_waiter():
+        first = asyncio.create_task(proxmox_providers_module._load_db_transport_settings())
+        try:
+            while not started.is_set():
+                await asyncio.sleep(0)
+            second = asyncio.create_task(proxmox_providers_module._load_db_transport_settings())
+            await asyncio.sleep(0)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            release.set()
+            settings = await second
+            await asyncio.sleep(0)
+            assert asyncio.get_running_loop() not in proxmox_providers_module._DB_SETTINGS_INFLIGHT
+            return settings
+        finally:
+            release.set()
+
+    settings = asyncio.run(_cancel_one_waiter())
+
+    assert settings_calls == 1
+    assert {
+        key: settings[key]
+        for key in (
+            "proxmox_timeout",
+            "proxmox_max_retries",
+            "proxmox_retry_backoff",
+        )
+    } == {
+        "proxmox_timeout": 19,
+        "proxmox_max_retries": 2,
+        "proxmox_retry_backoff": 0.25,
+    }
+
+
+def test_database_proxmox_encrypted_credential_timeout_stays_bounded_and_fails_clear(
+    monkeypatch,
+):
+    from proxbox_api import credentials as credentials_module
+    from proxbox_api import settings_client as settings_client_module
+
+    endpoint = ProxmoxEndpoint(
+        id=94,
+        name="pve-encrypted",
+        ip_address="10.0.0.94",
+        username="root@pam",
+        password="enc:unavailable-key",
+        verify_ssl=False,
+    )
+
+    class _Result:
+        def all(self):
+            return [endpoint]
+
+    class _AsyncDatabaseSession:
+        async def exec(self, _query):
+            return _Result()
+
+    settings_calls = 0
+
+    def _timed_out(**_kwargs):
+        nonlocal settings_calls
+        settings_calls += 1
+        raise TimeoutError("bounded settings request timed out")
+
+    monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setattr(credentials_module, "_resolve_local_key_file", lambda: "")
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _timed_out)
+    monkeypatch.setattr(
+        settings_client_module,
+        "fetch_settings_from_netbox",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("credential parsing must not start a second settings fetch")
+        ),
+    )
+    credentials_module.reset_encryption_cache()
+    try:
+        with pytest.raises(ProxboxException, match="Could not decrypt") as exc_info:
+            asyncio.run(
+                proxmox_providers_module.load_proxmox_session_schemas(_AsyncDatabaseSession())
+            )
+    finally:
+        credentials_module.reset_encryption_cache()
+
+    assert exc_info.value.http_status_code == 503
+    assert settings_calls == 1
+
+
+def test_database_proxmox_encrypted_credentials_use_single_bounded_settings_result(
+    monkeypatch,
+):
+    from proxbox_api import credentials as credentials_module
+    from proxbox_api import settings_client as settings_client_module
+
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "provider-bounded-key")
+    credentials_module.reset_encryption_cache()
+    encrypted_password = credentials_module.encrypt_value("decrypted-password")
+    encrypted_token = credentials_module.encrypt_value("decrypted-token")
+    assert encrypted_password is not None
+    assert encrypted_token is not None
+
+    endpoint = ProxmoxEndpoint(
+        id=95,
+        name="pve-encrypted-success",
+        ip_address="10.0.0.95",
+        username="root@pam",
+        password=encrypted_password,
+        token_name="automation",
+        token_value=encrypted_token,
+        verify_ssl=False,
+    )
+
+    class _Result:
+        def all(self):
+            return [endpoint]
+
+    class _AsyncDatabaseSession:
+        async def exec(self, _query):
+            return _Result()
+
+    settings_calls = 0
+
+    def _settings(**_kwargs):
+        nonlocal settings_calls
+        settings_calls += 1
+        return {
+            **settings_client_module.get_default_settings(),
+            "encryption_key": "provider-bounded-key",
+        }
+
+    monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY")
+    monkeypatch.setattr(credentials_module, "_resolve_local_key_file", lambda: "")
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _settings)
+    monkeypatch.setattr(
+        settings_client_module,
+        "fetch_settings_from_netbox",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("credential parsing must reuse the bounded settings result")
+        ),
+    )
+    credentials_module.reset_encryption_cache()
+    try:
+        schemas = asyncio.run(
+            proxmox_providers_module.load_proxmox_session_schemas(_AsyncDatabaseSession())
+        )
+    finally:
+        credentials_module.reset_encryption_cache()
+
+    assert settings_calls == 1
+    assert len(schemas) == 1
+    assert schemas[0].password == "decrypted-password"
+    assert schemas[0].token.value == "decrypted-token"
+    assert schemas[0].password != encrypted_password
+    assert schemas[0].token.value != encrypted_token
 
 
 def test_proxmox_sessions_proxmox_endpoint_ids_alias_matches_endpoint_ids(monkeypatch, db_engine):
@@ -1482,8 +2449,11 @@ def test_proxmox_sessions_proxmox_endpoint_ids_alias_matches_endpoint_ids(monkey
             domain=None,
             port=8006,
             username="root@pam",
-            password="password",
+            password=None,
             verify_ssl=False,
+            timeout=5,
+            max_retries=0,
+            retry_backoff=0.5,
         )
         ep2 = ProxmoxEndpoint(
             name="pve02",
@@ -1491,8 +2461,11 @@ def test_proxmox_sessions_proxmox_endpoint_ids_alias_matches_endpoint_ids(monkey
             domain=None,
             port=8006,
             username="root@pam",
-            password="password",
+            password=None,
             verify_ssl=False,
+            timeout=5,
+            max_retries=0,
+            retry_backoff=0.5,
         )
         session.add(ep1)
         session.add(ep2)
@@ -1561,6 +2534,149 @@ def test_proxmox_sessions_reads_netbox_endpoints_async(monkeypatch, db_engine):
     assert len(sessions) == 1
     assert sessions[0].name == "lab-cluster"
     assert sessions[0].db_endpoint_id == 44
+
+
+def test_netbox_proxmox_schema_filter_uses_repeated_chunked_ids_and_dedupes(
+    monkeypatch,
+    db_engine,
+):
+    def _endpoint(endpoint_id: int) -> dict[str, object]:
+        return {
+            "id": endpoint_id,
+            "name": f"pve-{endpoint_id}",
+            "ip_address": {"address": f"10.0.{endpoint_id // 255}.{endpoint_id % 255}/24"},
+            "domain": None,
+            "port": 8006,
+            "username": "root@pam",
+            "password": None,
+            "verify_ssl": False,
+            "token_name": None,
+            "token_value": None,
+            "enabled": True,
+        }
+
+    def _page(query, _payload):
+        raw_ids = (query or {}).get("id", [])
+        ids = [int(value) for value in raw_ids]
+        offset = int((query or {}).get("offset", 0))
+        if len(ids) == 100 and offset == 0:
+            next_query = "&".join([*(f"id={value}" for value in ids), "offset=50"])
+            return 200, {
+                "count": 102,
+                "next": (
+                    f"https://netbox.local/api/plugins/proxbox/endpoints/proxmox/?{next_query}"
+                ),
+                "results": [*(_endpoint(value) for value in ids[:50])],
+            }
+        if len(ids) == 100 and offset == 50:
+            return 200, {
+                "count": 102,
+                "next": None,
+                "results": [
+                    *(_endpoint(value) for value in ids[50:]),
+                    _endpoint(101),
+                    _endpoint(999),
+                ],
+            }
+        assert ids == [101, 102]
+        assert offset == 0
+        return 200, {
+            "count": 3,
+            "next": None,
+            "results": [_endpoint(102), _endpoint(101), _endpoint(999)],
+        }
+
+    netbox_facade = AsyncNetBoxRestFacade(
+        {("GET", "/api/plugins/proxbox/endpoints/proxmox/"): _page}
+    )
+    settings_calls: list[object] = []
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "get_netbox_async_session",
+        lambda *, database_session: netbox_facade,
+    )
+
+    def _settings(*, netbox_session):
+        settings_calls.append(netbox_session)
+        return {
+            "proxmox_timeout": 5,
+            "proxmox_max_retries": 0,
+            "proxmox_retry_backoff": 0.5,
+        }
+
+    monkeypatch.setattr(proxmox_providers_module, "get_settings", _settings)
+
+    with Session(db_engine) as session:
+        schemas = asyncio.run(
+            proxmox_providers_module.load_proxmox_session_schemas(
+                session,
+                source="netbox",
+                endpoint_ids=list(range(1, 103)),
+            )
+        )
+
+    assert [schema.db_endpoint_id for schema in schemas] == list(range(1, 103))
+    assert settings_calls == [netbox_facade]
+    assert len(netbox_facade.client.calls) == 3
+    assert netbox_facade.client.calls[0][2]["id"] == [str(value) for value in range(1, 101)]
+    assert netbox_facade.client.calls[1][2]["id"] == [str(value) for value in range(1, 101)]
+    assert netbox_facade.client.calls[1][2]["offset"] == "50"
+    assert netbox_facade.client.calls[2][2]["id"] == ["101", "102"]
+
+
+def test_netbox_proxmox_schema_filter_fails_closed_when_a_chunk_fails(
+    monkeypatch,
+    db_engine,
+):
+    queries: list[dict[str, object] | None] = []
+
+    async def _list(_netbox_session, _path, *, query=None):
+        queries.append(query)
+        if len(queries) == 2:
+            raise ProxboxException(
+                message="NetBox endpoint chunk failed",
+                http_status_code=502,
+            )
+        return [
+            {
+                "id": endpoint_id,
+                "enabled": True,
+                "name": f"pve-{endpoint_id}",
+                "ip_address": {"address": "10.0.0.1/24"},
+                "port": 8006,
+                "username": "root@pam",
+                "verify_ssl": False,
+            }
+            for endpoint_id in range(1, 101)
+        ]
+
+    monkeypatch.setattr(proxmox_providers_module, "rest_list_async", _list)
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "get_netbox_async_session",
+        lambda *, database_session: object(),
+    )
+    monkeypatch.setattr(
+        proxmox_providers_module,
+        "get_settings",
+        lambda *, netbox_session: {
+            "proxmox_timeout": 5,
+            "proxmox_max_retries": 0,
+            "proxmox_retry_backoff": 0.5,
+        },
+    )
+
+    with Session(db_engine) as session:
+        with pytest.raises(ProxboxException, match="endpoint chunk failed"):
+            asyncio.run(
+                proxmox_providers_module.load_proxmox_session_schemas(
+                    session,
+                    source="netbox",
+                    endpoint_ids=list(range(1, 102)),
+                )
+            )
+
+    assert [len(query["id"]) for query in queries if query is not None] == [100, 1]
 
 
 def test_get_raw_netbox_session_closes_database_session(monkeypatch):
@@ -2381,7 +3497,7 @@ def test_cache_overflow_evicts_oldest_entries():
         {
             ("GET", f"/api/dcim/device-types/{i}/"): (
                 200,
-                {"id": i, "model": f"device-{i}"},
+                [{"id": i, "model": f"device-{i}"}],
             )
             for i in range(10)
         }
@@ -2408,7 +3524,7 @@ def test_cache_eviction_by_bytes():
     large_data = {"id": 1, "data": "x" * 1000}
     session = AsyncNetBoxRestFacade(
         {
-            ("GET", "/api/dcim/devices/"): (200, large_data),
+            ("GET", "/api/dcim/devices/"): (200, [large_data]),
         }
     )
 

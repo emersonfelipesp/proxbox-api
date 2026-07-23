@@ -279,11 +279,33 @@ Cobertura de testes:
 - `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
+- `GET /virtualization/virtual-machines/task-history/create/stream` - Etapa SSE
+  dedicada de task history; aceita `netbox_vm_ids` separado por virgulas.
+  Omissao seleciona todas as VMs; valor vazio/invalido seleciona nenhuma. O
+  parametro opcional `fetch_max_concurrency` precisa ser pelo menos 1. Cada
+  requisicao limpa e testa novamente o cache de indisponibilidade do sidecar.
+  Internamente os IDs selecionados sao enviados ao NetBox como valores
+  repetidos em lotes deduplicados de no maximo 100; a falha de qualquer lote
+  aborta a selecao explicita.
+
+As quatro rotas de criacao de VM (geral/direcionada e suas variantes SSE)
+aceitam `sync_task_history`, com padrao `true`. Quando `false`, a etapa de VM
+pula o unico agregado de task history porque uma etapa dedicada e a dona. Um
+agregado degradado preserva as linhas reconciliadas, mas o REST standalone
+responde HTTP 502; o SSE publica o resumo degradado da etapa de task history.
+
+O campo `created` do resultado de task history e mantido por compatibilidade e
+conta todas as linhas reconciliadas (criadas, atualizadas e inalteradas), nao
+somente operacoes POST.
 
 ## Full Update
 
 - `GET /full-update` - Executa sync de devices, storages, VMs, task history, discos, backups, snapshots, interfaces de node, interfaces de VM, IPs de VM, replications e backup routines.
 - `GET /full-update/stream` - Variacao SSE.
+
+As duas variantes de full-update enviam `sync_task_history=false` para a etapa
+de VM e depois executam exatamente uma etapa dedicada de task history. O
+override opcional `fetch_max_concurrency` precisa ser pelo menos 1.
 
 Os tres endpoints de `virtual-disks` tambem aceitam o parametro opcional
 `fetch_max_concurrency` para sobrescrever a largura do fetch de config de VM

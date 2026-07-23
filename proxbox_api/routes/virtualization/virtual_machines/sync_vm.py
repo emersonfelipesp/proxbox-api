@@ -30,6 +30,7 @@ from proxbox_api.netbox_rest import (
     rest_create_async,
     rest_first_async,
     rest_list_async,
+    rest_list_paginated_async,
     rest_patch_async,
     rest_reconcile_async,
 )
@@ -129,20 +130,24 @@ from proxbox_api.services.sync.sync_state_writer import (
     write_vm_interface_sync_state,
 )
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
-from proxbox_api.services.sync.task_history import (
-    sync_virtual_machine_task_history,
-)
+from proxbox_api.services.sync.task_history import sync_all_virtual_machine_task_histories
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
 )
 from proxbox_api.services.sync.vm_create import ensure_vm_type
+from proxbox_api.services.sync.vm_filter import (
+    filter_cluster_resources_by_netbox_vm_ids as _filter_selected_vm_resources,
+)
+from proxbox_api.services.sync.vm_filter import (
+    filter_cluster_resources_for_selected_vm as _filter_selected_vm_resource,
+)
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     build_guest_mac_index,
     extract_vm_disk_aggregate_size,
     merged_guest_iface_from_mac_index,
-    parse_comma_separated_ints,
     parse_proxmox_net_configs,
+    parse_selected_netbox_vm_ids,
     preferred_primary_ip_order,
     resolve_netbox_cluster_id_by_name,
     stamp_vm_last_run_id,
@@ -436,31 +441,12 @@ async def _load_netbox_virtual_machine_snapshot(
     if fresh:
         clear_rest_get_cache_for_path(nb, "/api/virtualization/virtual-machines/")
 
-    page_size = 200
-    offset = 0
-    snapshot: list[dict[str, object]] = []
-
-    while True:
-        records = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={"limit": page_size, "offset": offset},
-        )
-        if not records:
-            break
-
-        serialized_page: list[dict[str, object]] = []
-        for record in records:
-            serialized = _to_mapping(record)
-            if serialized:
-                serialized_page.append(serialized)
-
-        snapshot.extend(serialized_page)
-        if len(records) < page_size:
-            break
-        offset += page_size
-
-    return snapshot
+    records = await rest_list_paginated_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        page_size=200,
+    )
+    return [serialized for record in records if (serialized := _to_mapping(record))]
 
 
 def _prepared_proxmox_vmid(prepared: _PreparedVMState) -> int | None:
@@ -1129,142 +1115,22 @@ def _parse_vm_networks(vm_config: dict[str, object]) -> list[dict[str, dict[str,
     return parse_proxmox_net_configs(vm_config)
 
 
-def _filter_cluster_resources_for_vm(  # noqa: C901
-    cluster_resources: list[dict],
-    *,
-    vm_name: str,
-    proxmox_vm_id: int | None,
-    endpoint_id: int | None = None,
-    endpoint_id_by_cluster: dict[str, int] | None = None,
-    cluster_name: str | None = None,
-    cluster_id: int | None = None,
-) -> list[dict]:
-    """Filter cluster resources to find VM matching name and/or ID criteria.
-
-    Searches through cluster resource lists to find QEMU VMs or LXC containers
-    matching the provided identifiers. Optionally filters by cluster name/ID.
-
-    Args:
-        cluster_resources: List of cluster resource dicts from Proxmox
-        vm_name: VM name to match (exact match)
-        proxmox_vm_id: Proxmox VM ID to match, or None
-        cluster_name: Cluster name to filter by, or None for all clusters
-        cluster_id: NetBox cluster ID to filter by, or None for all
-
-    Returns:
-        Filtered list of cluster resource dicts containing matching VMs
-    """
-    cluster_hint = (cluster_name or "").strip().lower()
-    filtered: list[dict] = []
-    for cluster in cluster_resources:
-        if not isinstance(cluster, dict):
-            continue
-        for cluster_key, resources in cluster.items():
-            if not isinstance(resources, list):
-                continue
-            cluster_key_str = str(cluster_key)
-            if cluster_hint and cluster_key_str.strip().lower() != cluster_hint:
-                continue
-            if endpoint_id is not None and endpoint_id_by_cluster:
-                cluster_endpoint_id = endpoint_id_by_cluster.get(cluster_key_str)
-                if cluster_endpoint_id is not None and cluster_endpoint_id != endpoint_id:
-                    continue
-            selected = []
-            for resource in resources:
-                if not isinstance(resource, dict):
-                    continue
-                if resource.get("type") not in ("qemu", "lxc"):
-                    continue
-                same_name = bool(vm_name) and str(resource.get("name", "")).strip() == vm_name
-                same_vmid = proxmox_vm_id is not None and str(
-                    resource.get("vmid", "")
-                ).strip() == str(proxmox_vm_id)
-                if not (same_name or same_vmid):
-                    continue
-                if cluster_id is not None:
-                    resource_cluster_id = _relation_id(resource.get("cluster"))
-                    if resource_cluster_id is not None and resource_cluster_id != cluster_id:
-                        continue
-                selected.append(resource)
-            if selected:
-                filtered.append({cluster_key_str: selected})
-    return filtered
-
-
 async def _filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     netbox_session: NetBoxSessionDep,
     cluster_resources: list[dict],
     netbox_vm_ids: list[int],
+    *,
+    pxs: object,
+    cluster_status: object,
 ) -> list[dict]:
-    """Filter cluster resources to only include VMs matching the given NetBox VM IDs."""
-    from proxbox_api.netbox_rest import rest_list_async
-
-    if not netbox_vm_ids:
-        return cluster_resources
-
-    id_to_vm: dict[int, dict] = {}
-    for vm_id in netbox_vm_ids:
-        id_to_vm[vm_id] = {"id": vm_id, "name": None, "cluster": None, "cf_proxmox_vm_id": None}
-
-    try:
-        vms = await rest_list_async(
-            netbox_session,
-            "/api/virtualization/virtual-machines/",
-            query={"id": ",".join(str(vid) for vid in netbox_vm_ids)},
-        )
-        if vms and isinstance(vms, list):
-            for vm in vms:
-                if not isinstance(vm, dict):
-                    continue
-                vm_id = vm.get("id")
-                if vm_id is not None:
-                    id_to_vm[vm_id] = vm
-    except Exception:
-        pass
-
-    target_proxmox_vm_ids: set[int] = set()
-    target_vm_names: set[str] = set()
-    target_cluster_ids: set[int] = set()
-
-    for vm in id_to_vm.values():
-        cf = vm.get("custom_fields", {}) or {}
-        raw_vmid = cf.get("proxmox_vm_id")
-        if raw_vmid is not None and str(raw_vmid).strip().isdigit():
-            target_proxmox_vm_ids.add(int(str(raw_vmid).strip()))
-        vm_name = str(vm.get("name", "")).strip()
-        if vm_name:
-            target_vm_names.add(vm_name.lower())
-        cluster = vm.get("cluster")
-        if isinstance(cluster, dict):
-            cluster_id = cluster.get("id")
-            if isinstance(cluster_id, int):
-                target_cluster_ids.add(cluster_id)
-
-    filtered: list[dict] = []
-    for cluster in cluster_resources:
-        if not isinstance(cluster, dict):
-            continue
-        for cluster_key, resources in cluster.items():
-            if not isinstance(resources, list):
-                continue
-            selected = []
-            for resource in resources:
-                if not isinstance(resource, dict):
-                    continue
-                if resource.get("type") not in ("qemu", "lxc"):
-                    continue
-                res_vmid = resource.get("vmid")
-                if res_vmid is not None and int(res_vmid) in target_proxmox_vm_ids:
-                    selected.append(resource)
-                    continue
-                res_name = str(resource.get("name", "")).strip().lower()
-                if res_name in target_vm_names:
-                    selected.append(resource)
-                    continue
-            if selected:
-                filtered.append({cluster_key: selected})
-
-    return filtered
+    """Delegate selected-resource filtering to the shared ownership implementation."""
+    return await _filter_selected_vm_resources(
+        netbox_session,
+        cluster_resources,
+        netbox_vm_ids,
+        pxs=pxs,
+        cluster_status=cluster_status,
+    )
 
 
 _VALID_SYNC_MODES = frozenset({"always", "bootstrap_only", "disabled"})
@@ -1721,6 +1587,7 @@ async def _create_virtual_machine_by_netbox_id(
     tag: ProxboxTagDep,
     websocket=None,
     use_websocket: bool = False,
+    sync_task_history: bool = True,
     use_guest_agent_interface_name: bool = True,
     vm_interface_sync_strategy: VMInterfaceSyncStrategy = "guest_os_model",
     ignore_ipv6_link_local_addresses: bool = True,
@@ -1768,52 +1635,22 @@ async def _create_virtual_machine_by_netbox_id(
         )
 
     vm_data = _to_mapping(vm_record)
-    vm_name = str(vm_data.get("name", "")).strip()
-    vm_cluster_name = _relation_name(vm_data.get("cluster"))
-    vm_cluster_id = _relation_id(vm_data.get("cluster"))
-    vm_endpoint_id = extract_proxmox_endpoint_id(vm_data)
-    cf = vm_data.get("custom_fields")
-    proxmox_vm_id = None
-    if isinstance(cf, dict):
-        raw_id = cf.get("proxmox_vm_id")
-        if raw_id is not None and str(raw_id).strip().isdigit():
-            proxmox_vm_id = int(str(raw_id).strip())
-
-    # A NetBox VM row can exist with a blank name -- for example after a partial
-    # prior sync, or when Proxmox briefly reported an empty name during a rename.
-    # Such a record is still matchable as long as the Proxmox VM ID is known,
-    # because _filter_cluster_resources_for_vm matches on name OR vmid and the
-    # downstream create/update flow heals the name from the matched Proxmox
-    # resource. Only refuse the sync when neither a name nor a proxmox_vm_id is
-    # available to match on.
-    if not vm_name and proxmox_vm_id is None:
+    if _extract_proxmox_vmid_from_vm_record(vm_data) is None:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Virtual machine id={netbox_vm_id} has no name and no "
-                "proxmox_vm_id custom field to match in Proxmox."
+                f"Virtual machine id={netbox_vm_id} has no positive "
+                "proxmox_vm_id custom field; exact targeted ownership cannot be resolved."
             ),
         )
 
-    filtered_resources = _filter_cluster_resources_for_vm(
+    filtered_for_call = _filter_selected_vm_resource(
+        vm_data,
         cluster_resources,
-        vm_name=vm_name,
-        proxmox_vm_id=proxmox_vm_id,
-        endpoint_id=vm_endpoint_id,
-        endpoint_id_by_cluster=_endpoint_id_by_cluster_names(pxs, cluster_status),
-        cluster_name=vm_cluster_name,
-        cluster_id=vm_cluster_id,
+        netbox_vm_id=netbox_vm_id,
+        pxs=pxs,
+        cluster_status=cluster_status,
     )
-    if not filtered_resources:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "No matching Proxmox VM was found for NetBox virtual machine "
-                f"id={netbox_vm_id} (name={vm_name!r}, proxmox_vm_id={proxmox_vm_id})."
-            ),
-        )
-
-    filtered_for_call = filtered_resources
 
     return await create_virtual_machines(
         netbox_session=netbox_session,
@@ -1824,6 +1661,8 @@ async def _create_virtual_machine_by_netbox_id(
         tag=tag,
         websocket=websocket,
         use_websocket=use_websocket,
+        sync_task_history=sync_task_history,
+        netbox_vm_ids=str(netbox_vm_id),
         use_guest_agent_interface_name=use_guest_agent_interface_name,
         vm_interface_sync_strategy=vm_interface_sync_strategy,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
@@ -1894,6 +1733,14 @@ async def create_virtual_machines(  # noqa: C901
     use_css: bool = False,
     use_websocket: bool = False,
     sync_vm_network: bool = True,
+    sync_task_history: bool = Query(
+        default=True,
+        title="Sync Task History",
+        description=(
+            "Synchronize archived Proxmox task history after successful VM reconciliation. "
+            "Disable when a dedicated task-history stage follows immediately."
+        ),
+    ),
     use_guest_agent_interface_name: bool = Query(
         default=True,
         title="Use Guest Agent Interface Name",
@@ -2103,14 +1950,18 @@ async def create_virtual_machines(  # noqa: C901
         websocket if isinstance(websocket, WebSocketSSEBridge) else None
     )
 
-    if netbox_vm_ids and isinstance(netbox_vm_ids, str):
-        vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-        if vm_ids:
-            filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
-                netbox_session=netbox_session,
-                cluster_resources=cluster_resources,
-                netbox_vm_ids=vm_ids,
-            )
+    try:
+        selected_vm_ids = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if selected_vm_ids is not None:
+        filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
+            netbox_session=netbox_session,
+            cluster_resources=cluster_resources,
+            netbox_vm_ids=selected_vm_ids,
+            pxs=pxs,
+            cluster_status=cluster_status,
+        )
 
     # Drop VM/template resources disabled by sync mode at the source so they
     # never drive discovery or dependency precompute (see finding: disabled
@@ -2178,6 +2029,40 @@ async def create_virtual_machines(  # noqa: C901
         }
     ]
     tag_refs = [tag_ref for tag_ref in tag_refs if tag_ref.get("name") and tag_ref.get("slug")]
+
+    async def _sync_scoped_task_history(records: list[object]) -> dict[str, object] | None:
+        if not sync_task_history:
+            return None
+        vm_ids = sorted(
+            {
+                vm_id
+                for record in records
+                if (vm_id := _relation_id(_to_mapping(record).get("id"))) is not None
+            }
+        )
+        if not vm_ids:
+            return None
+        result = await sync_all_virtual_machine_task_histories(
+            netbox_session=nb,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            tag_refs=tag_refs,
+            websocket=websocket,
+            use_websocket=use_websocket,
+            netbox_vm_ids=vm_ids,
+        )
+        if isinstance(result, dict) and result.get("degraded") and not use_websocket:
+            raise ProxboxException(
+                message="Task-history sync completed with degraded coverage",
+                detail={
+                    "errors": result.get("errors", 0),
+                    "reconciled": result.get("created", 0),
+                    "skipped": result.get("skipped", 0),
+                },
+                http_status_code=502,
+            )
+        return result
+
     flattened_results = []
     storage_index: dict[tuple[str, str], dict] = {}
     cluster_dependency_cache: dict[str, dict[str, object]] = {}
@@ -2589,30 +2474,6 @@ async def create_virtual_machines(  # noqa: C901
             )
             results.append(vm_record)
 
-            vm_id = _relation_id(vm_record.get("id"))
-            if vm_id is None:
-                continue
-            try:
-                await sync_virtual_machine_task_history(
-                    netbox_session=nb,
-                    pxs=pxs,
-                    cluster_status=cluster_status,
-                    virtual_machine_id=vm_id,
-                    proxmox_vmid=vmid,
-                    vm_type=str(operation.prepared.vm_type or "unknown"),
-                    cluster_name=operation.prepared.cluster_name,
-                    tag_refs=tag_refs,
-                    websocket=websocket,
-                    use_websocket=use_websocket,
-                )
-            except Exception as error:
-                logger.warning(
-                    "Error syncing task history for VM %s (%s): %s",
-                    operation.prepared.resource.get("name"),
-                    operation.prepared.resource.get("vmid"),
-                    error,
-                )
-
         batch_ms = (time.perf_counter() - batch_t0) * 1000
         reconciliation_share_pct = (reconciliation_ms / batch_ms) * 100 if batch_ms > 0 else 0.0
         logger.info(
@@ -2632,6 +2493,7 @@ async def create_virtual_machines(  # noqa: C901
 
     if not sync_vm_network:
         flattened_results, failed_vms = await _run_full_update_vm_batch()
+        await _sync_scoped_task_history(flattened_results)
         successful_vms = len(flattened_results)
         total_vms = successful_vms + failed_vms
         if bridge:
@@ -3300,32 +3162,6 @@ async def create_virtual_machines(  # noqa: C901
                     }
                 )
 
-        try:
-            task_history_count = await sync_virtual_machine_task_history(
-                netbox_session=nb,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                virtual_machine_id=int(virtual_machine.get("id")),
-                proxmox_vmid=int(resource.get("vmid")),
-                vm_type=str(vm_type or "unknown"),
-                cluster_name=cluster_name,
-                tag_refs=tag_refs,
-                websocket=websocket,
-                use_websocket=use_websocket,
-            )
-            logger.debug(
-                "Synced %s task history records for VM %s",
-                task_history_count,
-                resource.get("name"),
-            )
-        except Exception as error:
-            logger.warning(
-                "Error syncing task history for VM %s (%s): %s",
-                resource.get("name"),
-                resource.get("vmid"),
-                error,
-            )
-
         if bridge:
             if failed_interface_count:
                 emit_status = "warning"
@@ -3430,6 +3266,8 @@ async def create_virtual_machines(  # noqa: C901
                         successful_vms += 1
                         flattened_results.append(vm_result)
 
+        await _sync_scoped_task_history(flattened_results)
+
         if bridge:
             await bridge.emit_phase_summary(
                 phase="virtual-machines",
@@ -3454,6 +3292,8 @@ async def create_virtual_machines(  # noqa: C901
             failed_vms,
         )
 
+    except ProxboxException:
+        raise
     except Exception as error:
         error_msg = f"Error during VM sync: {str(error)}"
         if bridge:
@@ -4780,6 +4620,14 @@ async def create_virtual_machine_by_netbox_id(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    sync_task_history: bool = Query(
+        default=True,
+        title="Sync Task History",
+        description=(
+            "Synchronize archived Proxmox task history for the targeted VM. "
+            "Disable when a dedicated task-history stage follows immediately."
+        ),
+    ),
     run_id: str | None = Query(
         default=None,
         title="Run ID",
@@ -4802,6 +4650,7 @@ async def create_virtual_machine_by_netbox_id(
         vm_interface_sync_strategy=vm_interface_sync_strategy,
         ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
+        sync_task_history=sync_task_history,
         overwrite_flags=overwrite_flags,
         run_id=run_id,
     )
@@ -4911,6 +4760,14 @@ async def create_virtual_machines_stream(
             "Use when a dedicated network-sync stage follows immediately after."
         ),
     ),
+    sync_task_history: bool = Query(
+        default=True,
+        title="Sync Task History",
+        description=(
+            "Synchronize archived Proxmox task history after successful VM reconciliation. "
+            "Disable when a dedicated task-history stage follows immediately."
+        ),
+    ),
     run_id: str | None = Query(
         default=None,
         title="Run ID",
@@ -4975,16 +4832,20 @@ async def create_virtual_machines_stream(
     )
 
     filtered_cluster_resources = cluster_resources
-    vm_ids: list[int] = []
+    try:
+        selected_vm_ids = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    vm_ids = selected_vm_ids or []
 
-    if netbox_vm_ids:
-        vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-        if vm_ids:
-            filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
-                netbox_session=netbox_session,
-                cluster_resources=cluster_resources,
-                netbox_vm_ids=vm_ids,
-            )
+    if selected_vm_ids is not None:
+        filtered_cluster_resources = await _filter_cluster_resources_by_netbox_vm_ids(
+            netbox_session=netbox_session,
+            cluster_resources=cluster_resources,
+            netbox_vm_ids=selected_vm_ids,
+            pxs=pxs,
+            cluster_status=cluster_status,
+        )
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -5010,6 +4871,7 @@ async def create_virtual_machines_stream(
                     overwrite_vm_description=overwrite_vm_description,
                     overwrite_vm_custom_fields=overwrite_vm_custom_fields,
                     sync_vm_network=sync_vm_network,
+                    sync_task_history=sync_task_history,
                     overwrite_flags=overwrite_flags,
                     run_id=run_id,
                     assign_vm_interface_ips=assign_vm_interface_ips,
@@ -5166,6 +5028,14 @@ async def create_virtual_machine_by_netbox_id_stream(
         title="Primary IP Preference",
         description="Preferred IP family when choosing VM primary IP (ipv4 or ipv6).",
     ),
+    sync_task_history: bool = Query(
+        default=True,
+        title="Sync Task History",
+        description=(
+            "Synchronize archived Proxmox task history for the targeted VM. "
+            "Disable when a dedicated task-history stage follows immediately."
+        ),
+    ),
     overwrite_vm_role: bool | None = Query(
         default=None,
         title="Overwrite VM Role",
@@ -5255,6 +5125,7 @@ async def create_virtual_machine_by_netbox_id_stream(
                     vm_interface_sync_strategy=vm_interface_sync_strategy,
                     ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
                     primary_ip_preference=primary_ip_preference,
+                    sync_task_history=sync_task_history,
                     overwrite_vm_role=overwrite_vm_role,
                     overwrite_vm_type=overwrite_vm_type,
                     overwrite_vm_tags=overwrite_vm_tags,

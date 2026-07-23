@@ -9,8 +9,9 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from netbox_sdk.client import ApiResponse
 
@@ -36,6 +37,7 @@ from proxbox_api.routes.netbox import (
     netbox_status,
     update_netbox_endpoint,
 )
+from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.routes.proxmox.endpoints import (
     ProxmoxEndpointCreate,
     ProxmoxEndpointUpdate,
@@ -59,6 +61,7 @@ from proxbox_api.services import custom_fields as custom_fields_service
 from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.devices import create_proxmox_devices
+from proxbox_api.session.netbox import get_netbox_session
 from proxbox_api.session.proxmox_providers import proxmox_sessions_dep
 
 
@@ -128,6 +131,36 @@ def test_full_update_routes_run_netbox_dependency_bootstrap():
             dependency.name == "_sync_deps" and dependency.call is ensure_netbox_sync_dependencies
             for dependency in route.dependant.dependencies
         ), f"{path} does not bootstrap NetBox sync dependencies"
+
+
+@pytest.mark.parametrize("path", ["/full-update", "/full-update/stream"])
+@pytest.mark.parametrize("fetch_max_concurrency", [0, -1])
+def test_full_update_routes_reject_invalid_fetch_concurrency(
+    path,
+    fetch_max_concurrency,
+):
+    probe_app = FastAPI()
+    probe_app.include_router(full_update_router)
+    probe_app.dependency_overrides[get_netbox_session] = object
+    probe_app.dependency_overrides[ensure_netbox_sync_dependencies] = BootstrapStatus
+    probe_app.dependency_overrides[proxmox_sessions_dep] = lambda: []
+    probe_app.dependency_overrides[cluster_status] = lambda: []
+    probe_app.dependency_overrides[cluster_resources] = lambda: []
+    probe_app.dependency_overrides[create_custom_fields] = lambda: []
+    probe_app.dependency_overrides[proxbox_tag] = lambda: SimpleNamespace(
+        id=1,
+        name="Proxbox",
+        slug="proxbox",
+        color="ff5722",
+    )
+
+    with TestClient(probe_app) as client:
+        response = client.get(
+            path,
+            params={"fetch_max_concurrency": fetch_max_concurrency},
+        )
+
+    assert response.status_code == 422
 
 
 def test_full_update_route_bootstrap_runs_before_vm_creation(auth_test_client, monkeypatch):
@@ -205,7 +238,7 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
             if (
                 method == "GET"
                 and (query or {}).get("limit") == 200
-                and (query or {}).get("offset") == 0
+                and (query or {}).get("offset") in (None, 0)
             ):
                 return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
 
@@ -855,6 +888,7 @@ def test_netbox_status_route_wraps_dependency_errors():
 
 def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
     create_vm_calls: list[dict] = []
+    task_history_stage_calls: list[dict] = []
 
     async def _fake_devices(**kwargs):
         return [{"id": 1, "name": "node01"}]
@@ -876,6 +910,7 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
         return {"count": 1, "created": 1, "skipped": 0}
 
     async def _fake_task_history(**kwargs):
+        task_history_stage_calls.append(kwargs)
         return {
             "count": 0,
             "created": 0,
@@ -934,10 +969,14 @@ def test_full_update_sync_returns_structured_payload(monkeypatch):  # noqa: C901
             cluster_resources=[],
             custom_fields=[],
             tag=type("Tag", (), {"id": 1})(),
+            fetch_max_concurrency=3,
         )
     )
 
     assert create_vm_calls and create_vm_calls[0]["sync_vm_network"] is False
+    assert create_vm_calls[0]["sync_task_history"] is False
+    assert len(task_history_stage_calls) == 1
+    assert task_history_stage_calls[0]["fetch_max_concurrency"] == 3
     assert body == {
         "status": "completed",
         "devices": [{"id": 1, "name": "node01"}],
@@ -1125,11 +1164,12 @@ def test_create_virtual_machines_handles_empty_clusters():
     assert result == []
 
 
-def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypatch):
+def test_create_virtual_machine_by_netbox_id_filters_exact_owned_resource(monkeypatch):
     captured: dict[str, object] = {}
 
     async def _fake_create_virtual_machines(**kwargs):
         captured["cluster_resources"] = kwargs["cluster_resources"]
+        captured["netbox_vm_ids"] = kwargs["netbox_vm_ids"]
         return [{"id": 248, "name": "vm-248"}]
 
     monkeypatch.setattr(
@@ -1140,9 +1180,13 @@ def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypat
     vm_record = SimpleNamespace(
         serialize=lambda: {
             "id": 248,
-            "name": "vm-248",
-            "cluster": {"id": 10, "name": "cluster-a"},
-            "custom_fields": {"proxmox_vm_id": 9248},
+            "name": "shared-name",
+            "cluster": {"id": 10, "name": " Cluster-A "},
+            "custom_fields": {
+                "proxmox_endpoint_id": 11,
+                "proxmox_vm_id": 9248,
+                "proxmox_vm_type": "qemu",
+            },
         }
     )
 
@@ -1155,18 +1199,24 @@ def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypat
     fake_nb = SimpleNamespace(
         virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
+    selected = {"type": "qemu", "name": "renamed-in-proxmox", "vmid": 9248}
+    same_name = {"type": "qemu", "name": "shared-name", "vmid": 9999}
+    wrong_type = {"type": "lxc", "name": "shared-name", "vmid": 9248}
+    reused_vmid = {"type": "qemu", "name": "shared-name", "vmid": 9248}
     cluster_resources = [
-        {"cluster-a": [{"type": "qemu", "name": "vm-248", "vmid": 9248}]},
-        {"cluster-a": [{"type": "qemu", "name": "vm-999", "vmid": 9999}]},
-        {"cluster-b": [{"type": "qemu", "name": "vm-248", "vmid": 9248}]},
+        {"CLUSTER-A": [same_name, wrong_type, selected]},
+        {"cluster-b": [reused_vmid]},
     ]
 
     result = asyncio.run(
         create_virtual_machine_by_netbox_id(
             netbox_vm_id=248,
             netbox_session=fake_nb,
-            pxs=[],
-            cluster_status=[],
+            pxs=[SimpleNamespace(db_endpoint_id=11), SimpleNamespace(db_endpoint_id=22)],
+            cluster_status=[
+                SimpleNamespace(name="cluster-a"),
+                SimpleNamespace(name="cluster-b"),
+            ],
             cluster_resources=cluster_resources,
             custom_fields=[],
             tag=SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722"),
@@ -1174,9 +1224,8 @@ def test_create_virtual_machine_by_netbox_id_filters_cluster_resources(monkeypat
     )
 
     assert result == [{"id": 248, "name": "vm-248"}]
-    assert captured["cluster_resources"] == [
-        {"cluster-a": [{"type": "qemu", "name": "vm-248", "vmid": 9248}]}
-    ]
+    assert captured["cluster_resources"] == [{"CLUSTER-A": [selected]}]
+    assert captured["netbox_vm_ids"] == "248"
 
 
 def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
@@ -1228,6 +1277,10 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
     )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_paginated_async",
         _fake_rest_list,
     )
     # The sidecar reader has its own rest_list_async reference; with the legacy
@@ -1297,7 +1350,7 @@ def test_create_virtual_machines_reconciles_vm_children_for_single_vm_bundle(
         _fake_create_vm_disk_parallel,
     )
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_virtual_machine_task_history",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
         _fake_task_history,
     )
     monkeypatch.setattr(
@@ -1358,13 +1411,17 @@ def test_create_virtual_machine_by_netbox_id_raises_404_when_missing():
     assert excinfo.value.status_code == 404
 
 
-def test_create_virtual_machine_by_netbox_id_raises_404_when_not_in_proxmox():
+def test_create_virtual_machine_by_netbox_id_raises_502_when_exact_owner_is_not_live():
     vm_record = SimpleNamespace(
         serialize=lambda: {
             "id": 248,
             "name": "vm-248",
             "cluster": {"id": 10, "name": "cluster-a"},
-            "custom_fields": {"proxmox_vm_id": 9248},
+            "custom_fields": {
+                "proxmox_endpoint_id": 11,
+                "proxmox_vm_id": 9248,
+                "proxmox_vm_type": "qemu",
+            },
         }
     )
 
@@ -1374,19 +1431,19 @@ def test_create_virtual_machine_by_netbox_id_raises_404_when_not_in_proxmox():
     fake_nb = SimpleNamespace(
         virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_fake_get))
     )
-    with pytest.raises(HTTPException, match="No matching Proxmox VM") as excinfo:
+    with pytest.raises(ProxboxException, match="No exact live Proxmox resource") as excinfo:
         asyncio.run(
             create_virtual_machine_by_netbox_id(
                 netbox_vm_id=248,
                 netbox_session=fake_nb,
-                pxs=[],
-                cluster_status=[],
+                pxs=[SimpleNamespace(db_endpoint_id=11)],
+                cluster_status=[SimpleNamespace(name="cluster-a")],
                 cluster_resources=[{"cluster-a": [{"type": "qemu", "name": "other", "vmid": 1}]}],
                 custom_fields=[],
                 tag=SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722"),
             )
         )
-    assert excinfo.value.status_code == 404
+    assert excinfo.value.http_status_code == 502
 
 
 def test_create_virtual_machine_by_netbox_id_stream_emits_complete(monkeypatch):
@@ -1454,6 +1511,7 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
         return [{"id": 1, "name": "pve01"}]
 
     create_vm_calls: list[dict] = []
+    task_history_stage_calls: list[dict] = []
 
     async def _fake_vms(**kwargs):
         create_vm_calls.append(kwargs)
@@ -1523,6 +1581,10 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
             )
         return {"count": 1, "created": 1, "skipped": 0}
 
+    async def _fake_task_history(**kwargs):
+        task_history_stage_calls.append(kwargs)
+        return {"count": 1, "created": 1, "skipped": 0}
+
     monkeypatch.setattr("proxbox_api.app.full_update.StreamingResponse", _StreamingResponseStub)
     monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _fake_devices)
     monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _fake_vms)
@@ -1534,6 +1596,10 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
     monkeypatch.setattr(
         "proxbox_api.app.full_update._create_all_virtual_machine_snapshots",
         _fake_snapshots,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories",
+        _fake_task_history,
     )
 
     response = asyncio.run(
@@ -1559,6 +1625,71 @@ def test_full_update_stream_includes_granular_bridge_messages(monkeypatch):  # n
     assert "Synced virtual disk vm01/scsi0" in payload
     assert "event: complete" in payload
     assert create_vm_calls[0]["sync_vm_network"] is False
+    assert create_vm_calls[0]["sync_task_history"] is False
+    assert len(task_history_stage_calls) == 1
+
+
+def test_full_update_stream_reports_task_history_fatal_as_terminal_failure(monkeypatch):
+    class _Tag:
+        id = 1
+        name = "Proxbox"
+        slug = "proxbox"
+        color = "ff5722"
+
+    class _StreamingResponseStub:
+        def __init__(self, content, media_type=None, headers=None):
+            self.content = content
+            self.media_type = media_type
+            self.headers = headers or {}
+
+    async def _empty_list(**_kwargs):
+        return []
+
+    async def _empty_disks(**_kwargs):
+        return {"count": 0, "created": 0, "skipped": 0}
+
+    async def _fatal_task_history(**_kwargs):
+        raise ProxboxException(
+            message="Task-history archive collection failed for every selected node",
+            detail="2 node archive requests failed",
+            http_status_code=502,
+        )
+
+    async def _unexpected_backups(**_kwargs):
+        raise AssertionError("full update must stop after fatal task-history stage")
+
+    monkeypatch.setattr("proxbox_api.app.full_update.StreamingResponse", _StreamingResponseStub)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_proxmox_devices", _empty_list)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_storages", _empty_list)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_machines", _empty_list)
+    monkeypatch.setattr("proxbox_api.app.full_update.create_virtual_disks", _empty_disks)
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update.sync_all_virtual_machine_task_histories",
+        _fatal_task_history,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.app.full_update._create_all_virtual_machine_backups",
+        _unexpected_backups,
+    )
+
+    response = asyncio.run(
+        full_update_sync_stream(
+            _sync_deps=BootstrapStatus(),
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            custom_fields=[],
+            tag=_Tag(),
+        )
+    )
+    payload = "".join(asyncio.run(_collect_async_frames(response.content)))
+
+    assert "event: error" in payload
+    assert '"status": "failed"' in payload
+    assert '"ok": false' in payload
+    assert "Task-history archive collection failed" in payload
+    assert "event: complete" in payload
 
 
 async def _collect_async_frames(stream) -> list[str]:
@@ -1583,12 +1714,23 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
                     text=json.dumps(
                         {
                             "count": 1,
-                            "results": [{"id": 55, "name": "vm101"}],
+                            "results": [
+                                {
+                                    "id": 55,
+                                    "name": "vm101",
+                                    "cluster": {"name": "cluster-a"},
+                                    "custom_fields": {"proxmox_vm_id": 101},
+                                }
+                            ],
                         }
                     ),
                 )
             if method == "GET" and path == "/api/plugins/proxbox/backups/":
-                if query == {"volume_id": "backup-store:vm/101/2026-03-29", "limit": 2}:
+                if query == {
+                    "virtual_machine": 55,
+                    "volume_id": "backup-store:vm/101/2026-03-29",
+                    "limit": 2,
+                }:
                     self._backup_volume_lookups += 1
                     return ApiResponse(
                         status=200,
@@ -1705,7 +1847,11 @@ def test_create_netbox_backups_reuses_duplicate_backup(monkeypatch):
         (
             "GET",
             "/api/plugins/proxbox/backups/",
-            {"volume_id": "backup-store:vm/101/2026-03-29", "limit": 2},
+            {
+                "virtual_machine": 55,
+                "volume_id": "backup-store:vm/101/2026-03-29",
+                "limit": 2,
+            },
             None,
             True,
         ),
