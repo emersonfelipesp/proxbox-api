@@ -109,8 +109,11 @@ def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
 
     upload_step = steps["Upload coverage report"]
     assert upload_step["if"] == "${{ always() }}"
+    # The Gitea gate pins upload-artifact v3: Gitea's artifact service speaks
+    # the v3 protocol only, and the v4 action fails with GHESNotSupportedError
+    # after an otherwise-green run. The GitHub workflow keeps its v4 pin.
     assert upload_step["uses"] == (
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        "actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32"
     )
     assert upload_step["with"] == {
         "name": "coverage-py312-gitea",
