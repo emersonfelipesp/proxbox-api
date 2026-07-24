@@ -91,6 +91,8 @@ def _patch_route(
     cancel_side_effect=None,
     task_status_payload=None,
     journal_entry: dict | None = None,
+    journal_create_side_effect=None,
+    journal_update_side_effect=None,
 ):
     if preflight_payload is None:
         preflight_payload = {
@@ -112,7 +114,14 @@ def _patch_route(
     task_status_mock = AsyncMock(
         return_value=task_status_payload or SimpleNamespace(status="stopped", exitstatus="OK")
     )
-    journal_mock = AsyncMock(return_value=journal_entry)
+    journal_create_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_create_side_effect,
+    )
+    journal_update_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_update_side_effect,
+    )
 
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
@@ -128,7 +137,11 @@ def _patch_route(
         ),
         patch(
             "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
-            journal_mock,
+            journal_create_mock,
+        ),
+        patch(
+            "proxbox_api.routes.proxmox_actions.update_verb_journal_entry",
+            journal_update_mock,
         ),
     ]
 
@@ -139,7 +152,8 @@ def _patch_route(
         "migrate": migrate_mock,
         "cancel": cancel_mock,
         "task_status": task_status_mock,
-        "journal": journal_mock,
+        "journal": journal_update_mock,
+        "journal_create": journal_create_mock,
     }
 
 
@@ -298,6 +312,67 @@ def test_migrate_qemu_success_returns_202_with_sse_url_and_journal(
     assert "verb: migrate" in handles["journal"].call_args.kwargs["comments"]
 
 
+def test_migrate_qemu_creates_writeahead_journal_before_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 792, "url": "/api/extras/journal-entries/792/"}
+
+    async def _migrate_vm(*_args, **_kwargs):
+        events.append("migrate_dispatch")
+        return "UPID:pve-node-01:0001:migrate"
+
+    handles = _patch_route(
+        migrate_side_effect=_migrate_vm,
+        journal_create_side_effect=_create_journal,
+    )
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post(
+            "/proxmox/qemu/100/migrate",
+            params={"endpoint_id": endpoint_id},
+            json={"target": "pve-node-02"},
+        )
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 202
+    assert events.index("journal_create") < events.index("migrate_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+def test_migrate_qemu_writeahead_journal_without_id_blocks_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"})
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post(
+            "/proxmox/qemu/100/migrate",
+            params={"endpoint_id": endpoint_id},
+            json={"target": "pve-node-02"},
+        )
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "migrate"
+    handles["journal_create"].assert_awaited_once()
+    handles["preflight"].assert_not_awaited()
+    handles["migrate"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
+
+
 def test_migrate_qemu_idempotency_key_reuse_returns_cached_202(client: TestClient):
     endpoint_id = _make_endpoint(client)
     handles = _patch_route()
@@ -400,8 +475,70 @@ def test_migrate_qemu_cancel_returns_200_and_writes_journal(client: TestClient):
     assert body["result"] == "cancel_requested"
     assert body["proxmox_task_upid"] == "UPID:pve-node-01:0001:migrate"
     handles["cancel"].assert_awaited_once()
+    handles["journal_create"].assert_awaited_once()
+    assert handles["journal_create"].call_args.kwargs["kind"] == "info"
+    assert "result: in_progress" in handles["journal_create"].call_args.kwargs["comments"]
     handles["journal"].assert_awaited_once()
-    assert handles["journal"].call_args.kwargs["kind"] == "info"
+
+
+def test_migrate_qemu_cancel_creates_writeahead_journal_before_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 792, "url": "/api/extras/journal-entries/792/"}
+
+    async def _cancel_task(*_args, **_kwargs):
+        events.append("cancel_dispatch")
+        return None
+
+    handles = _patch_route(
+        cancel_side_effect=_cancel_task,
+        journal_create_side_effect=_create_journal,
+    )
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.delete(
+            "/proxmox/qemu/100/migrate/UPID:pve-node-01:0001:migrate",
+            params={"endpoint_id": endpoint_id},
+        )
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("cancel_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+def test_migrate_qemu_cancel_writeahead_journal_without_id_blocks_dispatch(
+    client: TestClient,
+):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"})
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.delete(
+            "/proxmox/qemu/100/migrate/UPID:pve-node-01:0001:migrate",
+            params={"endpoint_id": endpoint_id},
+        )
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "migrate"
+    handles["journal_create"].assert_awaited_once()
+    handles["cancel"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 def test_migrate_qemu_cancel_proxmox_failure_writes_warning(client: TestClient):
@@ -422,6 +559,9 @@ def test_migrate_qemu_cancel_proxmox_failure_writes_warning(client: TestClient):
     body = resp.json()
     assert body["result"] == "cancel_failed"
     assert body["reason"] == "proxmox_cancel_failed"
+    handles["journal_create"].assert_awaited_once()
+    assert handles["journal_create"].call_args.kwargs["kind"] == "info"
+    assert "result: in_progress" in handles["journal_create"].call_args.kwargs["comments"]
     handles["journal"].assert_awaited_once()
     assert handles["journal"].call_args.kwargs["kind"] == "warning"
 

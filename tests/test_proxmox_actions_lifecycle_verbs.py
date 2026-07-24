@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import contextmanager
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -32,6 +34,16 @@ class _GateSession:
         if model is ProxmoxEndpoint and object_id == self.endpoint.id:
             return self.endpoint
         return None
+
+
+class _FakeDestroyAPI:
+    def __init__(self, upid: str) -> None:
+        self.upid = upid
+        self.calls: list[dict[str, object]] = []
+
+    async def delete(self, *path_args: str, **params: object) -> dict[str, object]:
+        self.calls.append({"path_args": path_args, "params": params})
+        return {"data": self.upid}
 
 
 @pytest.fixture
@@ -153,6 +165,8 @@ def _patched_route(
     delete_snapshot_result="UPID:pve-node-01:0001:delsnap",
     delete_snapshot_side_effect=None,
     journal_entry: dict | None = None,
+    journal_create_side_effect=None,
+    journal_update_side_effect=None,
 ):
     if journal_entry is None:
         journal_entry = {"id": 793, "url": "/api/extras/journal-entries/793/"}
@@ -171,7 +185,14 @@ def _patched_route(
             return_value=delete_snapshot_result,
             side_effect=delete_snapshot_side_effect,
         ),
-        "journal": AsyncMock(return_value=journal_entry),
+        "journal_create": AsyncMock(
+            return_value=journal_entry,
+            side_effect=journal_create_side_effect,
+        ),
+        "journal": AsyncMock(
+            return_value=journal_entry,
+            side_effect=journal_update_side_effect,
+        ),
     }
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", handles["open_session"]),
@@ -187,7 +208,11 @@ def _patched_route(
         ),
         patch("proxbox_api.routes.proxmox_actions.backup_vm", handles["backup"]),
         patch("proxbox_api.routes.proxmox_actions.delete_vm_snapshot", handles["delete_snapshot"]),
-        patch("proxbox_api.routes.proxmox_actions.write_verb_journal_entry", handles["journal"]),
+        patch(
+            "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
+            handles["journal_create"],
+        ),
+        patch("proxbox_api.routes.proxmox_actions.update_verb_journal_entry", handles["journal"]),
     ]
     started = [patcher.start() for patcher in patches]
     try:
@@ -222,6 +247,49 @@ async def test_reboot_qemu_success_returns_response_shape_and_writes_journal(
     handles["journal"].assert_awaited_once()
     assert "verb: reboot" in handles["journal"].call_args.kwargs["comments"]
     assert "actor: alice@netbox" in handles["journal"].call_args.kwargs["comments"]
+
+
+async def test_reboot_qemu_creates_writeahead_journal_before_dispatch(
+    route_session: _GateSession,
+):
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 793, "url": "/api/extras/journal-entries/793/"}
+
+    async def _reboot_vm(*_args, **_kwargs):
+        events.append("reboot_dispatch")
+        return "UPID:pve-node-01:0001:reboot"
+
+    with _patched_route(
+        reboot_side_effect=_reboot_vm,
+        journal_create_side_effect=_create_journal,
+    ) as handles:
+        resp = await _call_reboot(route_session)
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("reboot_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+async def test_reboot_qemu_writeahead_journal_without_id_blocks_dispatch(
+    route_session: _GateSession,
+):
+    with _patched_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"}) as handles:
+        resp = await _call_reboot(route_session)
+
+    assert resp.status_code == 409
+    body = _json_response(resp)
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "reboot"
+    handles["journal_create"].assert_awaited_once()
+    handles["status"].assert_not_awaited()
+    handles["reboot"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 async def test_reboot_qemu_idempotency_key_reuse_returns_cached_response(
@@ -298,8 +366,59 @@ async def test_delete_qemu_running_stops_then_deletes_and_audits_once(
     assert body["stop_task_upid"] == "UPID:pve-node-01:0001:stop"
     handles["stop"].assert_awaited_once()
     handles["delete"].assert_awaited_once()
+    assert handles["delete"].call_args.kwargs["suppress_dispatcher_journal"] is True
     handles["journal"].assert_awaited_once()
     assert "verb: delete" in handles["journal"].call_args.kwargs["comments"]
+
+
+async def test_delete_qemu_creates_writeahead_journal_before_stop_and_delete(
+    route_session: _GateSession,
+):
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 793, "url": "/api/extras/journal-entries/793/"}
+
+    async def _stop_vm(*_args, **_kwargs):
+        events.append("stop_dispatch")
+        return "UPID:pve-node-01:0001:stop"
+
+    async def _delete_vm(*_args, **_kwargs):
+        events.append("delete_dispatch")
+        return "UPID:pve-node-01:0001:delete"
+
+    with _patched_route(
+        stop_side_effect=_stop_vm,
+        delete_side_effect=_delete_vm,
+        journal_create_side_effect=_create_journal,
+    ) as handles:
+        resp = await _call_delete(route_session)
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("stop_dispatch")
+    assert events.index("journal_create") < events.index("delete_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+async def test_delete_qemu_writeahead_journal_without_id_blocks_dispatch(
+    route_session: _GateSession,
+):
+    with _patched_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"}) as handles:
+        resp = await _call_delete(route_session)
+
+    assert resp.status_code == 409
+    body = _json_response(resp)
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "delete"
+    handles["journal_create"].assert_awaited_once()
+    handles["status"].assert_not_awaited()
+    handles["stop"].assert_not_awaited()
+    handles["delete"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 async def test_delete_qemu_unresolved_netbox_vm_fails_closed_before_dispatch(
@@ -393,6 +512,40 @@ async def test_delete_qemu_stop_failure_writes_warning_and_skips_delete(
     assert handles["journal"].call_args.kwargs["kind"] == "warning"
 
 
+async def test_delete_prepare_stop_failure_cancelled_after_internal_finalize_patches_once(
+    route_session: _GateSession,
+):
+    patch_started = asyncio.Event()
+    finish_patch = asyncio.Event()
+    patched_comments: list[str] = []
+
+    async def _update_journal(_nb, **kwargs):
+        patch_started.set()
+        await finish_patch.wait()
+        patched_comments.append(kwargs["comments"])
+        return {"id": 793, "url": "/api/extras/journal-entries/793/"}
+
+    with _patched_route(
+        stop_side_effect=ProxmoxAPIError(message="stop refused"),
+        journal_update_side_effect=_update_journal,
+    ) as handles:
+        task = asyncio.create_task(_call_delete(route_session))
+        await asyncio.wait_for(patch_started.wait(), timeout=1)
+        task.cancel()
+        await asyncio.sleep(0)
+        finish_patch.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    handles["journal_create"].assert_awaited_once()
+    handles["stop"].assert_awaited_once()
+    handles["delete"].assert_not_awaited()
+    handles["journal"].assert_awaited_once()
+    assert len(patched_comments) == 1
+    assert "result: failed" in patched_comments[0]
+    assert "result: interrupted" not in patched_comments[0]
+
+
 async def test_delete_qemu_delete_failure_writes_warning_journal(
     route_session: _GateSession,
 ):
@@ -421,6 +574,56 @@ async def test_delete_lxc_routes_through_same_dispatch(route_session: _GateSessi
     assert body["vmid"] == 101
     node_call = handles["node"].call_args
     assert node_call.args[1] == "lxc" or node_call.kwargs.get("vm_type") == "lxc"
+
+
+@pytest.mark.parametrize(
+    ("module_name", "dispatcher_name", "kind"),
+    [
+        ("proxbox_api.routes.intent.dispatchers.qemu_destroy", "dispatch_qemu_destroy", "qemu"),
+        ("proxbox_api.routes.intent.dispatchers.lxc_destroy", "dispatch_lxc_destroy", "lxc"),
+    ],
+)
+async def test_destroy_dispatcher_suppresses_nested_journal_when_requested(
+    route_session: _GateSession,
+    module_name: str,
+    dispatcher_name: str,
+    kind: str,
+):
+    from proxbox_api.routes.intent.dispatchers.common import IntentEndpointContext
+
+    module = import_module(module_name)
+    dispatcher = getattr(module, dispatcher_name)
+    fake_api = _FakeDestroyAPI(f"UPID:pve-node-01:0001:{kind}-destroy")
+    journal = AsyncMock()
+
+    with (
+        patch(f"{module_name}._gate", new=AsyncMock(return_value=route_session.endpoint)),
+        patch(
+            f"{module_name}._open_proxmox_session",
+            new=AsyncMock(return_value=SimpleNamespace(session=fake_api)),
+        ),
+        patch(f"{module_name}.write_deletion_request_journal", journal),
+    ):
+        result = await dispatcher(
+            IntentEndpointContext(
+                session=route_session,
+                endpoint_id=_endpoint_id(route_session),
+            ),
+            100,
+            "pve-node-01",
+            "run-1",
+            actor="alice@netbox",
+            suppress_journal=True,
+        )
+
+    assert result["upid"] == f"UPID:pve-node-01:0001:{kind}-destroy"
+    assert fake_api.calls == [
+        {
+            "path_args": ("nodes", "pve-node-01", kind, "100"),
+            "params": {"purge": 1},
+        }
+    ]
+    journal.assert_not_awaited()
 
 
 async def test_backup_qemu_success_forwards_vzdump_body_and_writes_journal(
@@ -458,6 +661,70 @@ async def test_backup_qemu_success_forwards_vzdump_body_and_writes_journal(
     }
     handles["journal"].assert_awaited_once()
     assert "verb: backup" in handles["journal"].call_args.kwargs["comments"]
+
+
+async def test_backup_qemu_creates_writeahead_journal_before_dispatch(
+    route_session: _GateSession,
+):
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 793, "url": "/api/extras/journal-entries/793/"}
+
+    async def _backup_vm(*_args, **_kwargs):
+        events.append("backup_dispatch")
+        return "UPID:pve-node-01:0001:vzdump"
+
+    with _patched_route(
+        backup_side_effect=_backup_vm,
+        journal_create_side_effect=_create_journal,
+    ) as handles:
+        resp = await _call_backup(
+            route_session,
+            body=proxmox_actions.BackupRequest(storage="pbs-main"),
+        )
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("backup_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+async def test_backup_qemu_writeahead_journal_without_id_blocks_dispatch(
+    route_session: _GateSession,
+):
+    with _patched_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"}) as handles:
+        resp = await _call_backup(
+            route_session,
+            body=proxmox_actions.BackupRequest(storage="pbs-main"),
+        )
+
+    assert resp.status_code == 409
+    body = _json_response(resp)
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "backup"
+    handles["journal_create"].assert_awaited_once()
+    handles["backup"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
+
+
+async def test_backup_qemu_cancelled_dispatch_finalizes_writeahead_then_reraises(
+    route_session: _GateSession,
+):
+    with _patched_route(backup_side_effect=asyncio.CancelledError()) as handles:
+        with pytest.raises(asyncio.CancelledError):
+            await _call_backup(
+                route_session,
+                body=proxmox_actions.BackupRequest(storage="pbs-main"),
+            )
+
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+    assert handles["journal"].call_args.kwargs["kind"] == "warning"
+    assert "result: interrupted" in handles["journal"].call_args.kwargs["comments"]
 
 
 async def test_backup_qemu_idempotency_key_reuse_returns_cached_response(
@@ -552,6 +819,48 @@ async def test_delete_snapshot_qemu_success_returns_shape_and_writes_journal(
     assert "pre-upgrade" in call_args.args or call_args.kwargs.get("snapname") == "pre-upgrade"
     handles["journal"].assert_awaited_once()
     assert "verb: delete_snapshot" in handles["journal"].call_args.kwargs["comments"]
+
+
+async def test_delete_snapshot_qemu_creates_writeahead_journal_before_dispatch(
+    route_session: _GateSession,
+):
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 793, "url": "/api/extras/journal-entries/793/"}
+
+    async def _delete_snapshot(*_args, **_kwargs):
+        events.append("delete_snapshot_dispatch")
+        return "UPID:pve-node-01:0001:delsnap"
+
+    with _patched_route(
+        delete_snapshot_side_effect=_delete_snapshot,
+        journal_create_side_effect=_create_journal,
+    ) as handles:
+        resp = await _call_delete_snapshot(route_session)
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("delete_snapshot_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+async def test_delete_snapshot_qemu_writeahead_journal_without_id_blocks_dispatch(
+    route_session: _GateSession,
+):
+    with _patched_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"}) as handles:
+        resp = await _call_delete_snapshot(route_session)
+
+    assert resp.status_code == 409
+    body = _json_response(resp)
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "delete_snapshot"
+    handles["journal_create"].assert_awaited_once()
+    handles["delete_snapshot"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 async def test_delete_snapshot_qemu_idempotency_key_reuse_returns_cached_response(

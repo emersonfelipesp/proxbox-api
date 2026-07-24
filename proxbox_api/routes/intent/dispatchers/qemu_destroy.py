@@ -17,24 +17,33 @@ from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
 from proxbox_api.services.verb_dispatch import write_verb_journal_entry
 
 
-async def dispatch_qemu_destroy(endpoint, vmid: int, node: str, run_uuid, *, actor) -> dict:
+async def dispatch_qemu_destroy(
+    endpoint,
+    vmid: int,
+    node: str,
+    run_uuid,
+    *,
+    actor,
+    suppress_journal: bool = False,
+) -> dict:
     endpoint_context = coerce_endpoint_context(endpoint)
     gated = await _gate(endpoint_context.session, endpoint_context.endpoint_id)
     if isinstance(gated, JSONResponse):
-        await write_deletion_request_journal(
-            journal_writer=write_verb_journal_entry,
-            session=endpoint_context.session,
-            endpoint=None,
-            endpoint_id=endpoint_context.endpoint_id or 0,
-            verb="deletion_request_execute",
-            result="blocked",
-            vmid=vmid,
-            actor=actor,
-            run_uuid=str(run_uuid),
-            target_kind="qemu",
-            journal_kind="warning",
-            error_detail="writes_disabled_for_endpoint",
-        )
+        if not suppress_journal:
+            await write_deletion_request_journal(
+                journal_writer=write_verb_journal_entry,
+                session=endpoint_context.session,
+                endpoint=None,
+                endpoint_id=endpoint_context.endpoint_id or 0,
+                verb="deletion_request_execute",
+                result="blocked",
+                vmid=vmid,
+                actor=actor,
+                run_uuid=str(run_uuid),
+                target_kind="qemu",
+                journal_kind="warning",
+                error_detail="writes_disabled_for_endpoint",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="writes_disabled_for_endpoint"
         )
@@ -56,34 +65,36 @@ async def dispatch_qemu_destroy(endpoint, vmid: int, node: str, run_uuid, *, act
             node,
             message,
         )
+        if not suppress_journal:
+            await write_deletion_request_journal(
+                journal_writer=write_verb_journal_entry,
+                session=endpoint_context.session,
+                endpoint=gated,
+                endpoint_id=gated.id or endpoint_context.endpoint_id or 0,
+                verb="deletion_request_execute",
+                result="failed",
+                vmid=vmid,
+                actor=actor,
+                run_uuid=str(run_uuid),
+                target_kind="qemu",
+                journal_kind="warning",
+                error_detail=message,
+            )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message) from error
+
+    if not suppress_journal:
         await write_deletion_request_journal(
             journal_writer=write_verb_journal_entry,
             session=endpoint_context.session,
             endpoint=gated,
             endpoint_id=gated.id or endpoint_context.endpoint_id or 0,
             verb="deletion_request_execute",
-            result="failed",
+            result="succeeded",
             vmid=vmid,
             actor=actor,
             run_uuid=str(run_uuid),
             target_kind="qemu",
-            journal_kind="warning",
-            error_detail=message,
+            journal_kind="success",
+            proxmox_upid=upid,
         )
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message) from error
-
-    await write_deletion_request_journal(
-        journal_writer=write_verb_journal_entry,
-        session=endpoint_context.session,
-        endpoint=gated,
-        endpoint_id=gated.id or endpoint_context.endpoint_id or 0,
-        verb="deletion_request_execute",
-        result="succeeded",
-        vmid=vmid,
-        actor=actor,
-        run_uuid=str(run_uuid),
-        target_kind="qemu",
-        journal_kind="success",
-        proxmox_upid=upid,
-    )
     return {"upid": upid, "run_uuid": str(run_uuid)}
