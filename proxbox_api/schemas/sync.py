@@ -274,6 +274,15 @@ class SyncBehaviorFlags(ProxboxBaseModel):
             "before this feature shipped."
         ),
     )
+    sync_node_interfaces: bool = Field(
+        default=False,
+        title="Sync Node Interfaces",
+        description=(
+            "When true, reconcile the node's full /nodes/{node}/network "
+            "topology (physical NICs, bridges, bonds, VLAN sub-interfaces) "
+            "into dcim.Interface, instead of only the in-use bridges."
+        ),
+    )
 
 
 def behavior_flags_from_query_params(

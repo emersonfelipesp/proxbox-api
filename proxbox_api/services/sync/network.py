@@ -240,10 +240,23 @@ async def sync_node_network(  # noqa: C901
     ``dcim.Interface`` records on the node device, including topology
     (bridge/bond membership, VLAN sub-interface parent), enabled state and IPs.
 
+    ``network_entries`` must be the **raw** ``/nodes/{node}/network`` payload
+    (a direct proxmox-sdk call), not the normalized ``ProxmoxNodeInterface`` SDK
+    model. The reconcile reads hyphenated keys (``vlan-id``,
+    ``vlan-raw-device``) and topology/state keys (``bridge_ports``,
+    ``bond_slaves``, ``options``, ``active``, ``cidr6``) that the normalized
+    model renames or drops.
+
     Two phases are required because the topology FKs (``bridge``/``lag``/
     ``parent``) reference *sibling* interfaces: phase 1 reconciles every
     interface's scalar fields + IPs (+ VLAN objects) and collects a name -> id
     map; phase 2 patches the cross-references once all ids are known.
+
+    A VLAN sub-interface (e.g. ``vmbr1.200``) is modeled as ``mode=tagged`` with
+    the VLAN in ``tagged_vlans`` because in Proxmox it is an 802.1Q-tagged
+    sub-interface carrying that single VID on its parent — distinct from the
+    legacy per-interface path (``sync_node_interface_and_ip``), which models a
+    bridge's ``untagged_vlan`` as ``mode=access``.
     """
     from proxbox_api.services.sync.mac_address import normalize_mac, reconcile_mac_for_interface
 

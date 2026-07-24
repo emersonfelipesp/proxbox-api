@@ -6,7 +6,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from proxbox_api.dependencies import ProxboxTagDep, ResolvedSyncOverwriteFlagsDep
+from proxbox_api.dependencies import (
+    ProxboxTagDep,
+    ResolvedSyncBehaviorFlagsDep,
+    ResolvedSyncOverwriteFlagsDep,
+)
 from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import nested_tag_payload, rest_patch_async, rest_reconcile_async
@@ -22,6 +26,7 @@ from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfacesDep
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.devices import ProxmoxCreateDevicesDep, create_proxmox_devices
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
+from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
 router = APIRouter()
@@ -259,14 +264,100 @@ async def _emit_node_interface_event(websocket, use_websocket: bool, payload: di
         await websocket.send_json(payload)
 
 
+async def _sync_node_network_topology(
+    netbox_session,
+    tag_refs: list[dict[str, object]],
+    node_obj,
+    proxmox_session,
+    websocket=None,
+    use_websocket: bool = False,
+) -> list[dict]:
+    """Reconcile a node's full ``/nodes/{node}/network`` topology in one pass.
+
+    Feeds ``sync_node_network`` the **raw** ``/nodes/{node}/network`` payload
+    (hyphenated keys such as ``vlan-id``/``vlan-raw-device`` plus
+    ``bridge_ports``/``bond_slaves``/``options``/``active``/``cidr6``) obtained
+    via a direct proxmox-sdk call, not the normalized ``node_obj.network`` SDK
+    model whose fields the topology reconcile does not surface.
+    """
+    from proxbox_api.netbox_rest import rest_first_async
+    from proxbox_api.proxmox_async import resolve_async
+    from proxbox_api.services.sync.network import sync_node_network
+
+    node_name = node_obj.name
+
+    # sync_node_network writes dcim.Interface rows keyed by the NetBox device id,
+    # so resolve the device by node name (node_obj.id is the Proxmox id, not the
+    # NetBox device PK).
+    device = await rest_first_async(
+        netbox_session,
+        "/api/dcim/devices/",
+        query={"name": node_name, "limit": 1},
+    )
+    device_id = device.get("id") if isinstance(device, dict) else getattr(device, "id", None)
+    if device_id is None:
+        logger.warning(
+            "Skipping node network topology sync for %s: NetBox device not found",
+            node_name,
+        )
+        return []
+
+    try:
+        raw_network = await resolve_async(
+            proxmox_session.session(f"/nodes/{node_name}/network").get()
+        )
+    except Exception as exc:
+        logger.warning("Failed to fetch raw network for node %s: %s", node_name, exc)
+        return []
+
+    try:
+        results = await sync_node_network(
+            netbox_session,
+            {"id": device_id, "name": node_name},
+            list(raw_network or []),
+            tag_refs,
+        )
+    except Exception as exc:
+        logger.warning("Failed to sync node network topology for %s: %s", node_name, exc)
+        return []
+
+    for result in results:
+        await _emit_node_interface_event(
+            websocket,
+            use_websocket,
+            {
+                "object": "interface",
+                "data": {
+                    "completed": True,
+                    "rowid": result.get("name"),
+                    "name": result.get("name"),
+                    "netbox_id": result.get("id"),
+                    "device": node_name,
+                    "ip_address": (result.get("ip_addresses") or [None])[0],
+                },
+            },
+        )
+
+    return results
+
+
 async def _sync_node_interfaces_for_node(
     netbox_session: NetBoxAsyncSessionDep,
     tag_refs: list[dict[str, object]],
     node_obj,
     websocket=None,
     use_websocket: bool = False,
+    proxmox_session=None,
+    sync_full_topology: bool = False,
 ) -> list[dict]:
-    """Sync all interfaces for a single node and emit optional websocket updates."""
+    """Sync all interfaces for a single node and emit optional websocket updates.
+
+    When ``sync_full_topology`` is set (the ``sync_node_interfaces`` behavior
+    flag) and a ``proxmox_session`` is provided, the node's full
+    ``/nodes/{node}/network`` topology is reconciled via ``sync_node_network``
+    in a single pass. Otherwise the historical per-interface loop over the
+    normalized SDK model is used, keeping existing deployments unchanged.
+    """
     from proxbox_api.services.sync.network import sync_node_interface_and_ip
 
     results: list[dict] = []
@@ -285,6 +376,30 @@ async def _sync_node_interfaces_for_node(
             },
         },
     )
+
+    if sync_full_topology and proxmox_session is not None:
+        results = await _sync_node_network_topology(
+            netbox_session,
+            tag_refs,
+            node_obj,
+            proxmox_session,
+            websocket=websocket,
+            use_websocket=use_websocket,
+        )
+        await _emit_node_interface_event(
+            websocket,
+            use_websocket,
+            {
+                "object": "node_interface",
+                "data": {
+                    "completed": True,
+                    "rowid": node_name,
+                    "name": node_name,
+                    "count": len(results),
+                },
+            },
+        )
+        return results
 
     try:
         node_networks = node_obj.network or []
@@ -390,6 +505,8 @@ async def create_all_device_interfaces(
     clusters_status: ClusterStatusDep,
     websocket=None,
     use_websocket: bool = False,
+    pxs=None,
+    behavior_flags=None,
 ) -> list[dict]:
     """Sync all Proxmox node interfaces and their IP addresses across all clusters.
 
@@ -399,6 +516,12 @@ async def create_all_device_interfaces(
         clusters_status: All cluster status objects from Proxmox.
         websocket: Optional WebSocketSSEBridge for progress events.
         use_websocket: Whether to emit progress events.
+        pxs: Proxmox sessions, one per cluster in ``clusters_status`` order
+            (both derive from the same ``ProxmoxSessionsDep``). Required for the
+            ``sync_node_interfaces`` full-topology path, which needs the raw
+            ``/nodes/{node}/network`` payload.
+        behavior_flags: Resolved ``SyncBehaviorFlags``; ``sync_node_interfaces``
+            selects the full-topology reconcile.
 
     Returns:
         List of all synced interface records.
@@ -409,9 +532,17 @@ async def create_all_device_interfaces(
     if not clusters_status:
         return all_results
 
-    for cluster_status in clusters_status:
+    sync_full_topology = bool(getattr(behavior_flags, "sync_node_interfaces", False))
+    # cluster_status() builds one ClusterStatusSchema per Proxmox session, in
+    # session order, so clusters_status and pxs line up positionally. Any
+    # session in a cluster can serve /nodes/{node}/network for that cluster.
+    sessions = list(pxs) if pxs is not None else []
+
+    for index, cluster_status in enumerate(clusters_status):
         if not cluster_status or not cluster_status.node_list:
             continue
+
+        proxmox_session = sessions[index] if index < len(sessions) else None
 
         for node_obj in cluster_status.node_list:
             all_results.extend(
@@ -421,6 +552,8 @@ async def create_all_device_interfaces(
                     node_obj,
                     websocket=websocket,
                     use_websocket=use_websocket,
+                    proxmox_session=proxmox_session,
+                    sync_full_topology=sync_full_topology,
                 )
             )
 
@@ -435,16 +568,22 @@ async def create_all_devices_interfaces(
     netbox_session: NetBoxSessionDep,
     clusters_status: ClusterStatusDep,
     tag: ProxboxTagDep,
+    pxs: ProxmoxSessionsDep,
+    behavior_flags: ResolvedSyncBehaviorFlagsDep,
 ):
     """Sync network interfaces for all Proxmox nodes (dcim.Device interfaces).
 
     Iterates through all cluster nodes and syncs their network interfaces
     and IP addresses to NetBox dcim.Interface and ipam.IPAddress records.
+    With the ``sync_node_interfaces`` behavior flag set, the full
+    ``/nodes/{node}/network`` topology is reconciled instead.
     """
     results = await create_all_device_interfaces(
         netbox_session=netbox_session,
         tag=tag,
         clusters_status=clusters_status,
+        pxs=pxs,
+        behavior_flags=behavior_flags,
     )
     return results
 
@@ -454,6 +593,8 @@ async def create_all_devices_interfaces_stream(
     netbox_session: NetBoxSessionDep,
     clusters_status: ClusterStatusDep,
     tag: ProxboxTagDep,
+    pxs: ProxmoxSessionsDep,
+    behavior_flags: ResolvedSyncBehaviorFlagsDep,
 ):
     """Streaming endpoint for syncing all Proxmox node interfaces.
 
@@ -471,6 +612,8 @@ async def create_all_devices_interfaces_stream(
                     clusters_status=clusters_status,
                     websocket=bridge,
                     use_websocket=True,
+                    pxs=pxs,
+                    behavior_flags=behavior_flags,
                 )
             finally:
                 await bridge.close()
