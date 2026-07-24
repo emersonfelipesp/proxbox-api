@@ -344,17 +344,29 @@ class NetBoxInterfaceSyncState(BaseModel):
     device: int
     name: str
     status: str = "active"
+    enabled: bool = True
     type: str
     bridge: int | None = None
+    lag: int | None = None
+    parent: int | None = None
     untagged_vlan: int | None = None
+    tagged_vlans: list[int] = Field(default_factory=list)
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("device", "bridge", "untagged_vlan", mode="before")
+    @field_validator("device", "bridge", "lag", "parent", "untagged_vlan", mode="before")
     @classmethod
     def normalize_device(cls, value: object) -> object:
         return _relation_id(value)
+
+    @field_validator("tagged_vlans", mode="before")
+    @classmethod
+    def normalize_tagged_vlans(cls, value: object) -> list[int]:
+        if not value:
+            return []
+        items = value if isinstance(value, (list, tuple)) else [value]
+        return [vid for vid in (_relation_id(v) for v in items) if vid is not None]
 
     @field_validator("status", mode="before")
     @classmethod
