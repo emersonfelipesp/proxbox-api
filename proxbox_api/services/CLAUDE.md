@@ -20,6 +20,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
+- `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue
   Python fallback and optional Rust bridge.
