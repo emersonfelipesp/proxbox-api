@@ -149,6 +149,10 @@ class CephApplyError(RuntimeError):
 class _CephRunLeaseLost(RuntimeError):
     """The active worker no longer owns a live durable run lease."""
 
+    def __init__(self, run_id: object) -> None:
+        super().__init__(run_id)
+        self.run_id = run_id
+
 
 _TaskResultT = TypeVar("_TaskResultT")
 
@@ -962,10 +966,15 @@ async def recover_stale_operation_run(
         },
     }
     errors = [*redact_secrets(record.errors or []), "In-flight run lease expired."]
+    # Capture the primary key before the rollback: rollback expires every
+    # instance in the session, and a post-rollback ``record.id`` read would
+    # lazy-load through the sync facade and raise ``MissingGreenlet`` on an
+    # ``AsyncSession`` — the same mechanism fixed in ``_renew_run_lease``.
+    record_id = record.id
     await _maybe_await(session.rollback())
     statement = (
         sa_update(CephOperationRunRecord)
-        .where(col(CephOperationRunRecord.id) == record.id)
+        .where(col(CephOperationRunRecord.id) == record_id)
         .where(col(CephOperationRunRecord.status).in_(("running", "dispatching")))
         .where(
             or_(
@@ -988,10 +997,10 @@ async def recover_stale_operation_run(
     )
     result = await _maybe_await(session.exec(statement))
     if result.rowcount == 1:
-        sequence = await _next_event_sequence(session, record.id)
+        sequence = await _next_event_sequence(session, record_id)
         session.add(
             CephOperationEventRecord(
-                run_id=record.id,
+                run_id=record_id,
                 sequence=sequence,
                 event="run_lease_expired",
                 status="outcome_unknown",
@@ -1011,7 +1020,7 @@ async def recover_stale_operation_run(
     refreshed = await _maybe_await(
         session.exec(
             select(CephOperationRunRecord)
-            .where(CephOperationRunRecord.id == record.id)
+            .where(CephOperationRunRecord.id == record_id)
             .execution_options(populate_existing=True)
         )
     )
@@ -1020,15 +1029,21 @@ async def recover_stale_operation_run(
 
 async def _operation_after_lease_loss(
     session: DatabaseSessionProtocol,
-    record: CephOperationRunRecord,
+    run_id: object,
 ) -> OperationRun:
-    """Return a conservative terminal view after a worker loses its lease."""
+    """Return a conservative terminal view after a worker loses its lease.
+
+    Takes the scalar run id — never the ORM instance. The instance a losing
+    worker holds has typically just been expired by a renewal rollback, and
+    reading ``.id`` off it would lazy-load through the sync facade and raise
+    ``MissingGreenlet`` on an ``AsyncSession``.
+    """
 
     await _maybe_await(session.rollback())
     result = await _maybe_await(
         session.exec(
             select(CephOperationRunRecord)
-            .where(CephOperationRunRecord.id == record.id)
+            .where(CephOperationRunRecord.id == run_id)
             .execution_options(populate_existing=True)
         )
     )
@@ -1794,8 +1809,13 @@ async def _dispatch_provider_operation(
             # checkpoint before the caller's cancellation is honored.
             raw_result = dispatch.result()
             cancellation_deferred = True
-    except _CephRunLeaseLost:
-        return run_record, None, await _operation_after_lease_loss(session, run_record), False
+    except _CephRunLeaseLost as lease_loss:
+        return (
+            run_record,
+            None,
+            await _operation_after_lease_loss(session, lease_loss.run_id),
+            False,
+        )
     except CephWriteGateDenied as exc:
         errors = [
             f"{operation.action} {operation.kind} {operation.target_ref}: "
@@ -2121,8 +2141,8 @@ async def _resolve_submitted_task(
                 node=node,
                 upid=upid,
             )
-        except _CephRunLeaseLost:
-            return run_record, await _operation_after_lease_loss(session, run_record)
+        except _CephRunLeaseLost as lease_loss:
+            return run_record, await _operation_after_lease_loss(session, lease_loss.run_id)
         except asyncio.CancelledError:
             await _persist_cancelled_checkpoint(
                 session,
@@ -2659,8 +2679,8 @@ async def apply_plan(
         ) from exc
     try:
         return await _execute_plan_operations(plan, adapter, session, run_record)
-    except _CephRunLeaseLost:
-        return await _operation_after_lease_loss(session, run_record)
+    except _CephRunLeaseLost as lease_loss:
+        return await _operation_after_lease_loss(session, lease_loss.run_id)
 
 
 async def reconcile_provider(
