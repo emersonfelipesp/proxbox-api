@@ -39,7 +39,8 @@ Core behavior:
 - Creates dependencies such as cluster, device, and role as needed.
 - Creates VM interfaces and IP addresses when possible.
 - Writes journal entries for auditability.
-- In full-update mode, VM creation skips network writes so the dedicated VM interface and IP stages own that work.
+- In full-update mode, VM creation skips network writes and task history so the
+  dedicated VM-interface, VM-IP, and task-history stages each own that work once.
 - Duplicate VM names within a single NetBox cluster are resolved deterministically before the operation queue is built. See [VM Name Collision Resolver](./name-collision-resolver.md).
 
 ### Dependency-Ordered Async Model
@@ -68,9 +69,23 @@ Per-VM required order:
 2. Reconcile VM in NetBox (create/patch).
 3. Reconcile VM interfaces and IPs (if enabled).
 4. Reconcile VM disks.
-5. Reconcile VM task history.
+5. After all successful VMs are known, reconcile their task history in one
+   node-oriented aggregate (unless `sync_task_history=false`).
 
 This means async is used for throughput where objects are independent, while parent-child dependencies are always awaited in sequence.
+
+### Task-history ownership
+
+The create and targeted create routes default `sync_task_history=true`, which
+preserves standalone behavior. They pass only successfully reconciled NetBox VM
+IDs to one aggregate call. Full-update explicitly sets the VM-stage flag to
+`false` and runs its dedicated all-VM stage once afterward. The collector pages
+each selected node archive once rather than scanning every node for every VM;
+partial coverage is returned as `degraded=true`. Standalone REST converts that
+owned degraded aggregate to HTTP 502 after retaining reconciled rows, while SSE
+publishes the degraded phase summary. Selected NetBox ID lookups use bounded
+repeated-value chunks and fail closed if any chunk cannot be read. See
+[Task History Synchronization](./task-history.md).
 
 ### Parallelism Rules
 
@@ -249,6 +264,7 @@ Endpoints:
 - `GET /virtualization/virtual-machines/backups/create`
 - `GET /virtualization/virtual-machines/backups/all/create`
 - `GET /virtualization/virtual-machines/backups/all/create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/backups/create/stream`
 
 Core behavior:
 
@@ -256,7 +272,23 @@ Core behavior:
 - Maps backups to NetBox VMs.
 - Creates backup objects under the NetBox plugin model.
 - Handles duplicate detection.
-- Optional deletion of backups missing from the Proxmox source.
+- Optionally deletes backups missing from the Proxmox source when
+  `delete_nonexistent_backup=true`.
+
+Targeted routes and `netbox_vm_ids` selections resolve each NetBox VM to its
+exact `(Proxmox endpoint ID, normalized cluster name, Proxmox VMID)` owner.
+Discovery queries only that endpoint and cluster; it never widens the selected
+scope to another endpoint that happens to reuse the VMID. Missing ownership, an
+unavailable owner session, or multiple selected VMs claiming the same identity
+fail closed instead of guessing. Reconciliation then keys each backup by its
+owning NetBox VM plus `volume_id`, so identical volume IDs owned by different
+VMs remain independent.
+
+Stale deletion is limited to VMs whose owning endpoint/cluster discovery
+completed successfully. Any failed node/storage discovery task makes the run
+partial and suppresses the backup deletion pass. Conversely, a fully successful
+discovery that finds zero backups is authoritative and may remove stale rows,
+but only for owner-covered VMs in the requested scope.
 
 ## Snapshot Sync Flow
 
@@ -265,12 +297,27 @@ Endpoints:
 - `GET /virtualization/virtual-machines/snapshots/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/snapshots/create/stream`
 
 Core behavior:
 
 - Discovers snapshots for NetBox VMs mapped to Proxmox VM IDs.
 - Reconciles snapshot objects in the NetBox plugin model.
 - Resolves related storage records when possible.
+
+Targeted routes and `netbox_vm_ids` selections preserve the exact NetBox VM,
+Proxmox endpoint, cluster, and VMID ownership scope. Only the matching endpoint
+session may be queried. A missing or ambiguous owner session, or an unresolved
+node, fails closed for that VM without falling back to another endpoint with the
+same VMID. Snapshot reconciliation also includes the owning NetBox VM in its
+lookup identity, preventing cross-owner patches when names and VMIDs collide.
+
+With `delete_nonexistent_snapshot=true`, stale cleanup is owner-scoped and is
+enabled for a VM only after its snapshot discovery completed successfully. A
+partial endpoint, node, or fetch failure suppresses destructive cleanup for that
+owner. A fully successful empty discovery may remove stale snapshots for that
+exact NetBox VM; snapshots owned by VMs outside the proven-complete scope are
+not touched.
 
 ## Storage Sync Flow
 

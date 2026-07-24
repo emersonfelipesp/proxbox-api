@@ -28,7 +28,7 @@ async def test_create_all_virtual_machine_backups_returns_empty_list_on_no_backu
         return {}
 
     async def empty_vm_cache(_nb):
-        return {}
+        return backups_vm._BackupVMCache()
 
     monkeypatch.setattr(backups_vm, "_load_storage_index", empty_storage_index)
     monkeypatch.setattr(backups_vm, "_prefetch_vm_cache", empty_vm_cache)

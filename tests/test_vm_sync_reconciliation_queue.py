@@ -448,22 +448,22 @@ async def test_sidecar_hydration_makes_reconciliation_queue_adopt_cf_absent_vm(m
 @pytest.mark.asyncio
 async def test_load_netbox_virtual_machine_snapshot_can_bypass_stale_cache(monkeypatch):
     cleared_paths: list[str] = []
-    queries: list[dict[str, object]] = []
+    page_sizes: list[int | None] = []
 
     def _fake_clear(nb, path):
         cleared_paths.append(path)
 
-    async def _fake_list(nb, path, *, query=None):
-        queries.append(dict(query or {}))
+    async def _fake_list(nb, path, *, page_size=None):
+        page_sizes.append(page_size)
         return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
 
     monkeypatch.setattr(sync_vm, "clear_rest_get_cache_for_path", _fake_clear)
-    monkeypatch.setattr(sync_vm, "rest_list_async", _fake_list)
+    monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _fake_list)
 
     snapshot = await sync_vm._load_netbox_virtual_machine_snapshot(object(), fresh=True)
 
     assert cleared_paths == ["/api/virtualization/virtual-machines/"]
-    assert queries == [{"limit": 200, "offset": 0}]
+    assert page_sizes == [200]
     assert snapshot == [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
 
 

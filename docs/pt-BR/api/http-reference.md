@@ -15,13 +15,13 @@ Para schemas completos de request e response, use o OpenAPI em tempo de execucao
 
 Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Proxbox-API-Key`. Consulte [Autenticacao](../getting-started/authentication.md) para o fluxo completo de bootstrap e gerenciamento de chaves.
 
-- `GET /auth/bootstrap-status` - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao.
-- `POST /auth/register-key` - Registra a primeira chave de API. Isento de autenticacao; falha se ja existir uma chave.
+- `GET /auth/bootstrap-status` - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao. `needs_bootstrap` e `false` assim que a reivindicacao duravel de bootstrap existe ou qualquer registro de chave (ativa ou inativa) existe.
+- `POST /auth/register-key` - Registra a primeira chave de API. Isento de autenticacao; a reivindicacao singleton duravel de bootstrap e o hash bcrypt sao gravados em uma unica transacao, entao o bootstrap so pode ser consumido uma vez por banco de dados. Qualquer chamada posterior — inclusive depois de todas as chaves serem removidas ou desativadas — retorna `409 Conflict`.
 - `POST /auth/keys` - Cria uma nova chave de API. Retorna o valor da chave uma unica vez; armazene com seguranca.
 - `GET /auth/keys` - Lista todas as chaves de API. Os valores sao ocultados (apenas metadados sao retornados).
-- `DELETE /auth/keys/{key_id}` - Remove uma chave de API pelo ID.
+- `DELETE /auth/keys/{key_id}` - Remove uma chave de API pelo ID. Recusa remover a ultima chave ativa com `409` (`last_active_api_key_required`); crie e verifique uma substituta antes.
 - `POST /auth/keys/{key_id}/activate` - Reativa uma chave previamente desativada.
-- `POST /auth/keys/{key_id}/deactivate` - Desativa uma chave ativa sem remove-la.
+- `POST /auth/keys/{key_id}/deactivate` - Desativa uma chave ativa sem remove-la. Recusa desativar a ultima chave ativa com `409` (`last_active_api_key_required`).
 
 ## Admin
 
@@ -424,11 +424,34 @@ Cobertura de testes:
 - `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
+- `GET /virtualization/virtual-machines/task-history/create/stream` - Etapa SSE
+  dedicada de task history; aceita `netbox_vm_ids` separado por virgulas.
+  Omissao seleciona todas as VMs; valor vazio, malformado ou nao positivo recebe
+  HTTP 422 antes do inicio do SSE. O parametro opcional `fetch_max_concurrency`
+  precisa ser pelo menos 1. Cada
+  requisicao limpa e testa novamente o cache de indisponibilidade do sidecar.
+  Internamente os IDs selecionados sao enviados ao NetBox como valores
+  repetidos em lotes deduplicados de no maximo 100; a falha de qualquer lote
+  aborta a selecao explicita.
+
+As quatro rotas de criacao de VM (geral/direcionada e suas variantes SSE)
+aceitam `sync_task_history`, com padrao `true`. Quando `false`, a etapa de VM
+pula o unico agregado de task history porque uma etapa dedicada e a dona. Um
+agregado degradado preserva as linhas reconciliadas, mas o REST standalone
+responde HTTP 502; o SSE publica o resumo degradado da etapa de task history.
+
+O campo `created` do resultado de task history e mantido por compatibilidade e
+conta todas as linhas reconciliadas (criadas, atualizadas e inalteradas), nao
+somente operacoes POST.
 
 ## Full Update
 
 - `GET /full-update` - Executa sync de devices, storages, VMs, task history, discos, backups, snapshots, interfaces de node, interfaces de VM, IPs de VM, replications e backup routines.
 - `GET /full-update/stream` - Variacao SSE.
+
+As duas variantes de full-update enviam `sync_task_history=false` para a etapa
+de VM e depois executam exatamente uma etapa dedicada de task history. O
+override opcional `fetch_max_concurrency` precisa ser pelo menos 1.
 
 Os tres endpoints de `virtual-disks` tambem aceitam o parametro opcional
 `fetch_max_concurrency` para sobrescrever a largura do fetch de config de VM

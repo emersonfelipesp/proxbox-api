@@ -1014,11 +1014,23 @@ async def test_sync_task_history_individual_accepts_cluster_name_and_reports_upd
             return [SimpleNamespace(id=77)]
         return []
 
+    reconciled_payloads: list[dict[str, object]] = []
+
     async def _fake_rest_reconcile_async(*args, **kwargs):
+        reconciled_payloads.append(dict(kwargs["payload"]))
         return FakeRecord(kwargs["payload"], record_id=77)
 
     async def _fake_get_vm_tasks_individual(*args, **kwargs):
-        return [{"upid": "UPID:1", "type": "qmstart", "user": "root"}]
+        return [
+            {
+                "upid": "UPID:1",
+                "type": "qmstart",
+                "user": "root",
+                "starttime": 1710000000,
+                "endtime": 1710000300,
+                "status": "OK",
+            }
+        ]
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.task_history_sync.get_vm_tasks_individual",
@@ -1052,3 +1064,7 @@ async def test_sync_task_history_individual_accepts_cluster_name_and_reports_upd
     )
 
     assert result["action"] == "updated"
+    assert reconciled_payloads[0]["status"] == "OK"
+    assert reconciled_payloads[0]["exitstatus"] == "OK"
+    assert reconciled_payloads[0]["task_state"] == "stopped"
+    assert str(reconciled_payloads[0]["end_time"]).startswith("2024-03")

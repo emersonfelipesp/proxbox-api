@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -855,6 +855,64 @@ async def get_node_storage_content(
 
 
 @_dual_mode
+async def get_node_zfs_pools(
+    session: ProxmoxSession,
+    node: str,
+) -> list[generated_models.GetNodesNodeDisksZfsResponseItem]:
+    """Get ZFS pool summaries from a Proxmox node via the structured REST API."""
+    try:
+        result = await resolve_async(session.session.nodes(node).disks.zfs.get())
+        validated = generated_models.GetNodesNodeDisksZfsResponse.model_validate(result)
+        return validated.root
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message=f"Proxmox node ZFS pool list request timed out for {node}",
+            original_error=error,
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message=f"Unable to connect to Proxmox for node ZFS pool list on {node}",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message=f"Error fetching Proxmox ZFS pool list for node {node}",
+            original_error=error,
+        )
+
+
+@_dual_mode
+async def get_node_zfs_pool_detail(
+    session: ProxmoxSession,
+    node: str,
+    name: str,
+) -> generated_models.GetNodesNodeDisksZfsNameResponse:
+    """Get ZFS pool detail and vdev topology from the structured Proxmox REST API."""
+    try:
+        result = await resolve_async(session.session.nodes(node).disks.zfs(name).get())
+        return generated_models.GetNodesNodeDisksZfsNameResponse.model_validate(result)
+    except ProxboxException:
+        raise
+    except ProxmoxTimeoutError as error:
+        raise ProxmoxAPIError(
+            message=f"Proxmox node ZFS pool detail request timed out for {node}/{name}",
+            original_error=error,
+        )
+    except ProxmoxConnectionError as error:
+        raise ProxmoxAPIError(
+            message=f"Unable to connect to Proxmox for ZFS pool detail {node}/{name}",
+            original_error=error,
+        )
+    except Exception as error:
+        raise ProxmoxAPIError(
+            message=f"Error fetching Proxmox ZFS pool detail for {node}/{name}",
+            original_error=error,
+        )
+
+
+@_dual_mode
 async def get_node_tasks(
     session: ProxmoxSession,
     node: str,
@@ -863,7 +921,11 @@ async def get_node_tasks(
     source: str | None = "archive",
     statusfilter: str | None = None,
     typefilter: str | None = None,
+    start: int | None = None,
+    limit: int | None = None,
+    since: int | None = None,
     until: int | None = None,
+    errors: bool | None = None,
     userfilter: str | None = None,
 ) -> list[generated_models.GetNodesNodeTasksResponseItem]:
     """Get tasks from a specific node."""
@@ -873,7 +935,11 @@ async def get_node_tasks(
             "source": source,
             "statusfilter": statusfilter,
             "typefilter": typefilter,
+            "start": start,
+            "limit": limit,
+            "since": since,
             "until": until,
+            "errors": errors,
             "userfilter": userfilter,
         }
         filtered = {key: value for key, value in params.items() if value is not None}
@@ -1350,7 +1416,7 @@ async def cancel_task(
         )
 
 
-def dump_models(items: list[object]) -> list[dict[str, object]]:
+def dump_models(items: Sequence[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 
 
@@ -1360,8 +1426,15 @@ async def get_vm_snapshots(
     node: str,
     vm_type: str,
     vmid: int,
+    *,
+    raise_on_error: bool = False,
 ) -> list[dict[str, object]]:
-    """Get snapshots for a specific VM from Proxmox."""
+    """Get snapshots for a specific VM from Proxmox.
+
+    ``raise_on_error`` lets reconciliation callers distinguish an authoritative
+    empty snapshot list from a failed discovery. Legacy read-only callers keep
+    the historical best-effort empty-list behavior by default.
+    """
     try:
         if vm_type == "qemu":
             payload = await resolve_async(session.session.nodes(node).qemu(vmid).snapshot.get())
@@ -1386,6 +1459,8 @@ async def get_vm_snapshots(
                 vm_type,
                 error,
             )
+        if raise_on_error:
+            raise
         return []
     except Exception as error:
         logger.warning(
@@ -1395,6 +1470,8 @@ async def get_vm_snapshots(
             vm_type,
             error,
         )
+        if raise_on_error:
+            raise
         return []
 
 
@@ -1516,8 +1593,10 @@ async def get_vm_tasks_individual(
         if vmid is not None:
             filtered = []
             for task in task_dicts:
-                task_vmid = task.get("vmid")
-                if task_vmid is not None and int(task_vmid) == vmid:
+                # PVE archive rows normally expose the guest identity as
+                # ``id``; retain ``vmid`` compatibility for other sources.
+                task_vmid = task.get("vmid") or task.get("id")
+                if task_vmid is not None and str(task_vmid).strip() == str(vmid):
                     filtered.append(task)
             return filtered
         return task_dicts

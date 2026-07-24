@@ -28,6 +28,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   It preserves valid-empty versus malformed collection semantics so malformed
   payloads fail closed, and it requires affirmative storage health state. It
   must remain usable when endpoint writes are disabled.
+- `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue
   Python fallback and optional Rust bridge.
@@ -40,6 +41,10 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `schemas/` and `proxmox_to_netbox/` provide the normalization layer that services rely on.
 - VM full sync uses `sync/reconciliation/build_vm_operation_queue()` as the
   synchronous boundary between prepared desired state and NetBox write dispatch.
+- Task-history bulk sync is node-oriented, not VM-oriented: one paginated
+  archive walk per selected node feeds one NetBox reconcile. The VM route owns
+  only the backward-compatible `sync_task_history` flag; the service owns
+  identity safety, UPID dedupe, cancellation, and degraded/error reporting.
 
 ## Extension Guidance
 

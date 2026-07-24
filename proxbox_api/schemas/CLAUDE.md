@@ -32,6 +32,7 @@ Top-level Pydantic schema package for plugin and API contracts.
   normalization plus `CloudImageSSHExecutionTarget`, the validated persisted
   execution authority. Keep this module independent of route packages so
   endpoint and cloud schemas can import it without a cycle.
+- `zfs.py`: typed ZFS pool summary/detail contracts, recursive vdev tree nodes, and tier-selection metadata for `/proxmox/storage/zfs/*`.
 - `netbox/`: NetBox session, endpoint, and payload schemas.
 - `virtualization/`: VM config and summary schemas.
 

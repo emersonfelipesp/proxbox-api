@@ -49,6 +49,25 @@ O sync le todas as VMs do NetBox em paginas (`limit/offset`) e monta um indice e
 
 - `(cluster_id, proxmox_vm_id, proxmox_vm_type)`
 
+A travessia REST compartilhada segue a URL `next` fornecida pelo NetBox,
+inclusive filtros com valores repetidos, e nao considera uma pagina curta
+limitada pelo servidor como fim. Objetos/links de paginacao malformados, pagina
+vazia com `next` e qualquer sobreposicao de registros entre paginas falham de
+forma fechada. Cada link `next` deve manter o mesmo caminho normalizado do
+recurso e todos os filtros que nao pertencem a paginacao, alem de avancar por
+um unico offset continuo e nao negativo. O `count` nao negativo do servidor
+deve permanecer estavel e corresponder ao agregado final. Leituras exaustivas
+tem limites de seguranca de 10.000 paginas e 1.000.000 de registros;
+`max_offset` e aplicado antes da proxima requisicao. Qualquer lacuna, mudanca de
+escopo, cursor malformado, divergencia de contagem ou limite ultrapassado retorna
+HTTP 502 sem devolver nem armazenar uma colecao parcial em cache.
+
+Nos seletores de VM, backup, snapshot e disco virtual, omitir
+`netbox_vm_ids` significa todas as VMs. Um seletor presente vazio ou malformado
+retorna HTTP 422 e nunca amplia o escopo. IDs validos sao deduplicados e
+consultados em grupos de no maximo 100 como parametros `id` repetidos
+(`?id=1&id=2`); falhas de consulta encerram de forma fechada.
+
 O segmento de tipo evita colisao entre uma VM QEMU 100 e um CT LXC 100 no mesmo cluster.
 Registros legados sem `custom_fields.proxmox_vm_type` so sao reaproveitados quando a identidade
 `(cluster_id, proxmox_vm_id)` e inequivoca.
@@ -109,6 +128,15 @@ As operacoes sao executadas em ordem deterministica.
 - `CREATE` executa POST no NetBox.
 - `UPDATE` executa PATCH por ID no NetBox.
 
+Apos reconciliar os objetos, o sync de task history recebe o conjunto completo
+de IDs NetBox das VMs bem-sucedidas. Ele percorre uma vez o arquivo de cada node
+selecionado e executa uma unica reconciliacao global; nunca roda dentro do loop
+de dispatch por VM. IDs selecionados sao resolvidos por consultas limitadas de
+valores repetidos no NetBox, e cada escopo endpoint/cluster solicitado precisa
+ter cobertura de node descoberta; lacunas parciais sao degradadas e a perda
+total de cobertura e fatal. Veja
+[Sincronizacao de Task History](./task-history.md).
+
 ## Diagramas Mermaid
 
 ### Fluxo de Reconciliacao de Ponta a Ponta
@@ -122,7 +150,7 @@ flowchart TD
     E --> F[Montar fila ordenada: GET CREATE UPDATE]
     F --> G[Despachar fila em janelas de batch]
     G --> H[Executar escritas NetBox de forma sequencial]
-    H --> I[Sincronizar task history da VM]
+    H --> I[Agregar arquivos dos nodes e reconciliar task history uma vez]
     I --> J[Retornar VMs reconciliadas]
 ```
 

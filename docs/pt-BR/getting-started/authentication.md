@@ -4,7 +4,7 @@ O `proxbox-api` usa autenticação por chave API armazenada em banco de dados. T
 
 ## Fluxo de Bootstrap
 
-Quando o backend inicia com um banco de dados vazio, ele retorna `needs_bootstrap: true` do endpoint de status:
+Quando o backend inicia com um banco de dados nunca inicializado, ele retorna `needs_bootstrap: true` do endpoint de status:
 
 ```bash
 curl http://localhost:8800/auth/bootstrap-status
@@ -22,7 +22,28 @@ curl -X POST http://localhost:8800/auth/register-key \
 # {"detail": "API key registered."}
 ```
 
-Uma vez que uma chave existe, chamadas subsequentes para `/auth/register-key` retornam `409 Conflict`.
+**O bootstrap é consumido exatamente uma vez por banco de dados.** O registro
+grava uma reivindicação singleton durável de bootstrap junto com o hash bcrypt
+da primeira chave em uma única transação, então duas tentativas concorrentes de
+bootstrap não podem ambas ter sucesso — a perdedora recebe um `409 Conflict`
+estável. Uma vez consumido o bootstrap, toda chamada posterior a
+`/auth/register-key` retorna `409 Conflict`, **inclusive quando todas as chaves
+já foram desativadas ou removidas**: o histórico de chaves inativas e a
+reivindicação permanente fecham para sempre a janela de bootstrap sem
+autenticação. Bancos inicializados antes da reivindicação existir são
+preenchidos na inicialização — qualquer histórico de chaves também fecha o
+bootstrap permanentemente nesses bancos.
+
+### Perdendo Todas as Chaves
+
+Como o bootstrap nunca reabre, a API recusa aposentar a última chave ativa:
+`DELETE /auth/keys/{id}` e `POST /auth/keys/{id}/deactivate` retornam `409`
+com o código `last_active_api_key_required` quando o alvo é a única chave
+ativa. Crie e verifique uma chave substituta primeiro, depois aposente a
+antiga. Se um banco de dados de alguma forma ficar sem nenhuma chave ativa, a
+recuperação é uma operação em nível de banco de dados feita pelo operador
+(restaurar um backup ou editar a tabela SQLite `apikey` diretamente) — não um
+caminho HTTP sem autenticação.
 
 ### Integração com Plugin NetBox
 
@@ -55,7 +76,7 @@ Estes endpoints não requerem autenticação:
 | `GET /health` | Verificação de saúde |
 | `GET /meta` | Metadados do serviço |
 | `GET /auth/bootstrap-status` | Verifica se bootstrap é necessário |
-| `POST /auth/register-key` | Registra primeira chave (apenas quando nenhuma chave existe) |
+| `POST /auth/register-key` | Registra primeira chave (apenas enquanto o bootstrap nunca foi consumido) |
 
 ## Endpoints de Gerenciamento de Chaves
 
@@ -87,6 +108,9 @@ curl -X POST http://localhost:8800/auth/keys/1/deactivate \
 # {"id": 1, "label": "chave-bootstrap", "is_active": false, "created_at": 1712345678.123}
 ```
 
+Desativar a última chave ativa é recusado com `409`
+(`last_active_api_key_required`) — crie e verifique outra chave primeiro.
+
 ### Reativar uma Chave
 
 ```bash
@@ -102,6 +126,9 @@ curl -X DELETE http://localhost:8800/auth/keys/1 \
   -H "X-Proxbox-API-Key: sua-chave"
 # (204 No Content)
 ```
+
+Remover a última chave ativa é recusado com `409`
+(`last_active_api_key_required`) — crie e verifique outra chave primeiro.
 
 ## Proteção Contra Brute-Force
 
@@ -127,7 +154,11 @@ O backend implementa bloqueio por IP:
 {"detail": "No API key configured. Register a key via POST /auth/register-key or use an existing key."}
 ```
 
-O banco de dados não tem chaves API. Chame `/auth/register-key` com uma nova chave para fazer o bootstrap.
+O banco de dados não tem chaves API. Em um banco nunca inicializado, chame
+`/auth/register-key` com uma nova chave para fazer o bootstrap. Em um banco que
+já fez bootstrap uma vez, `/auth/register-key` permanece fechado (`409`);
+recupere em nível de banco de dados (restaure um backup ou repare a tabela
+`apikey`).
 
 ### "Invalid API key"
 

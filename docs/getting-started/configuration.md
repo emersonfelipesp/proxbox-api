@@ -71,6 +71,17 @@ Authentication rules for create and update:
 - `token_name` and `token_value` must be provided together.
 - Endpoint names must be unique.
 
+The optional database endpoint fields `timeout`, `max_retries`, and
+`retry_backoff` inherit the effective `ProxboxPluginSettings` values when they
+are null. Explicit endpoint values take precedence, including zero retries or
+zero retry backoff. A database load with no endpoints, or with concrete values
+for every endpoint, performs no plugin-settings request. When inheritance is
+needed, one shared lookup uses a bounded total request budget and falls back to
+the documented defaults without caching that temporary fallback. Encrypted
+database credentials use the same bounded lookup for the plugin encryption key;
+if no environment, plugin, or local key can decrypt them, endpoint loading fails
+with `503` and never forwards ciphertext as a Proxmox credential.
+
 ### `allow_writes` field
 
 `ProxmoxEndpoint.allow_writes` (boolean, default `false`) is the trust boundary
@@ -213,7 +224,7 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent Proxmox VM config fetches during VM and virtual-disk sync. |
 | `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Per-call timeout (seconds, range 1-600) for the QEMU guest-agent `network-get-interfaces` request. Interface-dense guests (many VRRP/alias interfaces) can be slow to enumerate; raise this if guest-agent interface fetches time out. Maps to the `ProxboxPluginSettings.guest_agent_timeout` plugin field. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Optional env override for `ProxboxPluginSettings.reconciliation_engine`. Valid values are `python`, `compare`, and `rust`. |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync, virtual disks) / `4` (task-history, snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync, virtual disks) / `4` (snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. Task-history reconciliation uses bounded bulk requests instead of per-VM write dispatch. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
 | `PROXBOX_RATE_LIMIT` | `300` | Maximum API requests per minute per IP address. |
