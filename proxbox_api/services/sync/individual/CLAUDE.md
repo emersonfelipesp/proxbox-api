@@ -24,6 +24,10 @@ Per-object synchronization services that sync individual objects from Proxmox to
 - `interface_sync.py`: `sync_interface_individual()` for a single interface.
 - `ip_sync.py`: `sync_ip_individual()` for a single IP address.
 - `task_history_sync.py`: `sync_task_history_individual()` for VM task history.
+  PVE archive rows identify the guest through `id` (with `vmid` compatibility),
+  and nonnumeric non-VM IDs must be skipped safely. Archive `endtime` and final
+  `exitstatus`/`status` are authoritative; persist the same final value to
+  `status` and `exitstatus` with `task_state="stopped"`.
 - `storage_sync.py`: `sync_storage_individual()` for a single storage.
 - `virtual_disk_sync.py`: `sync_virtual_disk_individual()` for a single virtual disk.
 - `backup_sync.py`: `sync_backup_individual()` for a single backup.

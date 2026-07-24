@@ -55,6 +55,22 @@ The sync reads all NetBox VMs in paginated batches (`limit/offset`) and builds a
 - `(cluster_id, proxmox_vm_id, proxmox_vm_type)`
 
 This avoids repeated NetBox list/filter calls during per-VM comparison.
+The shared REST traversal follows NetBox's server-provided `next` URL, including
+repeated filter values, and never infers completion from a short server-capped
+page. It rejects malformed pagination objects/links, empty pages with `next`,
+and any record overlap between pages. Every `next` link must retain the same
+normalized resource path and all non-pagination filter values, and must advance
+through one continuous, non-negative offset. The server's non-negative `count`
+must stay stable and match the final aggregate. Exhaustive reads have hard
+safety ceilings of 10,000 pages and 1,000,000 records; caller `max_offset`
+limits are enforced before another request. Any gap, scope change, malformed
+cursor, count mismatch, or crossed ceiling returns HTTP 502 without returning
+or caching a partial collection.
+
+For VM, backup, snapshot, and virtual-disk selectors, omitted
+`netbox_vm_ids` means all VMs. A present empty or malformed selector is HTTP 422
+and never widens scope. Valid IDs are deduplicated and queried in groups of at
+most 100 as repeated `id` parameters (`?id=1&id=2`); lookup failures fail closed.
 When the snapshot lacks Proxbox custom fields, dispatch performs a sidecar-first
 identity read through `/api/plugins/proxbox/sync-state/virtual-machines/` before
 creating a VM. A sidecar match is reconciled as the existing NetBox VM, so
@@ -120,7 +136,13 @@ Operations are executed in deterministic queue order.
 - `CREATE` operations call NetBox create.
 - `UPDATE` operations call NetBox patch by record ID.
 
-After object reconciliation, VM task-history sync is executed per resolved VM record.
+After object reconciliation, task-history sync receives the complete set of
+successful NetBox VM IDs. It walks each selected Proxmox node archive once and
+performs one global reconciliation; it is never executed inside the per-VM
+dispatch loop. Selected IDs are resolved through bounded repeated-value NetBox
+queries, and every requested endpoint/cluster scope must have discovered node
+coverage; partial gaps are degraded and total coverage loss is fatal. See
+[Task History Synchronization](./task-history.md).
 
 ## Mermaid Diagrams
 
@@ -135,7 +157,7 @@ flowchart TD
     E --> F[Build Ordered Queue: GET CREATE UPDATE]
     F --> G[Dispatch Queue in Batch Windows]
     G --> H[Sequential NetBox Write Execution]
-    H --> I[Sync VM Task History]
+    H --> I[Aggregate Node Archives and Reconcile Task History Once]
     I --> J[Return Reconciled VM Results]
 ```
 

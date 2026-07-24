@@ -5,10 +5,13 @@ from __future__ import annotations
 import ipaddress
 import json
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -24,8 +27,31 @@ if TYPE_CHECKING:
 _SETTINGS_CACHE: ProxboxSettingsDict | None = None
 _SETTINGS_CACHE_TIME: float = 0.0
 _SETTINGS_CACHE_TTL: float = 300.0  # 5 minutes
-_FETCHING_SETTINGS: bool = False  # reentrance guard against credential-decryption recursion
+_SETTINGS_CONDITION = threading.Condition()
+_SETTINGS_FETCH_IN_PROGRESS = False
+_SETTINGS_FETCH_GENERATION = 0
+_SETTINGS_LAST_RESULT: ProxboxSettingsDict | None = None
+_SETTINGS_THREAD_LOCAL = threading.local()
 _VALID_RECONCILIATION_ENGINES = {"python", "compare", "rust"}
+_DEFAULT_SETTINGS_REQUEST_TIMEOUT_SECONDS = 10.0
+
+
+@contextmanager
+def override_settings_for_current_thread(
+    settings: ProxboxSettingsDict,
+) -> Iterator[None]:
+    """Provide recursion-safe settings while parsing credentials in one thread."""
+
+    sentinel = object()
+    previous = getattr(_SETTINGS_THREAD_LOCAL, "override", sentinel)
+    _SETTINGS_THREAD_LOCAL.override = settings
+    try:
+        yield
+    finally:
+        if previous is sentinel:
+            delattr(_SETTINGS_THREAD_LOCAL, "override")
+        else:
+            _SETTINGS_THREAD_LOCAL.override = previous
 
 
 def _coerce_role_id(value: object) -> int | None:
@@ -177,13 +203,14 @@ def _request_settings_json(
     path: str,
     auth: str,
     ssl_verify: bool | None,
+    request_timeout_seconds: float,
 ) -> tuple[object | None, int | None]:
     url = f"{base_url}{path}"
     req = urllib.request.Request(
         url,
         headers={"Authorization": auth, "Accept": "application/json"},
     )
-    urlopen_kwargs: dict[str, object] = {"timeout": 10}
+    urlopen_kwargs: dict[str, object] = {"timeout": request_timeout_seconds}
     if ssl_verify is False and urllib.parse.urlsplit(base_url).scheme.lower() == "https":
         urlopen_kwargs["context"] = ssl._create_unverified_context()
 
@@ -197,12 +224,19 @@ def _request_settings_json(
     except urllib.error.URLError as exc:
         logger.warning("Error fetching ProxboxPluginSettings from %s: %s", url, exc)
         return None, None
+    except TimeoutError as exc:
+        logger.warning("Timed out fetching ProxboxPluginSettings from %s: %s", url, exc)
+        return None, None
     except json.JSONDecodeError as exc:
         logger.warning("Invalid JSON fetching ProxboxPluginSettings from %s: %s", url, exc)
         return None, None
 
 
-def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | None:
+def fetch_settings_from_netbox(  # noqa: C901
+    netbox_session: "Api",
+    *,
+    request_timeout_seconds: float = _DEFAULT_SETTINGS_REQUEST_TIMEOUT_SECONDS,
+) -> ProxboxSettingsDict | None:
     """Fetch ProxboxPluginSettings from NetBox plugin API.
 
     Returns None if fetch fails.
@@ -221,15 +255,21 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
             return None
 
         settings = None
+        deadline = time.monotonic() + max(request_timeout_seconds, 0.0)
         for path in (
             "/api/plugins/proxbox/settings/runtime/",
             "/api/plugins/proxbox/settings/",
         ):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("Timed out fetching ProxboxPluginSettings")
+                break
             data, status = _request_settings_json(
                 base_url=base_url,
                 path=path,
                 auth=auth,
                 ssl_verify=getattr(config, "ssl_verify", None),
+                request_timeout_seconds=remaining,
             )
             if status is not None and status != 200:
                 if path.endswith("/runtime/") and status == 404:
@@ -325,31 +365,63 @@ def fetch_settings_from_netbox(netbox_session: "Api") -> ProxboxSettingsDict | N
         return None
 
 
-def get_settings(
-    netbox_session: "Api | None" = None, use_cache: bool = True
+def get_settings(  # noqa: C901
+    netbox_session: "Api | None" = None,
+    use_cache: bool = True,
+    *,
+    request_timeout_seconds: float | None = None,
+    cache_fallback: bool = True,
 ) -> ProxboxSettingsDict:
     """Get ProxboxPluginSettings with caching.
 
     Falls back to defaults if NetBox is unavailable.
     Uses a 5-minute cache TTL.
     """
-    global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME, _FETCHING_SETTINGS
+    global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME
+    global _SETTINGS_FETCH_IN_PROGRESS, _SETTINGS_FETCH_GENERATION, _SETTINGS_LAST_RESULT
 
-    # Break the circular dependency: credential decryption calls get_settings()
-    # to read the encryption key, which calls get_raw_netbox_session(), which
-    # calls decrypt_value(), which calls get_settings() again indefinitely.
-    if _FETCHING_SETTINGS:
+    override = getattr(_SETTINGS_THREAD_LOCAL, "override", None)
+    if override is not None:
+        return override
+
+    recursion_depth = getattr(_SETTINGS_THREAD_LOCAL, "fetch_depth", 0)
+    if recursion_depth:
+        # Building the NetBox facade can decrypt its token, which asks for the
+        # plugin encryption key. The same-thread recursion must not deadlock on
+        # the single-flight condition.
         return get_default_settings()
 
-    now = time.time()
+    deadline = (
+        None
+        if request_timeout_seconds is None
+        else time.monotonic() + max(request_timeout_seconds, 0.0)
+    )
+    with _SETTINGS_CONDITION:
+        while True:
+            now = time.time()
+            if use_cache and _SETTINGS_CACHE is not None:
+                if now - _SETTINGS_CACHE_TIME < _SETTINGS_CACHE_TTL:
+                    return _SETTINGS_CACHE
 
-    if use_cache and _SETTINGS_CACHE is not None:
-        if now - _SETTINGS_CACHE_TIME < _SETTINGS_CACHE_TTL:
-            return _SETTINGS_CACHE
+            if not _SETTINGS_FETCH_IN_PROGRESS:
+                _SETTINGS_FETCH_IN_PROGRESS = True
+                break
 
-    _FETCHING_SETTINGS = True
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                # A bounded availability-preserving caller must never inherit an
+                # unrelated, longer settings lookup already in progress.
+                return get_default_settings()
+            _SETTINGS_CONDITION.wait(timeout=remaining)
+
+    _SETTINGS_THREAD_LOCAL.fetch_depth = recursion_depth + 1
+    settings: ProxboxSettingsDict | None = None
+    fetched: ProxboxSettingsDict | None = None
     try:
-        if netbox_session is None:
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            fetched = None
+        elif netbox_session is None:
             from proxbox_api.app.netbox_session import get_raw_netbox_session
 
             try:
@@ -357,18 +429,42 @@ def get_settings(
             except Exception as exc:
                 logger.debug("Could not get NetBox session for settings: %s", exc)
 
-        fetched = fetch_settings_from_netbox(netbox_session) if netbox_session is not None else None
+        if netbox_session is None:
+            fetched = None
+        elif request_timeout_seconds is None:
+            fetched = fetch_settings_from_netbox(netbox_session)
+        else:
+            remaining = deadline - time.monotonic() if deadline is not None else 0.0
+            if remaining > 0:
+                fetched = fetch_settings_from_netbox(
+                    netbox_session,
+                    request_timeout_seconds=remaining,
+                )
         settings = fetched if fetched is not None else get_default_settings()
     finally:
-        _FETCHING_SETTINGS = False
+        if recursion_depth:
+            _SETTINGS_THREAD_LOCAL.fetch_depth = recursion_depth
+        else:
+            delattr(_SETTINGS_THREAD_LOCAL, "fetch_depth")
+        with _SETTINGS_CONDITION:
+            if settings is not None:
+                _SETTINGS_FETCH_GENERATION += 1
+                _SETTINGS_LAST_RESULT = settings
+                if fetched is not None or cache_fallback:
+                    _SETTINGS_CACHE = settings
+                    _SETTINGS_CACHE_TIME = time.time()
+            _SETTINGS_FETCH_IN_PROGRESS = False
+            _SETTINGS_CONDITION.notify_all()
 
-    _SETTINGS_CACHE = settings
-    _SETTINGS_CACHE_TIME = now
+    if settings is None:  # pragma: no cover - the fetch path either returns or raises
+        return get_default_settings()
     return settings
 
 
 def invalidate_settings_cache() -> None:
     """Invalidate the settings cache to force a fresh fetch."""
-    global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME
-    _SETTINGS_CACHE = None
-    _SETTINGS_CACHE_TIME = 0.0
+    global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME, _SETTINGS_LAST_RESULT
+    with _SETTINGS_CONDITION:
+        _SETTINGS_CACHE = None
+        _SETTINGS_CACHE_TIME = 0.0
+        _SETTINGS_LAST_RESULT = None

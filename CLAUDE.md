@@ -333,7 +333,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `proxbox_fetch_max_concurrency` | 8 |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 (4 in task-history) |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in task-history/snapshots) |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in snapshots) |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `backup_batch_size` | 5 |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `backup_batch_delay_ms` | 200 ms |
 | `PROXBOX_BULK_BATCH_SIZE` | `bulk_batch_size` | 50 |
@@ -349,6 +349,43 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 | n/a | `custom_fields_enabled` | false (deprecated legacy reflection custom fields; sidecars are standard. No env override.) |
+
+### Task-history sync ownership
+
+VM create routes expose `sync_task_history` with a backward-compatible default
+of `true`. Standalone and targeted VM syncs run one task-history aggregate after
+the successful VM IDs are known. Full-update is the single-owner exception: it
+passes `sync_task_history=false` into its VM stage, then runs the dedicated
+task-history stage exactly once. Deploy this backend behavior before changing an
+orchestrating plugin to send `false`; older callers that omit the flag continue
+to work.
+
+The task-history service walks each selected Proxmox node archive with
+`start`/`limit=500` pagination and one fixed `until`, under one global fetch
+semaphore. It loads the typed VM sync-state sidecar once and treats its endpoint,
+cluster, VMID, and VM type as authoritative. A present malformed/duplicate
+sidecar for a relevant VM fails closed; successful estate scans skip genuinely
+unmanaged VMs, while explicitly selected VMs without identity remain fatal.
+Legacy custom-field identity is used only for an absent or unreadable sidecar
+when `custom_fields_enabled=true`. Selected NetBox IDs are deduplicated and sent
+in bounded groups of 100 using repeated `id` values, as required by NetBox's
+`MultiValueNumberFilter`. The service deduplicates UPIDs and performs one NetBox
+bulk reconcile without per-UPID status reads or per-item write fallback. Partial
+collection, missing target scopes, ownership conflicts, and archive no-progress
+guards return `degraded=true`; standalone REST converts that result to HTTP 502
+after retaining reconciled rows, while SSE exposes the degraded phase summary.
+Identity verification failure, unsafe NetBox pagination, VM-list failure, no
+usable nodes, total node failure, or global reconcile failure raises
+`ProxboxException` so REST/SSE cannot report success.
+
+All NetBox list helpers follow the server `next` URL and preserve repeated query
+values. Reject malformed pagination objects/links, empty+next pages, and any
+cross-page record overlap. Exhaustive traversal is bounded at 10,000 pages and
+1,000,000 records; explicit offset/record caps raise HTTP 502 before an
+over-bound request and partial collections are never returned or cached.
+Across VM/backup/snapshot/disk selectors, omitted `netbox_vm_ids` means all,
+while present empty/malformed input is HTTP 422. Resolve valid IDs as repeated
+values in deduplicated chunks of at most 100 and fail closed on lookup errors.
 
 ### VM interface sync strategy
 

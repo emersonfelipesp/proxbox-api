@@ -11,6 +11,7 @@ from proxbox_api.netbox_rest import (
     rest_bulk_delete_async,
     rest_bulk_reconcile_async,
     rest_list_async,
+    rest_list_paginated_async,
     rest_patch_async,
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
@@ -23,7 +24,13 @@ from proxbox_api.services.sync.storage_links import (
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.sync_state_writer import write_virtual_disk_sync_state
-from proxbox_api.services.sync.vm_helpers import relation_id, relation_name, to_mapping
+from proxbox_api.services.sync.vm_helpers import (
+    list_netbox_virtual_machines_by_ids,
+    relation_id,
+    relation_name,
+    require_selected_netbox_vm_coverage,
+    to_mapping,
+)
 from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_endpoint_id,
     extract_proxmox_vm_type,
@@ -195,24 +202,11 @@ async def _list_all_vms_with_proxmox_id(
     batch_size: int = 500,
 ) -> list[RestRecord]:
     """List all VMs from NetBox with pagination handling."""
-    all_vms = []
-    offset = 0
-
-    while True:
-        vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query={"limit": batch_size, "offset": offset},
-        )
-        if not vms:
-            break
-        all_vms.extend(vms)
-
-        if len(vms) < batch_size:
-            break
-        offset += batch_size
-
-    return all_vms
+    return await rest_list_paginated_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        page_size=batch_size,
+    )
 
 
 async def _delete_stale_virtual_disks(
@@ -725,26 +719,29 @@ async def create_virtual_disks(  # noqa: C901
         tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
 
     target_vm_ids: list[int] | None = None
-    if netbox_vm_ids:
+    if netbox_vm_ids is not None:
         target_vm_ids = netbox_vm_ids
     elif netbox_vm_id is not None:
         target_vm_ids = [netbox_vm_id]
 
-    if target_vm_ids:
+    if target_vm_ids is not None:
         logger.info("Starting virtual disks sync for NetBox VM ids=%s", target_vm_ids)
     else:
         logger.info("Starting virtual disks sync for existing VMs")
 
     try:
-        if target_vm_ids:
-            vms = await rest_list_async(
-                nb,
-                "/api/virtualization/virtual-machines/",
-                query={"id": ",".join(str(vid) for vid in target_vm_ids)},
+        if target_vm_ids is not None:
+            vms = await list_netbox_virtual_machines_by_ids(nb, target_vm_ids)
+            vms = require_selected_netbox_vm_coverage(
+                vms,
+                target_vm_ids,
+                operation="virtual-disk sync",
             )
         else:
             vms = await _list_all_vms_with_proxmox_id(nb)
     except Exception as e:
+        if target_vm_ids is not None:
+            raise
         logger.error(f"Error fetching VMs from NetBox: {e}")
         if use_websocket and websocket:
             await websocket.send_json(

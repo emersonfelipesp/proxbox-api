@@ -613,7 +613,7 @@ class _FakeNetBoxClient:
 
     async def request(self, method: str, path: str, query=None, payload=None, **_kwargs):
         if method == "GET":
-            return _FakeResponse({"results": [self.existing], "next": None})
+            return _FakeResponse({"count": 1, "results": [self.existing], "next": None})
         if method == "PATCH":
             self.patch_payloads.append(payload)
             return _FakeResponse(payload)

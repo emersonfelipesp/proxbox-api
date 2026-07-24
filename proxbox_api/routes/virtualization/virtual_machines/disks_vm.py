@@ -19,7 +19,7 @@ from proxbox_api.routes.proxmox.cluster import (
 from proxbox_api.services.sync.virtual_disks import (
     create_virtual_disks as sync_virtual_disks,
 )
-from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
+from proxbox_api.services.sync.vm_helpers import parse_selected_netbox_vm_ids
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
@@ -53,10 +53,10 @@ async def create_virtual_disks(
     Queries NetBox for VMs with cf_proxmox_vm_id set, fetches their disk
     configuration from Proxmox, and creates/updates Virtual Disk objects.
     """
-    netbox_vm_id_list = None
-    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-    if vm_ids:
-        netbox_vm_id_list = vm_ids
+    try:
+        netbox_vm_id_list = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     result = await sync_virtual_disks(
         netbox_session=netbox_session,
@@ -91,10 +91,10 @@ async def create_virtual_disks_stream(
         description="Optional override for the number of concurrent Proxmox VM config fetches.",
     ),
 ):
-    netbox_vm_id_list = None
-    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-    if vm_ids:
-        netbox_vm_id_list = vm_ids
+    try:
+        netbox_vm_id_list = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     async def event_stream():
         bridge = WebSocketSSEBridge()

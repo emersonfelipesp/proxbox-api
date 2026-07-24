@@ -32,7 +32,17 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `snapshots.py`: snapshot sync helpers.
 - `storage_links.py`: storage-to-NetBox relationship helpers.
 - `storages.py`: storage sync helpers.
-- `task_history.py`: NetBox task history and journal helpers.
+- `task_history.py`: node-oriented Proxmox archive pagination and one-pass
+  NetBox task-history reconciliation. It loads VM sync-state sidecars once and
+  uses their endpoint + cluster + VMID + type identity authoritatively, with
+  fail-closed malformed/duplicate rows and opt-in legacy fallback only for
+  absent rows. A successful full scan skips unmanaged NetBox VMs, but selected
+  VMs without identity remain fatal. It also provides UPID conflict detection,
+  requested-scope coverage checks, a run-global fetch semaphore, archive
+  terminal status (no per-UPID status N+1), and degraded results for
+  partial/no-progress collection plus fatal exceptions for unusable identity,
+  total coverage loss, incomplete explicit VM lookup coverage, NetBox
+  pagination, or global reconcile failures.
 - `virtual_disks.py`: VM disk sync helpers.
 - `virtual_machines.py`: virtual machine payload and sync helpers.
 - `vm_coordinator.py`: VM sync orchestration.
@@ -46,7 +56,9 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   `resolve_netbox_cluster_id_by_name()` (read-only cluster-id lookup by name,
   with optional caching; returns `None` when the cluster does not exist). These
   back the `(cluster_id, vmid)` scoping that keeps same-`vmid` VMs on different
-  clusters from being conflated (issue #223).
+  clusters from being conflated (issue #223). It also owns
+  `chunk_netbox_multi_value_ids()`: stable positive-ID deduplication into groups
+  of at most 100 for NetBox repeated multi-value query parameters.
 - `vm_network.py`: VM network sync helpers.
 - `vm_network_processor.py`: VM network parsing and processing helpers.
 - `vmid_helpers.py`: VMID lookup and coordination helpers.
@@ -59,10 +71,23 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - The VM helpers split orchestration, filtering, network processing, and object creation so the route layer does not need to duplicate state handling.
 - `reconciliation/` is the deterministic sync seam: it receives prepared state
   and NetBox snapshots, returns queue operations, and performs no I/O.
+- **Task-history request bound.** Never call task-history sync inside a per-VM
+  loop. Collect each selected node archive once with `start`/`limit` pagination
+  and a fixed `until`, then reconcile all mapped UPIDs in one bulk call with
+  individual fallback disabled. Every aggregate scans the NetBox task-history
+  table once because the schema uses UPID as its global lookup key; a row
+  attached to the wrong VM must remain visible for reassignment. Later-page,
+  repeated-page, and no-new-UPID failures retain earlier rows and return
+  `degraded=true`; partially missing target scopes and true ownership conflicts
+  do the same, while unrelated archive VMIDs are normal skips. Fatal
+  identity/total-coverage/pagination/reconcile failures raise
+  `ProxboxException`, and cancellation must propagate before reconciliation.
 - `virtual_disks.py` resolves VM config targets from live Proxmox
   `cluster/resources` VMID/type data before falling back to NetBox VM custom
   fields or `device.name`; this avoids disk sync calls against stale or FQDN
-  NetBox node names.
+  NetBox node names. Explicit multi-VM selections require complete NetBox
+  lookup coverage; empty or partial service-level selections are typed 502
+  failures rather than zero-count success.
 - **IP ownership invariant (all sync paths).** IP sync must never reassign an
   address that already belongs to a *different* object. The shared helper
   `ip_ownership.py` (`_reconcile_interface_ip`) resolves ownership before

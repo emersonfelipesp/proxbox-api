@@ -56,13 +56,24 @@ Main synchronization endpoints for virtual machines and related resources.
   `tests/test_targeted_vm_sync_await.py` (includes an AST contract over all
   four modules). Test fakes for `virtual_machines.get` **must be coroutine
   functions** — a synchronous fake is what let this ship.
-- **Blank-name VM recovery.** `_create_virtual_machine_by_netbox_id` matches a
-  NetBox VM to Proxmox by name **or** `proxmox_vm_id`. It only rejects (HTTP
-  422) a VM that has neither a name nor a `proxmox_vm_id` custom field — a
-  blank-name record with a known `proxmox_vm_id` is matched by vmid and its
-  name is healed from the matched Proxmox resource on the next sync. Note this
-  recovery was unreachable in practice until the missing-`await` fix above,
-  because the record always coerced to `{}`.
+- **Exact targeted VM ownership.** `_create_virtual_machine_by_netbox_id`
+  and the selected batch filter join every selected core VM to the typed
+  `ProxboxVMSyncState` sidecar once, then match only its Proxmox endpoint,
+  normalized cluster name, positive VMID, and guest type. Sidecar identity is
+  authoritative even when legacy custom fields are stale. Legacy custom-field
+  fallback is allowed only when the sidecar row is absent/unavailable and
+  `custom_fields_enabled=true`; malformed or duplicate relevant sidecars fail
+  closed. VM names are never selectors, so a same-name guest, a reused VMID on
+  another endpoint/cluster, or the wrong QEMU/LXC type cannot widen the
+  operation. A blank-name record can still heal its name when that complete
+  identity is present. The same sidecar-first selection contract applies to
+  explicitly selected backup sync: `backups_vm.py::_prefetch_vm_cache` overlays
+  sidecar identity onto every selected VM (via
+  `vm_filter.hydrate_selected_vm_identities`) before validating exact
+  endpoint/cluster/VMID scope. The by-id snapshot and backup stream routes have
+  no legacy `proxmox_vm_id` custom-field precondition — ownership resolves
+  downstream from the sidecar, so sidecar-only VMs (the default with
+  `custom_fields_enabled=false`) sync through them.
 - **Interface failures are surfaced, not swallowed.** Per-interface creation is
   retried a bounded number of times for transient NetBox errors; interfaces
   that still fail are counted. The per-VM progress item carries
@@ -108,6 +119,28 @@ Main synchronization endpoints for virtual machines and related resources.
   request, so missing discovery tags, VM roles/types, device roles/types,
   cluster types, and custom fields are recreated before payloads reference
   them by slug.
+
+- **Task-history has one owner per request.** `/create`, `/create/stream`, and
+  both targeted create routes declare `sync_task_history` as a real FastAPI
+  boolean query parameter with default `true`. When enabled, the route invokes
+  one aggregate after it knows the successfully reconciled NetBox VM IDs; it
+  never invokes task history from the per-VM worker. Full-update passes `false`
+  because its dedicated task-history stage runs once afterward. Keep the flag
+  forwarded through both targeted and SSE call chains so `false` cannot be
+  silently dropped and omission preserves standalone compatibility.
+  When the standalone/default-true path owns task history, propagate fatal
+  `ProxboxException` outcomes so neither REST nor SSE can report VM-route
+  success after an unpaired/failed task-history stage. A degraded aggregate is
+  also HTTP 502 for standalone REST after its safe rows are retained; SSE keeps
+  the task-history warning summary visible. Selected-ID resource filtering must
+  use deduplicated, bounded repeated `id` parameters and fail closed if any
+  chunk lookup fails.
+  The dedicated `/task-history/create/stream` route also declares
+  `netbox_vm_ids`; omission means all VMs, while an explicitly empty, malformed,
+  or non-positive string returns ordinary HTTP 422 before SSE starts so a bad
+  scoped request cannot widen to the whole estate. It must reset sidecar
+  availability memoization per request
+  and validate `fetch_max_concurrency >= 1`.
 
 - **VM and template sync modes (`sync_mode_vm`, `sync_mode_vm_template`).** The
   `create_virtual_machines` route accepts two optional query parameters that

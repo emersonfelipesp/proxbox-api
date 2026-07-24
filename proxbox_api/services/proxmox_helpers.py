@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -863,7 +863,11 @@ async def get_node_tasks(
     source: str | None = "archive",
     statusfilter: str | None = None,
     typefilter: str | None = None,
+    start: int | None = None,
+    limit: int | None = None,
+    since: int | None = None,
     until: int | None = None,
+    errors: bool | None = None,
     userfilter: str | None = None,
 ) -> list[generated_models.GetNodesNodeTasksResponseItem]:
     """Get tasks from a specific node."""
@@ -873,7 +877,11 @@ async def get_node_tasks(
             "source": source,
             "statusfilter": statusfilter,
             "typefilter": typefilter,
+            "start": start,
+            "limit": limit,
+            "since": since,
             "until": until,
+            "errors": errors,
             "userfilter": userfilter,
         }
         filtered = {key: value for key, value in params.items() if value is not None}
@@ -1350,7 +1358,7 @@ async def cancel_task(
         )
 
 
-def dump_models(items: list[object]) -> list[dict[str, object]]:
+def dump_models(items: Sequence[object]) -> list[dict[str, object]]:
     return [_model_dump(item) for item in items]
 
 
@@ -1360,8 +1368,15 @@ async def get_vm_snapshots(
     node: str,
     vm_type: str,
     vmid: int,
+    *,
+    raise_on_error: bool = False,
 ) -> list[dict[str, object]]:
-    """Get snapshots for a specific VM from Proxmox."""
+    """Get snapshots for a specific VM from Proxmox.
+
+    ``raise_on_error`` lets reconciliation callers distinguish an authoritative
+    empty snapshot list from a failed discovery. Legacy read-only callers keep
+    the historical best-effort empty-list behavior by default.
+    """
     try:
         if vm_type == "qemu":
             payload = await resolve_async(session.session.nodes(node).qemu(vmid).snapshot.get())
@@ -1386,6 +1401,8 @@ async def get_vm_snapshots(
                 vm_type,
                 error,
             )
+        if raise_on_error:
+            raise
         return []
     except Exception as error:
         logger.warning(
@@ -1395,6 +1412,8 @@ async def get_vm_snapshots(
             vm_type,
             error,
         )
+        if raise_on_error:
+            raise
         return []
 
 
@@ -1516,8 +1535,10 @@ async def get_vm_tasks_individual(
         if vmid is not None:
             filtered = []
             for task in task_dicts:
-                task_vmid = task.get("vmid")
-                if task_vmid is not None and int(task_vmid) == vmid:
+                # PVE archive rows normally expose the guest identity as
+                # ``id``; retain ``vmid`` compatibility for other sources.
+                task_vmid = task.get("vmid") or task.get("id")
+                if task_vmid is not None and str(task_vmid).strip() == str(vmid):
                     filtered.append(task)
             return filtered
         return task_dicts

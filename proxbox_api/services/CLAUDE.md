@@ -32,6 +32,10 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `schemas/` and `proxmox_to_netbox/` provide the normalization layer that services rely on.
 - VM full sync uses `sync/reconciliation/build_vm_operation_queue()` as the
   synchronous boundary between prepared desired state and NetBox write dispatch.
+- Task-history bulk sync is node-oriented, not VM-oriented: one paginated
+  archive walk per selected node feeds one NetBox reconcile. The VM route owns
+  only the backward-compatible `sync_task_history` flag; the service owns
+  identity safety, UPID dedupe, cancellation, and degraded/error reporting.
 
 ## Extension Guidance
 

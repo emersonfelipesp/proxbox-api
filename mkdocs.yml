@@ -70,6 +70,7 @@ nav:
       - Cluster HA: api/cluster-ha.md
   - Synchronization:
       - Workflows: sync/workflows.md
+      - Task History: sync/task-history.md
       - VM Reconciliation Architecture: sync/reconciliation-architecture.md
       - Name Collision Resolver: sync/name-collision-resolver.md
       - Overwrite Flags: sync/overwrite-flags.md
