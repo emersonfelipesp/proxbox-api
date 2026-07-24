@@ -887,15 +887,28 @@ async def _renew_run_lease(
     response must not resurrect it as completed.
     """
 
-    if record.status not in {"running", "dispatching"} or not record.lease_owner:
+    # Drop the stale read snapshot first, then reload through the async-safe
+    # refresh before reading any attribute. ``rollback()`` expires every
+    # instance in the session, and a plain attribute read on an expired
+    # instance lazy-loads through the sync facade — which raises
+    # ``MissingGreenlet`` on an ``AsyncSession`` (a concurrent commit on the
+    # shared session triggers the same expiry, so entry-time reads are just as
+    # unsafe as post-rollback ones).
+    await _maybe_await(session.rollback())
+    try:
+        await _maybe_await(session.refresh(record))
+    except Exception:  # noqa: BLE001 - a vanished run row means the lease is gone
+        await _maybe_await(session.rollback())
+        return False
+    record_id = record.id
+    expected_owner = record.lease_owner
+    if record.status not in {"running", "dispatching"} or not expected_owner:
         return False
     now = time.time()
     lease_seconds = _run_lease_seconds()
-    expected_owner = record.lease_owner
-    await _maybe_await(session.rollback())
     statement = (
         sa_update(CephOperationRunRecord)
-        .where(col(CephOperationRunRecord.id) == record.id)
+        .where(col(CephOperationRunRecord.id) == record_id)
         .where(col(CephOperationRunRecord.status).in_(("running", "dispatching")))
         .where(col(CephOperationRunRecord.lease_owner) == expected_owner)
         .where(col(CephOperationRunRecord.lease_expires_at) > now)
@@ -1862,6 +1875,11 @@ async def _apply_with_lease_heartbeat(  # noqa: C901 - dispatch/heartbeat owners
     """Await one SDK dispatch while renewing and verifying worker ownership."""
 
     interval = min(30.0, max(0.1, _run_lease_seconds() / 3))
+    # Capture the primary key before any renewal: a failed renewal has rolled
+    # the session back, expiring ``run_record``, and reading ``.id`` off an
+    # expired instance would lazy-load through the sync facade and raise
+    # ``MissingGreenlet`` instead of the intended lease-lost error.
+    run_record_id = run_record.id
     dispatch_task = asyncio.create_task(adapter.apply(operation, confirm_destructive=True))
 
     async def renew_lease() -> bool:
@@ -1877,7 +1895,7 @@ async def _apply_with_lease_heartbeat(  # noqa: C901 - dispatch/heartbeat owners
             if dispatch_task.done():
                 return
             if not await renew_lease():
-                raise _CephRunLeaseLost(run_record.id)
+                raise _CephRunLeaseLost(run_record_id)
 
     heartbeat_task = asyncio.create_task(heartbeat())
     try:
@@ -1898,7 +1916,7 @@ async def _apply_with_lease_heartbeat(  # noqa: C901 - dispatch/heartbeat owners
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
         if not await renew_lease():
-            raise _CephRunLeaseLost(run_record.id)
+            raise _CephRunLeaseLost(run_record_id)
         return result
     except asyncio.CancelledError:
         dispatch_task.cancel()
@@ -1919,6 +1937,10 @@ async def _wait_for_provider_task(
 ) -> dict[str, Any]:
     """Poll a submitted task while retaining one non-reclaimable run lease."""
 
+    # Same expired-instance hazard as _apply_with_lease_heartbeat: a failed
+    # renewal has rolled the session back, so read the id before any renewal.
+    run_record_id = run_record.id
+
     async def heartbeat() -> None:
         lock = getattr(adapter, "database_session_lock", None)
         if lock is None:
@@ -1927,7 +1949,7 @@ async def _wait_for_provider_task(
             async with lock:
                 renewed = await _renew_run_lease(session, run_record)
         if not renewed:
-            raise _CephRunLeaseLost(run_record.id)
+            raise _CephRunLeaseLost(run_record_id)
 
     if getattr(adapter, "supports_task_heartbeat", False):
         outcome = await adapter.wait_for_terminal(
