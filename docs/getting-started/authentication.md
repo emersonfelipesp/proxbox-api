@@ -4,7 +4,7 @@
 
 ## Bootstrap Flow
 
-When the backend starts with an empty database, it returns `needs_bootstrap: true` from the status endpoint:
+When the backend starts with a never-initialized database, it returns `needs_bootstrap: true` from the status endpoint:
 
 ```bash
 curl http://localhost:8800/auth/bootstrap-status
@@ -22,7 +22,25 @@ curl -X POST http://localhost:8800/auth/register-key \
 # {"detail": "API key registered."}
 ```
 
-Once a key exists, subsequent calls to `/auth/register-key` return `409 Conflict`.
+**Bootstrap is consumed exactly once per database.** The registration commits a
+durable singleton bootstrap claim together with the bcrypt hash of the first
+key in a single transaction, so two concurrent bootstrap attempts cannot both
+succeed — the loser receives a stable `409 Conflict`. Once bootstrap is
+consumed, every later call to `/auth/register-key` returns `409 Conflict`,
+**including when all keys have since been deactivated or deleted**: inactive
+key history and the permanent claim both close the unauthenticated bootstrap
+window forever. Databases initialized before the claim existed are backfilled
+on startup — any key history permanently closes bootstrap there too.
+
+### Losing All Keys
+
+Because bootstrap never reopens, the API refuses to retire the final active
+key: `DELETE /auth/keys/{id}` and `POST /auth/keys/{id}/deactivate` return
+`409` with code `last_active_api_key_required` when the target is the only
+active key. Create and verify a replacement key first, then retire the old
+one. If a database somehow ends up with no active key, recovery is a
+database-level operation by the operator (restore a backup or edit the SQLite
+`apikey` table directly) — not an unauthenticated HTTP path.
 
 ### NetBox Plugin Integration
 
@@ -55,7 +73,7 @@ These endpoints do not require authentication:
 | `GET /health` | Health check |
 | `GET /meta` | Service metadata |
 | `GET /auth/bootstrap-status` | Check if bootstrap is needed |
-| `POST /auth/register-key` | Register first key (only when no keys exist) |
+| `POST /auth/register-key` | Register first key (only while bootstrap has never been consumed) |
 
 ## Key Management Endpoints
 
@@ -87,6 +105,9 @@ curl -X POST http://localhost:8800/auth/keys/1/deactivate \
 # {"id": 1, "label": "bootstrap-key", "is_active": false, "created_at": 1712345678.123}
 ```
 
+Deactivating the final active key is refused with `409`
+(`last_active_api_key_required`) — create and verify another key first.
+
 ### Reactivate a Key
 
 ```bash
@@ -102,6 +123,9 @@ curl -X DELETE http://localhost:8800/auth/keys/1 \
   -H "X-Proxbox-API-Key: your-key"
 # (204 No Content)
 ```
+
+Deleting the final active key is refused with `409`
+(`last_active_api_key_required`) — create and verify another key first.
 
 ## Brute-Force Protection
 
@@ -127,7 +151,10 @@ The backend implements IP-based lockout:
 {"detail": "No API key configured. Register a key via POST /auth/register-key or use an existing key."}
 ```
 
-The database has no API keys. Call `/auth/register-key` with a new key to bootstrap.
+The database has no API keys. On a never-initialized database, call
+`/auth/register-key` with a new key to bootstrap. On a database that was
+already bootstrapped once, `/auth/register-key` stays closed (`409`); recover
+at the database level instead (restore a backup or repair the `apikey` table).
 
 ### "Invalid API key"
 

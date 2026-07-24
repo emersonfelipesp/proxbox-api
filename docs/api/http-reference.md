@@ -17,13 +17,13 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 
 All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. See [Authentication](../getting-started/authentication.md) for the full bootstrap flow and key management guide.
 
-- `GET /auth/bootstrap-status` - Check whether first-time key registration is still needed. Auth-exempt.
-- `POST /auth/register-key` - Register the first API key. Auth-exempt; fails once a key already exists.
+- `GET /auth/bootstrap-status` - Check whether first-time key registration is still needed. Auth-exempt. `needs_bootstrap` is `false` once the durable bootstrap claim exists or any key row (active or inactive) exists.
+- `POST /auth/register-key` - Register the first API key. Auth-exempt; the durable singleton bootstrap claim and the bcrypt hash are committed in one transaction, so bootstrap can be consumed exactly once per database. Any later call — including after every key is deleted or deactivated — returns `409 Conflict`.
 - `POST /auth/keys` - Create a new API key. Returns the raw key value once; store it securely.
 - `GET /auth/keys` - List all API keys. Key values are redacted (only metadata is returned).
-- `DELETE /auth/keys/{key_id}` - Delete an API key by ID.
+- `DELETE /auth/keys/{key_id}` - Delete an API key by ID. Refuses to delete the final active key with `409` (`last_active_api_key_required`); create and verify a replacement first.
 - `POST /auth/keys/{key_id}/activate` - Re-activate a previously deactivated key.
-- `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key without deleting it.
+- `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key without deleting it. Refuses to deactivate the final active key with `409` (`last_active_api_key_required`).
 
 ## Admin
 

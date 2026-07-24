@@ -12,9 +12,14 @@ import secrets
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func, text
 from sqlmodel import select
 
-from proxbox_api.database import ApiKey, AsyncDatabaseSessionDep
+from proxbox_api.database import (
+    ApiKey,
+    ApiKeyBootstrapConflict,
+    AsyncDatabaseSessionDep,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -52,10 +57,11 @@ class BootstrapStatusResponse(BaseModel):
 
 @router.get("/bootstrap-status", response_model=BootstrapStatusResponse)
 async def get_bootstrap_status(session: AsyncDatabaseSessionDep):
-    """Check if initial bootstrap is needed (no API keys exist)."""
-    has_db_keys = await ApiKey.has_any_key_async(session)
+    """Check whether this database has permanently consumed first bootstrap."""
+    has_db_keys = await ApiKey.has_any_record_async(session)
+    bootstrap_claimed = await ApiKey.bootstrap_is_claimed_async(session)
     return BootstrapStatusResponse(
-        needs_bootstrap=not has_db_keys,
+        needs_bootstrap=not bootstrap_claimed,
         has_db_keys=has_db_keys,
     )
 
@@ -71,10 +77,74 @@ async def register_key(body: RegisterKeyRequest, session: AsyncDatabaseSessionDe
         raise HTTPException(status_code=400, detail="API key must be at least 32 characters.")
 
     async with _BOOTSTRAP_LOCK:
-        if await ApiKey.has_any_key_async(session):
+        if await ApiKey.bootstrap_is_claimed_async(session):
             raise HTTPException(status_code=409, detail="An API key is already configured.")
-        await ApiKey.store_key_async(session, body.api_key, label=body.label)
+        try:
+            await ApiKey.bootstrap_first_key_async(session, body.api_key, label=body.label)
+        except ApiKeyBootstrapConflict:
+            raise HTTPException(
+                status_code=409,
+                detail="An API key is already configured.",
+            ) from None
     return {"detail": "API key registered."}
+
+
+def _last_active_key_error() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "last_active_api_key_required",
+            "message": ("Create and verify another active API key before retiring this key."),
+        },
+    )
+
+
+async def _begin_serialized_key_write(session: AsyncDatabaseSessionDep) -> None:
+    """Serialize active-key retirement across all SQLite worker processes."""
+
+    await session.exec(text("BEGIN IMMEDIATE"))
+
+
+async def _active_key_count(session: AsyncDatabaseSessionDep) -> int:
+    result = await session.exec(
+        select(func.count(ApiKey.id)).where(ApiKey.is_active == True)  # noqa: E712
+    )
+    return int(result.one())
+
+
+async def _delete_key_safely(
+    session: AsyncDatabaseSessionDep,
+    key_id: int,
+) -> None:
+    await _begin_serialized_key_write(session)
+    key = await session.get(ApiKey, key_id)
+    if key is None:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="API key not found.")
+    if key.is_active and await _active_key_count(session) <= 1:
+        await session.rollback()
+        raise _last_active_key_error()
+    await session.delete(key)
+    await session.commit()
+
+
+async def _deactivate_key_safely(
+    session: AsyncDatabaseSessionDep,
+    key_id: int,
+) -> ApiKey:
+    await _begin_serialized_key_write(session)
+    key = await session.get(ApiKey, key_id)
+    if key is None:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="API key not found.")
+    if key.is_active and await _active_key_count(session) <= 1:
+        await session.rollback()
+        raise _last_active_key_error()
+    key.is_active = False
+    session.add(key)
+    await session.commit()
+    await session.refresh(key)
+    return key
 
 
 @router.post("/keys", status_code=201, response_model=CreateKeyResponse)
@@ -117,24 +187,14 @@ async def list_keys(session: AsyncDatabaseSessionDep):
 @router.delete("/keys/{key_id}", status_code=204)
 async def delete_key(key_id: int, session: AsyncDatabaseSessionDep):
     """Delete an API key by ID."""
-    key = await session.get(ApiKey, key_id)
-    if not key:
-        raise HTTPException(status_code=404, detail="API key not found.")
-    await session.delete(key)
-    await session.commit()
+    await _delete_key_safely(session, key_id)
     return None
 
 
 @router.post("/keys/{key_id}/deactivate", response_model=ApiKeyResponse)
 async def deactivate_key(key_id: int, session: AsyncDatabaseSessionDep):
     """Deactivate an API key (keeps it in DB but marks as inactive)."""
-    key = await session.get(ApiKey, key_id)
-    if not key:
-        raise HTTPException(status_code=404, detail="API key not found.")
-    key.is_active = False
-    session.add(key)
-    await session.commit()
-    await session.refresh(key)
+    key = await _deactivate_key_safely(session, key_id)
     return ApiKeyResponse(
         id=key.id,
         label=key.label,

@@ -15,13 +15,13 @@ Para schemas completos de request e response, use o OpenAPI em tempo de execucao
 
 Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Proxbox-API-Key`. Consulte [Autenticacao](../getting-started/authentication.md) para o fluxo completo de bootstrap e gerenciamento de chaves.
 
-- `GET /auth/bootstrap-status` - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao.
-- `POST /auth/register-key` - Registra a primeira chave de API. Isento de autenticacao; falha se ja existir uma chave.
+- `GET /auth/bootstrap-status` - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao. `needs_bootstrap` e `false` assim que a reivindicacao duravel de bootstrap existe ou qualquer registro de chave (ativa ou inativa) existe.
+- `POST /auth/register-key` - Registra a primeira chave de API. Isento de autenticacao; a reivindicacao singleton duravel de bootstrap e o hash bcrypt sao gravados em uma unica transacao, entao o bootstrap so pode ser consumido uma vez por banco de dados. Qualquer chamada posterior — inclusive depois de todas as chaves serem removidas ou desativadas — retorna `409 Conflict`.
 - `POST /auth/keys` - Cria uma nova chave de API. Retorna o valor da chave uma unica vez; armazene com seguranca.
 - `GET /auth/keys` - Lista todas as chaves de API. Os valores sao ocultados (apenas metadados sao retornados).
-- `DELETE /auth/keys/{key_id}` - Remove uma chave de API pelo ID.
+- `DELETE /auth/keys/{key_id}` - Remove uma chave de API pelo ID. Recusa remover a ultima chave ativa com `409` (`last_active_api_key_required`); crie e verifique uma substituta antes.
 - `POST /auth/keys/{key_id}/activate` - Reativa uma chave previamente desativada.
-- `POST /auth/keys/{key_id}/deactivate` - Desativa uma chave ativa sem remove-la.
+- `POST /auth/keys/{key_id}/deactivate` - Desativa uma chave ativa sem remove-la. Recusa desativar a ultima chave ativa com `409` (`last_active_api_key_required`).
 
 ## Admin
 
