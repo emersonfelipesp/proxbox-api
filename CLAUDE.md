@@ -144,6 +144,14 @@ Open the nearest scoped guide for the code you are changing.
   dispatch input, kept so an incident rollback to a known-good older SHA is not
   locked out. A dispatch `ref` that is not a full 40-character SHA is refused
   rather than verified imprecisely. Contracts: `tests/test_deploy_ci_gate.py`.
+- `.gitea/workflows/ci.yml`: the authoritative `CI / Lint, smoke, and core
+  coverage` gate (ruff → ty → compile/import smoke → pytest+coverage). **Its
+  coverage-artifact step must pin `actions/upload-artifact@v3` (SHA
+  `a8a3f3ad30e3422c9c7b888a15615d19a852ae32`), not v4.** Gitea Actions does not
+  implement the `@actions/artifact` v2+ API that `upload-artifact@v4+` requires
+  and fails the step with `GHESNotSupportedError`, turning an otherwise-passing
+  run red and blocking the CI-gated deploy. The `.github/workflows/ci.yml` twin
+  keeps v4 because it runs on GitHub-hosted runners that support it.
 - `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
   committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
   events: builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes
